@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r \".tool_input.file_path // .tool_response.filePath // empty\" | { read -r f; case \"$f\" in */arpg/*.rs|*/arpg/*.toml|*/arpg/*.wgsl) ;; *) exit 0 ;; esac; cd \"${f%%/arpg/*}/arpg\" || exit 0; . \"$HOME/.cargo/env\" 2>/dev/null; if ! out=$(cargo clippy --workspace --all-targets -- -D warnings 2>&1); then printf \"%s\\n\" \"$out\" | tail -n 40 >&2; exit 2; fi; }",
+            "timeout": 120,
+            "statusMessage": "Checking invariants"
+          }
+        ]
+      }
+    ]
+  }
+}
