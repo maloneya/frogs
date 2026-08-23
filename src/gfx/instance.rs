@@ -28,6 +28,18 @@ pub struct Instance {
     pub _pad2: f32,
 }
 
+// The 48-byte stride is a contract with three other places: the vertex
+// attribute array below, the `@location` slots in shader.wgsl, and the buffer
+// capacity maths. Rust can't see into WGSL, but it can at least refuse to
+// compile if the Rust half drifts — which is the half that gets edited.
+const _: () = assert!(size_of::<Instance>() == 48);
+const _: () = assert!(size_of::<Instance>() == 3 * 4 * size_of::<f32>());
+
+/// Guards against `MAX_INSTANCES` being raised past what's reasonable to
+/// allocate up front. 200_000 x 48B is ~9.6MB; this trips well before anything
+/// that would fail at startup on a real GPU.
+const _: () = assert!(MAX_INSTANCES * size_of::<Instance>() < 64 << 20);
+
 impl Instance {
     pub fn new(pos: Vec3, scale: Vec3, color: Vec3) -> Self {
         Self {
