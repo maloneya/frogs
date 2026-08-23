@@ -3,7 +3,7 @@ mod cube;
 mod instance;
 
 pub use camera::OrthoCamera;
-pub use instance::{Instance, MAX_INSTANCES};
+pub use instance::{Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES};
 
 use std::sync::Arc;
 

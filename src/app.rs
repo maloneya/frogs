@@ -6,7 +6,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use crate::gfx::{Instance, OrthoCamera, Renderer};
+use crate::gfx::{InstanceBuffer, OrthoCamera, Renderer};
 use crate::time::Clock;
 use crate::world::World;
 
@@ -20,7 +20,7 @@ pub struct App {
     camera: Option<OrthoCamera>,
     world: World,
     /// Reused every frame so a steady state allocates nothing.
-    instances: Vec<Instance>,
+    instances: InstanceBuffer,
     clock: Clock,
 }
 
@@ -135,8 +135,8 @@ impl ApplicationHandler for App {
 
                 // The per-frame spine. Next chunk a fixed-timestep loop lands
                 // between the tick and the extract.
-                self.world.extract(&mut self.instances);
-                renderer.render(camera, &self.instances);
+                self.world.extract(self.instances.sink());
+                renderer.render(camera, self.instances.as_slice());
 
                 if self.clock.hud_due()
                     && let Some(window) = &self.window
@@ -146,7 +146,7 @@ impl ApplicationHandler for App {
                         self.clock.frame_ms(),
                         self.clock.fps(),
                         self.world.enemy_count(),
-                        self.instances.len(),
+                        self.instances.as_slice().len(),
                         if renderer.vsync() { "  [vsync]" } else { "  [uncapped]" },
                     ));
                 }

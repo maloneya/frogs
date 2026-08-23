@@ -1,6 +1,6 @@
 use glam::Vec3;
 
-use crate::gfx::{Instance, MAX_INSTANCES};
+use crate::gfx::{Instance, InstanceSink, MAX_INSTANCES};
 
 /// Ground plane size, in tiles.
 const GROUND_TILES: usize = 32;
@@ -45,21 +45,22 @@ impl World {
         self.enemy_count = n.clamp(1, MAX_ENEMIES);
     }
 
-    /// **The seam.** The world describes itself in the renderer's vocabulary and
-    /// hands over a flat slice; `gfx` never sees a `World`.
+    /// **The seam.** The world describes itself in the renderer's vocabulary;
+    /// `gfx` never sees a `World`.
     ///
-    /// Writes into a caller-owned buffer that gets reused every frame, so a
-    /// steady state costs zero allocations. Next chunk this grows an `alpha`
-    /// parameter for interpolating between simulation ticks.
-    pub fn extract(&self, out: &mut Vec<Instance>) {
-        out.clear();
-        self.extract_ground(out);
-        self.extract_enemies(out);
+    /// Takes the sink by value, so it is single-use and cannot outlive the
+    /// frame. Everything about the buffer — that it was reset, that it is
+    /// capacity-bounded, that pushing is the only thing anyone may do to it —
+    /// is settled by the type rather than by remembering. Next chunk this
+    /// grows an `alpha` parameter for interpolating between simulation ticks.
+    pub fn extract(&self, mut out: InstanceSink<'_>) {
+        self.extract_ground(&mut out);
+        self.extract_enemies(&mut out);
     }
 
     /// The floor is not a special case — it is just more cube instances, flat
     /// and tinted. Same mesh, same pipeline, same draw call as the horde.
-    fn extract_ground(&self, out: &mut Vec<Instance>) {
+    fn extract_ground(&self, out: &mut InstanceSink<'_>) {
         let offset = (GROUND_TILES as f32 - 1.0) * TILE * 0.5;
 
         for z in 0..GROUND_TILES {
@@ -75,7 +76,7 @@ impl World {
         }
     }
 
-    fn extract_enemies(&self, out: &mut Vec<Instance>) {
+    fn extract_enemies(&self, out: &mut InstanceSink<'_>) {
 
         let side = (self.enemy_count as f32).sqrt().ceil().max(1.0) as usize;
         // Deliberately *not* TILE. Matching the floor's spacing made the horde
