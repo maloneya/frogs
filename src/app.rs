@@ -6,9 +6,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use crate::gfx::{Instance, OrthoCamera, Renderer, MAX_INSTANCES};
+use crate::gfx::{Instance, OrthoCamera, Renderer};
 use crate::time::Clock;
-use crate::world::{World, GROUND_INSTANCES};
+use crate::world::World;
 
 /// Owns everything and wires it together. Deliberately the only place that
 /// knows about all the subsystems at once — `gfx` and `world` stay ignorant of
@@ -24,31 +24,31 @@ pub struct App {
     clock: Clock,
 }
 
-/// The horde has to share the instance budget with the floor.
-const MAX_ENEMIES: usize = MAX_INSTANCES - GROUND_INSTANCES;
+/// One notch of zoom per keypress.
+const ZOOM_STEP: f32 = 1.2;
 
 impl App {
     fn on_key(&mut self, key: KeyCode) {
         match key {
             // Doubling rather than stepping: the interesting range spans three
             // orders of magnitude, and the knee is easier to find by bisection
-            // than by walking.
+            // than by walking. Both directions clamp inside `set_enemy_count`.
             KeyCode::BracketRight => {
-                self.world.enemy_count = (self.world.enemy_count * 2).min(MAX_ENEMIES);
-                log::info!("N = {}", self.world.enemy_count);
+                self.world.set_enemy_count(self.world.enemy_count() * 2);
+                log::info!("N = {}", self.world.enemy_count());
             }
             KeyCode::BracketLeft => {
-                self.world.enemy_count = (self.world.enemy_count / 2).max(1);
-                log::info!("N = {}", self.world.enemy_count);
+                self.world.set_enemy_count(self.world.enemy_count() / 2);
+                log::info!("N = {}", self.world.enemy_count());
             }
             KeyCode::Equal => {
                 if let Some(c) = &mut self.camera {
-                    c.zoom = (c.zoom / 1.2).max(2.0);
+                    c.zoom_by(1.0 / ZOOM_STEP);
                 }
             }
             KeyCode::Minus => {
                 if let Some(c) = &mut self.camera {
-                    c.zoom = (c.zoom * 1.2).min(400.0);
+                    c.zoom_by(ZOOM_STEP);
                 }
             }
             _ => {}
@@ -90,7 +90,7 @@ impl ApplicationHandler for App {
             display_handle,
         )));
         let size = window.inner_size();
-        self.camera = Some(OrthoCamera::new(size.width as f32 / size.height as f32));
+        self.camera = Some(OrthoCamera::new(size.width, size.height));
         self.window = Some(window);
     }
 
@@ -127,7 +127,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::Resized(size) => {
                 renderer.resize(size.width, size.height);
-                camera.aspect = size.width.max(1) as f32 / size.height.max(1) as f32;
+                camera.set_viewport(size.width, size.height);
             }
 
             WindowEvent::RedrawRequested => {
@@ -145,9 +145,9 @@ impl ApplicationHandler for App {
                         "arpg — {:.2}ms  {:.0}fps  N={}  ({} instances){}",
                         self.clock.frame_ms(),
                         self.clock.fps(),
-                        self.world.enemy_count,
+                        self.world.enemy_count(),
                         self.instances.len(),
-                        if renderer.vsync { "  [vsync]" } else { "  [uncapped]" },
+                        if renderer.vsync() { "  [vsync]" } else { "  [uncapped]" },
                     ));
                 }
             }

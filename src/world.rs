@@ -1,19 +1,30 @@
 use glam::Vec3;
 
-use crate::gfx::Instance;
+use crate::gfx::{Instance, MAX_INSTANCES};
 
 /// Ground plane size, in tiles.
 const GROUND_TILES: usize = 32;
 const TILE: f32 = 1.5;
 
 /// The floor's share of the instance budget.
-pub const GROUND_INSTANCES: usize = GROUND_TILES * GROUND_TILES;
+const GROUND_INSTANCES: usize = GROUND_TILES * GROUND_TILES;
+
+/// How large the horde may grow. The ground is drawn from the same instance
+/// buffer in the same draw call, so the enemy budget is whatever the floor
+/// leaves behind.
+///
+/// This constant lives next to the field it bounds rather than in the caller.
+/// That placement is the whole point: previously the subtraction happened in
+/// `app.rs`, which meant `World` did not know its own limit and any *second*
+/// writer of `enemy_count` would silently overrun the GPU buffer — a failure
+/// with no error message, since the upload just truncates.
+const MAX_ENEMIES: usize = MAX_INSTANCES - GROUND_INSTANCES;
 
 /// What exists. Currently a static grid of cubes; this is where the simulation
 /// will live as it grows — fixed-timestep stepping, entity storage, spatial
 /// partitioning.
 pub struct World {
-    pub enemy_count: usize,
+    enemy_count: usize,
 }
 
 impl Default for World {
@@ -23,6 +34,17 @@ impl Default for World {
 }
 
 impl World {
+    pub fn enemy_count(&self) -> usize {
+        self.enemy_count
+    }
+
+    /// The only door in, so the clamp cannot be bypassed or forgotten. A
+    /// spawner, a save-load path or a debug console added later inherits it
+    /// without having to know `MAX_ENEMIES` exists.
+    pub fn set_enemy_count(&mut self, n: usize) {
+        self.enemy_count = n.clamp(1, MAX_ENEMIES);
+    }
+
     /// **The seam.** The world describes itself in the renderer's vocabulary and
     /// hands over a flat slice; `gfx` never sees a `World`.
     ///

@@ -19,13 +19,18 @@ pub const MAX_INSTANCES: usize = 200_000;
 /// the offset arithmetic trivial.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+/// The fields are private, and the padding is why. They are not storage anyone
+/// should write — they are reserved space for rotation, hit-flash and team id,
+/// and the 48-byte stride they produce is a contract with the vertex attribute
+/// array and the shader. A struct literal could set `_pad0: 3.0` and ship
+/// garbage to the GPU; `new` is the only door, and it zeroes them.
 pub struct Instance {
-    pub pos: [f32; 3],
-    pub _pad0: f32,
-    pub scale: [f32; 3],
-    pub _pad1: f32,
-    pub color: [f32; 3],
-    pub _pad2: f32,
+    pos: [f32; 3],
+    _pad0: f32,
+    scale: [f32; 3],
+    _pad1: f32,
+    color: [f32; 3],
+    _pad2: f32,
 }
 
 // The 48-byte stride is a contract with three other places: the vertex

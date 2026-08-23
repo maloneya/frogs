@@ -9,10 +9,23 @@ use glam::{Mat4, Vec3};
 /// equal area — hence *iso*-metric, equal measure. Any other elevation is some
 /// other axonometric projection.
 pub struct OrthoCamera {
-    pub target: Vec3,
+    target: Vec3,
     /// Half-height of the view volume, in world units. Smaller = zoomed in.
-    pub zoom: f32,
-    pub aspect: f32,
+    zoom: f32,
+    aspect: f32,
+}
+
+/// Zoom bounds, kept beside the field they constrain rather than in the input
+/// handler that happens to drive it today. `zoom` reaching zero collapses the
+/// view volume and produces a degenerate projection matrix — a black screen
+/// with no error anywhere.
+const MIN_ZOOM: f32 = 2.0;
+const MAX_ZOOM: f32 = 400.0;
+
+/// A zero-sized window is real — minimising produces one — and dividing by it
+/// yields a NaN that propagates silently through the whole matrix.
+fn aspect_of(width: u32, height: u32) -> f32 {
+    width.max(1) as f32 / height.max(1) as f32
 }
 
 const ISO_YAW: f32 = std::f32::consts::FRAC_PI_4; // 45°
@@ -24,8 +37,18 @@ const ISO_PITCH: f32 = 0.615_479_7; // atan(1/sqrt(2))
 const DISTANCE: f32 = 250.0;
 
 impl OrthoCamera {
-    pub fn new(aspect: f32) -> Self {
-        Self { target: Vec3::ZERO, zoom: 26.0, aspect }
+    pub fn new(width: u32, height: u32) -> Self {
+        Self { target: Vec3::ZERO, zoom: 26.0, aspect: aspect_of(width, height) }
+    }
+
+    pub fn set_viewport(&mut self, width: u32, height: u32) {
+        self.aspect = aspect_of(width, height);
+    }
+
+    /// Scales the view volume. `factor < 1` zooms in, `> 1` zooms out; the
+    /// clamp lives here so no caller has to remember the limits.
+    pub fn zoom_by(&mut self, factor: f32) {
+        self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
     pub fn view_proj(&self) -> Mat4 {

@@ -45,7 +45,10 @@ pub struct Renderer {
     cubes: CubePipeline,
     /// The best uncapped mode this surface supports, if any.
     uncapped: Option<wgpu::PresentMode>,
-    pub vsync: bool,
+    /// Private because it mirrors state that actually lives in `config.present_mode`.
+    /// A direct write would desync the two: the HUD would claim one thing while
+    /// the surface did another, with no reconfigure to make it true.
+    vsync: bool,
 }
 
 /// The depth buffer must match the colour attachment's dimensions exactly, so
@@ -159,6 +162,10 @@ impl Renderer {
         self.config.height = height.max(1);
         self.surface.configure(&self.device, &self.config);
         self.depth = create_depth(&self.device, &self.config);
+    }
+
+    pub fn vsync(&self) -> bool {
+        self.vsync
     }
 
     /// Returns whether vsync is on afterwards — unchanged if the surface has no
