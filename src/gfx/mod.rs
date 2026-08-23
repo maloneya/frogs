@@ -54,13 +54,13 @@ pub struct Renderer {
 /// The depth buffer must match the colour attachment's dimensions exactly, so
 /// this is called from both setup and `resize`. Forgetting the resize path is
 /// the classic way to crash on the first window drag.
-fn create_depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
+fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
             size: wgpu::Extent3d {
-                width: config.width,
-                height: config.height,
+                width: width.max(1),
+                height: height.max(1),
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -137,7 +137,7 @@ impl Renderer {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&device, &config);
 
-        let depth = create_depth(&device, &config);
+        let depth = create_depth(&device, config.width, config.height);
         let camera = CameraBinding::new(&device);
         let cubes = CubePipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
 
@@ -161,7 +161,7 @@ impl Renderer {
         self.config.width = width.max(1);
         self.config.height = height.max(1);
         self.surface.configure(&self.device, &self.config);
-        self.depth = create_depth(&self.device, &self.config);
+        self.depth = create_depth(&self.device, self.config.width, self.config.height);
     }
 
     pub fn vsync(&self) -> bool {
@@ -292,5 +292,133 @@ impl Renderer {
         // against the flip instead of guessing.
         self.window.pre_present_notify();
         self.queue.present(frame);
+    }
+}
+
+/// Headless GPU tests.
+///
+/// These exist to close the gap Rust cannot see across: the vertex layout in
+/// `instance.rs` and the `@location` declarations in `shader.wgsl` are one
+/// contract maintained in two files and two languages. `cargo check` is blind
+/// to it. wgpu's validator is not — it compares them at pipeline creation and
+/// again at draw time, so the job here is simply to reach those points without
+/// a window and to turn any complaint into a test failure.
+///
+/// A device needs no surface: `compatible_surface: None`, and on Metal the
+/// display handle goes unused.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gfx::instance::InstanceBuffer;
+    use glam::Vec3;
+
+    /// Matches the real swapchain format so the pipeline under test is the one
+    /// that actually ships.
+    const TEST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
+
+    fn headless_device() -> (wgpu::Device, wgpu::Queue) {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            ..Default::default()
+        }))
+        .expect("no GPU adapter available for tests");
+
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("headless test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        }))
+        .expect("create headless device")
+    }
+
+    /// Renders one frame into an offscreen texture, with every validation error
+    /// captured rather than left to the default handler.
+    ///
+    /// Pipeline creation catches a Rust/WGSL mismatch — a changed `Instance`
+    /// field, a stride that no longer matches, an attribute pointing at a
+    /// `@location` the shader does not declare. Actually drawing catches the
+    /// rest: buffer sizes, bind group layouts, and the depth attachment's
+    /// dimensions disagreeing with the colour attachment.
+    #[test]
+    fn a_frame_renders_without_validation_errors() {
+        let (device, queue) = headless_device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+        let camera_binding = CameraBinding::new(&device);
+        let cubes = CubePipeline::new(&device, &camera_binding.layout, TEST_FORMAT, DEPTH_FORMAT);
+
+        const W: u32 = 256;
+        const H: u32 = 128;
+
+        let color = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("test colour target"),
+                size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: TEST_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = create_depth(&device, W, H);
+
+        let camera = OrthoCamera::new(W, H);
+        camera_binding.upload(&queue, &camera);
+
+        let mut buf = InstanceBuffer::default();
+        let mut sink = buf.sink();
+        for i in 0..64 {
+            sink.push(Instance::new(
+                Vec3::new(i as f32, 0.0, 0.0),
+                Vec3::ONE,
+                Vec3::new(0.3, 0.1, 0.05),
+            ));
+        }
+        let count = cubes.upload(&queue, buf.as_slice());
+        assert_eq!(count, 64, "upload should report every instance as live");
+
+        let mut encoder = device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test frame") });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("test pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            cubes.draw(&mut pass, &camera_binding.bind_group, count);
+        }
+        queue.submit(Some(encoder.finish()));
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll device");
+
+        if let Some(err) = pollster::block_on(scope.pop()) {
+            panic!("wgpu rejected the frame: {err}");
+        }
     }
 }
