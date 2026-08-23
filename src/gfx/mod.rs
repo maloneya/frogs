@@ -1,7 +1,9 @@
 mod camera;
 mod cube;
+mod instance;
 
 pub use camera::OrthoCamera;
+pub use instance::{Instance, MAX_INSTANCES};
 
 use std::sync::Arc;
 
@@ -41,6 +43,9 @@ pub struct Renderer {
     depth: wgpu::TextureView,
     camera: CameraBinding,
     cubes: CubePipeline,
+    /// The best uncapped mode this surface supports, if any.
+    uncapped: Option<wgpu::PresentMode>,
+    pub vsync: bool,
 }
 
 /// The depth buffer must match the colour attachment's dimensions exactly, so
@@ -111,9 +116,21 @@ impl Renderer {
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .expect("surface not supported by adapter");
 
-        // Vsync. Frame pacing is the foundation everything else gets measured
-        // against, so we start pinned to the display's refresh rate and only
-        // change this deliberately, with a reason.
+        // Vsync by default. Frame pacing is the foundation everything else gets
+        // measured against, so we stay pinned to the refresh rate unless
+        // explicitly asked otherwise.
+        //
+        // The exception is measurement: vsync *quantises* frame time to
+        // multiples of the refresh interval, so under it a renderer that takes
+        // 4ms and one that takes 16ms look identical. Finding where the horde
+        // actually costs requires taking the cap off.
+        let caps = surface.get_capabilities(&adapter);
+        log::info!("present modes: {:?}", caps.present_modes);
+
+        let uncapped = [wgpu::PresentMode::Immediate, wgpu::PresentMode::Mailbox]
+            .into_iter()
+            .find(|m| caps.present_modes.contains(m));
+
         config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&device, &config);
 
@@ -121,7 +138,19 @@ impl Renderer {
         let camera = CameraBinding::new(&device);
         let cubes = CubePipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
 
-        Self { window, instance, surface, device, queue, config, depth, camera, cubes }
+        Self {
+            window,
+            instance,
+            surface,
+            device,
+            queue,
+            config,
+            depth,
+            camera,
+            cubes,
+            uncapped,
+            vsync: true,
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -132,11 +161,26 @@ impl Renderer {
         self.depth = create_depth(&self.device, &self.config);
     }
 
+    /// Returns whether vsync is on afterwards — unchanged if the surface has no
+    /// uncapped mode to offer.
+    pub fn toggle_vsync(&mut self) -> bool {
+        let Some(uncapped) = self.uncapped else {
+            log::warn!("no uncapped present mode available on this surface");
+            return self.vsync;
+        };
+
+        self.vsync = !self.vsync;
+        self.config.present_mode =
+            if self.vsync { wgpu::PresentMode::AutoVsync } else { uncapped };
+        self.reconfigure();
+        self.vsync
+    }
+
     fn reconfigure(&mut self) {
         self.surface.configure(&self.device, &self.config);
     }
 
-    pub fn render(&mut self, camera: &OrthoCamera) {
+    pub fn render(&mut self, camera: &OrthoCamera, instances: &[Instance]) {
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU
         // dropped the surface. Each wants a slightly different response, and
@@ -187,6 +231,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
 
         self.camera.upload(&self.queue, camera);
+        let count = self.cubes.upload(&self.queue, instances);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -231,7 +276,7 @@ impl Renderer {
                 multiview_mask: None,
             });
 
-            self.cubes.draw(&mut pass, &self.camera.bind_group);
+            self.cubes.draw(&mut pass, &self.camera.bind_group, count);
         }
 
         self.queue.submit(Some(encoder.finish()));

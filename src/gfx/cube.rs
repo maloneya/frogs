@@ -1,6 +1,8 @@
 use glam::Vec3;
 use wgpu::util::DeviceExt;
 
+use super::instance::{self, Instance, MAX_INSTANCES};
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
@@ -51,6 +53,7 @@ pub struct CubePipeline {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    instances: wgpu::Buffer,
 }
 
 impl CubePipeline {
@@ -88,11 +91,18 @@ impl CubePipeline {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-                })],
+                // Two buffers feeding one pipeline: the mesh, stepped per
+                // vertex, and the instance data, stepped per instance. The GPU
+                // walks them at different rates and hands the shader one row
+                // from each.
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+                    }),
+                    Some(instance::layout()),
+                ],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -119,14 +129,44 @@ impl CubePipeline {
             cache: None,
         });
 
-        Self { pipeline, vertices, indices: index_buf, index_count: indices.len() as u32 }
+        let instances = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("instances"),
+            size: (MAX_INSTANCES * size_of::<Instance>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            pipeline,
+            vertices,
+            indices: index_buf,
+            index_count: indices.len() as u32,
+            instances,
+        }
     }
 
-    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, camera_bind_group: &wgpu::BindGroup) {
+    /// The second of the two places per frame where data crosses into the GPU.
+    /// Returns how many instances are actually live.
+    pub fn upload(&self, queue: &wgpu::Queue, instances: &[Instance]) -> u32 {
+        let n = instances.len().min(MAX_INSTANCES);
+        queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&instances[..n]));
+        n as u32
+    }
+
+    pub fn draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        camera_bind_group: &wgpu::BindGroup,
+        count: u32,
+    ) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, camera_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_vertex_buffer(1, self.instances.slice(..));
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(0..self.index_count, 0, 0..1);
+
+        // One call. The whole horde. The last argument is the instance range —
+        // everything else here is identical to drawing a single cube.
+        pass.draw_indexed(0..self.index_count, 0, 0..count);
     }
 }

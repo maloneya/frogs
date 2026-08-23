@@ -42,14 +42,28 @@ Native macOS only (Apple M4 / Metal). Cross-platform and wasm support are
 explicit non-goals — a lot of wgpu example code exists to satisfy the browser's
 ban on blocking the main thread, and none of that complexity is warranted here.
 
-- `src/main.rs` — winit `ApplicationHandler`. Owns the event loop and window
-  lifecycle. GPU state is built in `resumed`, not `main`, because winit models
-  surface loss as suspend/resume. `about_to_wait` requests a redraw every time
-  the queue drains, which is what converts winit's event-driven default into a
-  continuous game loop.
-- `src/gfx.rs` — `Renderer`: wgpu instance/surface/device/queue plus swapchain
-  configuration and the per-frame render pass. Currently clears to a flat colour
-  and draws nothing.
+**The rule the layout enforces: `gfx` never knows what an enemy is.** Its
+vocabulary is `Instance` — position, scale, colour. `world` describes itself in
+that vocabulary via `extract()`; the dependency runs one way. This is what makes
+it possible to change entity storage or add interpolation without touching
+rendering code. Don't let game concepts leak into `gfx`.
+
+- `src/main.rs` — module declarations and entry point, nothing else.
+- `src/app.rs` — `App`: winit `ApplicationHandler`. Owns window, renderer, world,
+  camera, clock, and the reusable instance buffer. GPU state is built in
+  `resumed`, not `main`, because winit models surface loss as suspend/resume.
+  `about_to_wait` requests a redraw every time the queue drains, converting
+  winit's event-driven default into a continuous game loop.
+- `src/time.rs` — `Clock`: frame delta and smoothed stats. The fixed-timestep
+  accumulator lands here next.
+- `src/world.rs` — `World`: what exists, plus `extract()` — the sim/render seam.
+- `src/gfx/` — `mod.rs` (surface, device, depth, frame orchestration),
+  `camera.rs` (isometric ortho camera + uniform), `cube.rs` (mesh + pipeline +
+  instance buffer), `instance.rs` (the `Instance` POD type), `shader.wgsl`.
+
+### Controls
+
+`[` / `]` halve and double N · `-` / `=` zoom · `V` toggle vsync · `Esc` quit
 
 ### Decisions already made, and why
 
@@ -65,10 +79,18 @@ roughly independent of how much that call draws, so per-entity draw calls are
 the failure mode to avoid. (This is why raylib was rejected — its immediate-mode
 `DrawCube` forces exactly that.)
 
-**Vsync (`PresentMode::AutoVsync`) is deliberate.** Frame pacing is the
-foundation every feel mechanic is measured against: hitstop is "freeze for N
-frames", so erratic frame times make identical hits feel different. Changing
-present mode needs a stated reason.
+**Vsync (`PresentMode::AutoVsync`) is the default, with a toggle.** Frame pacing
+is the foundation every feel mechanic is measured against: hitstop is "freeze for
+N frames", so erratic frame times make identical hits feel different.
+
+But vsync *quantises* frame time to multiples of the refresh interval — under it
+a 4ms renderer and a 16ms renderer look identical, and cost appears as a cliff to
+33.3ms rather than a climb. `V` switches to `Immediate` (supported on this
+Metal surface) for measurement. Measure uncapped; tune feel under vsync.
+
+**Colours are specified in linear space.** The surface is `Bgra8UnormSrgb`, so
+the hardware encodes on write. Passing the sRGB value you want yields something
+roughly five times too bright.
 
 ### Roadmap
 
