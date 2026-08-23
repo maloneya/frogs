@@ -1,6 +1,11 @@
+//! What exists, and how it describes itself to a renderer.
+//!
+//! Depends on `arpg-core` for vocabulary and on nothing else. In particular it
+//! does not link wgpu, so simulation tests run without a GPU.
+
 use glam::Vec3;
 
-use crate::gfx::{Instance, InstanceSink, MAX_INSTANCES};
+use arpg_core::{Instance, InstanceSink, MAX_INSTANCES};
 
 /// Ground plane size, in tiles.
 const GROUND_TILES: usize = 32;
@@ -34,6 +39,8 @@ impl Default for World {
 }
 
 impl World {
+    /// How many enemies the horde currently holds. Always within
+    /// `1..=MAX_ENEMIES`, because [`World::set_enemy_count`] is the only writer.
     pub fn enemy_count(&self) -> usize {
         self.enemy_count
     }

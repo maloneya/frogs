@@ -1,0 +1,15 @@
+[package]
+name = "arpg-sim"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+# Depends on the vocabulary, not on the renderer. `arpg-gfx` is absent on
+# purpose: the simulation describes itself in `Instance`s and never learns how
+# they are drawn.
+[dependencies]
+arpg-core.workspace = true
+glam.workspace = true
+
+[lints]
+workspace = true

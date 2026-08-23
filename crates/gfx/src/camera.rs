@@ -37,10 +37,12 @@ const ISO_PITCH: f32 = 0.615_479_7; // atan(1/sqrt(2))
 const DISTANCE: f32 = 250.0;
 
 impl OrthoCamera {
+    /// A camera framing the origin, sized to the given viewport in pixels.
     pub fn new(width: u32, height: u32) -> Self {
         Self { target: Vec3::ZERO, zoom: 26.0, aspect: aspect_of(width, height) }
     }
 
+    /// Re-derives the aspect ratio after a resize.
     pub fn set_viewport(&mut self, width: u32, height: u32) {
         self.aspect = aspect_of(width, height);
     }
@@ -51,6 +53,7 @@ impl OrthoCamera {
         self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
+    /// The combined view-projection matrix, as uploaded to the shader.
     pub fn view_proj(&self) -> Mat4 {
         let dir = Vec3::new(
             ISO_PITCH.cos() * ISO_YAW.cos(),
@@ -79,14 +82,14 @@ impl OrthoCamera {
 
 /// The GPU-side half of the camera: one 64-byte uniform holding the combined
 /// view-projection matrix, plus the bind group that makes it visible to shaders.
-pub struct CameraBinding {
+pub(crate) struct CameraBinding {
     buffer: wgpu::Buffer,
-    pub layout: wgpu::BindGroupLayout,
-    pub bind_group: wgpu::BindGroup,
+    pub(crate) layout: wgpu::BindGroupLayout,
+    pub(crate) bind_group: wgpu::BindGroup,
 }
 
 impl CameraBinding {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub(crate) fn new(device: &wgpu::Device) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera uniform"),
             size: 64, // one mat4x4<f32>
@@ -121,7 +124,7 @@ impl CameraBinding {
     }
 
     /// One of only two places per frame where data crosses into the GPU.
-    pub fn upload(&self, queue: &wgpu::Queue, camera: &OrthoCamera) {
+    pub(crate) fn upload(&self, queue: &wgpu::Queue, camera: &OrthoCamera) {
         let m = camera.view_proj();
         queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&m.to_cols_array()));
     }

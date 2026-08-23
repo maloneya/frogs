@@ -1,0 +1,14 @@
+[package]
+name = "arpg-core"
+version.workspace = true
+edition.workspace = true
+
+# The vocabulary both halves of the engine speak, and deliberately nothing else.
+# No wgpu here: that is what keeps `arpg-sim` free of the graphics stack, so
+# simulation tests neither link it nor need a GPU to run.
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+
+[lints]
+workspace = true

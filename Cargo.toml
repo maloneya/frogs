@@ -1,9 +1,19 @@
-[package]
-name = "arpg"
+[workspace]
+members = ["crates/core", "crates/gfx", "crates/sim", "crates/app"]
+resolver = "3"
+
+# So a bare `cargo run` still means "run the game".
+default-members = ["crates/app"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace.dependencies]
+arpg-core = { path = "crates/core" }
+arpg-gfx = { path = "crates/gfx" }
+arpg-sim = { path = "crates/sim" }
+
 bytemuck = { version = "1.25", features = ["derive"] }
 env_logger = "0.11"
 glam = "0.33"
@@ -12,42 +22,35 @@ pollster = "1.0.1"
 wgpu = "30.0.1"
 winit = "0.30.13"
 
-# Graphics crates are murderously slow when compiled unoptimized, and none of
-# this is our code to debug. Optimising dependencies while leaving our own crate
-# in debug keeps builds fast to iterate on and fast to run.
-[profile.dev.package."*"]
-opt-level = 3
-
 # The lint wall. These are compile errors, not style preferences: each one
 # corresponds to a mistake that is easy to make locally and expensive to find
-# later. `unreachable_pub` is the load-bearing one — it pushes back when code
-# widens an API purely to reach something, which is how an invariant ends up
-# enforced in a module that doesn't own it.
+# later.
 #
 # The escape hatch is `#[expect(lint, reason = "...")]`, never `#[allow]`.
 # `expect` fails to compile once the violation it covers disappears, so stale
 # suppressions can't accumulate and every exception carries a written reason.
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "deny"      # deny rather than forbid: the allocation counter will need one opt-out
 missing_docs = "warn"
 
-# Off, deliberately, and this is the interesting one.
+# Now load-bearing, which it could not be before the split.
 #
-# In a *binary* crate `unreachable_pub` fires on every `pub` item — 32 of 32
-# here — because nothing is reachable from outside the crate by definition. It
-# cannot tell a deliberate API from a careless one, so switching it on now would
-# mean 32 mechanical edits that teach nothing.
-#
-# It becomes load-bearing the moment the code is split into library crates,
-# where `pub` finally means "part of this crate's contract". Flipping this to
-# "deny" is therefore part of that split, and the fact that it then reports only
-# a handful of items rather than all of them is the evidence that the crate
-# boundaries are real.
-unreachable_pub = "allow"
+# In a single binary crate this fired on all 32 `pub` items, because nothing is
+# reachable from outside a binary by definition — it could not tell a deliberate
+# API from a careless one. Across library crates `pub` finally means "part of
+# this crate's contract", so what it reports is real: an item widened to reach
+# something rather than because it belongs in the interface.
+unreachable_pub = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 todo = "deny"
 unimplemented = "deny"
 dbg_macro = "deny"
 print_stdout = "deny"     # forces `log`, which keeps the frame path off stdout
 print_stderr = "deny"
+
+# Graphics crates are murderously slow when compiled unoptimized, and none of
+# this is our code to debug. Optimising dependencies while leaving our own crates
+# in debug keeps builds fast to iterate on and fast to run.
+[profile.dev.package."*"]
+opt-level = 3

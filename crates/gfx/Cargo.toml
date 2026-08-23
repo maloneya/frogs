@@ -1,0 +1,22 @@
+[package]
+name = "arpg-gfx"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+# Note what is absent: arpg-sim. Cargo refuses cyclic package dependencies, so
+# the rule "gfx never knows what an enemy is" is enforced here, in a file whose
+# diff is one line, rather than by convention inside the source.
+[dependencies]
+arpg-core.workspace = true
+bytemuck.workspace = true
+glam.workspace = true
+log.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true
+
+[lints]
+workspace = true

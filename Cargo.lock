@@ -134,13 +134,42 @@ dependencies = [
 name = "arpg"
 version = "0.1.0"
 dependencies = [
- "bytemuck",
+ "arpg-core",
+ "arpg-gfx",
+ "arpg-sim",
  "env_logger",
+ "log",
+ "pollster",
+ "winit",
+]
+
+[[package]]
+name = "arpg-core"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "glam",
+]
+
+[[package]]
+name = "arpg-gfx"
+version = "0.1.0"
+dependencies = [
+ "arpg-core",
+ "bytemuck",
  "glam",
  "log",
  "pollster",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "arpg-sim"
+version = "0.1.0"
+dependencies = [
+ "arpg-core",
+ "glam",
 ]
 
 [[package]]

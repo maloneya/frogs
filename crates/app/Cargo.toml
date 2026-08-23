@@ -1,0 +1,17 @@
+[package]
+name = "arpg"
+version.workspace = true
+edition.workspace = true
+
+# The wiring layer, and the only crate that depends on both sides.
+[dependencies]
+arpg-core.workspace = true
+arpg-gfx.workspace = true
+arpg-sim.workspace = true
+env_logger.workspace = true
+log.workspace = true
+pollster.workspace = true
+winit.workspace = true
+
+[lints]
+workspace = true

@@ -6,7 +6,7 @@ use std::time::Instant;
 /// accumulator, and becomes the thing that decides how many simulation steps a
 /// frame is worth — which is why it's its own module rather than two fields on
 /// `App`.
-pub struct Clock {
+pub(crate) struct Clock {
     last: Instant,
     /// Exponential moving average of frame time, in seconds.
     smoothed: f32,
@@ -31,7 +31,7 @@ impl Default for Clock {
 
 impl Clock {
     /// Call once per frame. Returns the raw delta in seconds.
-    pub fn tick(&mut self) -> f32 {
+    pub(crate) fn tick(&mut self) -> f32 {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f32();
         self.last = now;
@@ -41,16 +41,16 @@ impl Clock {
         dt
     }
 
-    pub fn frame_ms(&self) -> f32 {
+    pub(crate) fn frame_ms(&self) -> f32 {
         self.smoothed * 1000.0
     }
 
-    pub fn fps(&self) -> f32 {
+    pub(crate) fn fps(&self) -> f32 {
         if self.smoothed > 0.0 { 1.0 / self.smoothed } else { 0.0 }
     }
 
     /// True roughly ten times a second.
-    pub fn hud_due(&mut self) -> bool {
+    pub(crate) fn hud_due(&mut self) -> bool {
         if self.since_hud >= HUD_INTERVAL {
             self.since_hud = 0.0;
             return true;

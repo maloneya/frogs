@@ -1,3 +1,10 @@
+//! The vocabulary both halves of the engine speak.
+//!
+//! `arpg-sim` describes what exists in terms of [`Instance`]; `arpg-gfx` knows
+//! how to draw one. Neither depends on the other, and this crate depends on
+//! neither of them — nor on wgpu, which is what keeps the simulation free of the
+//! graphics stack.
+
 use glam::Vec3;
 
 /// Capacity of the instance buffer. Allocated once, up front.
@@ -46,6 +53,7 @@ const _: () = assert!(size_of::<Instance>() == 3 * 4 * size_of::<f32>());
 const _: () = assert!(MAX_INSTANCES * size_of::<Instance>() < 64 << 20);
 
 impl Instance {
+    /// The only constructor, so the reserved padding is always zeroed.
     pub fn new(pos: Vec3, scale: Vec3, color: Vec3) -> Self {
         Self {
             pos: pos.into(),
@@ -86,6 +94,8 @@ impl InstanceBuffer {
         InstanceSink { remaining: MAX_INSTANCES, buf: &mut self.buf }
     }
 
+    /// The frame's instances, ready to upload. Read-only: writing goes through
+    /// [`InstanceBuffer::sink`].
     pub fn as_slice(&self) -> &[Instance] {
         &self.buf
     }
@@ -115,22 +125,6 @@ impl InstanceSink<'_> {
         }
         self.buf.push(instance);
         self.remaining -= 1;
-    }
-}
-
-/// Locations 0 and 1 belong to the mesh; instance data starts at 2.
-const ATTRS: [wgpu::VertexAttribute; 3] =
-    wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4];
-
-/// The one line that makes this instance data rather than vertex data:
-/// `step_mode: Instance` tells the GPU to advance this buffer once per
-/// *instance* instead of once per vertex. Same buffer machinery, different
-/// stepping rule — that's the whole trick.
-pub fn layout() -> wgpu::VertexBufferLayout<'static> {
-    wgpu::VertexBufferLayout {
-        array_stride: size_of::<Instance>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &ATTRS,
     }
 }
 

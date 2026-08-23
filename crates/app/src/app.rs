@@ -6,15 +6,16 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use crate::gfx::{InstanceBuffer, OrthoCamera, Renderer};
+use arpg_core::InstanceBuffer;
+use arpg_gfx::{OrthoCamera, Renderer};
 use crate::time::Clock;
-use crate::world::World;
+use arpg_sim::World;
 
 /// Owns everything and wires it together. Deliberately the only place that
 /// knows about all the subsystems at once — `gfx` and `world` stay ignorant of
 /// each other, and this is where they meet.
 #[derive(Default)]
-pub struct App {
+pub(crate) struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     camera: Option<OrthoCamera>,
@@ -55,7 +56,7 @@ impl App {
         }
     }
 
-    pub fn run() {
+    pub(crate) fn run() {
         let event_loop = EventLoop::new().expect("create event loop");
 
         // Poll rather than Wait: never block waiting for input, just keep

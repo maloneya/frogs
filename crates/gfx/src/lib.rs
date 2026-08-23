@@ -1,9 +1,16 @@
+//! Turning [`Instance`]s into pixels.
+//!
+//! This crate's entire vocabulary is position, scale and colour. It has no
+//! dependency on `arpg-sim` and cannot acquire one: Cargo refuses cyclic
+//! package dependencies, so "gfx never knows what an enemy is" is enforced by
+//! the build rather than by good intentions.
+
 mod camera;
 mod cube;
-mod instance;
 
 pub use camera::OrthoCamera;
-pub use instance::{Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES};
+
+use arpg_core::Instance;
 
 use std::sync::Arc;
 
@@ -74,6 +81,10 @@ fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture
 }
 
 impl Renderer {
+    /// Brings up the GPU: adapter, device, queue, swapchain and pipelines.
+    ///
+    /// Blocks until the device is ready. That is fine here and would not be on
+    /// the web, which is why the wgpu examples route this through the event loop.
     pub async fn new(window: Arc<Window>, display_handle: winit::event_loop::OwnedDisplayHandle) -> Self {
         let size = window.inner_size();
 
@@ -156,6 +167,11 @@ impl Renderer {
         }
     }
 
+    /// Reconfigures the swapchain and rebuilds the depth buffer to match.
+    ///
+    /// Both, always: a depth attachment whose dimensions disagree with the
+    /// colour attachment is a validation error, and dragging a window edge is
+    /// the fastest way to find out.
     pub fn resize(&mut self, width: u32, height: u32) {
         // A zero-sized surface is invalid; minimising a window will produce one.
         self.config.width = width.max(1);
@@ -164,6 +180,7 @@ impl Renderer {
         self.depth = create_depth(&self.device, self.config.width, self.config.height);
     }
 
+    /// Whether the surface is currently pinned to the refresh rate.
     pub fn vsync(&self) -> bool {
         self.vsync
     }
@@ -187,6 +204,8 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
+    /// Draws one frame: the whole horde and the ground in a single instanced
+    /// draw call.
     pub fn render(&mut self, camera: &OrthoCamera, instances: &[Instance]) {
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU
@@ -309,7 +328,7 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::instance::InstanceBuffer;
+    use arpg_core::InstanceBuffer;
     use glam::Vec3;
 
     /// Matches the real swapchain format so the pipeline under test is the one

@@ -1,7 +1,7 @@
 use glam::Vec3;
 use wgpu::util::DeviceExt;
 
-use super::instance::{self, Instance, MAX_INSTANCES};
+use arpg_core::{Instance, MAX_INSTANCES};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -47,8 +47,30 @@ fn cube_mesh() -> (Vec<Vertex>, Vec<u16>) {
     (verts, indices)
 }
 
+/// How `arpg_core::Instance` is fed to the GPU.
+///
+/// This lives here rather than beside the type it describes because it names
+/// wgpu, and `arpg-core` must not — otherwise `arpg-sim` would link the whole
+/// graphics stack just to say where an enemy is standing.
+///
+/// Locations 0 and 1 belong to the mesh; instance data starts at 2.
+const ATTRS: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4];
+
+/// The one line that makes this instance data rather than vertex data:
+/// `step_mode: Instance` tells the GPU to advance this buffer once per
+/// *instance* instead of once per vertex. Same buffer machinery, different
+/// stepping rule — that's the whole trick.
+fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: size_of::<Instance>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &ATTRS,
+    }
+}
+
 /// The cube mesh on the GPU, plus the pipeline that draws it.
-pub struct CubePipeline {
+pub(crate) struct CubePipeline {
     pipeline: wgpu::RenderPipeline,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -57,7 +79,7 @@ pub struct CubePipeline {
 }
 
 impl CubePipeline {
-    pub fn new(
+    pub(crate) fn new(
         device: &wgpu::Device,
         camera_layout: &wgpu::BindGroupLayout,
         color_format: wgpu::TextureFormat,
@@ -101,7 +123,7 @@ impl CubePipeline {
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
                     }),
-                    Some(instance::layout()),
+                    Some(instance_layout()),
                 ],
             },
             fragment: Some(wgpu::FragmentState {
@@ -147,13 +169,13 @@ impl CubePipeline {
 
     /// The second of the two places per frame where data crosses into the GPU.
     /// Returns how many instances are actually live.
-    pub fn upload(&self, queue: &wgpu::Queue, instances: &[Instance]) -> u32 {
+    pub(crate) fn upload(&self, queue: &wgpu::Queue, instances: &[Instance]) -> u32 {
         let n = instances.len().min(MAX_INSTANCES);
         queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&instances[..n]));
         n as u32
     }
 
-    pub fn draw(
+    pub(crate) fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         camera_bind_group: &wgpu::BindGroup,
