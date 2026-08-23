@@ -92,6 +92,45 @@ Metal surface) for measurement. Measure uncapped; tune feel under vsync.
 the hardware encodes on write. Passing the sRGB value you want yields something
 roughly five times too bright.
 
+### Deliberate choices that look like smells
+
+Do not "clean up" these without understanding why they're there — each one is
+load-bearing, and several will compile fine while producing wrong output.
+
+- **`Instance` has three `_pad` floats.** Not waste. Vertex buffers have no
+  16-byte alignment requirement so the struct *could* pack to 36 bytes, but the
+  48-byte stride keeps offset maths trivial and reserves room for rotation,
+  hit-flash and team id. Removing the padding means rewriting the vertex
+  attribute layout and the shader together.
+- **The cube has 24 vertices, not 8.** Each face needs its own normal and a
+  vertex carries one. Deduplicating to 8 corners silently destroys the shading.
+- **Cube winding is derived from a per-face orthonormal basis**, not written out
+  as a literal table. That's what guarantees correct outward winding under
+  back-face culling; a hand-written table is where inside-out faces come from.
+- **Colour literals look far too dark.** They're linear; the surface is sRGB and
+  the hardware encodes on write. `0.05` on screen is `0.0039` in source.
+- **The instance buffer is allocated at full `MAX_INSTANCES` capacity** and only
+  partially written. Capacity and count are separate on purpose — regrowing a GPU
+  buffer mid-run means syncing against in-flight frames.
+- **`about_to_wait` requests a redraw unconditionally.** This is what makes the
+  loop continuous rather than event-driven. It is not a busy-wait bug.
+- **Depth uses `StoreOp::Discard`.** Nothing reads depth after the pass; storing
+  it would waste real bandwidth on a tiled GPU.
+
+### Known limitations (real, not yet worth fixing)
+
+- `World::extract()` rebuilds the 1024 static ground tiles every frame and
+  re-uploads the entire instance buffer. The fix is separate static/dynamic
+  buffer regions — deliberately deferred until measurement shows it costing
+  something.
+- `Clock` smooths frame time with an EMA, which *hides* pacing variance. An
+  average is the wrong instrument for the thing that matters most here; a
+  frame-time histogram is the intended replacement.
+- The camera angle is fixed. No rotation, and no way to look at anything but
+  the origin.
+- Nothing is tested. There is no headless render path, so correctness is
+  currently verified by looking at the window.
+
 ### Roadmap
 
 Rough order, one chunk at a time: ortho camera + ground grid + instanced cubes
