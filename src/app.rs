@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -35,9 +35,11 @@ impl App {
             // than by walking.
             KeyCode::BracketRight => {
                 self.world.enemy_count = (self.world.enemy_count * 2).min(MAX_ENEMIES);
+                log::info!("N = {}", self.world.enemy_count);
             }
             KeyCode::BracketLeft => {
                 self.world.enemy_count = (self.world.enemy_count / 2).max(1);
+                log::info!("N = {}", self.world.enemy_count);
             }
             KeyCode::Equal => {
                 if let Some(c) = &mut self.camera {
@@ -100,21 +102,26 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        state: ElementState::Pressed,
-                        physical_key: PhysicalKey::Code(key),
-                        ..
-                    },
-                ..
-            } => {
-                match key {
-                    KeyCode::Escape => event_loop.exit(),
-                    KeyCode::KeyV => {
-                        renderer.toggle_vsync();
+            WindowEvent::Focused(focused) => log::debug!("focus: {focused}"),
+
+            WindowEvent::KeyboardInput { event: key_event, .. } => {
+                log::debug!(
+                    "key: physical={:?} state={:?} repeat={}",
+                    key_event.physical_key,
+                    key_event.state,
+                    key_event.repeat
+                );
+
+                if key_event.state == ElementState::Pressed
+                    && let PhysicalKey::Code(key) = key_event.physical_key
+                {
+                    match key {
+                        KeyCode::Escape => event_loop.exit(),
+                        KeyCode::KeyV => {
+                            renderer.toggle_vsync();
+                        }
+                        _ => self.on_key(key),
                     }
-                    _ => self.on_key(key),
                 }
             }
 

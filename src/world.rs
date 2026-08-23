@@ -4,7 +4,7 @@ use crate::gfx::Instance;
 
 /// Ground plane size, in tiles.
 const GROUND_TILES: usize = 32;
-const TILE: f32 = 1.25;
+const TILE: f32 = 1.5;
 
 /// The floor's share of the instance budget.
 pub const GROUND_INSTANCES: usize = GROUND_TILES * GROUND_TILES;
@@ -56,7 +56,10 @@ impl World {
     fn extract_enemies(&self, out: &mut Vec<Instance>) {
 
         let side = (self.enemy_count as f32).sqrt().ceil().max(1.0) as usize;
-        let spacing = TILE;
+        // Deliberately *not* TILE. Matching the floor's spacing made the horde
+        // tile it exactly edge-to-edge, hiding the ground and — worse — making
+        // a change in N invisible, because the horde only grew off-screen.
+        let spacing = 0.7;
         let offset = (side as f32 - 1.0) * spacing * 0.5;
 
         for i in 0..self.enemy_count {
@@ -69,7 +72,7 @@ impl World {
             let color = Vec3::new(0.30 + t * 0.12, 0.06 + t * 0.05, 0.05);
 
             // Half-height 0.4, so the cube sits on the ground rather than in it.
-            out.push(Instance::new(Vec3::new(x, 0.4, z), Vec3::splat(0.8), color));
+            out.push(Instance::new(Vec3::new(x, 0.25, z), Vec3::splat(0.5), color));
         }
     }
 }

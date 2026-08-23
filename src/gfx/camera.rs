@@ -25,7 +25,7 @@ const DISTANCE: f32 = 250.0;
 
 impl OrthoCamera {
     pub fn new(aspect: f32) -> Self {
-        Self { target: Vec3::ZERO, zoom: 20.0, aspect }
+        Self { target: Vec3::ZERO, zoom: 26.0, aspect }
     }
 
     pub fn view_proj(&self) -> Mat4 {
