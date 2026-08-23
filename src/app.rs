@@ -6,7 +6,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use crate::gfx::Renderer;
+use crate::gfx::{OrthoCamera, Renderer};
 
 /// Owns everything and wires it together. Deliberately the only place that
 /// knows about all the subsystems at once — `gfx` and `world` stay ignorant of
@@ -15,6 +15,7 @@ use crate::gfx::Renderer;
 pub struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
+    camera: Option<OrthoCamera>,
 }
 
 impl App {
@@ -52,11 +53,13 @@ impl ApplicationHandler for App {
             window.clone(),
             display_handle,
         )));
+        let size = window.inner_size();
+        self.camera = Some(OrthoCamera::new(size.width as f32 / size.height as f32));
         self.window = Some(window);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let Some(renderer) = self.renderer.as_mut() else {
+        let (Some(renderer), Some(camera)) = (self.renderer.as_mut(), self.camera.as_mut()) else {
             return;
         };
 
@@ -72,9 +75,12 @@ impl ApplicationHandler for App {
                 ..
             } => event_loop.exit(),
 
-            WindowEvent::Resized(size) => renderer.resize(size.width, size.height),
+            WindowEvent::Resized(size) => {
+                renderer.resize(size.width, size.height);
+                camera.aspect = size.width.max(1) as f32 / size.height.max(1) as f32;
+            }
 
-            WindowEvent::RedrawRequested => renderer.render(),
+            WindowEvent::RedrawRequested => renderer.render(camera),
 
             _ => {}
         }

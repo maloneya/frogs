@@ -1,7 +1,20 @@
+mod camera;
+mod cube;
+
+pub use camera::OrthoCamera;
+
 use std::sync::Arc;
 
 use wgpu::CurrentSurfaceTexture;
 use winit::window::Window;
+
+use camera::CameraBinding;
+use cube::CubePipeline;
+
+/// Depth32Float is the safe universal choice. Under an orthographic camera
+/// depth is linear, so we aren't fighting the precision crush that makes
+/// perspective projections want 24-bit-plus formats.
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Everything required to get pixels onto the screen.
 ///
@@ -25,6 +38,31 @@ pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    depth: wgpu::TextureView,
+    camera: CameraBinding,
+    cubes: CubePipeline,
+}
+
+/// The depth buffer must match the colour attachment's dimensions exactly, so
+/// this is called from both setup and `resize`. Forgetting the resize path is
+/// the classic way to crash on the first window drag.
+fn create_depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth"),
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 impl Renderer {
@@ -79,7 +117,11 @@ impl Renderer {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&device, &config);
 
-        Self { window, instance, surface, device, queue, config }
+        let depth = create_depth(&device, &config);
+        let camera = CameraBinding::new(&device);
+        let cubes = CubePipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
+
+        Self { window, instance, surface, device, queue, config, depth, camera, cubes }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -87,13 +129,14 @@ impl Renderer {
         self.config.width = width.max(1);
         self.config.height = height.max(1);
         self.surface.configure(&self.device, &self.config);
+        self.depth = create_depth(&self.device, &self.config);
     }
 
     fn reconfigure(&mut self) {
         self.surface.configure(&self.device, &self.config);
     }
 
-    pub fn render(&mut self) {
+    pub fn render(&mut self, camera: &OrthoCamera) {
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU
         // dropped the surface. Each wants a slightly different response, and
@@ -143,9 +186,11 @@ impl Renderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
 
+        self.camera.upload(&self.queue, camera);
+
         {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear"),
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("main"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -155,16 +200,38 @@ impl Renderer {
                         // way in. Loading the previous contents instead would
                         // cost real bandwidth, so always clear what you'll
                         // fully overwrite.
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.06, b: 0.08, a: 1.0 }),
+                        //
+                        // These are *linear* values. The surface is sRGB, so the
+                        // hardware encodes on write: passing the sRGB numbers
+                        // you actually want (0.05, 0.06, 0.08) would come out
+                        // roughly five times too bright. This is the linear
+                        // pre-image of that colour.
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0039,
+                            g: 0.0049,
+                            b: 0.0072,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        // Discard, not Store: nothing reads the depth buffer
+                        // after this pass, so writing it back to memory would
+                        // be pure wasted bandwidth.
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // Nothing drawn yet — the clear is the whole frame for now.
+
+            self.cubes.draw(&mut pass, &self.camera.bind_group);
         }
 
         self.queue.submit(Some(encoder.finish()));
