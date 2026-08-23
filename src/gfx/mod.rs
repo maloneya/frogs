@@ -82,10 +82,6 @@ impl Renderer {
         Self { window, instance, surface, device, queue, config }
     }
 
-    pub fn window(&self) -> &Window {
-        &self.window
-    }
-
     pub fn resize(&mut self, width: u32, height: u32) {
         // A zero-sized surface is invalid; minimising a window will produce one.
         self.config.width = width.max(1);
