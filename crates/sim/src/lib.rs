@@ -184,6 +184,12 @@ impl World {
         self.player.pos
     }
 
+    /// Which way the character is pointing, in radians. The attack state
+    /// machine will orient its hitbox by this.
+    pub fn player_facing(&self) -> f32 {
+        self.player.facing
+    }
+
     /// **The seam.** The world describes itself in the renderer's vocabulary;
     /// `gfx` never sees a `World`.
     ///

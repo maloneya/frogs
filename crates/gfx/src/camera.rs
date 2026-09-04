@@ -116,6 +116,13 @@ impl OrthoCamera {
         self.lead = Vec3::ZERO;
     }
 
+    /// The point currently being looked at — the *smoothed* focus, which lags
+    /// the character on purpose. Read-only; `follow` and `snap_to` remain the
+    /// only writers.
+    pub fn target(&self) -> Vec3 {
+        self.target
+    }
+
     /// Chases `focus`, leading it in the direction of `heading`. Call once per
     /// rendered frame.
     ///

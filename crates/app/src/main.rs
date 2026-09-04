@@ -7,6 +7,7 @@
 //! that sees both sides.
 
 mod app;
+mod harness;
 mod input;
 mod time;
 

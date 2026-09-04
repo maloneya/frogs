@@ -10,6 +10,7 @@ use arpg_core::{InstanceBuffer, MoveDir};
 use arpg_gfx::{OrthoCamera, Renderer};
 use arpg_sim::World;
 
+use crate::harness::{self, Command, Request};
 use crate::input::Input;
 use crate::time::Clock;
 
@@ -22,6 +23,27 @@ pub(crate) struct App {
     renderer: Option<Renderer>,
     camera: Option<OrthoCamera>,
     world: World,
+    /// Numbers the screenshots, so repeated captures do not overwrite.
+    captures: u32,
+    /// Frames skipped because the surface had none to give — occluded,
+    /// resized behind our back, or lost. Reported alongside `frames` so a
+    /// suspiciously fast run is self-diagnosing rather than mysterious.
+    skipped: u64,
+    /// Frames presented since launch.
+    ///
+    /// Reported by the harness so throughput can be *counted* over a known
+    /// interval rather than inferred from `Clock`'s smoothed average — which is
+    /// an EMA, and so cannot distinguish a steady 60Hz from a mixture that
+    /// averages to it. It is also the only way to notice the app being throttled
+    /// while it sits in the background.
+    frames: u64,
+    /// Present only when `ARPG_HARNESS` asked for a control socket.
+    harness: Option<std::sync::mpsc::Receiver<Request>>,
+    /// Keys to release, and replies to send, once the game clock reaches them.
+    /// Deadlines are the game's own, so a `hold` lasts that long *in the world*.
+    scheduled: Vec<(std::time::Instant, Option<KeyCode>, Option<std::sync::mpsc::Sender<String>>)>,
+    /// Replies owed to callers waiting on a frame to be captured.
+    awaiting_frame: Vec<std::sync::mpsc::Sender<String>>,
     /// Reused every frame so a steady state allocates nothing.
     instances: InstanceBuffer,
     input: Input,
@@ -30,6 +52,14 @@ pub(crate) struct App {
 
 /// One notch of zoom per keypress.
 const ZOOM_STEP: f32 = 1.2;
+
+/// Where `P` writes screenshots. The system temp directory unless told
+/// otherwise, so a stray keypress never litters the working tree.
+fn capture_dir() -> std::path::PathBuf {
+    std::env::var_os("ARPG_CAPTURE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+}
 
 impl App {
     /// Debug and meta commands, kept deliberately apart from the action layer.
@@ -68,6 +98,117 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Applies whatever the control socket has sent since the last frame.
+    ///
+    /// Runs before input is sampled, so an injected key takes effect on the
+    /// very frame it arrives rather than the one after.
+    fn drain_harness(&mut self) -> bool {
+        // Collected up front so the receiver borrow ends before the loop needs
+        // the rest of `self`.
+        let Some(rx) = &self.harness else { return false };
+        let requests: Vec<Request> = rx.try_iter().collect();
+        let mut quit = false;
+
+        for Request { command, reply } in requests {
+            let now = std::time::Instant::now();
+            let answer = match command {
+                Command::Press(key) => {
+                    self.input.on_key(key, true, false);
+                    "ok".to_string()
+                }
+                Command::Release(key) => {
+                    self.input.on_key(key, false, false);
+                    "ok".to_string()
+                }
+                Command::Tap(key) => {
+                    self.input.on_key(key, true, false);
+                    self.scheduled.push((now, Some(key), None));
+                    "ok".to_string()
+                }
+                Command::Hold(key, ms) => {
+                    self.input.on_key(key, true, false);
+                    let due = now + std::time::Duration::from_millis(ms);
+                    self.scheduled.push((due, Some(key), Some(reply)));
+                    continue; // replies once the key comes back up
+                }
+                Command::Wait(ms) => {
+                    let due = now + std::time::Duration::from_millis(ms);
+                    self.scheduled.push((due, None, Some(reply)));
+                    continue;
+                }
+                Command::Shot(path) => {
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.request_capture(path);
+                    }
+                    self.awaiting_frame.push(reply);
+                    continue; // replies once the file exists
+                }
+                Command::State => self.report_state(),
+                Command::SetEnemies(n) => {
+                    self.world.set_enemy_count(n);
+                    format!("enemies {}", self.world.enemy_count())
+                }
+                Command::SetVsync(on) => match self.renderer.as_mut() {
+                    Some(renderer) => {
+                        if renderer.vsync() != on {
+                            renderer.toggle_vsync();
+                        }
+                        format!("vsync {}", renderer.vsync())
+                    }
+                    None => "error: no renderer yet".to_string(),
+                },
+                Command::Quit => {
+                    quit = true;
+                    "ok".to_string()
+                }
+            };
+            let _ = reply.send(answer);
+        }
+        quit
+    }
+
+    /// One line of everything worth knowing, so a test can assert on numbers
+    /// instead of inferring them from pixels.
+    fn report_state(&self) -> String {
+        let p = self.world.player_pos();
+        let c = self.camera.as_ref().map(|c| c.target()).unwrap_or_default();
+        format!(
+            "player_pos {:.3} {:.3} {:.3} facing {:.4} camera_target {:.3} {:.3} enemies {} instances {} frames {} skipped {} frame_ms {:.2} vsync {}",
+            p.x,
+            p.y,
+            p.z,
+            self.world.player_facing(),
+            c.x,
+            c.z,
+            self.world.enemy_count(),
+            self.instances.as_slice().len(),
+            self.frames,
+            self.skipped,
+            self.clock.frame_ms(),
+            self.renderer.as_ref().is_some_and(Renderer::vsync),
+        )
+    }
+
+    /// Fires the releases and replies whose deadline has passed.
+    fn service_schedule(&mut self) {
+        let now = std::time::Instant::now();
+        let mut still_pending = Vec::new();
+
+        for (due, key, reply) in std::mem::take(&mut self.scheduled) {
+            if now >= due {
+                if let Some(key) = key {
+                    self.input.on_key(key, false, false);
+                }
+                if let Some(reply) = reply {
+                    let _ = reply.send("ok".to_string());
+                }
+            } else {
+                still_pending.push((due, key, reply));
+            }
+        }
+        self.scheduled = still_pending;
     }
 
     pub(crate) fn run() {
@@ -115,6 +256,7 @@ impl ApplicationHandler for App {
 
         self.camera = Some(camera);
         self.window = Some(window);
+        self.harness = harness::start();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -158,6 +300,12 @@ impl ApplicationHandler for App {
                         KeyCode::KeyV => {
                             renderer.toggle_vsync();
                         }
+                        KeyCode::KeyP => {
+                            let path = capture_dir()
+                                .join(format!("arpg-{:04}.png", self.captures));
+                            self.captures += 1;
+                            renderer.request_capture(path);
+                        }
                         _ => self.on_debug_key(key),
                     }
                 }
@@ -192,7 +340,21 @@ impl ApplicationHandler for App {
                 camera.follow(self.world.player_pos(), dir, dt);
 
                 self.world.extract(self.instances.sink());
-                renderer.render(camera, self.instances.as_slice());
+                // Counted only when a frame actually reached the screen. An
+                // occluded window skips the draw entirely, and counting those
+                // would report thousands of frames a second for drawing nothing.
+                if renderer.render(camera, self.instances.as_slice()) {
+                    self.frames += 1;
+                } else {
+                    self.skipped += 1;
+                }
+
+                // The capture is written inside `render`, so anything waiting
+                // on a screenshot can be told the file exists.
+                for reply in std::mem::take(&mut self.awaiting_frame) {
+                    let _ = reply.send("ok".to_string());
+                }
+
 
                 if self.clock.hud_due()
                     && let Some(window) = &self.window
@@ -216,7 +378,20 @@ impl ApplicationHandler for App {
     /// game is the opposite — it must produce a frame whether or not anyone
     /// touched the keyboard. Requesting a redraw every time the event queue
     /// drains is what turns this into a continuous loop.
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // The control socket is drained here rather than inside the redraw,
+        // because this is the one point in the loop where nothing else is
+        // borrowed out of `self` — and it runs immediately before the frame,
+        // so an injected key takes effect on the very next one.
+        //
+        // Expiries are serviced *first*, so a key pressed by this pass survives
+        // until the next one and is therefore held for exactly one frame.
+        self.service_schedule();
+        if self.drain_harness() {
+            event_loop.exit();
+            return;
+        }
+
         if let Some(window) = &self.window {
             window.request_redraw();
         }

@@ -10,6 +10,7 @@
 //! complaint. The guard in `build.rs` is what closes it.
 
 mod camera;
+mod capture;
 mod cube;
 
 pub use camera::OrthoCamera;
@@ -22,6 +23,7 @@ use wgpu::CurrentSurfaceTexture;
 use winit::window::Window;
 
 use camera::CameraBinding;
+use capture::Readback;
 use cube::CubePipeline;
 
 /// Depth32Float is the safe universal choice. Under an orthographic camera
@@ -60,6 +62,12 @@ pub struct Renderer {
     /// A direct write would desync the two: the HUD would claim one thing while
     /// the surface did another, with no reconfigure to make it true.
     vsync: bool,
+    /// Set by [`Renderer::request_capture`], consumed by the next `render`.
+    ///
+    /// Deferred rather than done on the spot because the only moment the frame
+    /// exists as a copyable texture is between drawing it and presenting it,
+    /// and that moment is inside `render`.
+    pending_capture: Option<std::path::PathBuf>,
 }
 
 /// The depth buffer must match the colour attachment's dimensions exactly, so
@@ -150,6 +158,17 @@ impl Renderer {
             .find(|m| caps.present_modes.contains(m));
 
         config.present_mode = wgpu::PresentMode::AutoVsync;
+
+        // So the app can screenshot itself. Requested rather than assumed: a
+        // surface is only guaranteed to support RENDER_ATTACHMENT, and silently
+        // configuring an unsupported usage is a validation error at the worst
+        // possible moment.
+        if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            config.usage |= wgpu::TextureUsages::COPY_SRC;
+        } else {
+            log::warn!("surface cannot be copied from; screenshots unavailable");
+        }
+
         surface.configure(&device, &config);
 
         let depth = create_depth(&device, config.width, config.height);
@@ -168,6 +187,7 @@ impl Renderer {
             cubes,
             uncapped,
             vsync: true,
+            pending_capture: None,
         }
     }
 
@@ -182,6 +202,16 @@ impl Renderer {
         self.config.height = height.max(1);
         self.surface.configure(&self.device, &self.config);
         self.depth = create_depth(&self.device, self.config.width, self.config.height);
+    }
+
+    /// Asks for the next rendered frame to be written to `path` as a PNG.
+    ///
+    /// The app screenshotting itself, rather than something outside screenshotting
+    /// the window: no display has to be awake, no window focused, no permission
+    /// granted, and the framing is exactly the surface rather than a rectangle
+    /// guessed from outside.
+    pub fn request_capture(&mut self, path: std::path::PathBuf) {
+        self.pending_capture = Some(path);
     }
 
     /// Whether the surface is currently pinned to the refresh rate.
@@ -210,7 +240,13 @@ impl Renderer {
 
     /// Draws one frame: the whole horde and the ground in a single instanced
     /// draw call.
-    pub fn render(&mut self, camera: &OrthoCamera, instances: &[Instance]) {
+    ///
+    /// Returns whether a frame was actually **presented**. Several of the
+    /// recoverable surface states below skip the frame entirely, and a caller
+    /// counting frames has to be able to tell those apart — a loop spinning
+    /// freely because the window is occluded otherwise reports a spectacular
+    /// frame rate for drawing nothing at all.
+    pub fn render(&mut self, camera: &OrthoCamera, instances: &[Instance]) -> bool {
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU
         // dropped the surface. Each wants a slightly different response, and
@@ -223,12 +259,12 @@ impl Renderer {
             CurrentSurfaceTexture::Suboptimal(frame) => {
                 drop(frame);
                 self.reconfigure();
-                return;
+                return false;
             }
 
             CurrentSurfaceTexture::Outdated => {
                 self.reconfigure();
-                return;
+                return false;
             }
 
             // The surface itself is gone and has to be recreated from scratch.
@@ -238,12 +274,12 @@ impl Renderer {
                     .create_surface(self.window.clone())
                     .expect("recreate surface");
                 self.reconfigure();
-                return;
+                return false;
             }
 
             // Transient: the compositor isn't ready or we're hidden. Drop the
             // frame; we'll be asked again immediately.
-            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return,
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return false,
 
             CurrentSurfaceTexture::Validation => {
                 unreachable!("no error scope registered, so validation errors panic instead")
@@ -309,12 +345,28 @@ impl Renderer {
             self.cubes.draw(&mut pass, &self.camera.bind_group, count);
         }
 
+        // The frame is a copyable texture only between drawing and presenting,
+        // so the copy is recorded into this same encoder.
+        let capture = self.pending_capture.take().map(|path| {
+            let readback = Readback::new(&self.device, self.config.width, self.config.height);
+            readback.record(&mut encoder, &frame.texture);
+            (readback, path)
+        });
+
         self.queue.submit(Some(encoder.finish()));
+
+        if let Some((readback, path)) = capture {
+            match readback.write_png(&self.device, &path) {
+                Ok(()) => log::info!("captured frame to {}", path.display()),
+                Err(e) => log::error!("capture failed: {e}"),
+            }
+        }
 
         // Tells winit we're about to present, so it can time its own bookkeeping
         // against the flip instead of guessing.
         self.window.pre_present_notify();
         self.queue.present(frame);
+        true
     }
 }
 

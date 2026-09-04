@@ -30,6 +30,39 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace    # includes a headless GPU test; needs a real adapter
 ```
 
+### Driving the game from a shell
+
+`ARPG_HARNESS` opens a unix socket that plays the game: real keys through the
+real binding table, screenshots the app takes of itself, and simulation state as
+numbers. Unset, none of it exists — no socket, no thread, no way in.
+
+```sh
+ARPG_HARNESS=/tmp/arpg.sock cargo run --release
+echo 'hold d 500' | nc -U /tmp/arpg.sock     # walk east for 500ms, replies when done
+echo 'shot /tmp/f.png' | nc -U /tmp/arpg.sock # replies once the file exists
+echo state | nc -U /tmp/arpg.sock
+```
+
+`press`/`release`/`tap`/`hold <key> <ms>` · `wait <ms>` · `shot <path>` ·
+`state` · `enemies <n>` · `vsync on|off` · `quit`
+
+Every command replies, and the reply means the effect has *landed* — `hold`
+answers after the key comes back up, `shot` after the file is on disk. So a test
+is a sequence of commands, not a sequence of sleeps and hopes.
+
+Why it exists: driving the game through the OS instead (synthetic keystrokes
+plus a desktop screenshot tool) needs the window frontmost, the display awake,
+and accessibility permission, and when any of those is false it does not fail —
+the keys go to whatever *is* focused and the screenshot comes back black. Both
+look exactly like the game being broken. Building this cost less than the time
+already lost to a stray keypress silently resizing the horde mid-test.
+
+**Reading perf from it:** compare `frames` across a `wait`, rather than trusting
+`frame_ms`, which is an EMA and cannot tell a steady 60Hz from a mix averaging
+to it. Check `skipped` too: an occluded window makes the surface hand back
+nothing, the draw is skipped, and a loop spinning on nothing will otherwise
+report thousands of frames a second.
+
 Rust was installed via rustup with `--no-modify-path`, so `~/.cargo/bin` is
 **not** on PATH by default. Prefix commands with `. "$HOME/.cargo/env" &&`, or
 add it to the shell profile.
@@ -53,9 +86,9 @@ dependencies run one way.
 crates/
   core/  Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES   glam, bytemuck
          Action, ActionMask, InputState, Actions, MoveDir
-  gfx/   Renderer, camera, cube, shader.wgsl                     core, wgpu, winit
+  gfx/   Renderer, camera, cube, capture, shader.wgsl            core, wgpu, winit, png
   sim/   World, Player                                           core, glam  (no wgpu)
-  app/   App, Input + BINDINGS, Clock, wiring, main              core, gfx, sim, winit
+  app/   App, Input + BINDINGS, Clock, harness, wiring, main     core, gfx, sim, winit
 ```
 
 - `core` is the shared vocabulary and belongs to neither side. It deliberately
@@ -88,7 +121,8 @@ Debug commands (fixed, handled straight from the event callback — they act on
 the program, not the character, so they deliberately do *not* go through
 `Action`):
 
-`[` / `]` halve and double N · `-` / `=` zoom · `V` toggle vsync · `Esc` quit
+`[` / `]` halve and double N · `-` / `=` zoom · `V` toggle vsync ·
+`P` screenshot (to `$ARPG_CAPTURE_DIR`, default the temp dir) · `Esc` quit
 
 ## Structural invariants, and what actually enforces them
 
@@ -140,6 +174,10 @@ why if it cannot go higher.** What is in place today:
 | Turning is frame-rate independent and never overshoots | 3 | step clamped to the remaining arc; unit tests in `sim` |
 | Facing cannot drift toward the precision limit | 3 | `wrap_angle` after every turn; unit test in `sim` |
 | Spawning does not swoop the camera in from the origin | 0 | `snap_to`, called in `resumed` before the first frame |
+| A skipped frame is never counted as a rendered one | 1 | `Renderer::render` returns whether it presented; the caller must handle it |
+| Readback rows respect the copy alignment | 3 | `padded_bytes_per_row`; unit test in `gfx/capture.rs` |
+| A malformed harness command is reported, not ignored | 3 | `parse` returns `Result`; unit test in `app/harness.rs` |
+| The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
 
 **Escape hatch:** `#[expect(lint, reason = "…")]`, never `#[allow]`. `expect`
 stops compiling once the violation it covers disappears, so suppressions cannot
@@ -276,9 +314,14 @@ but this paragraph, which is precisely why they are worth reading twice.
   click-to-move an additive change: a second producer of `ActionMask`, with
   nothing downstream touched.
 - Test coverage is uneven: the GPU contract, the sink, the input layer, the
-  camera maths and player movement are covered; the cube mesh is not. There is
-  still no pixel-level check that the image is *correct*, only that wgpu accepts
-  the frame.
+  camera maths, player movement and turning are covered; the cube mesh is not.
+  There is still no automated pixel-level check that the image is *correct* —
+  but `gfx/capture.rs` is now the machinery one needs, and the yaw convention is
+  the first thing that should use it.
+- Perf numbers must be taken with the window visible. An occluded surface hands
+  back no texture, the draw is skipped, and the loop then spins as fast as it
+  likes — which reads as a spectacular frame rate for drawing nothing. `state`
+  reports `skipped` so that case is self-diagnosing rather than mysterious.
 - The headless test needs a real adapter, so `cargo test` will not pass in an
   environment without a GPU.
 
