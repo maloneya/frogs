@@ -3,7 +3,7 @@
 //! Depends on `arpg-core` for vocabulary and on nothing else. In particular it
 //! does not link wgpu, so simulation tests run without a GPU.
 
-use glam::{Vec2, Vec3};
+use glam::{Vec2, Vec3, Vec3Swizzles};
 
 use arpg_core::{Instance, InstanceSink, MoveDir, MAX_INSTANCES};
 
@@ -90,6 +90,62 @@ const ENEMY_SPACING: f32 = 0.7;
 const _: () =
     assert!(ENEMY_SPACING > ENEMY_SCALE.x, "a horde that spawns overlapped blows itself apart");
 
+/// Collision radii, in world units. **Bodies are discs, not boxes**, and that
+/// is a decision the camera pays for rather than a shortcut.
+///
+/// A disc is rotation-invariant, which matters because the player turns
+/// continuously: a box would need its collider rebuilt every frame, and its
+/// minimum-translation axis *flips* as two boxes slide past each other, which
+/// is a documented source of crowd jitter. A disc has one contact normal and
+/// one penetration depth, both unambiguous, and the test is a squared-distance
+/// compare with no `sqrt` until an overlap is confirmed.
+///
+/// What makes it *free* rather than merely cheap is the projection. A sorted-2D
+/// isometric game has to prevent overlap or the sort order pops, so the
+/// renderer dictates the radius. Here the depth buffer resolves occlusion
+/// exactly in hardware, so bodies may interpenetrate and the image stays
+/// correct — which leaves the radius as a pure feel knob, answerable to how
+/// dense the crowd should be and to nothing else.
+const ENEMY_RADIUS: f32 = ENEMY_SCALE.x * 0.5;
+
+/// Between the player's half-width (0.225) and half-depth (0.4), since one
+/// circle has to stand in for a footprint that is deliberately not square.
+const PLAYER_RADIUS: f32 = 0.3;
+
+const _: () = assert!(ENEMY_RADIUS > 0.0 && PLAYER_RADIUS > 0.0);
+const _: () = assert!(
+    ENEMY_SPACING > 2.0 * ENEMY_RADIUS,
+    "bodies must spawn clear of each other, not merely with their cubes apart"
+);
+
+/// How readily a body is displaced by a contact. Inverse mass, so zero is
+/// immovable and larger is lighter.
+///
+/// The asymmetry is the mechanic. At 1:20 the player absorbs about 5% of any
+/// single separation, so one enemy is a nudge — but nothing here caps how many
+/// contacts a tick may contain, and a crowd that cannot compress transmits all
+/// of them. Being penned in is therefore *emergent*: no code says "blocked",
+/// and the wall of bodies is only a wall because each body is also stopped by
+/// the one behind it.
+///
+/// Inverse mass also absorbs the cases that would otherwise need their own
+/// concept. A corpse, a barrel or a wall segment is a body with zero here; a
+/// dodge that lets the player slip through a gap is this number changing for a
+/// few ticks. Neither needs a branch in the solver.
+const PLAYER_INV_MASS: f32 = 0.05;
+const ENEMY_INV_MASS: f32 = 1.0;
+const _: () = assert!(PLAYER_INV_MASS > 0.0 && ENEMY_INV_MASS > 0.0);
+const _: () = assert!(
+    PLAYER_INV_MASS < ENEMY_INV_MASS,
+    "an equal or lighter player is shoved around by fodder"
+);
+
+/// Below this separation two bodies have no line between them to push along,
+/// and normalising their difference yields NaN — a position no clamp recovers.
+/// Squared, since that is what the overlap test already has to hand.
+const COINCIDENT_SQ: f32 = 1e-12;
+const _: () = assert!(COINCIDENT_SQ > 0.0);
+
 /// Half the ground plane's width, in world units.
 const ARENA_HALF: f32 = GROUND_TILES as f32 * TILE * 0.5;
 const _: () = assert!(ARENA_HALF > PLAYER_SCALE.x && ARENA_HALF > PLAYER_SCALE.z);
@@ -114,6 +170,11 @@ const _: () = assert!(PLAYER_SCALE.x > 0.0 && PLAYER_SCALE.y > 0.0 && PLAYER_SCA
 // so the facing would be real and invisible.
 const _: () = assert!(PLAYER_SCALE.x != PLAYER_SCALE.z, "a square footprint makes facing invisible");
 
+/// Where the player's centre sits so the body rests on the floor. Derived from
+/// the scale for the same reason the enemy's is: two numbers that must agree
+/// should be one number.
+const PLAYER_HALF_HEIGHT: f32 = PLAYER_SCALE.y * 0.5;
+
 /// Radians per second. Fast — a full 180° turn takes ~0.22s — because in an
 /// ARPG the character reorienting is feedback that the input registered, and
 /// anything slow enough to notice reads as the controls lagging.
@@ -136,6 +197,78 @@ fn wrap_angle(radians: f32) -> f32 {
 /// the inputs — is what removes the seam.
 fn shortest_arc(from: f32, to: f32) -> f32 {
     wrap_angle(to - from)
+}
+
+/// A separation direction for two bodies occupying exactly the same point.
+///
+/// It has to come from somewhere, and it has to be the *same* somewhere every
+/// run: a random direction would make two identical simulations diverge, which
+/// is precisely what the determinism the fixed timestep is for would be
+/// claiming. Deriving it from the pair's index costs nothing and is exactly
+/// reproducible.
+///
+/// Golden-angle steps rather than a fixed direction, so a clump of coincident
+/// bodies fans out instead of every one of them being pushed the same way and
+/// re-stacking on the next tick.
+fn escape_direction(tiebreak: usize) -> Vec2 {
+    /// `PI * (3 - sqrt(5))`, written out because `sqrt` is not const.
+    const GOLDEN_ANGLE: f32 = 2.399_963_2;
+
+    let angle = tiebreak as f32 * GOLDEN_ANGLE;
+    Vec2::new(angle.cos(), angle.sin())
+}
+
+/// Pushes two overlapping bodies apart along the line joining them, splitting
+/// the correction between them by inverse mass. Returns whether they touched.
+///
+/// **Position projection, not an impulse.** There is no velocity here and no
+/// momentum to conserve, which is the right model for a game whose movement is
+/// deliberately instantaneous: a solver whose whole job is conserving momentum
+/// would be fighting that. It also cannot inject energy, so there is no
+/// restitution to zero out and no explosive pushback to suppress.
+///
+/// The overlap is corrected in **full**, in one pass. The usual advice is to
+/// resolve a fraction — Box2D uses 0.2 — but that reasoning is about oblong
+/// shapes overshooting as they rotate, and these are discs that do not rotate
+/// and cannot stack. More to the point, a fraction applied once a tick is a
+/// per-tick lerp toward zero overlap, which is frame-rate dependent in exactly
+/// the way [`arpg_core::damp`] exists to prevent: it would converge five times
+/// faster uncapped than under vsync, so pressing `V` would change how the game
+/// feels and corrupt the measurement `V` is for. Full correction is exactly
+/// dt-independent, and it keeps that question shut until the fixed timestep
+/// makes it answerable.
+fn separate(
+    a: &mut Vec2,
+    b: &mut Vec2,
+    contact_distance: f32,
+    a_inv_mass: f32,
+    b_inv_mass: f32,
+    tiebreak: usize,
+) -> bool {
+    let delta = *b - *a;
+    let gap_sq = delta.length_squared();
+    if gap_sq >= contact_distance * contact_distance {
+        return false;
+    }
+
+    // Two immovable bodies have no correction to share out. Bailing keeps the
+    // division below from being a zero-divide that quietly yields NaN.
+    let share = a_inv_mass + b_inv_mass;
+    if share <= 0.0 {
+        return false;
+    }
+
+    let (normal, gap) = if gap_sq > COINCIDENT_SQ {
+        let gap = gap_sq.sqrt();
+        (delta / gap, gap)
+    } else {
+        (escape_direction(tiebreak), 0.0)
+    };
+
+    let overlap = contact_distance - gap;
+    *a -= normal * (overlap * a_inv_mass / share);
+    *b += normal * (overlap * b_inv_mass / share);
+    true
 }
 
 /// Where the horde is.
@@ -206,8 +339,13 @@ impl Enemies {
 /// only thing input drives, and it will accumulate state no enemy has — facing,
 /// attack phase, i-frames, buffered inputs. Wedging it into the horde's storage
 /// to avoid a "special case" would mean paying for those fields N times.
+#[derive(Default)]
 struct Player {
-    pos: Vec3,
+    /// Ground-plane position, on the same terms as the horde's: the height a
+    /// body is drawn at is a constant of its size, so there is no Y here for
+    /// movement to leave the floor through. That used to be a unit test; it is
+    /// now unrepresentable, which is where an invariant belongs.
+    pos: Vec2,
     /// Which way the body points, in radians. Yaw 0 faces world +Z and positive
     /// turns toward +X, matching `Instance::with_yaw` and `shader.wgsl`.
     ///
@@ -217,22 +355,27 @@ struct Player {
     facing: f32,
 }
 
-impl Default for Player {
-    fn default() -> Self {
-        Self { pos: Vec3::new(0.0, PLAYER_SCALE.y * 0.5, 0.0), facing: 0.0 }
-    }
-}
-
 /// What exists. This is where the simulation will live as it grows —
 /// fixed-timestep stepping, entity storage, spatial partitioning.
 pub struct World {
     enemies: Enemies,
     player: Player,
+    /// Contacts resolved by the last [`World::step`].
+    ///
+    /// The instrument the collision work is measured with, and it exists
+    /// because the alternative was reading pixels: a body is nine pixels across
+    /// at this zoom and a contact displaces it by a fraction of that, so
+    /// "is anything actually touching" is invisible on screen and obvious as a
+    /// number. It earns its keep twice — when the broadphase lands, a grid that
+    /// finds a different number of contacts than brute force is wrong, and this
+    /// is how that gets caught.
+    contacts: usize,
 }
 
 impl Default for World {
     fn default() -> Self {
-        let mut world = Self { enemies: Enemies::default(), player: Player::default() };
+        let mut world =
+            Self { enemies: Enemies::default(), player: Player::default(), contacts: 0 };
         world.set_enemy_count(DEFAULT_ENEMIES);
         world
     }
@@ -268,19 +411,66 @@ impl World {
     /// `move_dir` is world-space and already unit-or-zero — the type says so,
     /// so this does not have to check.
     pub fn step(&mut self, dt: f32, move_dir: MoveDir) {
-        self.player.pos += move_dir.as_vec3() * PLAYER_SPEED * dt;
+        self.player.pos += move_dir.as_vec3().xz() * PLAYER_SPEED * dt;
 
-        // The ground plane *is* the world; there is nothing beyond it to walk
-        // onto. This was previously a stand-in for the camera being pinned to
-        // the origin — that reason is gone now the camera tracks, but the
-        // boundary itself is real and stays until the world has an outside.
-        // The wider of the two footprint axes, since the body rotates and
-        // either one can be the one facing the wall.
-        let limit = ARENA_HALF - PLAYER_SCALE.x.max(PLAYER_SCALE.z) * 0.5;
-        self.player.pos.x = self.player.pos.x.clamp(-limit, limit);
-        self.player.pos.z = self.player.pos.z.clamp(-limit, limit);
+        // Order matters, and this is the whole of it: move first, then push
+        // bodies out of each other, then put everything back inside the world.
+        // Clamping before resolving would let a contact shove a body through
+        // the wall and leave it there until something else happened to touch
+        // it again.
+        self.resolve_contacts();
+        self.clamp_to_arena();
 
         self.turn_toward(move_dir, dt);
+    }
+
+    /// Separates every pair of bodies that overlap.
+    ///
+    /// Brute force, deliberately, and only against the player for now. It is
+    /// O(N) at this point, so at the default horde it is a thousand distance
+    /// checks a tick and costs nothing worth measuring. The uniform grid this
+    /// wants eventually is an *optimisation of something already correct* —
+    /// which means it can be tested by agreeing with this, and that test only
+    /// exists if this exists first.
+    ///
+    /// Gauss-Seidel: each correction is written immediately, so the next pair
+    /// sees it. That converges faster per pass than accumulating and applying
+    /// at the end, and its one real cost — the result depends on the order
+    /// pairs are visited — is fine here because the order is a fixed walk over
+    /// storage rather than anything that varies run to run.
+    fn resolve_contacts(&mut self) {
+        let contact = PLAYER_RADIUS + ENEMY_RADIUS;
+        // Disjoint fields, so both may be borrowed mutably at once.
+        let player = &mut self.player.pos;
+        let mut contacts = 0;
+
+        for (i, enemy) in self.enemies.pos.iter_mut().enumerate() {
+            contacts +=
+                usize::from(separate(player, enemy, contact, PLAYER_INV_MASS, ENEMY_INV_MASS, i));
+        }
+
+        self.contacts = contacts;
+    }
+
+    /// Keeps every body inside the world.
+    ///
+    /// The ground plane *is* the world; there is nothing beyond it to walk
+    /// onto. Enemies need this now for the first time — they have never moved
+    /// before, and without it a horde being shoved outward slowly walks off the
+    /// floor.
+    ///
+    /// It also hands over a mechanic for free. A body clamped against the wall
+    /// cannot yield along that axis, so it backs up the bodies behind it, and
+    /// pinning a crowd against terrain starts working without anyone
+    /// implementing it.
+    fn clamp_to_arena(&mut self) {
+        let player_limit = Vec2::splat(ARENA_HALF - PLAYER_RADIUS);
+        self.player.pos = self.player.pos.clamp(-player_limit, player_limit);
+
+        let enemy_limit = Vec2::splat(ARENA_HALF - ENEMY_RADIUS);
+        for pos in &mut self.enemies.pos {
+            *pos = pos.clamp(-enemy_limit, enemy_limit);
+        }
     }
 
     /// Rotates the body toward where it is heading, at a fixed rate.
@@ -306,15 +496,22 @@ impl World {
         self.player.facing = wrap_angle(self.player.facing + step * arc.signum());
     }
 
-    /// Where the character is standing. The camera will want this shortly.
+    /// Where the character is standing, lifted to world space for the camera
+    /// and the renderer. Stored on the ground plane; the height is a constant
+    /// of the body's size rather than state.
     pub fn player_pos(&self) -> Vec3 {
-        self.player.pos
+        on_ground(self.player.pos, PLAYER_HALF_HEIGHT)
     }
 
     /// Which way the character is pointing, in radians. The attack state
     /// machine will orient its hitbox by this.
     pub fn player_facing(&self) -> f32 {
         self.player.facing
+    }
+
+    /// How many overlapping pairs the last step pushed apart.
+    pub fn contacts(&self) -> usize {
+        self.contacts
     }
 
     /// **The seam.** The world describes itself in the renderer's vocabulary;
@@ -339,7 +536,7 @@ impl World {
         // — a bright cyan-blue, chosen to sit opposite the horde's muted red on
         // the colour wheel so the eye separates them without effort.
         out.push(
-            Instance::new(self.player.pos, PLAYER_SCALE, Vec3::new(0.10, 0.47, 0.88))
+            Instance::new(self.player_pos(), PLAYER_SCALE, Vec3::new(0.10, 0.47, 0.88))
                 .with_yaw(self.player.facing),
         );
     }
@@ -382,17 +579,42 @@ mod tests {
     use super::*;
     use arpg_core::InstanceBuffer;
 
+    /// A world whose player is clear of every body, so a test can measure
+    /// movement without measuring contact.
+    ///
+    /// Needed from the moment bodies touch: the horde spawns centred on the
+    /// origin and so does the player, which puts the two in contact on the
+    /// very first tick. Anything asking a question about *movement* has to get
+    /// out of the crowd first, or it is really asking about the solver.
+    fn in_open_ground() -> World {
+        let mut world = World::default();
+        world.set_enemy_count(1);
+
+        // The lone body spawns on top of the player. Two seconds east at
+        // `PLAYER_SPEED` clears it by 18 units.
+        for _ in 0..120 {
+            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+        }
+        world
+    }
+
     /// Speed must come from `dt`, not from how often `step` happens. Two half
     /// steps and one whole step have to land in the same place, or the game
     /// runs faster on a faster machine — the oldest bug in the medium.
+    ///
+    /// This is about the *integrator*, so it is measured in open ground.
+    /// Walking through a crowd is a different question and has a different
+    /// answer: contacts are resolved once per tick, so a step count that
+    /// depends on frame rate resolves a different number of them. That is the
+    /// bill the fixed timestep is there to pay, and it is not yet paid.
     #[test]
     fn movement_is_frame_rate_independent() {
         let east = MoveDir::new(Vec3::X);
 
-        let mut coarse = World::default();
+        let mut coarse = in_open_ground();
         coarse.step(0.2, east);
 
-        let mut fine = World::default();
+        let mut fine = in_open_ground();
         for _ in 0..20 {
             fine.step(0.01, east);
         }
@@ -402,7 +624,7 @@ mod tests {
 
     #[test]
     fn no_input_does_not_move_the_player() {
-        let mut world = World::default();
+        let mut world = in_open_ground();
         let start = world.player_pos();
         world.step(1.0, MoveDir::NONE);
         assert_eq!(world.player_pos(), start);
@@ -421,16 +643,6 @@ mod tests {
             assert!(pos.is_finite());
             assert!(pos.x.abs() <= ARENA_HALF && pos.z.abs() <= ARENA_HALF, "escaped: {pos}");
         }
-    }
-
-    /// Movement is horizontal: the character stays planted on the floor no
-    /// matter what direction is asked for.
-    #[test]
-    fn movement_stays_on_the_ground_plane() {
-        let mut world = World::default();
-        let height = world.player_pos().y;
-        world.step(0.5, MoveDir::new(Vec3::new(1.0, 5.0, 1.0)));
-        assert_eq!(world.player_pos().y, height);
     }
 
     /// **The seam that turning exists to get right.** Crossing the ±PI branch
@@ -617,5 +829,187 @@ mod tests {
     #[test]
     fn a_ground_position_keeps_x_and_lifts_y_into_z() {
         assert_eq!(on_ground(Vec2::new(3.0, -7.0), 0.25), Vec3::new(3.0, 0.25, -7.0));
+    }
+
+    /// What separation is *for*: afterwards the two are exactly touching, not
+    /// merely less overlapped.
+    #[test]
+    fn separating_leaves_two_bodies_exactly_touching() {
+        let mut a = Vec2::new(-0.1, 0.0);
+        let mut b = Vec2::new(0.1, 0.0);
+
+        assert!(separate(&mut a, &mut b, 1.0, 1.0, 1.0, 0));
+        assert!((a.distance(b) - 1.0).abs() < 1e-5, "settled at {}", a.distance(b));
+    }
+
+    /// Bodies that are merely near must not be touched at all, or the solver
+    /// would jitter everything within reach of everything.
+    #[test]
+    fn bodies_that_do_not_overlap_are_left_alone() {
+        let mut a = Vec2::new(-1.0, 0.0);
+        let mut b = Vec2::new(1.0, 0.0);
+
+        assert!(!separate(&mut a, &mut b, 1.0, 1.0, 1.0, 0));
+        assert_eq!((a, b), (Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
+    }
+
+    /// **The case that produces NaN if it is not handled.** Two bodies at the
+    /// same point have no line between them, and normalising their difference
+    /// poisons a position beyond any clamp's ability to recover. It happens for
+    /// real: a crowd converging on one target arrives at one point.
+    #[test]
+    fn coincident_bodies_separate_instead_of_producing_nan() {
+        let mut a = Vec2::new(5.0, -3.0);
+        let mut b = Vec2::new(5.0, -3.0);
+
+        assert!(separate(&mut a, &mut b, 1.0, 1.0, 1.0, 7));
+
+        assert!(a.is_finite() && b.is_finite(), "poisoned: {a} {b}");
+        assert!((a.distance(b) - 1.0).abs() < 1e-5);
+    }
+
+    /// The escape direction must be reproducible, or two identical runs
+    /// diverge the first time anything lands on top of anything else.
+    #[test]
+    fn the_escape_from_a_coincident_pair_is_deterministic() {
+        let run = || {
+            let (mut a, mut b) = (Vec2::ZERO, Vec2::ZERO);
+            separate(&mut a, &mut b, 1.0, 1.0, 1.0, 42);
+            (a, b)
+        };
+        assert_eq!(run(), run());
+
+        // And neighbouring pairs must not all escape the same way, or a clump
+        // separates into a line and re-stacks on the next tick.
+        assert!(escape_direction(3).distance(escape_direction(4)) > 0.1);
+    }
+
+    /// **The mechanic, at the level of one contact.** The heavy body barely
+    /// moves; the light one does almost all the yielding. This is the whole of
+    /// why a single enemy is a nudge rather than a wall.
+    #[test]
+    fn the_heavier_body_yields_less() {
+        let mut player = Vec2::ZERO;
+        let mut enemy = Vec2::new(0.5, 0.0);
+        let (start_player, start_enemy) = (player, enemy);
+
+        separate(&mut player, &mut enemy, 1.0, PLAYER_INV_MASS, ENEMY_INV_MASS, 0);
+
+        let player_moved = player.distance(start_player);
+        let enemy_moved = enemy.distance(start_enemy);
+        assert!(
+            enemy_moved > player_moved * 10.0,
+            "expected a lopsided split, got {player_moved} vs {enemy_moved}"
+        );
+    }
+
+    /// Projection moves bodies apart without moving the pair: the mass-weighted
+    /// centre is unchanged. That is what distinguishes it from an impulse — it
+    /// can only redistribute position, never inject energy, so there is no
+    /// explosive pushback to suppress.
+    #[test]
+    fn separation_preserves_the_mass_weighted_centre() {
+        let (ia, ib) = (PLAYER_INV_MASS, ENEMY_INV_MASS);
+        let centre = |a: Vec2, b: Vec2| (a / ia + b / ib) / (1.0 / ia + 1.0 / ib);
+
+        let mut a = Vec2::new(0.2, -0.1);
+        let mut b = Vec2::new(-0.1, 0.2);
+        let before = centre(a, b);
+
+        separate(&mut a, &mut b, 1.0, ia, ib, 0);
+        assert!((centre(a, b) - before).length() < 1e-5);
+    }
+
+    /// Two immovable bodies cannot be pushed apart, and asking must not divide
+    /// by their combined zero and yield NaN. Corpses and props will be exactly
+    /// this case.
+    #[test]
+    fn two_immovable_bodies_are_left_where_they_are() {
+        let mut a = Vec2::ZERO;
+        let mut b = Vec2::new(0.1, 0.0);
+
+        assert!(!separate(&mut a, &mut b, 1.0, 0.0, 0.0, 0));
+        assert_eq!((a, b), (Vec2::ZERO, Vec2::new(0.1, 0.0)));
+    }
+
+    /// **The invariant the pass exists to establish**, checked on the real
+    /// world rather than on a pair: after a step, nothing is inside the player.
+    #[test]
+    fn no_enemy_is_left_overlapping_the_player() {
+        let mut world = World::default();
+
+        // Walk into the middle of the horde and keep going.
+        for _ in 0..240 {
+            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+        }
+
+        let contact = PLAYER_RADIUS + ENEMY_RADIUS;
+        let player = world.player.pos;
+        for (i, &enemy) in world.enemies.pos.iter().enumerate() {
+            let gap = player.distance(enemy);
+            assert!(gap >= contact - 1e-4, "enemy {i} is {gap} from the player, needs {contact}");
+        }
+    }
+
+    /// Walking through the horde must displace it. A player that leaves the
+    /// crowd exactly as it found it is not colliding with anything, which is a
+    /// failure the previous test cannot see — it passes trivially if nothing
+    /// ever overlaps because nothing ever touches.
+    #[test]
+    fn walking_through_the_horde_displaces_it() {
+        let mut world = World::default();
+        let before = world.enemies.pos.clone();
+
+        let mut ever_touched = 0;
+        for _ in 0..240 {
+            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+            ever_touched += world.contacts();
+        }
+
+        let moved = before
+            .iter()
+            .zip(&world.enemies.pos)
+            .filter(|(a, b)| a.distance(**b) > 1e-4)
+            .count();
+
+        assert!(ever_touched > 0, "nothing was ever in contact");
+        assert!(moved > 0, "the player walked straight through {} bodies", before.len());
+    }
+
+    /// The contact count has to mean something, or it is a comforting number
+    /// that would keep reporting zero if the solver stopped working. Standing
+    /// clear of everything is zero; standing inside the horde is not.
+    #[test]
+    fn the_contact_count_tracks_whether_anything_is_touching() {
+        let mut clear = in_open_ground();
+        clear.step(1.0 / 60.0, MoveDir::NONE);
+        assert_eq!(clear.contacts(), 0, "nothing is near the player out here");
+
+        // The horde is centred on the origin and so is the player, so the
+        // spawn itself puts bodies in contact.
+        let mut crowded = World::default();
+        crowded.step(1.0 / 60.0, MoveDir::NONE);
+        assert!(crowded.contacts() > 0, "spawned inside the horde and touched nothing");
+    }
+
+    /// Everything stays inside the world, including bodies that only moved
+    /// because something shoved them.
+    #[test]
+    fn nothing_is_pushed_out_of_the_arena() {
+        let mut world = World::default();
+        world.set_enemy_count(256);
+
+        for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
+            for _ in 0..600 {
+                world.step(1.0 / 60.0, MoveDir::new(dir));
+            }
+            for &enemy in &world.enemies.pos {
+                assert!(enemy.is_finite(), "poisoned position {enemy}");
+                assert!(
+                    enemy.x.abs() <= ARENA_HALF && enemy.y.abs() <= ARENA_HALF,
+                    "escaped to {enemy}"
+                );
+            }
+        }
     }
 }

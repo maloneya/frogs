@@ -176,7 +176,7 @@ impl App {
         let p = self.world.player_pos();
         let c = self.camera.as_ref().map(|c| c.target()).unwrap_or_default();
         format!(
-            "player_pos {:.3} {:.3} {:.3} facing {:.4} camera_target {:.3} {:.3} enemies {} instances {} frames {} skipped {} frame_ms {:.2} vsync {}",
+            "player_pos {:.3} {:.3} {:.3} facing {:.4} camera_target {:.3} {:.3} enemies {} contacts {} instances {} frames {} skipped {} frame_ms {:.2} vsync {}",
             p.x,
             p.y,
             p.z,
@@ -184,6 +184,7 @@ impl App {
             c.x,
             c.z,
             self.world.enemy_count(),
+            self.world.contacts(),
             self.instances.as_slice().len(),
             self.frames,
             self.skipped,
