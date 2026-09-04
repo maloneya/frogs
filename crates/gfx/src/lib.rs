@@ -214,6 +214,16 @@ impl Renderer {
         self.pending_capture = Some(path);
     }
 
+    /// Abandons a capture that is never going to happen.
+    ///
+    /// A request survives until a frame actually presents, which is the right
+    /// behaviour when the next frame is merely late and the wrong one when
+    /// there is no next frame — an occluded window would otherwise write the
+    /// file minutes later, after whoever asked had been told it failed.
+    pub fn cancel_capture(&mut self) {
+        self.pending_capture = None;
+    }
+
     /// Whether the surface is currently pinned to the refresh rate.
     pub fn vsync(&self) -> bool {
         self.vsync

@@ -44,6 +44,16 @@ pub(crate) struct App {
     scheduled: Vec<(std::time::Instant, Option<KeyCode>, Option<std::sync::mpsc::Sender<String>>)>,
     /// Replies owed to callers waiting on a frame to be captured.
     awaiting_frame: Vec<std::sync::mpsc::Sender<String>>,
+    /// Frames skipped since the oldest pending screenshot was asked for.
+    ///
+    /// A capture is recorded between drawing a frame and presenting it, so a
+    /// frame that is never drawn never captures. An occluded window skips every
+    /// frame, and the screenshot then simply never happens — which used to be
+    /// reported as `ok`, because the reply was sent whether or not the draw
+    /// went through. That is the worst possible failure for a test harness
+    /// whose entire contract is that a reply means the effect landed: it turned
+    /// "your window is covered" into "your change did nothing", silently.
+    capture_stall: u32,
     /// Reused every frame so a steady state allocates nothing.
     instances: InstanceBuffer,
     input: Input,
@@ -191,6 +201,43 @@ impl App {
             self.clock.frame_ms(),
             self.renderer.as_ref().is_some_and(Renderer::vsync),
         )
+    }
+
+    /// Fails a pending screenshot once it is clear no frame is coming.
+    ///
+    /// Waiting forever would be honest and useless: the caller blocks on a
+    /// socket read with no idea why. Waiting a bounded number of skipped frames
+    /// and then saying what went wrong keeps the harness's promise — every
+    /// command replies, and the reply is true — while making the one condition
+    /// that breaks screenshots name itself.
+    ///
+    /// The threshold only has to exceed the skips a healthy run produces, and
+    /// a healthy run captures on the very next frame. A few seconds' worth is
+    /// generous enough that a momentary hiccup does not trip it.
+    ///
+    /// Counts one skipped frame against any pending screenshot and reports
+    /// whether the wait should be abandoned. Split from the abandoning itself
+    /// so the rule is a plain function over a counter: the condition it exists
+    /// for is one this environment cannot reliably produce on demand, and an
+    /// untested error path is one that has never run.
+    fn capture_has_stalled(waiting: bool, stall: &mut u32) -> bool {
+        /// Frames of nothing before a screenshot is declared impossible. Only
+        /// has to exceed what a healthy run produces, and a healthy run
+        /// captures on the very next frame.
+        const STALLED_FRAMES: u32 = 240;
+
+        if !waiting {
+            *stall = 0;
+            return false;
+        }
+
+        *stall += 1;
+        if *stall < STALLED_FRAMES {
+            return false;
+        }
+
+        *stall = 0;
+        true
     }
 
     /// Fires the releases and replies whose deadline has passed.
@@ -347,14 +394,30 @@ impl ApplicationHandler for App {
                 // would report thousands of frames a second for drawing nothing.
                 if renderer.render(camera, self.instances.as_slice()) {
                     self.frames += 1;
+
+                    // The capture is written inside `render`, and only on the
+                    // path that presents — so this is the first moment the file
+                    // is known to exist, and the only place `ok` is honest.
+                    self.capture_stall = 0;
+                    for reply in std::mem::take(&mut self.awaiting_frame) {
+                        let _ = reply.send("ok".to_string());
+                    }
                 } else {
                     self.skipped += 1;
-                }
 
-                // The capture is written inside `render`, so anything waiting
-                // on a screenshot can be told the file exists.
-                for reply in std::mem::take(&mut self.awaiting_frame) {
-                    let _ = reply.send("ok".to_string());
+                    let waiting = !self.awaiting_frame.is_empty();
+                    if Self::capture_has_stalled(waiting, &mut self.capture_stall) {
+                        // Drop the request too, so it cannot fire minutes later
+                        // and write a file after the caller was told it failed.
+                        renderer.cancel_capture();
+                        for reply in std::mem::take(&mut self.awaiting_frame) {
+                            let _ = reply.send(
+                                "error: no frame was presented, so nothing could be \
+                                 captured — the window is occluded or minimised"
+                                    .to_string(),
+                            );
+                        }
+                    }
                 }
 
 
@@ -397,5 +460,41 @@ impl ApplicationHandler for App {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+
+    /// A screenshot that cannot be taken has to *say so*. The reply used to be
+    /// sent whether or not the frame was drawn, which turned "your window is
+    /// covered" into "your change did nothing" — the worst failure available to
+    /// a harness whose whole contract is that a reply means the effect landed.
+    #[test]
+    fn a_screenshot_gives_up_only_after_a_long_run_of_skipped_frames() {
+        let mut stall = 0;
+
+        // A hiccup is not a stall; the wait has to survive one.
+        assert!(!App::capture_has_stalled(true, &mut stall));
+        assert!(!App::capture_has_stalled(true, &mut stall));
+
+        let gave_up = (0..10_000).any(|_| App::capture_has_stalled(true, &mut stall));
+        assert!(gave_up, "waited forever instead of reporting the failure");
+    }
+
+    /// With nothing pending there is nothing to give up on, and the count must
+    /// not carry over — otherwise a long occluded stretch would fail the next
+    /// screenshot the instant it was asked for.
+    #[test]
+    fn skipped_frames_with_no_screenshot_pending_do_not_accumulate() {
+        let mut stall = 0;
+
+        for _ in 0..10_000 {
+            assert!(!App::capture_has_stalled(false, &mut stall));
+        }
+        assert_eq!(stall, 0);
+
+        assert!(!App::capture_has_stalled(true, &mut stall), "a fresh request must not fail");
     }
 }

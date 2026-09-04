@@ -50,7 +50,7 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `tap <key>` | immediately; key is held for exactly one frame |
 | `hold <key> <ms>` | **after the key comes back up** |
 | `wait <ms>` | after that much game time |
-| `shot <path>` | **after the PNG is on disk** |
+| `shot <path>` | **after the PNG is on disk**, or an error if no frame presented |
 | `state` | one line of numbers (below) |
 | `enemies <n>` | clamped count |
 | `vsync on\|off` | resulting state |
@@ -107,6 +107,25 @@ sock "shot /tmp/scratch/frame.png"   # replies once written
 Then read the PNG directly — it is the exact surface, correctly framed, so no
 cropping is needed. `P` in the app does the same thing interactively, writing to
 `$ARPG_CAPTURE_DIR` (default: the temp dir).
+
+**Screenshots are the one thing here that a buried window breaks.** Everything
+else on this page works on an unfocused window behind others, but a *fully
+occluded* one hands back no surface texture, the draw is skipped, and the
+capture — which is recorded between drawing a frame and presenting it — never
+happens. Unfocused is fine; covered is not.
+
+That used to be silent: the reply was sent whether or not the frame was drawn,
+so `shot` answered `ok` with no file on disk, and a broken screenshot was
+indistinguishable from a change that did nothing. It now waits a few seconds of
+skipped frames and then says
+
+```
+error: no frame was presented, so nothing could be captured — the window is
+occluded or minimised
+```
+
+Diff `frames` across a `wait` first if you are unsure: a `frames` that is not
+rising means no screenshot is going to work until the window is uncovered.
 
 ## Measuring performance
 

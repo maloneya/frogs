@@ -191,6 +191,10 @@ why if it cannot go higher.** What is in place today:
 | A skipped frame is never counted as a rendered one | 1 | `Renderer::render` is `#[must_use]`, so ignoring the result is a denied warning |
 | Readback rows respect the copy alignment | 3 | `padded_bytes_per_row`; unit test in `gfx/capture.rs` |
 | A malformed harness command is reported, not ignored | 3 | `parse` returns `Result`; unit test in `app/harness.rs` |
+| A screenshot that never happened is not reported as `ok` | 3 | `capture_has_stalled`; unit tests in `app/app.rs` |
+| A body's position cannot leave the ground plane | 0 | positions are `Vec2`; `on_ground` is the only lift |
+| Nothing spawns already overlapping | 1 | `const _: () = assert!(ENEMY_SPACING > 2.0 * ENEMY_RADIUS)` |
+| Coincident bodies separate deterministically, not into NaN | 3 | `escape_direction`; unit tests in `sim` |
 | The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
 | The harness cannot fall behind the bindings | 0 | key names live *in* `BINDINGS`; there is no second table to forget |
 
