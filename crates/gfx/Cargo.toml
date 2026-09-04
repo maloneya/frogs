@@ -4,9 +4,11 @@ version.workspace = true
 edition.workspace = true
 build = "build.rs"
 
-# Note what is absent: arpg-sim. Cargo refuses cyclic package dependencies, so
-# the rule "gfx never knows what an enemy is" is enforced here, in a file whose
-# diff is one line, rather than by convention inside the source.
+# Note what is absent: arpg-sim. Cargo would accept that edge — gfx and sim are
+# siblings, not a cycle — so build.rs is what refuses it. The rule "gfx never
+# knows what an enemy is" is therefore enforced here, in a file whose diff is one
+# line and whose whole purpose is declaring dependencies, rather than by
+# convention buried in the source.
 [dependencies]
 arpg-core.workspace = true
 bytemuck.workspace = true

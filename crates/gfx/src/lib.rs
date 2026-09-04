@@ -1,9 +1,13 @@
 //! Turning [`Instance`]s into pixels.
 //!
-//! This crate's entire vocabulary is position, scale and colour. It has no
-//! dependency on `arpg-sim` and cannot acquire one: Cargo refuses cyclic
-//! package dependencies, so "gfx never knows what an enemy is" is enforced by
-//! the build rather than by good intentions.
+//! This crate's entire vocabulary is position, scale and colour, and it has no
+//! dependency on `arpg-sim`. Naming a simulation type here is a compile error
+//! (E0432, unresolved import) because the crate is not in this one's dependency
+//! closure; adding it to `Cargo.toml` to fix that is caught by `build.rs`.
+//!
+//! Note it is *not* a Cargo cycle — `arpg-gfx` and `arpg-sim` are siblings, both
+//! depending only on `arpg-core`, so Cargo would accept that edge without
+//! complaint. The guard in `build.rs` is what closes it.
 
 mod camera;
 mod cube;
