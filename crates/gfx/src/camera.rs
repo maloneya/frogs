@@ -1,7 +1,7 @@
 use glam::camera::rh::{proj::directx, view::look_at_mat4};
 use glam::{Mat4, Vec3};
 
-use arpg_core::MoveDir;
+use arpg_core::{damp_vec3, MoveDir};
 
 /// A true isometric camera.
 ///
@@ -29,6 +29,8 @@ pub struct OrthoCamera {
 /// with no error anywhere.
 const MIN_ZOOM: f32 = 2.0;
 const MAX_ZOOM: f32 = 400.0;
+const _: () = assert!(MIN_ZOOM > 0.0, "a zoom of zero collapses the view volume");
+const _: () = assert!(MAX_ZOOM > MIN_ZOOM);
 
 /// A zero-sized window is real — minimising produces one — and dividing by it
 /// yields a NaN that propagates silently through the whole matrix.
@@ -43,6 +45,7 @@ const ISO_PITCH: f32 = 0.615_479_7; // atan(1/sqrt(2))
 /// effect on apparent size — there's no perspective divide — so it only has to
 /// be large enough that the near plane never clips the scene.
 const DISTANCE: f32 = 250.0;
+const _: () = assert!(DISTANCE > 0.0);
 
 /// Seconds for the camera to close half the remaining distance to the player.
 ///
@@ -54,6 +57,12 @@ const DISTANCE: f32 = 250.0;
 /// visibly leading inside the frame while never threatening to escape it.
 const FOLLOW_HALF_LIFE: f32 = 0.12;
 
+// A non-positive half-life is the silent catastrophe: the exponent inverts, so
+// the error *grows* by a constant factor every frame — measured at 1.101x per
+// frame at 60Hz — diverging to infinity and then to NaN, and a NaN
+// view-projection matrix renders a black screen with no error anywhere.
+const _: () = assert!(FOLLOW_HALF_LIFE > 0.0, "a non-positive half-life diverges to NaN");
+
 /// The same, for the look-ahead offset, and deliberately three times slower.
 ///
 /// Look-ahead's failure mode is reversal: flick from right to left and a
@@ -61,6 +70,15 @@ const FOLLOW_HALF_LIFE: f32 = 0.12;
 /// the character has barely moved. Smoothing the offset on its own, slower
 /// clock turns that whip into an ease.
 const LEAD_HALF_LIFE: f32 = 0.35;
+
+// Not merely positive: *slower* than the follow. That ordering is the whole
+// reason reversing direction eases instead of whipping, so swapping the two
+// numbers would quietly reintroduce the bug they were chosen to prevent.
+const _: () = assert!(LEAD_HALF_LIFE > 0.0);
+const _: () = assert!(
+    LEAD_HALF_LIFE > FOLLOW_HALF_LIFE,
+    "the lead must ease slower than the follow, or reversing whips the camera"
+);
 
 /// How far in front of the character the camera looks, in world units.
 ///
@@ -72,26 +90,7 @@ const LEAD_HALF_LIFE: f32 = 0.35;
 /// looks shorter than the horizontal one, foreshortened by sin(35.26°), and
 /// that is correct rather than a bug to compensate for.
 const LOOK_AHEAD: f32 = 4.0;
-
-/// Frame-rate independent exponential smoothing: moves `from` half of the
-/// remaining distance to `to` every `half_life` seconds, **no matter how often
-/// it is called**.
-///
-/// This is the one piece of maths worth getting right in any follow camera.
-/// The tempting version is `from.lerp(to, 0.1)` once a frame, which keeps 90%
-/// of the error *per frame* rather than per second: after one second that is
-/// `0.9^60 ≈ 0.002` left at 60Hz but `0.9^144 ≈ 3e-7` at 144Hz, a camera some
-/// thousands of times tighter purely because the machine is faster. Here that
-/// would be worse than usual — pressing `V` to uncap the frame rate would
-/// change how the game *feels*, corrupting the measurement it exists to take.
-///
-/// `2^(-dt/half_life)` composes exactly under subdivision, because
-/// `2^(-a/h) · 2^(-b/h) = 2^(-(a+b)/h)`. Fifty steps of 10ms therefore land in
-/// precisely the same place as one step of 500ms — which is the property the
-/// naive form lacks, and what the test below pins.
-fn damp(from: Vec3, to: Vec3, half_life: f32, dt: f32) -> Vec3 {
-    to + (from - to) * (-dt / half_life).exp2()
-}
+const _: () = assert!(LOOK_AHEAD >= 0.0);
 
 impl OrthoCamera {
     /// A camera framing the origin, sized to the given viewport in pixels.
@@ -142,8 +141,8 @@ impl OrthoCamera {
         // way a lagging one never is.
         let focus = Vec3::new(focus.x, 0.0, focus.z);
 
-        self.lead = damp(self.lead, heading.as_vec3() * LOOK_AHEAD, LEAD_HALF_LIFE, dt);
-        self.target = damp(self.target, focus + self.lead, FOLLOW_HALF_LIFE, dt);
+        self.lead = damp_vec3(self.lead, heading.as_vec3() * LOOK_AHEAD, LEAD_HALF_LIFE, dt);
+        self.target = damp_vec3(self.target, focus + self.lead, FOLLOW_HALF_LIFE, dt);
     }
 
     /// Re-derives the aspect ratio after a resize.

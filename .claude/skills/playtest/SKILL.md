@@ -148,6 +148,20 @@ exit 2 and the errors on stderr — so a shell-based edit (a python or sed
 heredoc) cannot slip past it. Costs ~0.1s when nothing changed, because cargo's
 own staleness check does the work. You still have to run the tests.
 
+## Before changing a tuning constant
+
+Feel constants (`PLAYER_SPEED`, `PLAYER_TURN_RATE`, `FOLLOW_HALF_LIFE`,
+`LEAD_HALF_LIFE`, `LOOK_AHEAD`, zoom, `MAX_FRAME_TIME`) each carry a
+`const _: () = assert!(…)` guarding their valid range, so the catastrophic edits
+fail to compile. That is a floor, not a check on the value being *right*: state
+the effect you expect, change it, then measure it with the recipe above and put
+the number in the commit message.
+
+For anything needing smoothing, use `arpg_core::damp` / `damp_vec3`. Do not
+write `lerp(a, b, 0.1)` once a frame — it keeps 90% of the error per *frame*
+rather than per second, so it converges thousands of times faster at 144Hz than
+at 60Hz and the game feels different on faster hardware.
+
 ## What this cannot tell you
 
 - **Feel.** It proves the character moved 3.183 units where 3.182 was predicted.

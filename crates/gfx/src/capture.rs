@@ -74,18 +74,20 @@ impl Readback {
         );
     }
 
-    /// Maps the buffer and writes a PNG. Blocks until the GPU is done, which is
-    /// exactly what a screenshot wants and would be unacceptable in a frame.
+    /// Maps the buffer and returns tightly-packed RGBA, padding removed.
     ///
-    /// `bgra` because that is what the swapchain format is. The surface is
-    /// `Bgra8UnormSrgb`, so the bytes coming back are *already* sRGB-encoded —
-    /// they go straight into the PNG with no conversion. Applying one here
-    /// would double-encode and wash the image out.
-    pub(crate) fn write_png(
+    /// Blocks until the GPU is done, which is exactly what a screenshot — or a
+    /// test that wants to look at the pixels — needs, and would be unacceptable
+    /// inside a frame.
+    ///
+    /// `bgra` on the wire because that is the swapchain format. The surface is
+    /// `Bgra8UnormSrgb`, so the bytes coming back are *already* sRGB-encoded and
+    /// need no conversion; applying one here would double-encode and wash the
+    /// image out.
+    pub(crate) fn to_rgba(
         &self,
         device: &wgpu::Device,
-        path: &Path,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let slice = self.buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
@@ -102,22 +104,28 @@ impl Readback {
             for y in 0..self.height as usize {
                 let (pixels, _) = mapped[y * padded..y * padded + row].as_chunks::<4>();
                 for px in pixels {
-                    // BGRA on the wire, RGBA in the file.
                     rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
                 }
             }
         }
         self.buffer.unmap();
+        Ok(rgba)
+    }
+
+    /// Writes the frame to a PNG.
+    pub(crate) fn write_png(
+        &self,
+        device: &wgpu::Device,
+        path: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let rgba = self.to_rgba(device)?;
 
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let file = std::fs::File::create(path)?;
-        let mut encoder = png::Encoder::new(
-            std::io::BufWriter::new(file),
-            self.width,
-            self.height,
-        );
+        let mut encoder =
+            png::Encoder::new(std::io::BufWriter::new(file), self.width, self.height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.write_header()?.write_image_data(&rgba)?;

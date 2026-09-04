@@ -91,7 +91,7 @@ dependencies run one way.
 ```
 crates/
   core/  Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES   glam, bytemuck
-         Action, ActionMask, InputState, Actions, MoveDir
+         Action, ActionMask, InputState, Actions, MoveDir, damp
   gfx/   Renderer, camera, cube, capture, shader.wgsl            core, wgpu, winit, png
   sim/   World, Player                                           core, glam  (no wgpu)
   app/   App, Input + BINDINGS, Clock, harness, wiring, main     core, gfx, sim, winit
@@ -162,6 +162,13 @@ why if it cannot go higher.** What is in place today:
 | `Instance` is exactly 48 bytes | 1 | `const _: () = assert!(…)` beside the type |
 | Rust vertex layout matches `shader.wgsl` | 2 | headless pipeline + draw test in `gfx/src/lib.rs` |
 | Public API stays deliberate | 1 | `unreachable_pub = "deny"` |
+| No dependency outside a crate's allowlist | 1 | `crates/{gfx,sim}/build.rs` — fails closed, so unknown crates are caught too |
+| Tuning constants stay in their valid range | 1 | a `const _: () = assert!(…)` beside each one |
+| The lead eases slower than the follow | 1 | const assert; swapping them reintroduces the whip |
+| The player footprint is never square | 1 | const assert; a square one makes facing invisible |
+| A dt clamp cannot fall below one frame | 1 | const assert in `time.rs` |
+| The yaw convention matches the shader | 3 | pixel-readback test in `gfx/src/lib.rs`, mutation-checked |
+| Smoothing is frame-rate independent | 3 | `core::damp` and its tests, including the naive lerp failing the same check |
 | The lint wall runs however the edit was made | 1 | `PostToolUse` hook matches Bash as well as Edit/Write |
 | The sink's cap holds at its real value | 3 | unit tests in `core` |
 | `sim` cannot name a key or a window | 1 | `crates/sim/build.rs`; `core` never names winit |
@@ -205,6 +212,14 @@ splitting into crates does **not** make `gfx → sim` a Cargo cycle. They are
 siblings, both depending only on `core`, so Cargo accepts that edge without
 complaint. The `build.rs` guards exist precisely because the cycle argument
 does not hold.
+
+Those guards are **allowlists**, and the reason is worth keeping. They began as
+denylists naming `arpg-gfx`, `wgpu` and `winit` — which caught exactly the three
+mistakes someone had already imagined, and let `bevy`, `hecs` and `rapier` walk
+straight into `sim`, against the loudest rule the project has. A denylist fails
+open; you have to predict the mistake. An allowlist fails closed. Widening one is
+a deliberate, visible edit to a file whose whole job is saying what may be
+depended on.
 
 ### Decisions already made, and why
 
@@ -265,18 +280,23 @@ but this paragraph, which is precisely why they are worth reading twice.
   attribute array or the `@location` slots. The other two are still spoken for.
   Removing them means rewriting the vertex attribute layout and the shader
   together.
-- **Yaw 0 faces `+Z`, positive turns toward `+X`.** *(unenforced — prose in two
-  languages)* `Instance::with_yaw`, `World::turn_toward` and `rotate_y` in
-  `shader.wgsl` all depend on this one convention, and nothing checks that they
-  agree: wgpu validates the *types* crossing into WGSL, never the meaning of the
-  numbers. A sign flip would compile, validate, draw, and simply point every
-  character 90° off. Closing it properly needs a headless render plus pixel
-  readback — which would also be this project's first check that the image is
-  *correct* rather than merely accepted.
-- **The player is deeper than it is wide** (`0.45 x 1.2 x 0.8`). *(unenforced)*
-  A square footprint rotated about the vertical axis looks near-identical at
-  every angle, so facing would be real and invisible. The asymmetry is what
-  makes the turn readable.
+- **Yaw 0 faces `+Z`, positive turns toward `+X`.** *(enforced: pixel test)*
+  `Instance::with_yaw`, `World::turn_toward` and `rotate_y` in `shader.wgsl` all
+  depend on this one convention, and wgpu cannot check it — it validates the
+  *types* crossing into WGSL, never the meaning of the numbers, so a sign flip
+  compiles, validates, draws, and points every character 90° off in silence.
+  `yaw_points_the_body_where_the_convention_says` renders a long bar headless and
+  reads the pixels back. Note its second half: a bounding box is
+  **reflection-invariant**, so swapping `sin` and `cos` — which mirrors every
+  direction across the screen vertical — passed a box-only version of this test.
+  Measuring which way the bar *leans* is what catches it. Verified by mutation:
+  sign flip, dropped rotation, swapped sin/cos, negated yaw, and scale-after-
+  rotation are all caught.
+- **The player is deeper than it is wide** (`0.45 x 1.2 x 0.8`). *(enforced:
+  const assert)* A square footprint rotated about the vertical axis looks
+  near-identical at every angle, so facing would be real and invisible. The
+  asymmetry is what makes the turn readable, so it is a compile error to remove
+  it rather than a note somebody might read.
 - **The instance buffer is allocated at full `MAX_INSTANCES` capacity** and only
   partially written. *(enforced: `InstanceSink`)* Capacity and count are separate
   on purpose — regrowing a GPU buffer mid-run means syncing against in-flight
@@ -331,10 +351,11 @@ but this paragraph, which is precisely why they are worth reading twice.
   click-to-move an additive change: a second producer of `ActionMask`, with
   nothing downstream touched.
 - Test coverage is uneven: the GPU contract, the sink, the input layer, the
-  camera maths, player movement and turning are covered; the cube mesh is not.
-  There is still no automated pixel-level check that the image is *correct* —
-  but `gfx/capture.rs` is now the machinery one needs, and the yaw convention is
-  the first thing that should use it.
+  camera maths, smoothing, player movement, turning and the yaw convention are
+  covered; the cube mesh is not. The yaw test is the only pixel-level check that
+  the image is *correct* rather than merely accepted — `gfx/capture.rs` is the
+  machinery, and the cube's winding and 24-vertex normals are the obvious next
+  customers.
 - Perf numbers must be taken with the window visible. An occluded surface hands
   back no texture, the draw is skipped, and the loop then spins as fast as it
   likes — which reads as a spectacular frame rate for drawing nothing. `state`

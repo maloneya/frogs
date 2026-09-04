@@ -24,8 +24,17 @@ use arpg_core::{Instance, InstanceSink, MoveDir, MAX_INSTANCES};
 const GROUND_TILES: usize = 128;
 const TILE: f32 = 1.5;
 
+// Tuning constants are the one thing in this file with no type protecting them.
+// They are bare numbers, and the plausible wrong edit — a negative speed, a turn
+// rate of zero, a square footprint — produces silently wrong behaviour rather
+// than an error. A const assert is the cheapest guard there is and it fails at
+// compile time, so it belongs on every one of them.
+const _: () = assert!(GROUND_TILES > 0);
+const _: () = assert!(TILE > 0.0);
+
 /// The floor's share of the instance budget.
 const GROUND_INSTANCES: usize = GROUND_TILES * GROUND_TILES;
+const _: () = assert!(GROUND_INSTANCES < MAX_INSTANCES, "the floor alone must fit the buffer");
 
 /// How large the horde may grow. The ground and the player are drawn from the
 /// same instance buffer in the same draw call, so the enemy budget is whatever
@@ -40,11 +49,13 @@ const MAX_ENEMIES: usize = MAX_INSTANCES - GROUND_INSTANCES - 1;
 
 /// Half the ground plane's width, in world units.
 const ARENA_HALF: f32 = GROUND_TILES as f32 * TILE * 0.5;
+const _: () = assert!(ARENA_HALF > PLAYER_SCALE.x && ARENA_HALF > PLAYER_SCALE.z);
 
 /// World units per second. Fast enough that the arena crosses in a few seconds,
 /// which is the range an ARPG lives in — slow movement makes a horde feel like
 /// a traffic jam rather than a threat.
 const PLAYER_SPEED: f32 = 9.0;
+const _: () = assert!(PLAYER_SPEED > 0.0);
 
 /// Deliberately taller than an enemy (0.5), so the player stays readable from
 /// inside a crowd of them. Silhouette is the cheapest legibility tool there is.
@@ -54,11 +65,17 @@ const PLAYER_SPEED: f32 = 9.0;
 /// looks almost identical at every angle, so the character would turn correctly
 /// and appear not to — the facing would be real but invisible.
 const PLAYER_SCALE: Vec3 = Vec3::new(0.45, 1.2, 0.8);
+const _: () = assert!(PLAYER_SCALE.x > 0.0 && PLAYER_SCALE.y > 0.0 && PLAYER_SCALE.z > 0.0);
+// The reason the body is not square, promoted from a comment to a compile
+// error: a square footprint turns correctly and looks identical at every angle,
+// so the facing would be real and invisible.
+const _: () = assert!(PLAYER_SCALE.x != PLAYER_SCALE.z, "a square footprint makes facing invisible");
 
 /// Radians per second. Fast — a full 180° turn takes ~0.22s — because in an
 /// ARPG the character reorienting is feedback that the input registered, and
 /// anything slow enough to notice reads as the controls lagging.
 const PLAYER_TURN_RATE: f32 = 14.0;
+const _: () = assert!(PLAYER_TURN_RATE > 0.0);
 
 /// Folds an angle into `(-PI, PI]`, so facing cannot drift off toward the
 /// precision limit over a long session.

@@ -418,6 +418,181 @@ mod tests {
         .expect("create headless device")
     }
 
+    /// What a rendered silhouette looks like: its bounding box, and which way
+    /// it leans.
+    struct Silhouette {
+        width: u32,
+        height: u32,
+        /// Sign-bearing covariance of the lit pixels' x and y.
+        ///
+        /// The bounding box alone is **reflection-invariant**, and that is not a
+        /// nitpick: swapping `sin` and `cos` in the shader reflects every
+        /// direction across the screen vertical, which leaves every bounding box
+        /// identical. This is the measurement that notices, because a bar
+        /// leaning one way and its mirror image have opposite covariance.
+        lean: f32,
+    }
+
+    /// Renders a single instance at `yaw` and measures its silhouette.
+    ///
+    /// The body is a long thin bar — 8 units along its own +Z, half a unit the
+    /// other ways — so what appears on screen says which way it is pointing.
+    fn silhouette_of(yaw: f32) -> Silhouette {
+        const N: u32 = 256;
+        let (device, queue) = headless_device();
+
+        let camera_binding = CameraBinding::new(&device);
+        let cubes = CubePipeline::new(&device, &camera_binding.layout, TEST_FORMAT, DEPTH_FORMAT);
+
+        let color = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("silhouette target"),
+            size: wgpu::Extent3d { width: N, height: N, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEST_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = create_depth(&device, N, N);
+
+        camera_binding.upload(&queue, &OrthoCamera::new(N, N));
+
+        let mut buf = InstanceBuffer::default();
+        let mut sink = buf.sink();
+        sink.push(
+            Instance::new(Vec3::ZERO, Vec3::new(0.5, 0.5, 8.0), Vec3::ONE).with_yaw(yaw),
+        );
+        let count = cubes.upload(&queue, buf.as_slice());
+
+        let mut encoder = device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("silhouette") });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("silhouette pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            cubes.draw(&mut pass, &camera_binding.bind_group, count);
+        }
+
+        let readback = capture::Readback::new(&device, N, N);
+        readback.record(&mut encoder, &color);
+        queue.submit(Some(encoder.finish()));
+        let rgba = readback.to_rgba(&device).expect("read the frame back");
+
+        let (mut x0, mut y0, mut x1, mut y1) = (N, N, 0u32, 0u32);
+        let mut lit = Vec::new();
+        for y in 0..N {
+            for x in 0..N {
+                // Anything clearly brighter than the black clear colour.
+                if rgba[((y * N + x) * 4) as usize] > 40 {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                    lit.push((x as f32, y as f32));
+                }
+            }
+        }
+        assert!(!lit.is_empty(), "nothing was drawn at yaw {yaw}");
+
+        let n = lit.len() as f32;
+        let cx = lit.iter().map(|p| p.0).sum::<f32>() / n;
+        let cy = lit.iter().map(|p| p.1).sum::<f32>() / n;
+        let lean = lit.iter().map(|(x, y)| (x - cx) * (y - cy)).sum::<f32>() / n;
+
+        Silhouette { width: x1 - x0 + 1, height: y1 - y0 + 1, lean }
+    }
+
+    /// **The Rust/WGSL seam that nothing else covers.**
+    ///
+    /// `Instance::with_yaw`, `World::turn_toward` and `rotate_y` in the shader
+    /// all rest on one convention — yaw 0 faces +Z, positive turns toward +X —
+    /// and wgpu cannot check it. It validates the *types* crossing into WGSL,
+    /// never the meaning of the numbers, so a sign flip compiles, validates,
+    /// draws, and points every character 90 degrees off, forever, in silence.
+    ///
+    /// Under the isometric camera, screen-right is world `(+X, -Z)/√2`, which
+    /// `atan2(dir.x, dir.z)` inverts to yaw `3π/4`; screen-up is `(-X, -Z)/√2`,
+    /// or `-3π/4`. So a long bar at `+3π/4` must lie across the screen and the
+    /// same bar at `-3π/4` must point away from the camera. A sign error swaps
+    /// exactly those two, which is what makes this assertion worth making.
+    #[test]
+    fn yaw_points_the_body_where_the_convention_says() {
+        use std::f32::consts::PI;
+
+        let east = silhouette_of(3.0 * PI / 4.0);
+        let north = silhouette_of(-3.0 * PI / 4.0);
+
+        assert!(
+            east.width > east.height,
+            "facing screen-right should be wide: {}x{}",
+            east.width,
+            east.height
+        );
+        assert!(
+            north.height > north.width,
+            "facing screen-up should be tall: {}x{}",
+            north.width,
+            north.height
+        );
+        assert!(
+            east.width > north.width * 3,
+            "the bar across the screen should be far wider: {} vs {}",
+            east.width,
+            north.width
+        );
+
+        // Foreshortening, from the other side: pointing away from the camera
+        // costs the bar height, because the ground is compressed by sin(35.26).
+        assert!(
+            east.width > north.height,
+            "an unforeshortened bar should out-measure a foreshortened one: {} vs {}",
+            east.width,
+            north.height
+        );
+
+        // Yaw 0 is the axis the convention is actually *defined* on, and it is
+        // the one the two checks above cannot speak for: at odd multiples of
+        // pi/4 a sin/cos swap is invisible to a bounding box, because it
+        // reflects the bar onto a mirror image of the same size. Yaw 0 sends
+        // the bar along world +Z, which leans the opposite way to the world +X
+        // a swap would produce.
+        let along_z = silhouette_of(0.0);
+        let along_x = silhouette_of(PI / 2.0);
+        assert!(
+            along_z.lean * along_x.lean < 0.0,
+            "yaw 0 and yaw pi/2 must lean opposite ways: {} vs {}",
+            along_z.lean,
+            along_x.lean
+        );
+        assert!(
+            along_z.lean < 0.0,
+            "yaw 0 sends the bar along world +Z, which leans up-to-the-right: {}",
+            along_z.lean
+        );
+    }
+
     /// Renders one frame into an offscreen texture, with every validation error
     /// captured rather than left to the default handler.
     ///

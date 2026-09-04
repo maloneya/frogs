@@ -1,46 +1,46 @@
-//! Guards the one dependency edge that must never exist.
+//! Guards the renderer's dependency graph, as an **allowlist**.
 //!
-//! Splitting into crates made `gfx` unable to *name* a simulation type without
-//! declaring the dependency first — that is a real compile error (E0432), and it
-//! is most of the value. But it is not the whole story: `arpg-gfx` and
-//! `arpg-sim` are siblings, both depending only on `arpg-core`, so adding
-//! `arpg-sim` to this crate's dependencies is not a cycle and Cargo accepts it
-//! without complaint.
-//!
-//! This closes that. It runs on every build rather than only under `cargo test`,
-//! so there is no path to a compiled binary that skips it, and the failure names
-//! the rule rather than leaving the next person to infer it.
+//! Note what is absent: `arpg-sim`. Cargo would accept that edge — gfx and sim
+//! are siblings, not a cycle — so this file is what refuses it. But a denylist
+//! naming only `arpg-sim` failed open on everything else, so the rule is stated
+//! the other way round: these dependencies and no others.
+
+const CRATE: &str = "arpg-gfx";
+const FILE: &str = "crates/gfx/build.rs";
+
+const REASON: &str = "gfx must never know what an enemy is. Its vocabulary is \
+                      arpg_core::Instance — position, scale, colour. If the renderer needs \
+                      something the simulation has, widen Instance; do not reach across.";
+
+/// The complete set, dev-dependencies included.
+const ALLOWED: &[&str] =
+    &["arpg-core", "bytemuck", "glam", "log", "png", "wgpu", "winit", "pollster"];
 
 use std::collections::HashSet;
-
-/// Crates this one must never depend on, and why.
-const FORBIDDEN: &[(&str, &str)] = &[(
-    "arpg-sim",
-    "gfx must never know what an enemy is. Its vocabulary is arpg_core::Instance \
-     — position, scale, colour. If the renderer needs something the simulation \
-     has, widen Instance; do not reach across.",
-)];
 
 fn main() {
     println!("cargo:rerun-if-changed=Cargo.toml");
 
     let manifest = std::fs::read_to_string("Cargo.toml").expect("read own Cargo.toml");
-    let declared = declared_dependencies(&manifest);
 
-    for (crate_name, reason) in FORBIDDEN {
-        if declared.contains(*crate_name) {
+    for name in declared_dependencies(&manifest) {
+        if !ALLOWED.contains(&name.as_str()) {
             panic!(
-                "\n\n  arpg-gfx must not depend on {crate_name}.\n\n  {reason}\n\n  \
-                 If this edge is genuinely wanted, the architecture changed and \
-                 this guard should be updated deliberately — in crates/gfx/build.rs \
-                 — rather than worked around.\n\n"
+                "\n\n  {CRATE} may not depend on {name}.\n\n  {REASON}\n\n  \
+                 Permitted: {permitted}.\n\n  \
+                 If this edge is genuinely wanted, the architecture changed and this \
+                 allowlist should be widened deliberately — in {FILE} — rather than \
+                 worked around.\n\n",
+                permitted = ALLOWED.join(", "),
             );
         }
     }
 }
 
 /// Dependency names only: section-aware, so a crate merely *mentioned* in a
-/// comment or in `[package]` does not trip the guard.
+/// comment or in `[package]` does not trip the guard. Every `dependencies`
+/// section is scanned, dev-dependencies included — a test-only edge into the
+/// graphics stack would defeat the point just as thoroughly as a real one.
 fn declared_dependencies(manifest: &str) -> HashSet<String> {
     let mut found = HashSet::new();
     let mut in_deps = false;
@@ -56,7 +56,6 @@ fn declared_dependencies(manifest: &str) -> HashSet<String> {
             continue;
         }
 
-        // `name = ...`, `name.workspace = true`, or `"name" = ...`
         if let Some(key) = line.split('=').next() {
             let key = key.trim().trim_matches('"');
             let name = key.split('.').next().unwrap_or(key).trim();

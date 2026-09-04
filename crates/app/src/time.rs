@@ -18,10 +18,12 @@ pub(crate) struct Clock {
 /// the wrong instrument for pacing variance, which is what a frame-time graph
 /// would show instead.
 const SMOOTHING: f32 = 0.1;
+const _: () = assert!(SMOOTHING > 0.0 && SMOOTHING <= 1.0, "outside (0, 1] the average diverges or freezes");
 
 /// Refreshing the title every frame is unreadable, and pushes more work at the
 /// window server than the renderer is doing.
 const HUD_INTERVAL: f32 = 0.1;
+const _: () = assert!(HUD_INTERVAL > 0.0);
 
 /// The longest delta the simulation is allowed to see, in seconds.
 ///
@@ -34,6 +36,10 @@ const HUD_INTERVAL: f32 = 0.1;
 /// rather than skipping space, which is the right trade when the alternative is
 /// losing collisions.
 const MAX_FRAME_TIME: f32 = 0.1;
+const _: () = assert!(
+    MAX_FRAME_TIME >= 1.0 / 60.0,
+    "clamping below a real frame would run the game permanently in slow motion"
+);
 
 impl Default for Clock {
     fn default() -> Self {

@@ -52,6 +52,7 @@ pub(crate) struct App {
 
 /// One notch of zoom per keypress.
 const ZOOM_STEP: f32 = 1.2;
+const _: () = assert!(ZOOM_STEP > 1.0, "a step of 1 or less makes the zoom keys inert or inverted");
 
 /// Where `P` writes screenshots. The system temp directory unless told
 /// otherwise, so a stray keypress never litters the working tree.
