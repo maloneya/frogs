@@ -176,6 +176,13 @@ impl ApplicationHandler for App {
                 let dir = MoveDir::new(right * axis.x + up * axis.y);
 
                 self.world.step(dt, dir);
+
+                // After the step, not before: following last tick's position
+                // would add a frame of lag on top of the smoothing that is
+                // there deliberately. Per frame rather than per tick, because
+                // where the camera points is presentation, not simulation.
+                camera.follow(self.world.player_pos(), dir, dt);
+
                 self.world.extract(self.instances.sink());
                 renderer.render(camera, self.instances.as_slice());
 

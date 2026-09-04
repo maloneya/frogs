@@ -8,7 +8,20 @@ use glam::Vec3;
 use arpg_core::{Instance, InstanceSink, MoveDir, MAX_INSTANCES};
 
 /// Ground plane size, in tiles.
-const GROUND_TILES: usize = 32;
+///
+/// Sized so the world is comfortably larger than the view. A tracking camera
+/// is meaningless otherwise: if the whole arena fits on screen there is nothing
+/// for the camera to reveal, and following just slides the floor around inside
+/// a frame that already showed everything.
+///
+/// The size is also what keeps the void off screen, and it is why the camera
+/// does *not* clamp itself to the world bounds. Under this projection the view
+/// covers roughly 57x55 world units of floor, whose axis-aligned footprint is
+/// ~40 units either side of the focus. Subtract that from a 48-unit arena and a
+/// bounds-clamped camera could travel +/-8 units total — it would be pinned,
+/// and following would stop working before the player reached the edge. Making
+/// the world bigger is the fix that a camera clamp only pretends to be.
+const GROUND_TILES: usize = 128;
 const TILE: f32 = 1.5;
 
 /// The floor's share of the instance budget.
@@ -95,10 +108,10 @@ impl World {
     pub fn step(&mut self, dt: f32, move_dir: MoveDir) {
         self.player.pos += move_dir.as_vec3() * PLAYER_SPEED * dt;
 
-        // The camera is pinned to the origin and cannot follow yet, so walking
-        // off the ground plane means losing the character in the dark with no
-        // way to find it again. The clamp is a stand-in for a following camera,
-        // not a gameplay boundary — it comes out when the camera can track.
+        // The ground plane *is* the world; there is nothing beyond it to walk
+        // onto. This was previously a stand-in for the camera being pinned to
+        // the origin — that reason is gone now the camera tracks, but the
+        // boundary itself is real and stays until the world has an outside.
         let limit = ARENA_HALF - PLAYER_SCALE.x * 0.5;
         self.player.pos.x = self.player.pos.x.clamp(-limit, limit);
         self.player.pos.z = self.player.pos.z.clamp(-limit, limit);

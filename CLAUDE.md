@@ -63,8 +63,11 @@ crates/
   so simulation tests never need a GPU. The vertex layout for `Instance` lives
   in `gfx/cube.rs` for exactly this reason.
 - `gfx` — `lib.rs` (surface, device, depth, frame orchestration), `camera.rs`
-  (isometric ortho camera + uniform), `cube.rs` (mesh, pipeline, instance
-  buffer, vertex layout), `shader.wgsl`.
+  (isometric ortho camera, the follow rig, and the uniform), `cube.rs` (mesh,
+  pipeline, instance buffer, vertex layout), `shader.wgsl`. The camera rig lives
+  here rather than in `app` or `sim` because where the camera points is a
+  presentation decision; it is handed a bare `Vec3`, which is exactly as
+  anonymous as an `Instance`.
 - `sim` — `World`: what exists, plus `step()`, the input/sim seam, and
   `extract()`, the sim/render seam.
 - `app` — the wiring layer, and the only crate that sees both sides. `input.rs`
@@ -130,6 +133,9 @@ why if it cannot go higher.** What is in place today:
 | Ground + horde + player fit one buffer | 3 | unit test in `sim` at the largest horde the clamp allows |
 | The camera basis agrees with the projection | 3 | unit tests in `gfx/camera.rs` |
 | Movement speed is frame-rate independent | 3 | unit test in `sim` |
+| Camera smoothing is frame-rate independent | 3 | `damp` uses `2^(-dt/half_life)`; unit test in `gfx/camera.rs` |
+| The camera target cannot be set unsmoothed | 0 | private field; `follow` is the only writer |
+| The camera never overshoots or bobs vertically | 3 | unit tests in `gfx/camera.rs` |
 
 **Escape hatch:** `#[expect(lint, reason = "…")]`, never `#[allow]`. `expect`
 stops compiling once the violation it covers disappears, so suppressions cannot
@@ -168,6 +174,22 @@ Metal surface) for measurement. Measure uncapped; tune feel under vsync.
 the hardware encodes on write. Passing the sRGB value you want yields something
 roughly five times too bright.
 
+**The camera smooths by half-life, not by a per-frame lerp.** `pos.lerp(target,
+0.1)` once a frame keeps 90% of the error *per frame* rather than per second:
+after one second that is `0.9^60 ≈ 0.002` left at 60Hz but `0.9^144 ≈ 3e-7` at
+144Hz — a camera thousands of times tighter purely because the machine is
+faster. Here that would be worse than usual, because pressing `V` to uncap the
+frame rate would change how the game *feels*, corrupting the measurement `V`
+exists to take. `2^(-dt/half_life)` composes exactly under subdivision, so any
+number of small steps equals one big one.
+
+**The camera leads the character, and the lead is smoothed separately.** A rigid
+offset whips the camera two lead-lengths across the screen the instant you
+reverse; a slower half-life on the offset turns that into an ease. The lead is
+in world units, not screen ones, so it reveals the same distance in every
+direction — the axis threats live on — which is why the vertical lead looks
+shorter on screen, foreshortened by sin(35.26°).
+
 ### Deliberate choices that look like smells
 
 Do not "clean up" these without understanding why they're there — each one is
@@ -203,17 +225,26 @@ but this paragraph, which is precisely why they are worth reading twice.
 
 ### Known limitations (real, not yet worth fixing)
 
-- `World::extract()` rebuilds the 1024 static ground tiles every frame and
-  re-uploads the entire instance buffer. The fix is separate static/dynamic
-  buffer regions — deliberately deferred until measurement shows it costing
-  something.
+- `World::extract()` rebuilds the 16384 static ground tiles every frame and
+  re-uploads the entire instance buffer. Still deferred, and now with a number
+  behind it: 17409 instances render in 2.81ms uncapped (356fps) on the M4, so
+  the static/dynamic buffer split is not yet buying anything.
 - `Clock` smooths frame time with an EMA, which *hides* pacing variance. An
   average is the wrong instrument for the thing that matters most here; a
   frame-time histogram is the intended replacement.
-- The camera angle is fixed. No rotation, and no way to look at anything but
-  the origin — which is why `World::step` clamps the player to the arena: it is
-  a stand-in for a following camera, not a gameplay boundary. `World::player_pos`
-  exists for the camera to start tracking.
+- The camera angle is fixed. It tracks the player now, but there is still no
+  rotation — which is also what lets `ground_basis` be the only screen/world
+  translation without a feedback loop between input and view.
+- The camera does not clamp to the world bounds, so walking to the very edge
+  shows the void. This was measured rather than guessed: the view covers ~57x55
+  world units of floor, an axis-aligned footprint ~40 units either side of the
+  focus, so on the old 48-unit arena a bounds-clamped camera could have moved
+  +/-8 units total — pinned, and following would have stopped working before the
+  player reached the edge. Enlarging the world is the fix a camera clamp only
+  pretends to be; real level geometry is the eventual one.
+- There is no deadzone. Deliberate: it reduces micro-jitter but adds a sticky
+  region and a snap at its boundary, and for constant repositioning against a
+  horde the smoothed follow reads better. Worth revisiting once combat exists.
 - The player passes straight through the horde. Nothing collides with anything
   yet.
 - Movement is instantaneous — full speed on the first frame, dead stop on
@@ -233,7 +264,8 @@ but this paragraph, which is precisely why they are worth reading twice.
 
 Rough order, one chunk at a time: ~~ortho camera + ground grid + instanced cubes
 with runtime-adjustable N and a frame-time HUD~~ → ~~device input bound to
-actions, and a player-controlled character that moves~~ → fixed-timestep sim loop with
+actions, a player-controlled character that moves, and a camera that tracks
+it~~ → fixed-timestep sim loop with
 render interpolation → SoA entity storage → uniform-grid spatial hash for
 broadphase → separation steering → attack state machine (startup/active/recovery)
 with timed hitboxes → hitstop, knockback, input buffering.
