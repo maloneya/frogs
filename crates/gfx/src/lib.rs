@@ -246,6 +246,11 @@ impl Renderer {
     /// counting frames has to be able to tell those apart — a loop spinning
     /// freely because the window is occluded otherwise reports a spectacular
     /// frame rate for drawing nothing at all.
+    ///
+    /// `must_use` because a `bool` nobody reads is not an invariant. Without it
+    /// this is a note in a doc comment, which is the weakest enforcement there
+    /// is — and miscounting frames is precisely the bug it exists to prevent.
+    #[must_use = "a skipped frame must not be counted as a rendered one"]
     pub fn render(&mut self, camera: &OrthoCamera, instances: &[Instance]) -> bool {
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU

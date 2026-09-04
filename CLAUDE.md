@@ -181,7 +181,7 @@ why if it cannot go higher.** What is in place today:
 | Turning is frame-rate independent and never overshoots | 3 | step clamped to the remaining arc; unit tests in `sim` |
 | Facing cannot drift toward the precision limit | 3 | `wrap_angle` after every turn; unit test in `sim` |
 | Spawning does not swoop the camera in from the origin | 0 | `snap_to`, called in `resumed` before the first frame |
-| A skipped frame is never counted as a rendered one | 1 | `Renderer::render` returns whether it presented; the caller must handle it |
+| A skipped frame is never counted as a rendered one | 1 | `Renderer::render` is `#[must_use]`, so ignoring the result is a denied warning |
 | Readback rows respect the copy alignment | 3 | `padded_bytes_per_row`; unit test in `gfx/capture.rs` |
 | A malformed harness command is reported, not ignored | 3 | `parse` returns `Result`; unit test in `app/harness.rs` |
 | The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
