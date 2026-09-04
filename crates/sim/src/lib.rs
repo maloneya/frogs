@@ -3,9 +3,20 @@
 //! Depends on `arpg-core` for vocabulary and on nothing else. In particular it
 //! does not link wgpu, so simulation tests run without a GPU.
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 
 use arpg_core::{Instance, InstanceSink, MoveDir, MAX_INSTANCES};
+
+/// Lifts a ground-plane position into world space at a given height.
+///
+/// The one place `Vec2::y` is allowed to mean world **Z**. Spelling the swap
+/// out once, rather than writing `Vec3::new(p.x, h, p.y)` at each call site,
+/// is what keeps it from being a silent trap: the two axes are both horizontal
+/// and both plausible, so a transposition compiles, draws, and puts everything
+/// in the wrong place along one diagonal.
+fn on_ground(p: Vec2, height: f32) -> Vec3 {
+    Vec3::new(p.x, height, p.y)
+}
 
 /// Ground plane size, in tiles.
 ///
@@ -46,6 +57,38 @@ const _: () = assert!(GROUND_INSTANCES < MAX_INSTANCES, "the floor alone must fi
 /// writer of `enemy_count` would silently overrun the GPU buffer — a failure
 /// with no error message, since the upload just truncates.
 const MAX_ENEMIES: usize = MAX_INSTANCES - GROUND_INSTANCES - 1;
+
+/// How large the horde starts. Big enough to read as a crowd, small enough that
+/// the brute-force passes landing next stay comfortably inside a frame.
+const DEFAULT_ENEMIES: usize = 1024;
+const _: () = assert!(DEFAULT_ENEMIES >= 1 && DEFAULT_ENEMIES <= MAX_ENEMIES);
+
+/// One enemy, as drawn. Uniform on purpose: a horde of identically sized bodies
+/// is what lets the broadphase be a flat uniform grid rather than a hierarchy,
+/// since every structure that beats a grid does so by adapting to size variance
+/// there is none of here.
+const ENEMY_SCALE: Vec3 = Vec3::splat(0.5);
+const _: () = assert!(ENEMY_SCALE.x > 0.0 && ENEMY_SCALE.y > 0.0 && ENEMY_SCALE.z > 0.0);
+
+/// Where an enemy's centre sits so the cube rests *on* the floor rather than
+/// half sunk into it. Derived rather than written down, so the two cannot
+/// disagree after someone resizes the body.
+const ENEMY_HALF_HEIGHT: f32 = ENEMY_SCALE.y * 0.5;
+
+/// Spacing of the spawn grid, in world units.
+///
+/// Deliberately *not* `TILE`. Matching the floor's spacing made the horde tile
+/// it exactly edge-to-edge, hiding the ground and — worse — making a change in
+/// N invisible, because the horde only grew off-screen.
+///
+/// It is also wider than the body, and that is about to start mattering: once
+/// overlapping bodies push each other apart, a horde that spawns already
+/// interpenetrated resolves all of it on the first frame and detonates. The
+/// gap is the difference between a crowd and an explosion, so it is a compile
+/// error to close it rather than a comment someone might read.
+const ENEMY_SPACING: f32 = 0.7;
+const _: () =
+    assert!(ENEMY_SPACING > ENEMY_SCALE.x, "a horde that spawns overlapped blows itself apart");
 
 /// Half the ground plane's width, in world units.
 const ARENA_HALF: f32 = GROUND_TILES as f32 * TILE * 0.5;
@@ -95,6 +138,67 @@ fn shortest_arc(from: f32, to: f32) -> f32 {
     wrap_angle(to - from)
 }
 
+/// Where the horde is.
+///
+/// Until now an enemy had no position. `extract_enemies` derived one from the
+/// loop index on the way to the GPU and threw it away, which made the horde a
+/// *drawing* rather than a thing — there was nothing for a shove to move,
+/// because there was nothing there between frames. Storing it is the whole
+/// content of this step, and every interaction downstream needs it first.
+///
+/// Structure-of-arrays rather than `Vec<Enemy>`, decided now while there is
+/// nothing to migrate. The broadphase that lands next walks positions and
+/// nothing else, and a contiguous stream is what it wants; fields an enemy
+/// gains later — health, AI state, cooldowns — belong in their own arrays
+/// beside this one, so the hot loop never drags them through cache on its way
+/// to a position it does want.
+#[derive(Default)]
+struct Enemies {
+    /// Ground-plane position: `x` is world X and `y` is world **Z** — see
+    /// [`on_ground`], which is the only place that swap is spelled out.
+    ///
+    /// `Vec2` rather than `Vec3` because the horde never leaves the floor: the
+    /// height a body is drawn at is a constant of its size, not state worth
+    /// storing N times. That is what makes collision here genuinely 2D, which
+    /// is the largest saving the isometric camera hands over — a grid
+    /// neighbourhood is 9 cells rather than 27, and with no vertical axis there
+    /// is no stacking, which is the case that forces general solvers into four
+    /// to eight iterations.
+    pos: Vec<Vec2>,
+}
+
+impl Enemies {
+    fn len(&self) -> usize {
+        self.pos.len()
+    }
+
+    /// Lays `n` enemies out in a square grid centred on the origin.
+    ///
+    /// Respawns the whole horde rather than appending to it, which keeps `[`
+    /// and `]` behaving exactly as they did: the layout is a function of N, so
+    /// halving it re-centres what is left rather than deleting a corner.
+    /// Enemies that persist across a count change is the better model and it is
+    /// what real spawning will want — but it is a *spawning* decision, and
+    /// smuggling it in beside the storage change would mean this step could no
+    /// longer be checked by the picture staying identical.
+    fn respawn(&mut self, n: usize) {
+        // `clear` keeps the allocation, so doubling N repeatedly grows the
+        // buffer a few times rather than reallocating on every press.
+        self.pos.clear();
+        self.pos.reserve(n);
+
+        let side = (n as f32).sqrt().ceil().max(1.0) as usize;
+        let offset = (side as f32 - 1.0) * ENEMY_SPACING * 0.5;
+
+        for i in 0..n {
+            self.pos.push(Vec2::new(
+                (i % side) as f32 * ENEMY_SPACING - offset,
+                (i / side) as f32 * ENEMY_SPACING - offset,
+            ));
+        }
+    }
+}
+
 /// The player-controlled character.
 ///
 /// A single struct held apart from the horde, and it stays that way even once
@@ -122,28 +226,34 @@ impl Default for Player {
 /// What exists. This is where the simulation will live as it grows —
 /// fixed-timestep stepping, entity storage, spatial partitioning.
 pub struct World {
-    enemy_count: usize,
+    enemies: Enemies,
     player: Player,
 }
 
 impl Default for World {
     fn default() -> Self {
-        Self { enemy_count: 1024, player: Player::default() }
+        let mut world = Self { enemies: Enemies::default(), player: Player::default() };
+        world.set_enemy_count(DEFAULT_ENEMIES);
+        world
     }
 }
 
 impl World {
     /// How many enemies the horde currently holds. Always within
     /// `1..=MAX_ENEMIES`, because [`World::set_enemy_count`] is the only writer.
+    ///
+    /// Derived from the storage rather than tracked beside it: a separate
+    /// counter is a second copy of the same fact, and the two drift the first
+    /// time something spawns or kills one without going through the dial.
     pub fn enemy_count(&self) -> usize {
-        self.enemy_count
+        self.enemies.len()
     }
 
     /// The only door in, so the clamp cannot be bypassed or forgotten. A
     /// spawner, a save-load path or a debug console added later inherits it
     /// without having to know `MAX_ENEMIES` exists.
     pub fn set_enemy_count(&mut self, n: usize) {
-        self.enemy_count = n.clamp(1, MAX_ENEMIES);
+        self.enemies.respawn(n.clamp(1, MAX_ENEMIES));
     }
 
     /// Advances the world by `dt` seconds.
@@ -252,25 +362,17 @@ impl World {
         }
     }
 
+    /// Reads the horde's stored positions rather than re-deriving them, which
+    /// is the whole difference this step makes: what is drawn is now what the
+    /// simulation believes, so moving a body moves its cube.
     fn extract_enemies(&self, out: &mut InstanceSink<'_>) {
-        let side = (self.enemy_count as f32).sqrt().ceil().max(1.0) as usize;
-        // Deliberately *not* TILE. Matching the floor's spacing made the horde
-        // tile it exactly edge-to-edge, hiding the ground and — worse — making
-        // a change in N invisible, because the horde only grew off-screen.
-        let spacing = 0.7;
-        let offset = (side as f32 - 1.0) * spacing * 0.5;
-
-        for i in 0..self.enemy_count {
-            let x = (i % side) as f32 * spacing - offset;
-            let z = (i / side) as f32 * spacing - offset;
-
+        for (i, &pos) in self.enemies.pos.iter().enumerate() {
             // Linear-space colour, since the surface is sRGB and the hardware
             // encodes on write. These look darker here than they will on screen.
             let t = (i % 7) as f32 / 7.0;
             let color = Vec3::new(0.30 + t * 0.12, 0.06 + t * 0.05, 0.05);
 
-            // Half-height 0.4, so the cube sits on the ground rather than in it.
-            out.push(Instance::new(Vec3::new(x, 0.25, z), Vec3::splat(0.5), color));
+            out.push(Instance::new(on_ground(pos, ENEMY_HALF_HEIGHT), ENEMY_SCALE, color));
         }
     }
 }
@@ -437,5 +539,83 @@ mod tests {
         world.extract(buf.sink());
 
         assert_eq!(buf.as_slice().len(), MAX_INSTANCES);
+    }
+
+    /// The count is derived from the storage, so asking for N must actually
+    /// produce N bodies — not N draw calls over a formula.
+    #[test]
+    fn the_horde_holds_exactly_the_requested_count() {
+        let mut world = World::default();
+        assert_eq!(world.enemy_count(), DEFAULT_ENEMIES);
+
+        for n in [1, 17, 512, 1024, 4096] {
+            world.set_enemy_count(n);
+            assert_eq!(world.enemy_count(), n);
+            assert_eq!(world.enemies.pos.len(), n);
+        }
+    }
+
+    /// Nothing may spawn already overlapping.
+    ///
+    /// The const assert beside `ENEMY_SPACING` covers the constants; this
+    /// covers the *layout* they produce, which is the thing that actually has
+    /// to hold. Once bodies push each other apart, an interpenetrated spawn
+    /// resolves every overlap on frame one and detonates the horde — a failure
+    /// that looks like a physics bug and is a spawning bug.
+    #[test]
+    fn the_horde_spawns_with_a_gap_between_every_body() {
+        let mut world = World::default();
+        world.set_enemy_count(1024);
+
+        let pos = &world.enemies.pos;
+        let mut closest = f32::MAX;
+        for i in 0..pos.len() {
+            for j in i + 1..pos.len() {
+                closest = closest.min(pos[i].distance(pos[j]));
+            }
+        }
+
+        assert!(
+            closest > ENEMY_SCALE.x,
+            "spawned {closest} apart, but a body is {} wide",
+            ENEMY_SCALE.x
+        );
+    }
+
+    /// The grid is centred on the origin, which is what puts the player inside
+    /// the horde rather than beside it.
+    ///
+    /// Exactly centred only when N is a perfect square. Otherwise the last row
+    /// is partial and drags the centroid by up to one spacing — which is the
+    /// real behaviour and worth pinning at that bound rather than pretending
+    /// the grid is always square.
+    #[test]
+    fn the_horde_is_centred_on_the_origin() {
+        let mut world = World::default();
+
+        let centroid_at = |world: &World| {
+            let pos = &world.enemies.pos;
+            pos.iter().fold(Vec2::ZERO, |acc, &p| acc + p) / pos.len() as f32
+        };
+
+        for n in [1, 4, 1024] {
+            world.set_enemy_count(n);
+            let c = centroid_at(&world);
+            assert!(c.length() < 1e-3, "square N={n} should be exactly centred, got {c}");
+        }
+
+        for n in [17, 500, 4095] {
+            world.set_enemy_count(n);
+            let c = centroid_at(&world);
+            assert!(c.length() < ENEMY_SPACING, "ragged N={n} drifted {c}, more than one row");
+        }
+    }
+
+    /// The one place `Vec2::y` means world Z, so it is worth pinning: a
+    /// transposition here is horizontal either way and would draw the whole
+    /// horde mirrored along a diagonal without a single test failing elsewhere.
+    #[test]
+    fn a_ground_position_keeps_x_and_lifts_y_into_z() {
+        assert_eq!(on_ground(Vec2::new(3.0, -7.0), 0.25), Vec3::new(3.0, 0.25, -7.0));
     }
 }
