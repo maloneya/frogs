@@ -56,8 +56,10 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `vsync on\|off` | resulting state |
 | `quit` | then exits |
 
-Keys: `w a s d up down left right`. Anything else returns
-`error: unknown key "..."` — malformed input is always reported, never ignored.
+Keys come from `BINDINGS` in `crates/app/src/input.rs`, so whatever is bound is
+drivable — currently `w a s d up down left right`. An unknown one replies
+`error: unknown key "q"; bound keys are w s a d up down left right`, which is
+also how to ask what exists. Malformed input is always reported, never ignored.
 
 Meta commands say what they mean (`enemies 512`); do **not** simulate the debug
 keys (`[`, `]`, `v`, `p`) to achieve the same thing.
@@ -140,9 +142,11 @@ Reference, window frontmost, 17409 instances on an M4: **62/s vsync at 16.59ms,
 . "$HOME/.cargo/env" && cargo test --workspace
 ```
 
-Both must be clean. Note the `PostToolUse` hook in `.claude/settings.json` only
-fires for the Edit/Write tools — if you edited via shell, nothing ran clippy for
-you and you must run it yourself.
+Both must be clean. The `PostToolUse` hook in `.claude/settings.json` runs the
+clippy line for you after Edit/Write **and after every Bash call**, blocking with
+exit 2 and the errors on stderr — so a shell-based edit (a python or sed
+heredoc) cannot slip past it. Costs ~0.1s when nothing changed, because cargo's
+own staleness check does the work. You still have to run the tests.
 
 ## What this cannot tell you
 
@@ -159,8 +163,6 @@ you and you must run it yourself.
 
 ## Current gaps in the harness
 
-- `key_from_name` in `crates/app/src/harness.rs` is a second table that must be
-  kept in sync with `BINDINGS` by hand. Bind a new key and add it there too.
 - No mouse, and no scenario setup (no spawn/teleport). Testing combat will want
   the latter, built on `World::spawn` once entity storage exists.
 - `state` is a hand-maintained format string; extend it as the sim grows.

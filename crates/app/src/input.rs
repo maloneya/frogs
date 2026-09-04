@@ -7,25 +7,43 @@ use winit::keyboard::KeyCode;
 
 use arpg_core::{Action, ActionMask, Actions, InputState};
 
-/// Which physical keys mean which action.
+/// Which physical keys mean which action, and what each key is called.
 ///
 /// A table rather than a `match` because bindings are *data*: a match compiles
 /// the mapping into control flow, where nothing can enumerate it, print it to a
 /// settings screen, or replace it at runtime. As a slice, "load bindings from a
 /// file" is a change of where this array comes from and nothing else.
 ///
+/// The name column is what the test harness types. It lives *here*, rather than
+/// in a lookup table beside the harness, so the two cannot drift: a second table
+/// would have to be remembered every time a key is bound, and forgetting it
+/// would leave the new key undrivable — the tooling silently falling behind the
+/// game it is meant to test. One table means a binding is testable the moment it
+/// exists.
+///
 /// Note the same action appearing twice. That is the case the naive
 /// implementation gets wrong — see `down` below.
-const BINDINGS: &[(KeyCode, Action)] = &[
-    (KeyCode::KeyW, Action::MoveUp),
-    (KeyCode::KeyS, Action::MoveDown),
-    (KeyCode::KeyA, Action::MoveLeft),
-    (KeyCode::KeyD, Action::MoveRight),
-    (KeyCode::ArrowUp, Action::MoveUp),
-    (KeyCode::ArrowDown, Action::MoveDown),
-    (KeyCode::ArrowLeft, Action::MoveLeft),
-    (KeyCode::ArrowRight, Action::MoveRight),
+const BINDINGS: &[(&str, KeyCode, Action)] = &[
+    ("w", KeyCode::KeyW, Action::MoveUp),
+    ("s", KeyCode::KeyS, Action::MoveDown),
+    ("a", KeyCode::KeyA, Action::MoveLeft),
+    ("d", KeyCode::KeyD, Action::MoveRight),
+    ("up", KeyCode::ArrowUp, Action::MoveUp),
+    ("down", KeyCode::ArrowDown, Action::MoveDown),
+    ("left", KeyCode::ArrowLeft, Action::MoveLeft),
+    ("right", KeyCode::ArrowRight, Action::MoveRight),
 ];
+
+/// The key a harness command names, if it is bound to anything.
+pub(crate) fn key_named(name: &str) -> Option<KeyCode> {
+    BINDINGS.iter().find(|(n, ..)| *n == name).map(|&(_, key, _)| key)
+}
+
+/// Every bound key's name, for error messages that tell the caller what it
+/// *could* have said.
+pub(crate) fn key_names() -> impl Iterator<Item = &'static str> {
+    BINDINGS.iter().map(|&(name, ..)| name)
+}
 
 /// `down` is a bitset over `BINDINGS`, so the table cannot outgrow it quietly.
 /// Widening to `u64` is the fix if it ever does; a `Vec<bool>` is not, because
@@ -62,7 +80,7 @@ impl Input {
             return;
         }
 
-        for (i, (bound, _)) in BINDINGS.iter().enumerate() {
+        for (i, (_, bound, _)) in BINDINGS.iter().enumerate() {
             if *bound == key {
                 let bit = 1u32 << i;
                 if pressed {
@@ -92,7 +110,7 @@ impl Input {
     /// derived state can be wrong is if the physical state is.
     fn sync(&mut self) {
         let mut held = ActionMask::EMPTY;
-        for (i, (_, action)) in BINDINGS.iter().enumerate() {
+        for (i, (_, _, action)) in BINDINGS.iter().enumerate() {
             if self.down & (1u32 << i) != 0 {
                 held.insert(*action);
             }
@@ -148,6 +166,26 @@ mod tests {
         input.release_all();
 
         assert_eq!(input.sample().move_axis(), glam::Vec2::ZERO);
+    }
+
+    /// The harness drives the game by these names, so every binding must have
+    /// exactly one, and no two may collide — a duplicate would silently shadow
+    /// whichever key came second in the table.
+    #[test]
+    fn every_binding_has_a_unique_name() {
+        let mut seen = std::collections::HashSet::new();
+        for (name, key, _) in BINDINGS {
+            assert!(!name.is_empty(), "{key:?} has no name");
+            assert!(seen.insert(*name), "duplicate name {name:?}");
+            assert_eq!(key_named(name), Some(*key), "{name:?} does not resolve back");
+        }
+        assert_eq!(seen.len(), key_names().count());
+    }
+
+    #[test]
+    fn an_unknown_name_is_not_a_key() {
+        assert_eq!(key_named("q"), None);
+        assert_eq!(key_named(""), None);
     }
 
     /// Unbound keys must fall through untouched, so the debug keys keep working.

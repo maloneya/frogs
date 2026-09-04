@@ -46,6 +46,9 @@ echo state | nc -U /tmp/arpg.sock
 `press`/`release`/`tap`/`hold <key> <ms>` · `wait <ms>` · `shot <path>` ·
 `state` · `enemies <n>` · `vsync on|off` · `quit`
 
+Key names are a column of `BINDINGS` rather than a table beside the harness, so
+binding a key makes it drivable in the same edit.
+
 Every command replies, and the reply means the effect has *landed* — `hold`
 answers after the key comes back up, `shot` after the file is on disk. So a test
 is a sequence of commands, not a sequence of sleeps and hopes.
@@ -159,6 +162,7 @@ why if it cannot go higher.** What is in place today:
 | `Instance` is exactly 48 bytes | 1 | `const _: () = assert!(…)` beside the type |
 | Rust vertex layout matches `shader.wgsl` | 2 | headless pipeline + draw test in `gfx/src/lib.rs` |
 | Public API stays deliberate | 1 | `unreachable_pub = "deny"` |
+| The lint wall runs however the edit was made | 1 | `PostToolUse` hook matches Bash as well as Edit/Write |
 | The sink's cap holds at its real value | 3 | unit tests in `core` |
 | `sim` cannot name a key or a window | 1 | `crates/sim/build.rs`; `core` never names winit |
 | A movement direction is unit-length or zero | 0 | private field; `MoveDir::new` is the only door, and it normalises |
@@ -181,6 +185,16 @@ why if it cannot go higher.** What is in place today:
 | Readback rows respect the copy alignment | 3 | `padded_bytes_per_row`; unit test in `gfx/capture.rs` |
 | A malformed harness command is reported, not ignored | 3 | `parse` returns `Result`; unit test in `app/harness.rs` |
 | The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
+| The harness cannot fall behind the bindings | 0 | key names live *in* `BINDINGS`; there is no second table to forget |
+
+The lint wall is applied at write time, not just at build time: the
+`PostToolUse` hook in `.claude/settings.json` runs
+`cargo clippy --workspace --all-targets -- -D warnings` after every file-editing
+tool **and after every Bash call**, and blocks on failure. The Bash matcher is
+load-bearing rather than belt-and-braces — an agent editing through a shell
+heredoc produces no `file_path`, so a hook keyed only on Edit/Write never fires
+and the gate silently degrades to "remember to run clippy", which this file's
+own table rates as the weakest layer there is.
 
 **Escape hatch:** `#[expect(lint, reason = "…")]`, never `#[allow]`. `expect`
 stops compiling once the violation it covers disappears, so suppressions cannot

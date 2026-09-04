@@ -30,6 +30,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 
 use winit::keyboard::KeyCode;
 
+use crate::input::{key_named, key_names};
+
 /// A command plus the channel its reply goes back on.
 pub(crate) struct Request {
     pub(crate) command: Command,
@@ -58,20 +60,17 @@ pub(crate) enum Command {
 /// Game keys are injected as `KeyCode`s rather than as actions, so a test
 /// exercises the real binding table — only winit's delivery is skipped.
 ///
-/// Meta commands are *not* here. Simulating `[` to halve the horde would be
-/// pantomime; `enemies 512` says what it means and cannot drift from whatever
-/// key happens to be bound to it today.
-fn key_from_name(name: &str) -> Option<KeyCode> {
-    Some(match name {
-        "w" => KeyCode::KeyW,
-        "a" => KeyCode::KeyA,
-        "s" => KeyCode::KeyS,
-        "d" => KeyCode::KeyD,
-        "up" => KeyCode::ArrowUp,
-        "down" => KeyCode::ArrowDown,
-        "left" => KeyCode::ArrowLeft,
-        "right" => KeyCode::ArrowRight,
-        _ => return None,
+/// The names come from `BINDINGS` itself rather than a table kept here, so a
+/// newly bound key is drivable immediately and this file cannot fall behind the
+/// game it drives.
+///
+/// Meta commands are deliberately *not* keys. Simulating `[` to halve the horde
+/// would be pantomime; `enemies 512` says what it means and cannot drift from
+/// whatever key happens to be bound to it today.
+fn key(arg: Option<&str>) -> Result<KeyCode, String> {
+    let name = arg.ok_or_else(|| "expected a key name".to_string())?;
+    key_named(name).ok_or_else(|| {
+        format!("unknown key {name:?}; bound keys are {}", key_names().collect::<Vec<_>>().join(" "))
     })
 }
 
@@ -80,11 +79,6 @@ fn parse(line: &str) -> Result<Command, String> {
     let verb = it.next().unwrap_or("");
     let arg = it.next();
 
-    let key = |arg: Option<&str>| {
-        arg.ok_or_else(|| "expected a key name".to_string()).and_then(|n| {
-            key_from_name(n).ok_or_else(|| format!("unknown key {n:?}"))
-        })
-    };
     let number = |arg: Option<&str>| {
         arg.ok_or_else(|| "expected a number".to_string())
             .and_then(|v| v.parse::<u64>().map_err(|e| e.to_string()))
