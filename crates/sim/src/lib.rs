@@ -48,7 +48,35 @@ const PLAYER_SPEED: f32 = 9.0;
 
 /// Deliberately taller than an enemy (0.5), so the player stays readable from
 /// inside a crowd of them. Silhouette is the cheapest legibility tool there is.
-const PLAYER_SCALE: Vec3 = Vec3::new(0.55, 1.2, 0.55);
+///
+/// Also deliberately *not* square in plan: deeper along its own +Z (the facing
+/// axis) than it is wide. A square footprint rotated about the vertical axis
+/// looks almost identical at every angle, so the character would turn correctly
+/// and appear not to — the facing would be real but invisible.
+const PLAYER_SCALE: Vec3 = Vec3::new(0.45, 1.2, 0.8);
+
+/// Radians per second. Fast — a full 180° turn takes ~0.22s — because in an
+/// ARPG the character reorienting is feedback that the input registered, and
+/// anything slow enough to notice reads as the controls lagging.
+const PLAYER_TURN_RATE: f32 = 14.0;
+
+/// Folds an angle into `(-PI, PI]`, so facing cannot drift off toward the
+/// precision limit over a long session.
+fn wrap_angle(radians: f32) -> f32 {
+    let wrapped = radians.rem_euclid(std::f32::consts::TAU);
+    if wrapped > std::f32::consts::PI { wrapped - std::f32::consts::TAU } else { wrapped }
+}
+
+/// The signed angle from `from` to `to`, **always the short way round**.
+///
+/// This is the whole subtlety in turning. Subtracting raw angles has a seam:
+/// turning from 350° to 10° is a 20° step to the left, but `to - from` says
+/// -340°, so the character spins almost all the way round the wrong way for
+/// what looks on screen like a tiny correction. Wrapping the difference — not
+/// the inputs — is what removes the seam.
+fn shortest_arc(from: f32, to: f32) -> f32 {
+    wrap_angle(to - from)
+}
 
 /// The player-controlled character.
 ///
@@ -59,11 +87,18 @@ const PLAYER_SCALE: Vec3 = Vec3::new(0.55, 1.2, 0.55);
 /// to avoid a "special case" would mean paying for those fields N times.
 struct Player {
     pos: Vec3,
+    /// Which way the body points, in radians. Yaw 0 faces world +Z and positive
+    /// turns toward +X, matching `Instance::with_yaw` and `shader.wgsl`.
+    ///
+    /// Simulation state, not a rendering detail: this is what the attack hitbox
+    /// will be oriented by, so it has to be something the sim owns and can be
+    /// reasoned about without a GPU.
+    facing: f32,
 }
 
 impl Default for Player {
     fn default() -> Self {
-        Self { pos: Vec3::new(0.0, PLAYER_SCALE.y * 0.5, 0.0) }
+        Self { pos: Vec3::new(0.0, PLAYER_SCALE.y * 0.5, 0.0), facing: 0.0 }
     }
 }
 
@@ -112,10 +147,36 @@ impl World {
         // onto. This was previously a stand-in for the camera being pinned to
         // the origin — that reason is gone now the camera tracks, but the
         // boundary itself is real and stays until the world has an outside.
-        let limit = ARENA_HALF - PLAYER_SCALE.x * 0.5;
+        // The wider of the two footprint axes, since the body rotates and
+        // either one can be the one facing the wall.
+        let limit = ARENA_HALF - PLAYER_SCALE.x.max(PLAYER_SCALE.z) * 0.5;
         self.player.pos.x = self.player.pos.x.clamp(-limit, limit);
         self.player.pos.z = self.player.pos.z.clamp(-limit, limit);
 
+        self.turn_toward(move_dir, dt);
+    }
+
+    /// Rotates the body toward where it is heading, at a fixed rate.
+    ///
+    /// A fixed rate rather than the exponential damping the camera uses. Both
+    /// are frame-rate independent, but exponential decay is asymptotic — it
+    /// crawls through the last few degrees and never quite arrives, which on a
+    /// body reads as drifting rather than turning. A constant rate arrives, and
+    /// it makes the behaviour a number you can state: 180° in `PI / rate`
+    /// seconds. Clamping the step to the remaining arc is what keeps it from
+    /// overshooting and oscillating around the target.
+    fn turn_toward(&mut self, move_dir: MoveDir, dt: f32) {
+        let dir = move_dir.as_vec3();
+        if dir == Vec3::ZERO {
+            // Standing still keeps the last facing. Snapping back to a default
+            // would have the character turn away from whatever it just walked
+            // up to the instant the key came up.
+            return;
+        }
+
+        let arc = shortest_arc(self.player.facing, f32::atan2(dir.x, dir.z));
+        let step = (PLAYER_TURN_RATE * dt).min(arc.abs());
+        self.player.facing = wrap_angle(self.player.facing + step * arc.signum());
     }
 
     /// Where the character is standing. The camera will want this shortly.
@@ -144,11 +205,10 @@ impl World {
         // the hardware encodes on write. This is roughly sRGB (0.35, 0.72, 0.95)
         // — a bright cyan-blue, chosen to sit opposite the horde's muted red on
         // the colour wheel so the eye separates them without effort.
-        out.push(Instance::new(
-            self.player.pos,
-            PLAYER_SCALE,
-            Vec3::new(0.10, 0.47, 0.88),
-        ));
+        out.push(
+            Instance::new(self.player.pos, PLAYER_SCALE, Vec3::new(0.10, 0.47, 0.88))
+                .with_yaw(self.player.facing),
+        );
     }
 
     /// The floor is not a special case — it is just more cube instances, flat
@@ -246,6 +306,101 @@ mod tests {
         let height = world.player_pos().y;
         world.step(0.5, MoveDir::new(Vec3::new(1.0, 5.0, 1.0)));
         assert_eq!(world.player_pos().y, height);
+    }
+
+    /// **The seam that turning exists to get right.** Crossing the ±PI branch
+    /// cut must be a small step, not an almost-full revolution the other way.
+    #[test]
+    fn turning_takes_the_short_way_around() {
+        let nearly_half_turn = std::f32::consts::PI - 0.1;
+        let just_past = -nearly_half_turn;
+
+        let arc = shortest_arc(nearly_half_turn, just_past);
+        assert!(arc.abs() < 0.3, "went the long way: {arc}");
+
+        // And the naive subtraction this replaces really does get it wrong,
+        // which is why the wrapping is not decoration.
+        assert!((just_past - nearly_half_turn).abs() > 6.0);
+    }
+
+    #[test]
+    fn facing_follows_the_direction_of_travel() {
+        let mut world = World::default();
+        for _ in 0..120 {
+            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+        }
+        // atan2(dir.x, dir.z): due east is +X, so a quarter turn from +Z.
+        assert!((world.player.facing - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+
+        for _ in 0..120 {
+            world.step(1.0 / 60.0, MoveDir::new(Vec3::Z));
+        }
+        assert!(world.player.facing.abs() < 1e-4, "should face +Z");
+    }
+
+    /// A fixed turn rate is only frame-rate independent if the step is clamped
+    /// to the remaining arc; without the clamp the coarse step overshoots and
+    /// the two disagree.
+    #[test]
+    fn turning_is_frame_rate_independent() {
+        let west = MoveDir::new(Vec3::NEG_X);
+
+        let mut coarse = World::default();
+        coarse.step(0.05, west);
+
+        let mut fine = World::default();
+        for _ in 0..5 {
+            fine.step(0.01, west);
+        }
+
+        assert!((coarse.player.facing - fine.player.facing).abs() < 1e-5);
+    }
+
+    #[test]
+    fn turning_never_overshoots_its_target() {
+        let mut world = World::default();
+        let target = std::f32::consts::FRAC_PI_2;
+
+        for _ in 0..200 {
+            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+            assert!(world.player.facing >= 0.0);
+            assert!(world.player.facing <= target, "overshot to {}", world.player.facing);
+        }
+    }
+
+    /// Releasing the keys must not reorient the character — it would turn away
+    /// from whatever it just walked up to.
+    #[test]
+    fn standing_still_keeps_the_last_facing() {
+        let mut world = World::default();
+        for _ in 0..120 {
+            world.step(1.0 / 60.0, MoveDir::new(Vec3::NEG_Z));
+        }
+        let settled = world.player.facing;
+
+        for _ in 0..120 {
+            world.step(1.0 / 60.0, MoveDir::NONE);
+        }
+        assert_eq!(world.player.facing, settled);
+    }
+
+    /// Facing must stay canonical however long the session runs, rather than
+    /// accumulating toward the range where f32 loses angular precision.
+    #[test]
+    fn facing_stays_wrapped_while_spinning() {
+        let mut world = World::default();
+        let circle = [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z];
+
+        for lap in 0..50 {
+            for _ in 0..30 {
+                world.step(1.0 / 60.0, MoveDir::new(circle[lap % 4]));
+            }
+            assert!(
+                world.player.facing.abs() <= std::f32::consts::PI + 1e-6,
+                "drifted to {}",
+                world.player.facing
+            );
+        }
     }
 
     /// The whole world — floor, horde and player — has to fit the one buffer

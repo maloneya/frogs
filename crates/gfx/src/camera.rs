@@ -104,6 +104,18 @@ impl OrthoCamera {
         }
     }
 
+    /// Cuts straight to `focus`, with no smoothing and no lead.
+    ///
+    /// For spawning and teleporting — anywhere the character *discontinuously*
+    /// changes position. Without it the camera eases in from wherever it was,
+    /// so a player spawning away from the origin gets an unrequested swoop
+    /// across the world, and a teleport gets a long slide through everything in
+    /// between rather than a cut.
+    pub fn snap_to(&mut self, focus: Vec3) {
+        self.target = Vec3::new(focus.x, 0.0, focus.z);
+        self.lead = Vec3::ZERO;
+    }
+
     /// Chases `focus`, leading it in the direction of `heading`. Call once per
     /// rendered frame.
     ///
@@ -416,6 +428,20 @@ mod tests {
         camera.follow(focus, MoveDir::new(Vec3::NEG_X), 1.0 / 60.0);
         let moved = (camera.lead - settled).length();
         assert!(moved < LOOK_AHEAD * 0.1, "lead jumped {moved} in one frame");
+    }
+
+    /// Spawning away from the origin must be a cut, not a swoop.
+    #[test]
+    fn snapping_arrives_immediately_and_clears_the_lead() {
+        let mut camera = OrthoCamera::new(1280, 720);
+        for _ in 0..200 {
+            camera.follow(Vec3::ZERO, MoveDir::new(Vec3::X), 1.0 / 60.0);
+        }
+        assert!(camera.lead.length() > 0.0, "should have built up a lead");
+
+        camera.snap_to(Vec3::new(40.0, 9.0, -25.0));
+        assert_eq!(camera.target, Vec3::new(40.0, 0.0, -25.0));
+        assert_eq!(camera.lead, Vec3::ZERO);
     }
 
     #[test]

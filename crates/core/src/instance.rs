@@ -16,19 +16,25 @@ pub const MAX_INSTANCES: usize = 200_000;
 ///
 /// 48 bytes, laid out as three `vec4`s. It could be packed to 36 (vertex
 /// buffers have no 16-byte alignment requirement, unlike uniforms), but the
-/// three trailing floats are deliberate headroom for things we already know are
-/// coming — rotation, hit-flash intensity, team id — and a 48-byte stride keeps
-/// the offset arithmetic trivial.
+/// trailing floats are deliberate headroom for things we already know are
+/// coming, and a 48-byte stride keeps the offset arithmetic trivial. The first
+/// of the three is now spent: `yaw` moved into it, which is exactly what the
+/// headroom was for — the layout, the vertex attributes and the shader's
+/// `@location` slots did not have to change to gain a rotation.
 ///
+/// The remaining two are still reserved for hit-flash intensity and team id.
 /// The fields are private, and the padding is why: they are reserved space, not
-/// storage anyone should write. A struct literal could set `_pad0: 3.0` and ship
-/// garbage to the GPU in the slot rotation is going to occupy. `new` is the only
-/// door, and it zeroes them.
+/// storage anyone should write. A struct literal could set `_pad1: 3.0` and ship
+/// garbage to the GPU in a slot something is going to occupy later. `new` and
+/// [`Instance::with_yaw`] are the only doors, and between them they write every
+/// field that means something and zero every field that does not.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Instance {
     pos: [f32; 3],
-    _pad0: f32,
+    /// Rotation about the vertical axis, in radians. Shares a `vec4` with
+    /// `pos`, so the shader reads it as `i_pos.w`.
+    yaw: f32,
     scale: [f32; 3],
     _pad1: f32,
     color: [f32; 3],
@@ -49,10 +55,11 @@ const _: () = assert!(MAX_INSTANCES * size_of::<Instance>() < 64 << 20);
 
 impl Instance {
     /// The only constructor, so the reserved padding is always zeroed.
+    /// Unrotated; most things in the world have no meaningful facing.
     pub fn new(pos: Vec3, scale: Vec3, color: Vec3) -> Self {
         Self {
             pos: pos.into(),
-            _pad0: 0.0,
+            yaw: 0.0,
             scale: scale.into(),
             _pad1: 0.0,
             color: color.into(),
@@ -60,6 +67,17 @@ impl Instance {
         }
     }
 
+    /// Turns the instance about the vertical axis.
+    ///
+    /// **The convention, which `shader.wgsl` must match:** yaw `0` faces world
+    /// `+Z`, and a positive yaw turns toward `+X` — so a direction maps to a
+    /// yaw by `atan2(dir.x, dir.z)`. Rust cannot check that the WGSL agrees any
+    /// more than it can check the vertex layout, so the two are written to be
+    /// read together.
+    pub fn with_yaw(mut self, yaw: f32) -> Self {
+        self.yaw = yaw;
+        self
+    }
 }
 
 /// The CPU-side staging buffer, allocated once at full capacity for the same

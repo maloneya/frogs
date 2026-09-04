@@ -105,7 +105,15 @@ impl ApplicationHandler for App {
             display_handle,
         )));
         let size = window.inner_size();
-        self.camera = Some(OrthoCamera::new(size.width, size.height));
+
+        // Start framed on the character rather than easing in from the origin.
+        // Harmless today, since both begin there — but the moment anything
+        // spawns the player elsewhere, the first thing the player would see is
+        // the camera flying across the world to catch up.
+        let mut camera = OrthoCamera::new(size.width, size.height);
+        camera.snap_to(self.world.player_pos());
+
+        self.camera = Some(camera);
         self.window = Some(window);
     }
 

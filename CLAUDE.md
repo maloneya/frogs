@@ -136,6 +136,10 @@ why if it cannot go higher.** What is in place today:
 | Camera smoothing is frame-rate independent | 3 | `damp` uses `2^(-dt/half_life)`; unit test in `gfx/camera.rs` |
 | The camera target cannot be set unsmoothed | 0 | private field; `follow` is the only writer |
 | The camera never overshoots or bobs vertically | 3 | unit tests in `gfx/camera.rs` |
+| Turning takes the short way round the ±PI seam | 3 | `shortest_arc` wraps the *difference*; unit test in `sim` |
+| Turning is frame-rate independent and never overshoots | 3 | step clamped to the remaining arc; unit tests in `sim` |
+| Facing cannot drift toward the precision limit | 3 | `wrap_angle` after every turn; unit test in `sim` |
+| Spawning does not swoop the camera in from the origin | 0 | `snap_to`, called in `resumed` before the first frame |
 
 **Escape hatch:** `#[expect(lint, reason = "…")]`, never `#[allow]`. `expect`
 stops compiling once the violation it covers disappears, so suppressions cannot
@@ -197,11 +201,27 @@ load-bearing, and several will compile fine while producing wrong output. Where
 a mechanism now enforces one, it is named; the last two are enforced by nothing
 but this paragraph, which is precisely why they are worth reading twice.
 
-- **`Instance` has three `_pad` floats.** *(enforced: private fields + size
-  assert)* Not waste. Vertex buffers have no 16-byte alignment requirement so the
-  struct *could* pack to 36 bytes, but the 48-byte stride keeps offset maths
-  trivial and reserves room for rotation, hit-flash and team id. Removing the
-  padding means rewriting the vertex attribute layout and the shader together.
+- **`Instance` carries `yaw` plus two `_pad` floats.** *(enforced: private
+  fields + size assert)* Not waste. Vertex buffers have no 16-byte alignment
+  requirement so the struct *could* pack to 36 bytes, but the 48-byte stride
+  keeps offset maths trivial and reserved room for rotation, hit-flash and team
+  id. The reservation has now paid off once: `yaw` moved into the first slot and
+  gained the character a facing without touching the vertex layout, the
+  attribute array or the `@location` slots. The other two are still spoken for.
+  Removing them means rewriting the vertex attribute layout and the shader
+  together.
+- **Yaw 0 faces `+Z`, positive turns toward `+X`.** *(unenforced — prose in two
+  languages)* `Instance::with_yaw`, `World::turn_toward` and `rotate_y` in
+  `shader.wgsl` all depend on this one convention, and nothing checks that they
+  agree: wgpu validates the *types* crossing into WGSL, never the meaning of the
+  numbers. A sign flip would compile, validate, draw, and simply point every
+  character 90° off. Closing it properly needs a headless render plus pixel
+  readback — which would also be this project's first check that the image is
+  *correct* rather than merely accepted.
+- **The player is deeper than it is wide** (`0.45 x 1.2 x 0.8`). *(unenforced)*
+  A square footprint rotated about the vertical axis looks near-identical at
+  every angle, so facing would be real and invisible. The asymmetry is what
+  makes the turn readable.
 - **The instance buffer is allocated at full `MAX_INSTANCES` capacity** and only
   partially written. *(enforced: `InstanceSink`)* Capacity and count are separate
   on purpose — regrowing a GPU buffer mid-run means syncing against in-flight
@@ -232,7 +252,7 @@ but this paragraph, which is precisely why they are worth reading twice.
 - `Clock` smooths frame time with an EMA, which *hides* pacing variance. An
   average is the wrong instrument for the thing that matters most here; a
   frame-time histogram is the intended replacement.
-- The camera angle is fixed. It tracks the player now, but there is still no
+- The camera angle is fixed. It tracks and snaps now, but there is still no
   rotation — which is also what lets `ground_basis` be the only screen/world
   translation without a feedback loop between input and view.
 - The camera does not clamp to the world bounds, so walking to the very edge
@@ -248,8 +268,10 @@ but this paragraph, which is precisely why they are worth reading twice.
 - The player passes straight through the horde. Nothing collides with anything
   yet.
 - Movement is instantaneous — full speed on the first frame, dead stop on
-  release. Acceleration and friction are feel knobs worth tuning against a
-  fixed timestep, not a variable one.
+  release. Deliberate, not an oversight: ARPG movement is essentially instant
+  because responsiveness beats momentum, and acceleration is a feel knob better
+  tuned against a fixed timestep than a variable one. *Turning* is rate-limited;
+  translation is not.
 - Only the keyboard is wired. The action layer is what makes a gamepad or
   click-to-move an additive change: a second producer of `ActionMask`, with
   nothing downstream touched.
@@ -264,8 +286,8 @@ but this paragraph, which is precisely why they are worth reading twice.
 
 Rough order, one chunk at a time: ~~ortho camera + ground grid + instanced cubes
 with runtime-adjustable N and a frame-time HUD~~ → ~~device input bound to
-actions, a player-controlled character that moves, and a camera that tracks
-it~~ → fixed-timestep sim loop with
+actions, a player-controlled character that moves and faces where it walks, and
+a camera that tracks it~~ → fixed-timestep sim loop with
 render interpolation → SoA entity storage → uniform-grid spatial hash for
 broadphase → separation steering → attack state machine (startup/active/recovery)
 with timed hitboxes → hitstop, knockback, input buffering.
