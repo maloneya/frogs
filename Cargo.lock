@@ -138,6 +138,7 @@ dependencies = [
  "arpg-gfx",
  "arpg-sim",
  "env_logger",
+ "glam",
  "log",
  "pollster",
  "winit",

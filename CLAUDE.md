@@ -43,16 +43,19 @@ Native macOS only (Apple M4 / Metal). Cross-platform and wasm support are
 explicit non-goals — a lot of wgpu example code exists to satisfy the browser's
 ban on blocking the main thread, and none of that complexity is warranted here.
 
-**The rule the layout enforces: `gfx` never knows what an enemy is.** Its
-vocabulary is `Instance` — position, scale, colour. `sim` describes itself in
-that vocabulary via `extract()`; the dependency runs one way.
+**The rule the layout enforces: `gfx` never knows what an enemy is, and `sim`
+never knows what a key is.** Outward, the vocabulary is `Instance` — position,
+scale, colour — and `sim` describes itself in it via `extract()`. Inward, the
+vocabulary is `Action` — intent — and `app` translates devices into it. Both
+dependencies run one way.
 
 ```
 crates/
   core/  Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES   glam, bytemuck
+         Action, ActionMask, InputState, Actions, MoveDir
   gfx/   Renderer, camera, cube, shader.wgsl                     core, wgpu, winit
-  sim/   World                                                   core, glam  (no wgpu)
-  app/   App, Clock, wiring, main                                core, gfx, sim, winit
+  sim/   World, Player                                           core, glam  (no wgpu)
+  app/   App, Input + BINDINGS, Clock, wiring, main              core, gfx, sim, winit
 ```
 
 - `core` is the shared vocabulary and belongs to neither side. It deliberately
@@ -62,8 +65,10 @@ crates/
 - `gfx` — `lib.rs` (surface, device, depth, frame orchestration), `camera.rs`
   (isometric ortho camera + uniform), `cube.rs` (mesh, pipeline, instance
   buffer, vertex layout), `shader.wgsl`.
-- `sim` — `World`: what exists, plus `extract()`, the sim/render seam.
-- `app` — the wiring layer, and the only crate that sees both sides. GPU state
+- `sim` — `World`: what exists, plus `step()`, the input/sim seam, and
+  `extract()`, the sim/render seam.
+- `app` — the wiring layer, and the only crate that sees both sides. `input.rs`
+  holds `BINDINGS`, the one place a `KeyCode` becomes an `Action`. GPU state
   is built in `resumed`, not `main`, because winit models surface loss as
   suspend/resume. `about_to_wait` requests a redraw every time the queue drains,
   converting winit's event-driven default into a continuous game loop.
@@ -71,6 +76,14 @@ crates/
   instead, next to the `Dt` it will mint.
 
 ### Controls
+
+Game actions (rebindable, go through `Action`):
+
+`WASD` / arrows move the player
+
+Debug commands (fixed, handled straight from the event callback — they act on
+the program, not the character, so they deliberately do *not* go through
+`Action`):
 
 `[` / `]` halve and double N · `-` / `=` zoom · `V` toggle vsync · `Esc` quit
 
@@ -107,6 +120,16 @@ why if it cannot go higher.** What is in place today:
 | Rust vertex layout matches `shader.wgsl` | 2 | headless pipeline + draw test in `gfx/src/lib.rs` |
 | Public API stays deliberate | 1 | `unreachable_pub = "deny"` |
 | The sink's cap holds at its real value | 3 | unit tests in `core` |
+| `sim` cannot name a key or a window | 1 | `crates/sim/build.rs`; `core` never names winit |
+| A movement direction is unit-length or zero | 0 | private field; `MoveDir::new` is the only door, and it normalises |
+| Movement never leaves the ground plane | 0 | `MoveDir::new` drops the Y component |
+| Input edges are consumed exactly once | 0 | the clear lives in `InputState::sample`, the only reader |
+| Two keys on one action cannot desync | 0 | `Input.down` tracks *keys*; the action set is derived, never stored |
+| The binding table fits its bitset | 1 | `const _: () = assert!(BINDINGS.len() <= u32::BITS …)` |
+| A frame's dt cannot teleport the player | 0 | `Clock::tick` clamps what it returns; raw only reaches the HUD |
+| Ground + horde + player fit one buffer | 3 | unit test in `sim` at the largest horde the clamp allows |
+| The camera basis agrees with the projection | 3 | unit tests in `gfx/camera.rs` |
+| Movement speed is frame-rate independent | 3 | unit test in `sim` |
 
 **Escape hatch:** `#[expect(lint, reason = "…")]`, never `#[allow]`. `expect`
 stops compiling once the violation it covers disappears, so suppressions cannot
@@ -188,17 +211,29 @@ but this paragraph, which is precisely why they are worth reading twice.
   average is the wrong instrument for the thing that matters most here; a
   frame-time histogram is the intended replacement.
 - The camera angle is fixed. No rotation, and no way to look at anything but
-  the origin.
-- Test coverage is thin: the GPU contract and the sink are covered, the mesh and
-  the camera maths are not. There is still no pixel-level check that the image
-  is *correct*, only that wgpu accepts the frame.
+  the origin — which is why `World::step` clamps the player to the arena: it is
+  a stand-in for a following camera, not a gameplay boundary. `World::player_pos`
+  exists for the camera to start tracking.
+- The player passes straight through the horde. Nothing collides with anything
+  yet.
+- Movement is instantaneous — full speed on the first frame, dead stop on
+  release. Acceleration and friction are feel knobs worth tuning against a
+  fixed timestep, not a variable one.
+- Only the keyboard is wired. The action layer is what makes a gamepad or
+  click-to-move an additive change: a second producer of `ActionMask`, with
+  nothing downstream touched.
+- Test coverage is uneven: the GPU contract, the sink, the input layer, the
+  camera maths and player movement are covered; the cube mesh is not. There is
+  still no pixel-level check that the image is *correct*, only that wgpu accepts
+  the frame.
 - The headless test needs a real adapter, so `cargo test` will not pass in an
   environment without a GPU.
 
 ### Roadmap
 
 Rough order, one chunk at a time: ~~ortho camera + ground grid + instanced cubes
-with runtime-adjustable N and a frame-time HUD~~ → fixed-timestep sim loop with
+with runtime-adjustable N and a frame-time HUD~~ → ~~device input bound to
+actions, and a player-controlled character that moves~~ → fixed-timestep sim loop with
 render interpolation → SoA entity storage → uniform-grid spatial hash for
 broadphase → separation steering → attack state machine (startup/active/recovery)
 with timed hitboxes → hitstop, knockback, input buffering.

@@ -23,6 +23,18 @@ const SMOOTHING: f32 = 0.1;
 /// window server than the renderer is doing.
 const HUD_INTERVAL: f32 = 0.1;
 
+/// The longest delta the simulation is allowed to see, in seconds.
+///
+/// Dragging the window, waiting on a shader compile or sitting at a breakpoint
+/// produces a frame worth hundreds of milliseconds. Integrated honestly that is
+/// a teleport — through a wall, past a hitbox, out of the arena. Every game
+/// clamps this somewhere; the choice is only whether it happens on purpose.
+///
+/// ~6 frames at 60Hz. Beyond that the game deliberately runs in slow motion
+/// rather than skipping space, which is the right trade when the alternative is
+/// losing collisions.
+const MAX_FRAME_TIME: f32 = 0.1;
+
 impl Default for Clock {
     fn default() -> Self {
         Self { last: Instant::now(), smoothed: 1.0 / 60.0, since_hud: 0.0 }
@@ -30,7 +42,12 @@ impl Default for Clock {
 }
 
 impl Clock {
-    /// Call once per frame. Returns the raw delta in seconds.
+    /// Call once per frame. Returns the delta to simulate, in seconds, clamped
+    /// to [`MAX_FRAME_TIME`].
+    ///
+    /// The measurement side is fed the *raw* value on purpose: the clamp exists
+    /// to protect the simulation, and letting it reach into the HUD as well
+    /// would hide the very hitches the HUD is there to show.
     pub(crate) fn tick(&mut self) -> f32 {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f32();
@@ -38,7 +55,7 @@ impl Clock {
 
         self.smoothed += (dt - self.smoothed) * SMOOTHING;
         self.since_hud += dt;
-        dt
+        dt.min(MAX_FRAME_TIME)
     }
 
     pub(crate) fn frame_ms(&self) -> f32 {

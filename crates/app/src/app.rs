@@ -6,10 +6,12 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use arpg_core::InstanceBuffer;
+use arpg_core::{InstanceBuffer, MoveDir};
 use arpg_gfx::{OrthoCamera, Renderer};
-use crate::time::Clock;
 use arpg_sim::World;
+
+use crate::input::Input;
+use crate::time::Clock;
 
 /// Owns everything and wires it together. Deliberately the only place that
 /// knows about all the subsystems at once — `gfx` and `world` stay ignorant of
@@ -22,6 +24,7 @@ pub(crate) struct App {
     world: World,
     /// Reused every frame so a steady state allocates nothing.
     instances: InstanceBuffer,
+    input: Input,
     clock: Clock,
 }
 
@@ -29,7 +32,18 @@ pub(crate) struct App {
 const ZOOM_STEP: f32 = 1.2;
 
 impl App {
-    fn on_key(&mut self, key: KeyCode) {
+    /// Debug and meta commands, kept deliberately apart from the action layer.
+    ///
+    /// These are not things the *character* does — they are things done to the
+    /// running program, and the difference is not cosmetic. Game actions are
+    /// sampled as state once per tick, need rebinding, and will one day come
+    /// from a gamepad or a replay. These are one-shot, fire straight from the
+    /// event callback, and are meaningless to a simulation. Funnelling them
+    /// through `Action` would put "toggle vsync" in the vocabulary the horde's
+    /// AI speaks.
+    ///
+    /// The two sets must stay disjoint; `BINDINGS` is the list to check against.
+    fn on_debug_key(&mut self, key: KeyCode) {
         match key {
             // Doubling rather than stepping: the interesting range spans three
             // orders of magnitude, and the knee is easier to find by bisection
@@ -103,7 +117,14 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
-            WindowEvent::Focused(focused) => log::debug!("focus: {focused}"),
+            // A key-up goes to whoever has focus. Alt-tab while running and the
+            // release never arrives, so without this the character keeps going.
+            WindowEvent::Focused(focused) => {
+                log::debug!("focus: {focused}");
+                if !focused {
+                    self.input.release_all();
+                }
+            }
 
             WindowEvent::KeyboardInput { event: key_event, .. } => {
                 log::debug!(
@@ -113,15 +134,23 @@ impl ApplicationHandler for App {
                     key_event.repeat
                 );
 
-                if key_event.state == ElementState::Pressed
-                    && let PhysicalKey::Code(key) = key_event.physical_key
-                {
+                let PhysicalKey::Code(key) = key_event.physical_key else {
+                    return;
+                };
+                let pressed = key_event.state == ElementState::Pressed;
+
+                // Both halves see every event. Game actions need the release to
+                // know a key came up; the debug commands only care about the
+                // leading edge. Unbound keys fall through `on_key` untouched.
+                self.input.on_key(key, pressed, key_event.repeat);
+
+                if pressed && !key_event.repeat {
                     match key {
                         KeyCode::Escape => event_loop.exit(),
                         KeyCode::KeyV => {
                             renderer.toggle_vsync();
                         }
-                        _ => self.on_key(key),
+                        _ => self.on_debug_key(key),
                     }
                 }
             }
@@ -132,10 +161,21 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
-                self.clock.tick();
+                let dt = self.clock.tick();
 
-                // The per-frame spine. Next chunk a fixed-timestep loop lands
-                // between the tick and the extract.
+                // The per-frame spine: sample intent, resolve it against the
+                // view, step, extract. A fixed-timestep loop lands around the
+                // step later; nothing else here has to change for it.
+                let axis = self.input.sample().move_axis();
+
+                // Screen space becomes world space here, and only here. The
+                // camera owns the mapping because it owns the angle; `sim` is
+                // handed a direction it can integrate without knowing a screen
+                // exists.
+                let (right, up) = camera.ground_basis();
+                let dir = MoveDir::new(right * axis.x + up * axis.y);
+
+                self.world.step(dt, dir);
                 self.world.extract(self.instances.sink());
                 renderer.render(camera, self.instances.as_slice());
 

@@ -9,6 +9,7 @@ arpg-core.workspace = true
 arpg-gfx.workspace = true
 arpg-sim.workspace = true
 env_logger.workspace = true
+glam.workspace = true
 log.workspace = true
 pollster.workspace = true
 winit.workspace = true

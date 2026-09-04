@@ -7,6 +7,7 @@
 //! that sees both sides.
 
 mod app;
+mod input;
 mod time;
 
 fn main() {
