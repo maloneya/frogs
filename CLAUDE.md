@@ -59,9 +59,12 @@ already lost to a stray keypress silently resizing the horde mid-test.
 
 **Reading perf from it:** compare `frames` across a `wait`, rather than trusting
 `frame_ms`, which is an EMA and cannot tell a steady 60Hz from a mix averaging
-to it. Check `skipped` too: an occluded window makes the surface hand back
-nothing, the draw is skipped, and a loop spinning on nothing will otherwise
-report thousands of frames a second.
+to it. Then sanity-check against `skipped` *and* against the other present mode.
+An occluded window hands back no texture, the draw is skipped, and a loop
+spinning on nothing reports thousands of frames a second; a merely *backgrounded*
+window presents honestly but throttled, with `skipped` at zero. Uncapped that is
+not several times vsync means the app is throttled, not that the renderer is
+slow.
 
 Rust was installed via rustup with `--no-modify-path`, so `~/.cargo/bin` is
 **not** on PATH by default. Prefix commands with `. "$HOME/.cargo/env" &&`, or
