@@ -1,6 +1,6 @@
 ---
 name: playtest
-description: Build, run and drive the arpg game to prove a change actually works — inject keys, screenshot the running app, and read simulation state as numbers over the ARPG_HARNESS control socket. Use whenever you need to see the game running, verify movement/camera/rendering behaviour, take a screenshot, or measure frame throughput. Do NOT reach for osascript keystrokes or the screencapture utility; they fail silently in this environment and have already cost hours.
+description: Build, run and drive the arpg game to prove a change actually works — inject keys, screenshot the running app, read simulation state as JSON, and read the tick-stamped event trace, all over the ARPG_HARNESS control socket. Use whenever you need to see the game running, verify movement/camera/rendering behaviour, take a screenshot, measure frame throughput, or ask what the simulation did between two moments rather than what it holds now. Do NOT reach for osascript keystrokes or the screencapture utility; they fail silently in this environment and have already cost hours.
 ---
 
 # Playtesting arpg
