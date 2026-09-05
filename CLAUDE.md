@@ -20,6 +20,36 @@ This framing changes how to work here:
   game engine or an off-the-shelf ECS (Bevy, hecs, legion); writing those is the
   point.
 
+## How work is finished here
+
+Five streams shape every change here. The rationale, current state and open
+work for each is in [`docs/agent-principles.md`](docs/agent-principles.md);
+what follows are the rules that apply *while editing*.
+
+1. **Sim layer** — `sim` is a pure function of (state, inputs). No wall clock,
+   no unseeded randomness, no iteration over hash-ordered containers. The
+   invariant binds simulation only: presentation (interpolation, smoothing,
+   particles, audio) is exempt, and must never feed back into sim state.
+2. **Hooks** — a new behaviour is a named pass in the sim schedule, taking the
+   slices it declares. Do not add one by editing the body of `World::step`.
+   See the `add-sim-pass` skill.
+3. **Perception** — anything an agent must observe is a trace event or a
+   *derived* `state` field. Never a hand-maintained format string.
+4. **Scenarios** — a change to sim behaviour is not done until a scenario
+   asserts it and the scenario runner exits 0. See the `scenario` skill.
+5. **Traps** — before diagnosing a symptom, grep
+   [`docs/traps.md`](docs/traps.md). After losing more than ten minutes to
+   one, append an entry.
+
+Rule 4 is the stopping condition, not a suggestion. **A change verified by
+reading numbers off `state` and judging them correct yourself is unfinished
+work** — that is the agent grading its own homework, and it is the one failure
+mode none of the machinery above can catch. Predicting a value and then
+asserting it in a scenario is the same act, made durable and checkable.
+
+The `Stop` hook in `.claude/settings.json` enforces this: it runs the test
+suite and the scenario runner when a turn ends, and blocks on failure.
+
 ## Commands
 
 ```sh
@@ -148,55 +178,12 @@ at session start and then not again while editing. Prefer, in order:
 **When adding an invariant, put it as high up that table as it will go, and say
 why if it cannot go higher.** What is in place today:
 
-| Invariant | Layer | Mechanism |
-|---|---|---|
-| `gfx` cannot name a simulation type | 0 | separate crates — `use arpg_sim::…` is E0432 |
-| `gfx` cannot depend on `sim`; `sim` cannot depend on wgpu/winit | 1 | `crates/{gfx,sim}/build.rs`, run on every build |
-| Enemy count stays within the instance budget | 0 | private field; `World::set_enemy_count` clamps |
-| Zoom stays in a sane range | 0 | private field; `OrthoCamera::zoom_by` clamps |
-| Aspect ratio survives a minimised window | 0 | `aspect_of` guards inside the camera |
-| `Renderer.vsync` cannot desync from the surface | 0 | private field; `toggle_vsync` is the only writer |
-| `Instance` padding is never written | 0 | private fields; `Instance::new` is the only door |
-| No allocation or overflow at the extract seam | 0 | `InstanceSink` exposes `push` and nothing else |
-| The buffer is reset once per frame | 0 | reset lives in `InstanceBuffer::sink()` |
-| `Instance` is exactly 48 bytes | 1 | `const _: () = assert!(…)` beside the type |
-| Rust vertex layout matches `shader.wgsl` | 2 | headless pipeline + draw test in `gfx/src/lib.rs` |
-| Public API stays deliberate | 1 | `unreachable_pub = "deny"` |
-| No dependency outside a crate's allowlist | 1 | `crates/{gfx,sim}/build.rs` — fails closed, so unknown crates are caught too |
-| Tuning constants stay in their valid range | 1 | a `const _: () = assert!(…)` beside each one |
-| The lead eases slower than the follow | 1 | const assert; swapping them reintroduces the whip |
-| The player footprint is never square | 1 | const assert; a square one makes facing invisible |
-| A dt clamp cannot fall below one frame | 1 | const assert in `time.rs` |
-| The yaw convention matches the shader | 3 | pixel-readback test in `gfx/src/lib.rs`, mutation-checked |
-| Smoothing is frame-rate independent | 3 | `core::damp` and its tests, including the naive lerp failing the same check |
-| The lint wall runs however the edit was made | 1 | `PostToolUse` hook matches Bash as well as Edit/Write |
-| The sink's cap holds at its real value | 3 | unit tests in `core` |
-| `sim` cannot name a key or a window | 1 | `crates/sim/build.rs`; `core` never names winit |
-| A movement direction is unit-length or zero | 0 | private field; `MoveDir::new` is the only door, and it normalises |
-| Movement never leaves the ground plane | 0 | `MoveDir::new` drops the Y component |
-| Input edges are consumed exactly once | 0 | the clear lives in `InputState::sample`, the only reader |
-| Two keys on one action cannot desync | 0 | `Input.down` tracks *keys*; the action set is derived, never stored |
-| The binding table fits its bitset | 1 | `const _: () = assert!(BINDINGS.len() <= u32::BITS …)` |
-| A frame's dt cannot teleport the player | 0 | `Clock::tick` clamps what it returns; raw only reaches the HUD |
-| Ground + horde + player fit one buffer | 3 | unit test in `sim` at the largest horde the clamp allows |
-| The camera basis agrees with the projection | 3 | unit tests in `gfx/camera.rs` |
-| Movement speed is frame-rate independent | 3 | unit test in `sim` |
-| Camera smoothing is frame-rate independent | 3 | `damp` uses `2^(-dt/half_life)`; unit test in `gfx/camera.rs` |
-| The camera target cannot be set unsmoothed | 0 | private field; `follow` is the only writer |
-| The camera never overshoots or bobs vertically | 3 | unit tests in `gfx/camera.rs` |
-| Turning takes the short way round the ±PI seam | 3 | `shortest_arc` wraps the *difference*; unit test in `sim` |
-| Turning is frame-rate independent and never overshoots | 3 | step clamped to the remaining arc; unit tests in `sim` |
-| Facing cannot drift toward the precision limit | 3 | `wrap_angle` after every turn; unit test in `sim` |
-| Spawning does not swoop the camera in from the origin | 0 | `snap_to`, called in `resumed` before the first frame |
-| A skipped frame is never counted as a rendered one | 1 | `Renderer::render` is `#[must_use]`, so ignoring the result is a denied warning |
-| Readback rows respect the copy alignment | 3 | `padded_bytes_per_row`; unit test in `gfx/capture.rs` |
-| A malformed harness command is reported, not ignored | 3 | `parse` returns `Result`; unit test in `app/harness.rs` |
-| A screenshot that never happened is not reported as `ok` | 3 | `capture_has_stalled`; unit tests in `app/app.rs` |
-| A body's position cannot leave the ground plane | 0 | positions are `Vec2`; `on_ground` is the only lift |
-| Nothing spawns already overlapping | 1 | `const _: () = assert!(ENEMY_SPACING > 2.0 * ENEMY_RADIUS)` |
-| Coincident bodies separate deterministically, not into NaN | 3 | `escape_direction`; unit tests in `sim` |
-| The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
-| The harness cannot fall behind the bindings | 0 | key names live *in* `BINDINGS`; there is no second table to forget |
+The inventory of what is enforced today lives in
+[`docs/invariants.md`](docs/invariants.md). It is deliberately *not* here: it is
+long, it duplicates enforcement that already exists in the code, and a second
+table is a table that can silently disagree with the first — the exact failure
+`BINDINGS` was restructured to avoid. Read it when auditing; do not treat it as
+authoritative over the code.
 
 The lint wall is applied at write time, not just at build time: the
 `PostToolUse` hook in `.claude/settings.json` runs
@@ -322,63 +309,9 @@ but this paragraph, which is precisely why they are worth reading twice.
   reads depth after the pass; storing it would waste real bandwidth on a tiled
   GPU.
 
-### Known limitations (real, not yet worth fixing)
+### Known limitations, and the roadmap
 
-- `World::extract()` rebuilds the 16384 static ground tiles every frame and
-  re-uploads the entire instance buffer. Still deferred, and now with a number
-  behind it: 17409 instances render in 2.81ms uncapped (356fps) on the M4, so
-  the static/dynamic buffer split is not yet buying anything.
-- `Clock` smooths frame time with an EMA, which *hides* pacing variance. An
-  average is the wrong instrument for the thing that matters most here; a
-  frame-time histogram is the intended replacement.
-- The camera angle is fixed. It tracks and snaps now, but there is still no
-  rotation — which is also what lets `ground_basis` be the only screen/world
-  translation without a feedback loop between input and view.
-- The camera does not clamp to the world bounds, so walking to the very edge
-  shows the void. This was measured rather than guessed: the view covers ~57x55
-  world units of floor, an axis-aligned footprint ~40 units either side of the
-  focus, so on the old 48-unit arena a bounds-clamped camera could have moved
-  +/-8 units total — pinned, and following would have stopped working before the
-  player reached the edge. Enlarging the world is the fix a camera clamp only
-  pretends to be; real level geometry is the eventual one.
-- There is no deadzone. Deliberate: it reduces micro-jitter but adds a sticky
-  region and a snap at its boundary, and for constant repositioning against a
-  horde the smoothed follow reads better. Worth revisiting once combat exists.
-- The player passes straight through the horde. Nothing collides with anything
-  yet.
-- Movement is instantaneous — full speed on the first frame, dead stop on
-  release. Deliberate, not an oversight: ARPG movement is essentially instant
-  because responsiveness beats momentum, and acceleration is a feel knob better
-  tuned against a fixed timestep than a variable one. *Turning* is rate-limited;
-  translation is not.
-- Only the keyboard is wired. The action layer is what makes a gamepad or
-  click-to-move an additive change: a second producer of `ActionMask`, with
-  nothing downstream touched.
-- Test coverage is uneven: the GPU contract, the sink, the input layer, the
-  camera maths, smoothing, player movement, turning and the yaw convention are
-  covered; the cube mesh is not. The yaw test is the only pixel-level check that
-  the image is *correct* rather than merely accepted — `gfx/capture.rs` is the
-  machinery, and the cube's winding and 24-vertex normals are the obvious next
-  customers.
-- Perf numbers must be taken with the window visible. An occluded surface hands
-  back no texture, the draw is skipped, and the loop then spins as fast as it
-  likes — which reads as a spectacular frame rate for drawing nothing. `state`
-  reports `skipped` so that case is self-diagnosing rather than mysterious.
-- The headless test needs a real adapter, so `cargo test` will not pass in an
-  environment without a GPU.
-
-### Roadmap
-
-Rough order, one chunk at a time: ~~ortho camera + ground grid + instanced cubes
-with runtime-adjustable N and a frame-time HUD~~ → ~~device input bound to
-actions, a player-controlled character that moves and faces where it walks, and
-a camera that tracks it~~ → fixed-timestep sim loop with
-render interpolation → SoA entity storage → uniform-grid spatial hash for
-broadphase → separation steering → attack state machine (startup/active/recovery)
-with timed hitboxes → hitstop, knockback, input buffering.
-
-Landing with the fixed-timestep chunk, because they need a sim loop to be
-meaningful: `Dt` and `Alpha` as newtypes with private constructors (so a
-variable timestep cannot be smuggled in, and interpolation cannot leak into sim
-state), `EntityId` from `World::spawn`, a determinism test hashing two identical
-runs, and an allocation counter asserting a steady-state frame allocates zero.
+Both moved to [`docs/roadmap.md`](docs/roadmap.md), which now carries an exit-code
+gate per chunk. They lived here, were read once at session start, and grew; the
+roadmap is consulted when choosing work rather than while editing, so it belongs
+in a file loaded on demand.

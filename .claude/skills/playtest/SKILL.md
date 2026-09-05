@@ -154,6 +154,22 @@ a measurement. Bring the window to the front and repeat.
 Reference, window frontmost, 17409 instances on an M4: **62/s vsync at 16.59ms,
 302/s uncapped at 3.62ms, 0 skipped.**
 
+## This is not the completion gate
+
+The harness proves a change *ran*. It does not prove it is *correct*, because
+the comparison happens in your head — reading `player_pos 3.183` and deciding
+it matches the 3.182 you predicted is the agent grading its own homework, and it
+reads from the inside exactly like success.
+
+Write the same prediction as a scenario assertion instead; it costs the same and
+it persists. See the `scenario` skill. Use this skill for what a scenario cannot
+do: looking at the running game, checking an image, and measuring render cost.
+
+## Before diagnosing anything surprising
+
+Grep `docs/traps.md`. Occluded-window screenshots, skipped frames read as speed,
+and OS keystroke injection are all already in there, keyed by what you see.
+
 ## After any change
 
 ```sh
