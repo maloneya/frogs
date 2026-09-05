@@ -91,6 +91,19 @@ pub(crate) struct Expect {
     pub(crate) contacts: Option<usize>,
     #[serde(default)]
     pub(crate) enemy_count: Option<usize>,
+    /// A checked-in trace file, relative to the scenario, that the run's own
+    /// trace must match exactly.
+    ///
+    /// For behaviour too broad to enumerate as assertions. A tuning change then
+    /// produces a reviewable *diff* rather than a claim — which is the only
+    /// form in which "this changed the timing of everything by one tick" is
+    /// visible at all.
+    ///
+    /// Regenerate with `--bless`, and **read the diff before committing it**. A
+    /// blessed golden file nobody looked at is a test that has been deleted
+    /// without anyone noticing.
+    #[serde(default)]
+    pub(crate) trace: Option<String>,
 }
 
 /// A predicted scalar and how far off it may be.

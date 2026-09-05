@@ -52,6 +52,7 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `wait <ms>` | after that much game time |
 | `shot <path>` | **after the PNG is on disk**, or an error if no frame presented |
 | `state` | one line of numbers (below) |
+| `trace since <tick>` | every event from that tick on, plus a `# n event(s)` count |
 | `enemies <n>` | clamped count |
 | `vsync on\|off` | resulting state |
 | `quit` | then exits |
@@ -70,6 +71,25 @@ keys (`[`, `]`, `v`, `p`) to achieve the same thing.
 tick 1836 player_pos 3.821 0.600 -3.821 facing 2.3562 camera_target 4.513 -4.513
 enemies 1024 instances 17409 frames 4080 skipped 1 frame_ms 16.64 vsync true
 ```
+
+## Reading the trace
+
+`state` is a point sample; `trace` is the interval between two of them. Anything
+with a window — an attack, hitstop, a buffered input — exists only in that gap.
+
+```sh
+a=$(sock state | awk '{print $2}')   # the tick right now
+sock "hold d 400" >/dev/null
+sock "trace since $a"
+# 328 contacts count=4
+# 329 contacts count=1
+# ...
+# # 25 event(s)
+```
+
+Same format as a scenario's golden trace file, because it is the same function.
+A `# n event(s) dropped` line means the ring buffer wrapped and the beginning is
+gone. An empty result is `# 0 event(s)`, not an error.
 
 ## Verify by predicting first, then measuring
 

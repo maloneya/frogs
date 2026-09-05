@@ -52,6 +52,13 @@ pub(crate) enum Command {
     Shot(PathBuf),
     /// Report simulation and camera state.
     State,
+    /// Every trace event from this tick onward.
+    ///
+    /// The counterpart to `state`, and the reason both exist: `state` is a
+    /// point sample and cannot see what happened between two of them. Anything
+    /// with a window — an attack, hitstop, a buffered input — lives entirely in
+    /// that gap.
+    TraceSince(u64),
     SetEnemies(usize),
     SetVsync(bool),
     Quit,
@@ -94,6 +101,13 @@ fn parse(line: &str) -> Result<Command, String> {
             arg.ok_or_else(|| "expected a path".to_string())?,
         )),
         "state" => Command::State,
+        // `trace since <tick>` rather than `trace <tick>`, so the reply cannot
+        // be misread as "the trace at tick N".
+        "trace" => match (arg, it.next()) {
+            (Some("since"), Some(tick)) => Command::TraceSince(number(Some(tick))?),
+            (Some("since"), None) => return Err("expected a tick: trace since <tick>".into()),
+            _ => return Err("expected: trace since <tick>".into()),
+        },
         "enemies" => Command::SetEnemies(number(arg)? as usize),
         "vsync" => Command::SetVsync(matches!(arg, Some("on") | Some("1"))),
         "quit" => Command::Quit,

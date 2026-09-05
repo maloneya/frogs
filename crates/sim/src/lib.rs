@@ -3,15 +3,39 @@
 //! Depends on `arpg-core` for vocabulary and on nothing else. In particular it
 //! does not link wgpu, so simulation tests run without a GPU.
 
-use glam::{Vec2, Vec3, Vec3Swizzles};
+use glam::{Vec2, Vec3};
 
 use arpg_core::{Instance, InstanceSink, MoveDir, MAX_INSTANCES};
 
+mod angle;
 mod hash;
+mod pass;
 mod time;
+mod trace;
 
 pub use hash::Fnv;
 pub use time::{Accumulator, Alpha, Dt, Ticks, TICK_HZ};
+pub use trace::{Event, Trace};
+
+/// One tick of walking, in world units. Re-exported because a scenario or a
+/// harness reading a position is almost always trying to work out how many
+/// ticks of movement it is looking at.
+pub use pass::walk::PER_TICK as WALK_PER_TICK;
+
+/// Blends between two facings the short way round.
+///
+/// A plain lerp is wrong here and wrong *invisibly*: `facing` is wrapped to
+/// `-PI..=PI`, so a character turning through south goes from `3.13` to `-3.13`
+/// in one tick — a real turn of 0.02 radians. Lerping those endpoints sends the
+/// body spinning 6.26 radians the other way, across a single frame, for one
+/// frame. It reads as a flicker rather than as a spin, which is exactly the
+/// kind of artefact that gets blamed on the renderer.
+///
+/// `angle::shortest_arc` already solves this for the simulation's own turning;
+/// this is the same fix applied to the drawing of it.
+fn blend_angle(from: f32, to: f32, alpha: Alpha) -> f32 {
+    angle::wrap(from + angle::shortest_arc(from, to) * alpha.get())
+}
 
 /// Lifts a ground-plane position into world space at a given height.
 ///
@@ -124,43 +148,9 @@ const _: () = assert!(
     "bodies must spawn clear of each other, not merely with their cubes apart"
 );
 
-/// How readily a body is displaced by a contact. Inverse mass, so zero is
-/// immovable and larger is lighter.
-///
-/// The asymmetry is the mechanic. At 1:20 the player absorbs about 5% of any
-/// single separation, so one enemy is a nudge — but nothing here caps how many
-/// contacts a tick may contain, and a crowd that cannot compress transmits all
-/// of them. Being penned in is therefore *emergent*: no code says "blocked",
-/// and the wall of bodies is only a wall because each body is also stopped by
-/// the one behind it.
-///
-/// Inverse mass also absorbs the cases that would otherwise need their own
-/// concept. A corpse, a barrel or a wall segment is a body with zero here; a
-/// dodge that lets the player slip through a gap is this number changing for a
-/// few ticks. Neither needs a branch in the solver.
-const PLAYER_INV_MASS: f32 = 0.05;
-const ENEMY_INV_MASS: f32 = 1.0;
-const _: () = assert!(PLAYER_INV_MASS > 0.0 && ENEMY_INV_MASS > 0.0);
-const _: () = assert!(
-    PLAYER_INV_MASS < ENEMY_INV_MASS,
-    "an equal or lighter player is shoved around by fodder"
-);
-
-/// Below this separation two bodies have no line between them to push along,
-/// and normalising their difference yields NaN — a position no clamp recovers.
-/// Squared, since that is what the overlap test already has to hand.
-const COINCIDENT_SQ: f32 = 1e-12;
-const _: () = assert!(COINCIDENT_SQ > 0.0);
-
 /// Half the ground plane's width, in world units.
 const ARENA_HALF: f32 = GROUND_TILES as f32 * TILE * 0.5;
 const _: () = assert!(ARENA_HALF > PLAYER_SCALE.x && ARENA_HALF > PLAYER_SCALE.z);
-
-/// World units per second. Fast enough that the arena crosses in a few seconds,
-/// which is the range an ARPG lives in — slow movement makes a horde feel like
-/// a traffic jam rather than a threat.
-const PLAYER_SPEED: f32 = 9.0;
-const _: () = assert!(PLAYER_SPEED > 0.0);
 
 /// Deliberately taller than an enemy (0.5), so the player stays readable from
 /// inside a crowd of them. Silhouette is the cheapest legibility tool there is.
@@ -181,30 +171,6 @@ const _: () = assert!(PLAYER_SCALE.x != PLAYER_SCALE.z, "a square footprint make
 /// should be one number.
 const PLAYER_HALF_HEIGHT: f32 = PLAYER_SCALE.y * 0.5;
 
-/// Radians per second. Fast — a full 180° turn takes ~0.22s — because in an
-/// ARPG the character reorienting is feedback that the input registered, and
-/// anything slow enough to notice reads as the controls lagging.
-const PLAYER_TURN_RATE: f32 = 14.0;
-const _: () = assert!(PLAYER_TURN_RATE > 0.0);
-
-/// Folds an angle into `(-PI, PI]`, so facing cannot drift off toward the
-/// precision limit over a long session.
-fn wrap_angle(radians: f32) -> f32 {
-    let wrapped = radians.rem_euclid(std::f32::consts::TAU);
-    if wrapped > std::f32::consts::PI { wrapped - std::f32::consts::TAU } else { wrapped }
-}
-
-/// The signed angle from `from` to `to`, **always the short way round**.
-///
-/// This is the whole subtlety in turning. Subtracting raw angles has a seam:
-/// turning from 350° to 10° is a 20° step to the left, but `to - from` says
-/// -340°, so the character spins almost all the way round the wrong way for
-/// what looks on screen like a tiny correction. Wrapping the difference — not
-/// the inputs — is what removes the seam.
-fn shortest_arc(from: f32, to: f32) -> f32 {
-    wrap_angle(to - from)
-}
-
 /// A separation direction for two bodies occupying exactly the same point.
 ///
 /// It has to come from somewhere, and it has to be the *same* somewhere every
@@ -216,82 +182,6 @@ fn shortest_arc(from: f32, to: f32) -> f32 {
 /// Golden-angle steps rather than a fixed direction, so a clump of coincident
 /// bodies fans out instead of every one of them being pushed the same way and
 /// re-stacking on the next tick.
-/// Blends between two facings the short way round.
-///
-/// A plain lerp is wrong here and wrong *invisibly*: `facing` is wrapped to
-/// `-PI..=PI`, so a character turning through south goes from `3.13` to `-3.13`
-/// in one tick — a real turn of 0.02 radians. Lerping those endpoints sends the
-/// body spinning 6.26 radians the other way, across a single frame, for one
-/// frame. It reads as a flicker rather than as a spin, which is exactly the
-/// kind of artefact that gets blamed on the renderer.
-///
-/// `shortest_arc` already solves this for the simulation's own turning; this is
-/// the same fix applied to the drawing of it.
-fn blend_angle(from: f32, to: f32, alpha: Alpha) -> f32 {
-    wrap_angle(from + shortest_arc(from, to) * alpha.get())
-}
-
-fn escape_direction(tiebreak: usize) -> Vec2 {
-    /// `PI * (3 - sqrt(5))`, written out because `sqrt` is not const.
-    const GOLDEN_ANGLE: f32 = 2.399_963_2;
-
-    let angle = tiebreak as f32 * GOLDEN_ANGLE;
-    Vec2::new(angle.cos(), angle.sin())
-}
-
-/// Pushes two overlapping bodies apart along the line joining them, splitting
-/// the correction between them by inverse mass. Returns whether they touched.
-///
-/// **Position projection, not an impulse.** There is no velocity here and no
-/// momentum to conserve, which is the right model for a game whose movement is
-/// deliberately instantaneous: a solver whose whole job is conserving momentum
-/// would be fighting that. It also cannot inject energy, so there is no
-/// restitution to zero out and no explosive pushback to suppress.
-///
-/// The overlap is corrected in **full**, in one pass. The usual advice is to
-/// resolve a fraction — Box2D uses 0.2 — but that reasoning is about oblong
-/// shapes overshooting as they rotate, and these are discs that do not rotate
-/// and cannot stack. More to the point, a fraction applied once a tick is a
-/// per-tick lerp toward zero overlap, which is frame-rate dependent in exactly
-/// the way [`arpg_core::damp`] exists to prevent: it would converge five times
-/// faster uncapped than under vsync, so pressing `V` would change how the game
-/// feels and corrupt the measurement `V` is for. Full correction is exactly
-/// dt-independent, and it keeps that question shut until the fixed timestep
-/// makes it answerable.
-fn separate(
-    a: &mut Vec2,
-    b: &mut Vec2,
-    contact_distance: f32,
-    a_inv_mass: f32,
-    b_inv_mass: f32,
-    tiebreak: usize,
-) -> bool {
-    let delta = *b - *a;
-    let gap_sq = delta.length_squared();
-    if gap_sq >= contact_distance * contact_distance {
-        return false;
-    }
-
-    // Two immovable bodies have no correction to share out. Bailing keeps the
-    // division below from being a zero-divide that quietly yields NaN.
-    let share = a_inv_mass + b_inv_mass;
-    if share <= 0.0 {
-        return false;
-    }
-
-    let (normal, gap) = if gap_sq > COINCIDENT_SQ {
-        let gap = gap_sq.sqrt();
-        (delta / gap, gap)
-    } else {
-        (escape_direction(tiebreak), 0.0)
-    };
-
-    let overlap = contact_distance - gap;
-    *a -= normal * (overlap * a_inv_mass / share);
-    *b += normal * (overlap * b_inv_mass / share);
-    true
-}
-
 /// Where the horde is.
 ///
 /// Until now an enemy had no position. `extract_enemies` derived one from the
@@ -336,17 +226,6 @@ struct Enemies {
 impl Enemies {
     fn len(&self) -> usize {
         self.pos.len()
-    }
-
-    /// Called at the top of every tick, before anything moves.
-    ///
-    /// A flat copy rather than a swap of two buffers. A swap would be cheaper
-    /// and would be wrong the moment a pass reads a position it has already
-    /// written this tick — with a swap, `pos` starts the tick holding the
-    /// tick-before-last's values, and the Gauss-Seidel solver in
-    /// `resolve_contacts` reads exactly that way.
-    fn remember(&mut self) {
-        self.prev_pos.copy_from_slice(&self.pos);
     }
 
     /// Lays `n` enemies out in a square grid centred on the origin.
@@ -424,6 +303,13 @@ pub struct World {
     /// `u64` because wrapping is not a failure mode anyone should have to
     /// think about: at 60Hz this overflows in roughly ten billion years.
     tick: u64,
+    /// What the simulation *did*, as opposed to what it now holds.
+    ///
+    /// Lives on `World` rather than beside it because passes write to it, and a
+    /// pass takes the things it declares — a trace threaded in from `app` would
+    /// be unavailable to the scenario runner, which is the consumer that
+    /// matters most.
+    trace: Trace,
     /// Contacts resolved by the last [`World::step`].
     ///
     /// The instrument the collision work is measured with, and it exists
@@ -439,7 +325,13 @@ pub struct World {
 impl Default for World {
     fn default() -> Self {
         let mut world =
-            Self { enemies: Enemies::default(), player: Player::default(), tick: 0, contacts: 0 };
+            Self {
+                enemies: Enemies::default(),
+                player: Player::default(),
+                tick: 0,
+                trace: Trace::default(),
+                contacts: 0,
+            };
         world.set_enemy_count(DEFAULT_ENEMIES);
         world
     }
@@ -469,6 +361,27 @@ impl World {
     /// movement is really a prediction about the solver.
     pub fn set_enemy_count(&mut self, n: usize) {
         self.enemies.respawn(n.min(MAX_ENEMIES));
+
+        // Traced because it happens *outside* the schedule. State that changes
+        // between ticks is the hardest kind to account for later — it explains
+        // a hash sequence that diverges from a replay, and a frame drawn before
+        // any tick has run — so it is exactly the kind of thing the trace is
+        // for. Stamped with the tick it precedes.
+        self.trace.sink(self.tick).emit(Event::Spawned { count: self.enemies.len() });
+    }
+
+    /// Discards the trace so far. See [`Trace::clear`] for when that is right.
+    pub fn clear_trace(&mut self) {
+        self.trace.clear();
+    }
+
+    /// What the simulation has done recently, oldest first.
+    ///
+    /// Read-only, like [`World::extract`]: perception must never be able to
+    /// change what it observes.
+    #[must_use]
+    pub fn trace(&self) -> &Trace {
+        &self.trace
     }
 
     /// Advances the world by `dt` seconds.
@@ -485,29 +398,32 @@ impl World {
     /// `move_dir` is world-space and already unit-or-zero — the type says so,
     /// so this does not have to check.
     pub fn step(&mut self, dt: Dt, move_dir: MoveDir) {
-        // First, before anything moves: what is about to become the past.
-        // Every body, not just the ones this tick will touch — a body left
-        // alone must interpolate from where it is to where it is, and a stale
-        // `prev` would streak it back to wherever it last happened to move.
-        self.player.prev_pos = self.player.pos;
-        self.player.prev_facing = self.player.facing;
-        self.enemies.remember();
+        // Bound to the tick being run, so no pass can stamp an event with the
+        // wrong one. See `trace::TraceSink`.
+        let mut trace = self.trace.sink(self.tick);
 
-        self.player.pos += move_dir.as_vec3().xz() * PLAYER_SPEED * dt.secs();
+        // **The schedule.** This function is a list of passes and nothing else:
+        // no logic, no inline stages. Anything that reads like a step of the
+        // simulation belongs in `pass/`, so that the order stays something you
+        // can read in one screen and each pass's inputs stay visible in its
+        // signature. `pass/mod.rs` carries why each adjacency is what it is.
+        pass::remember::remember(
+            self.player.pos,
+            self.player.facing,
+            &mut self.player.prev_pos,
+            &mut self.player.prev_facing,
+            &self.enemies.pos,
+            &mut self.enemies.prev_pos,
+        );
+        pass::walk::walk(&mut self.player.pos, move_dir, dt);
+        self.contacts =
+            pass::separate::separate(&mut self.player.pos, &mut self.enemies.pos, trace.reborrow());
+        pass::contain::contain(&mut self.player.pos, &mut self.enemies.pos, trace.reborrow());
+        pass::face::face(&mut self.player.facing, move_dir, dt);
 
-        // Order matters, and this is the whole of it: move first, then push
-        // bodies out of each other, then put everything back inside the world.
-        // Clamping before resolving would let a contact shove a body through
-        // the wall and leave it there until something else happened to touch
-        // it again.
-        self.resolve_contacts();
-        self.clamp_to_arena();
-
-        self.turn_toward(move_dir, dt);
-
-        // Last, so that during the step above `self.tick` names the tick being
-        // run and afterwards it names how many have finished. Trace events will
-        // be stamped from inside a pass, so which of the two this is has to be
+        // Last, so that during the passes above `self.tick` names the tick being
+        // run and afterwards it names how many have finished. Trace events are
+        // stamped from inside a pass, so which of the two this is has to be
         // decided once and written down rather than rediscovered per pass.
         self.tick += 1;
     }
@@ -539,7 +455,15 @@ impl World {
     #[must_use]
     pub fn hash(&self) -> u64 {
         // Exhaustive on purpose — see above. Do not replace with `..`.
-        let Self { enemies, player, tick, contacts } = self;
+        let Self { enemies, player, tick, contacts, trace } = self;
+
+        // **Deliberately not hashed**, and the exhaustive destructuring above is
+        // what forced this line to be written rather than forgotten. The trace
+        // is derived output — a record of what the passes did — so feeding it
+        // back in would be hashing the hash's own inputs twice. It is also
+        // bounded and wraps, which would make two runs of different lengths
+        // disagree for a reason that has nothing to do with the simulation.
+        let _ = trace;
         let Player { pos, facing, prev_pos, prev_facing } = player;
         let Enemies { pos: enemy_pos, prev_pos: enemy_prev } = enemies;
 
@@ -569,78 +493,6 @@ impl World {
         }
 
         h.finish()
-    }
-
-    /// Separates every pair of bodies that overlap.
-    ///
-    /// Brute force, deliberately, and only against the player for now. It is
-    /// O(N) at this point, so at the default horde it is a thousand distance
-    /// checks a tick and costs nothing worth measuring. The uniform grid this
-    /// wants eventually is an *optimisation of something already correct* —
-    /// which means it can be tested by agreeing with this, and that test only
-    /// exists if this exists first.
-    ///
-    /// Gauss-Seidel: each correction is written immediately, so the next pair
-    /// sees it. That converges faster per pass than accumulating and applying
-    /// at the end, and its one real cost — the result depends on the order
-    /// pairs are visited — is fine here because the order is a fixed walk over
-    /// storage rather than anything that varies run to run.
-    fn resolve_contacts(&mut self) {
-        let contact = PLAYER_RADIUS + ENEMY_RADIUS;
-        // Disjoint fields, so both may be borrowed mutably at once.
-        let player = &mut self.player.pos;
-        let mut contacts = 0;
-
-        for (i, enemy) in self.enemies.pos.iter_mut().enumerate() {
-            contacts +=
-                usize::from(separate(player, enemy, contact, PLAYER_INV_MASS, ENEMY_INV_MASS, i));
-        }
-
-        self.contacts = contacts;
-    }
-
-    /// Keeps every body inside the world.
-    ///
-    /// The ground plane *is* the world; there is nothing beyond it to walk
-    /// onto. Enemies need this now for the first time — they have never moved
-    /// before, and without it a horde being shoved outward slowly walks off the
-    /// floor.
-    ///
-    /// It also hands over a mechanic for free. A body clamped against the wall
-    /// cannot yield along that axis, so it backs up the bodies behind it, and
-    /// pinning a crowd against terrain starts working without anyone
-    /// implementing it.
-    fn clamp_to_arena(&mut self) {
-        let player_limit = Vec2::splat(ARENA_HALF - PLAYER_RADIUS);
-        self.player.pos = self.player.pos.clamp(-player_limit, player_limit);
-
-        let enemy_limit = Vec2::splat(ARENA_HALF - ENEMY_RADIUS);
-        for pos in &mut self.enemies.pos {
-            *pos = pos.clamp(-enemy_limit, enemy_limit);
-        }
-    }
-
-    /// Rotates the body toward where it is heading, at a fixed rate.
-    ///
-    /// A fixed rate rather than the exponential damping the camera uses. Both
-    /// are frame-rate independent, but exponential decay is asymptotic — it
-    /// crawls through the last few degrees and never quite arrives, which on a
-    /// body reads as drifting rather than turning. A constant rate arrives, and
-    /// it makes the behaviour a number you can state: 180° in `PI / rate`
-    /// seconds. Clamping the step to the remaining arc is what keeps it from
-    /// overshooting and oscillating around the target.
-    fn turn_toward(&mut self, move_dir: MoveDir, dt: Dt) {
-        let dir = move_dir.as_vec3();
-        if dir == Vec3::ZERO {
-            // Standing still keeps the last facing. Snapping back to a default
-            // would have the character turn away from whatever it just walked
-            // up to the instant the key came up.
-            return;
-        }
-
-        let arc = shortest_arc(self.player.facing, f32::atan2(dir.x, dir.z));
-        let step = (PLAYER_TURN_RATE * dt.secs()).min(arc.abs());
-        self.player.facing = wrap_angle(self.player.facing + step * arc.signum());
     }
 
     /// Where the character is standing, lifted to world space for the camera
@@ -1100,7 +952,7 @@ mod tests {
         assert_eq!(world.contacts(), 0, "an empty arena reported a contact");
 
         // Movement is then exactly the constant, with nothing to interfere.
-        let expected = PLAYER_SPEED * 30.0 * Dt::SECS;
+        let expected = 30.0 * pass::walk::PER_TICK;
         assert!((world.player_pos().x - expected).abs() < 1e-4);
 
         // And it still draws: ground plus the player, no horde.
@@ -1244,46 +1096,6 @@ mod tests {
         }
     }
 
-    /// **Predicted from the constant, then asserted** — the discipline the
-    /// `scenario` skill is built around, applied to the two rates that exist.
-    ///
-    /// Also found by mutation: replacing `dt.secs()` in `turn_toward` with a
-    /// hard-coded `0.02` passed every determinism test here, and correctly so.
-    /// Under a fixed step both runs use the same wrong number and agree
-    /// perfectly. Reproducibility cannot see a rate that is simply the wrong
-    /// rate; only a prediction from `PLAYER_TURN_RATE` can.
-    #[test]
-    fn the_rates_are_the_constants_they_say_they_are() {
-        const TICKS: u32 = 6;
-
-        // Turning: from facing 0 toward +X, which is a quarter turn away, so
-        // the arc clamp is not what is being measured here.
-        let mut world = World::default();
-        for _ in 0..TICKS {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
-        }
-        let turned = PLAYER_TURN_RATE * TICKS as f32 * Dt::SECS;
-        assert!(turned < core::f32::consts::FRAC_PI_2, "the prediction ran past its target");
-        assert!(
-            (world.player.facing - turned).abs() < 1e-5,
-            "turned {} in {TICKS} ticks, predicted {turned}",
-            world.player.facing
-        );
-
-        // Walking, out of the crowd so the solver is not part of the answer.
-        let mut world = in_open_ground();
-        let start = world.player_pos();
-        for _ in 0..TICKS {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
-        }
-        let walked = PLAYER_SPEED * TICKS as f32 * Dt::SECS;
-        let travelled = (world.player_pos() - start).length();
-        assert!(
-            (travelled - walked).abs() < 1e-3,
-            "walked {travelled} in {TICKS} ticks, predicted {walked}"
-        );
-    }
-
     /// **Found by mutation, not by design.** Deleting the horde from `hash()`
     /// entirely — `let _ = enemy_pos;` — passed every other test in this file,
     /// including both replay gates. They only ever vary the *player's* input,
@@ -1403,7 +1215,7 @@ mod tests {
         let nearly_half_turn = std::f32::consts::PI - 0.1;
         let just_past = -nearly_half_turn;
 
-        let arc = shortest_arc(nearly_half_turn, just_past);
+        let arc = angle::shortest_arc(nearly_half_turn, just_past);
         assert!(arc.abs() < 0.3, "went the long way: {arc}");
 
         // And the naive subtraction this replaces really does get it wrong,
@@ -1589,107 +1401,6 @@ mod tests {
     #[test]
     fn a_ground_position_keeps_x_and_lifts_y_into_z() {
         assert_eq!(on_ground(Vec2::new(3.0, -7.0), 0.25), Vec3::new(3.0, 0.25, -7.0));
-    }
-
-    /// What separation is *for*: afterwards the two are exactly touching, not
-    /// merely less overlapped.
-    #[test]
-    fn separating_leaves_two_bodies_exactly_touching() {
-        let mut a = Vec2::new(-0.1, 0.0);
-        let mut b = Vec2::new(0.1, 0.0);
-
-        assert!(separate(&mut a, &mut b, 1.0, 1.0, 1.0, 0));
-        assert!((a.distance(b) - 1.0).abs() < 1e-5, "settled at {}", a.distance(b));
-    }
-
-    /// Bodies that are merely near must not be touched at all, or the solver
-    /// would jitter everything within reach of everything.
-    #[test]
-    fn bodies_that_do_not_overlap_are_left_alone() {
-        let mut a = Vec2::new(-1.0, 0.0);
-        let mut b = Vec2::new(1.0, 0.0);
-
-        assert!(!separate(&mut a, &mut b, 1.0, 1.0, 1.0, 0));
-        assert_eq!((a, b), (Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
-    }
-
-    /// **The case that produces NaN if it is not handled.** Two bodies at the
-    /// same point have no line between them, and normalising their difference
-    /// poisons a position beyond any clamp's ability to recover. It happens for
-    /// real: a crowd converging on one target arrives at one point.
-    #[test]
-    fn coincident_bodies_separate_instead_of_producing_nan() {
-        let mut a = Vec2::new(5.0, -3.0);
-        let mut b = Vec2::new(5.0, -3.0);
-
-        assert!(separate(&mut a, &mut b, 1.0, 1.0, 1.0, 7));
-
-        assert!(a.is_finite() && b.is_finite(), "poisoned: {a} {b}");
-        assert!((a.distance(b) - 1.0).abs() < 1e-5);
-    }
-
-    /// The escape direction must be reproducible, or two identical runs
-    /// diverge the first time anything lands on top of anything else.
-    #[test]
-    fn the_escape_from_a_coincident_pair_is_deterministic() {
-        let run = || {
-            let (mut a, mut b) = (Vec2::ZERO, Vec2::ZERO);
-            separate(&mut a, &mut b, 1.0, 1.0, 1.0, 42);
-            (a, b)
-        };
-        assert_eq!(run(), run());
-
-        // And neighbouring pairs must not all escape the same way, or a clump
-        // separates into a line and re-stacks on the next tick.
-        assert!(escape_direction(3).distance(escape_direction(4)) > 0.1);
-    }
-
-    /// **The mechanic, at the level of one contact.** The heavy body barely
-    /// moves; the light one does almost all the yielding. This is the whole of
-    /// why a single enemy is a nudge rather than a wall.
-    #[test]
-    fn the_heavier_body_yields_less() {
-        let mut player = Vec2::ZERO;
-        let mut enemy = Vec2::new(0.5, 0.0);
-        let (start_player, start_enemy) = (player, enemy);
-
-        separate(&mut player, &mut enemy, 1.0, PLAYER_INV_MASS, ENEMY_INV_MASS, 0);
-
-        let player_moved = player.distance(start_player);
-        let enemy_moved = enemy.distance(start_enemy);
-        assert!(
-            enemy_moved > player_moved * 10.0,
-            "expected a lopsided split, got {player_moved} vs {enemy_moved}"
-        );
-    }
-
-    /// Projection moves bodies apart without moving the pair: the mass-weighted
-    /// centre is unchanged. That is what distinguishes it from an impulse — it
-    /// can only redistribute position, never inject energy, so there is no
-    /// explosive pushback to suppress.
-    #[test]
-    fn separation_preserves_the_mass_weighted_centre() {
-        let (ia, ib) = (PLAYER_INV_MASS, ENEMY_INV_MASS);
-        let centre = |a: Vec2, b: Vec2| (a / ia + b / ib) / (1.0 / ia + 1.0 / ib);
-
-        let mut a = Vec2::new(0.2, -0.1);
-        let mut b = Vec2::new(-0.1, 0.2);
-        let before = centre(a, b);
-
-        separate(&mut a, &mut b, 1.0, ia, ib, 0);
-        assert!((centre(a, b) - before).length() < 1e-5);
-    }
-
-    /// Two immovable bodies cannot be pushed apart, and asking must not divide
-    /// by their combined zero and yield NaN. Corpses and props will be exactly
-    /// this case.
-    #[test]
-    fn two_immovable_bodies_are_left_where_they_are() {
-        let mut a = Vec2::ZERO;
-        let mut b = Vec2::new(0.1, 0.0);
-
-        assert!(!separate(&mut a, &mut b, 1.0, 0.0, 0.0, 0));
-        assert_eq!((a, b), (Vec2::ZERO, Vec2::new(0.1, 0.0)));
     }
 
     /// **The invariant the pass exists to establish**, checked on the real

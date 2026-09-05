@@ -78,7 +78,11 @@ echo state | nc -U /tmp/arpg.sock
 ```
 
 `press`/`release`/`tap`/`hold <key> <ms>` · `wait <ms>` · `shot <path>` ·
-`state` · `enemies <n>` · `vsync on|off` · `quit`
+`state` · `trace since <tick>` · `enemies <n>` · `vsync on|off` · `quit`
+
+`state` is a point sample; `trace since` is the interval between two of them.
+Anything with a window — an attack, hitstop, a buffered input — exists only in
+that gap, so a snapshot taken afterward cannot see a mistimed frame inside it.
 
 Key names are a column of `BINDINGS` rather than a table beside the harness, so
 binding a key makes it drivable in the same edit.
@@ -127,7 +131,7 @@ crates/
   core/  Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES   glam, bytemuck
          Action, ActionMask, InputState, Actions, MoveDir, damp
   gfx/   Renderer, camera, cube, capture, shader.wgsl            core, wgpu, winit, png
-  sim/   World, Player, Dt/Alpha/Accumulator, hash               core, glam  (no wgpu)
+  sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace       core, glam  (no wgpu)
   app/   App, Input + BINDINGS, Clock, harness, wiring, main     core, gfx, sim, winit
   scenario/  the headless gate: run a .ron, assert, exit 0/1     core, sim, ron  (no gfx)
 ```
@@ -142,8 +146,12 @@ crates/
   here rather than in `app` or `sim` because where the camera points is a
   presentation decision; it is handed a bare `Vec3`, which is exactly as
   anonymous as an `Instance`.
-- `sim` — `World`: what exists, plus `step()`, the input/sim seam, and
-  `extract()`, the sim/render seam.
+- `sim` — `World`: what exists. `step()` is the input/sim seam and is now
+  nothing but an ordered list of calls into `pass/`, one module per named pass,
+  each owning its tuning constants and taking the data it declares rather than
+  `&mut World`. `extract()` is the sim/render seam; `trace()` is the sim/agent
+  one. Both hand out shared references, which is what makes "perception cannot
+  change what it observes" a fact about the types.
 - `app` — the wiring layer, and the only crate that sees both sides. `input.rs`
   holds `BINDINGS`, the one place a `KeyCode` becomes an `Action`. GPU state
   is built in `resumed`, not `main`, because winit models surface loss as

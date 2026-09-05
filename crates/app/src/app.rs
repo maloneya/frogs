@@ -166,6 +166,7 @@ impl App {
                     continue; // replies once the file exists
                 }
                 Command::State => self.report_state(),
+                Command::TraceSince(tick) => self.report_trace(tick),
                 Command::SetEnemies(n) => {
                     self.world.set_enemy_count(n);
                     format!("enemies {}", self.world.enemy_count())
@@ -212,6 +213,29 @@ impl App {
             self.clock.frame_ms(),
             self.renderer.as_ref().is_some_and(Renderer::vsync),
         )
+    }
+
+    /// Every trace event from `tick` onward, one per line.
+    ///
+    /// Same rendering as a scenario's golden trace file, because it is the same
+    /// function — a second formatter would be a second thing to keep in step,
+    /// and the whole point is that what you read here is what a scenario can
+    /// assert on.
+    fn report_trace(&self, tick: u64) -> String {
+        let trace = self.world.trace();
+        let mut out = String::new();
+
+        // Said out loud rather than left to be inferred from a suspiciously
+        // short reply: the buffer is bounded, and a caller asking for a tick
+        // that has already scrolled away should be told so.
+        if trace.dropped() > 0 {
+            out.push_str(&format!("# {} event(s) dropped; the buffer wrapped\n", trace.dropped()));
+        }
+        for (t, event) in trace.since(tick) {
+            out.push_str(&format!("{t} {event}\n"));
+        }
+        out.push_str(&format!("# {} event(s)", trace.since(tick).count()));
+        out
     }
 
     /// Fails a pending screenshot once it is clear no frame is coming.

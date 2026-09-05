@@ -69,10 +69,34 @@ one because every test stepped immediately after a respawn, which hides a stale
 `prev`. The lesson is worth keeping: a test written against the convenient
 entity is not a test of the system.
 
-### (moved below chunk 3 — see the note there)
+### (ordered after chunk 3 — see the note there)
 
-Tick-stamped typed events in a ring buffer; `trace since <tick>` on the harness
-socket; written to file by scenarios, which now exist and can assert on them.
+Tick-stamped events in a 16k ring buffer, `trace since <tick>` on the harness
+socket, and golden trace files in scenarios. Taken together with the pass split
+from chunk 4, because a `TraceSink` is one of the things a pass declares and
+doing them apart would have meant doing the split twice.
+
+`TraceSink` is bound to the tick being run, so **a pass cannot stamp an event
+with the wrong tick** — the one error that would make every timing assertion
+built on this worthless. It mirrors `InstanceSink`, the other seam out of `sim`.
+
+Events summarise per tick (`contacts count=37`, not thirty-seven events);
+per-occurrence events are reserved for things that occur rarely, which is what
+hitboxes and hits will be. The trace is deliberately **not** hashed, and the
+exhaustive destructuring in `World::hash` is what forced that to be a written
+decision rather than an omission.
+
+**Gate: met.** `shoving_through_the_horde.ron` carries a checked-in golden
+trace. Mutation-checked: a contact radius moved by 0.02 adds one line, and
+**reordering two passes** — separation before walking instead of after — changes
+the contact count on tick 1. Moving `remember` out of first place is caught
+instead by three unit tests, which is the honest split: the trace sees
+simulation ordering, and `remember` exists for *interpolation*, which is not
+scenario-observable until offscreen capture in chunk 6.
+
+The trace earned its keep on the first golden file it produced. Tick 3 is
+missing from it — the player bounces clear of the crowd for exactly one tick —
+which no final-state assertion could ever show.
 
 Lands *before* the first hitbox rather than after. Attack windows, hitstop and
 knockback fail without a crash or a compiler error, and a state snapshot taken
@@ -121,14 +145,27 @@ Still true, and still owed: GPU-dependent tests are not yet behind
 `#[cfg(feature = "gpu")]`, so `cargo test --workspace` still needs an adapter.
 The scenario runner does not.
 
-## 2. Trace stream — *perception* — **next**
+## 2. Trace stream — *perception* — **done**, with 4's pass split
 
-## 4. SoA entity storage and pass decomposition — *hooks*
+## 4. SoA entity storage — *hooks*
 
-`EntityId` from `World::spawn`, plus `spawn`/`place` as scenario setup
-primitives. Same chunk as the pass split, because SoA is what makes disjoint
-slices exist: `step` becomes an ordered list of named passes, each taking the
-slices it declares, one module each.
+**The pass-decomposition half is done** (with chunk 2). `step` is an ordered
+list of named calls and nothing else; `pass/mod.rs` documents the order and why
+each adjacency is what it is; each pass owns its tuning constants, their const
+asserts, and its tests. Constants split on a rule worth keeping: a constant
+describing an *entity* (radius, scale, spacing) lives with the storage, and one
+describing a *behaviour* (speed, turn rate, mass ratio) lives with the pass.
+
+Doing it before the trace rather than after would have meant doing it twice, and
+doing it now rather than later was only *safe* because chunk 1's per-tick hash
+made a behaviour-preserving refactor checkable — the six scenarios passing
+unchanged is what proved the split changed nothing.
+
+**Still open:** `EntityId` from `World::spawn`, the player joining the horde's
+storage so passes take slices for it too, and `spawn`/`place` as scenario setup
+primitives. That last one is the binding constraint on scenarios today: the only
+setup available is a horde count, so anything needing a body in a specific place
+cannot be written yet.
 
 **Gate:** scenarios stay green across the refactor; a scenario asserts entity
 identity survives despawn and reuse.

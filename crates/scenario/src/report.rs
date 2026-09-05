@@ -14,11 +14,13 @@
 use crate::run::Failure;
 
 pub(crate) fn usage() {
-    eprintln!("usage: scenario <file.ron | directory>...");
+    eprintln!("usage: scenario [--bless] <file.ron | directory>...");
     eprintln!();
     eprintln!("Runs each scenario headlessly against the simulation and exits 0 or 1.");
     eprintln!("Every scenario is also replayed and compared tick by tick, so a loss of");
     eprintln!("determinism fails even a scenario that asserts nothing about it.");
+    eprintln!();
+    eprintln!("--bless rewrites every golden trace file instead of comparing. Read the diff.");
 }
 
 pub(crate) fn error(message: &str) {

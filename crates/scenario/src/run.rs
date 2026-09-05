@@ -1,5 +1,7 @@
 //! Running one scenario against the simulation.
 
+use std::path::Path;
+
 use arpg_core::MoveDir;
 use arpg_sim::{Accumulator, Dt, World};
 use glam::Vec3;
@@ -58,6 +60,11 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     let mut world = World::default();
     world.set_enemy_count(scenario.setup.enemies);
 
+    // Setup is not the run. Without this the golden trace would also record
+    // `World::default()` building a horde this scenario just replaced, tying
+    // every golden file to a constant none of them are about.
+    world.clear_trace();
+
     let budget = scenario.budget.ticks as usize;
     let schedule = input_schedule(scenario);
 
@@ -105,7 +112,9 @@ fn input_schedule(scenario: &Scenario) -> Vec<MoveDir> {
 /// should say so once.
 pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
     let mut failures = Vec::new();
-    let Expect { player_pos, facing, contacts, enemy_count } = &scenario.expect;
+    // Exhaustive, so an assertion added to the spec cannot be quietly left
+    // unchecked — the same trick `World::hash` uses, for the same reason.
+    let Expect { player_pos, facing, contacts, enemy_count, trace: _ } = &scenario.expect;
 
     let ticks = run.world.tick();
     if ticks != scenario.budget.ticks {
@@ -196,4 +205,86 @@ pub(crate) fn check_replay(scenario: &Scenario, first: &Run) -> Option<Failure> 
                     .into(),
             ),
     )
+}
+
+/// Compares the run's trace against a checked-in golden file.
+///
+/// Returns the failure, or `None` if it matched. `bless` rewrites the file
+/// instead of comparing, which is the only way to create one.
+pub(crate) fn check_trace(
+    scenario: &Scenario,
+    run: &Run,
+    beside: &Path,
+    bless: bool,
+) -> Option<Failure> {
+    let name = scenario.expect.trace.as_ref()?;
+    let path = beside.parent().unwrap_or(Path::new(".")).join(name);
+    let actual = run.world.trace().render();
+
+    // A wrapped ring buffer means the beginning of the run is simply gone, so
+    // the golden file would silently stop describing what it is named after.
+    // Refused rather than compared.
+    let dropped = run.world.trace().dropped();
+    if dropped > 0 {
+        return Some(
+            Failure::new("trace", "a complete trace".into(), format!("{dropped} event(s) dropped"))
+                .with_note(
+                    "the trace ring buffer wrapped, so the start of the run is gone. Shorten \
+                     the scenario or raise the buffer, but do not bless a truncated trace"
+                        .into(),
+                ),
+        );
+    }
+
+    if bless {
+        return match std::fs::write(&path, &actual) {
+            Ok(()) => None,
+            Err(e) => Some(Failure::new("trace", format!("write {}", path.display()), e.to_string())),
+        };
+    }
+
+    let expected = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => {
+            return Some(
+                Failure::new("trace", format!("{}", path.display()), e.to_string()).with_note(
+                    "no golden trace yet — create it with `--bless`, then read it before \
+                     committing it"
+                        .into(),
+                ),
+            );
+        }
+    };
+
+    if expected == actual {
+        return None;
+    }
+
+    // The first differing line, not a wall of text. A golden trace is hundreds
+    // of lines and the useful information is almost always where they part.
+    let mut expected_lines = expected.lines();
+    let mut actual_lines = actual.lines();
+    let mut line = 0;
+
+    loop {
+        line += 1;
+        match (expected_lines.next(), actual_lines.next()) {
+            (Some(e), Some(a)) if e == a => continue,
+            (e, a) => {
+                return Some(
+                    Failure::new(
+                        "trace",
+                        format!("{}:{line}: {}", path.display(), e.unwrap_or("<end of file>")),
+                        format!("line {line}: {}", a.unwrap_or("<end of trace>")),
+                    )
+                    .with_note(format!(
+                        "{} line(s) expected, {} produced — re-bless only once you \
+                         understand why they differ",
+                        expected.lines().count(),
+                        actual.lines().count(),
+                    )),
+                );
+            }
+        }
+    }
 }

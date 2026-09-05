@@ -34,7 +34,10 @@ mod spec;
 mod report;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let bless = args.iter().any(|a| a == "--bless");
+    args.retain(|a| a != "--bless");
+
     if args.is_empty() {
         report::usage();
         return ExitCode::FAILURE;
@@ -57,7 +60,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let failed = files.iter().filter(|f| !run_one(f)).count();
+    let failed = files.iter().filter(|f| !run_one(f, bless)).count();
     report::summary(failed, files.len());
 
     if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
@@ -83,7 +86,7 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
 }
 
 /// Runs one file and reports it. Returns whether it passed.
-fn run_one(path: &Path) -> bool {
+fn run_one(path: &Path, bless: bool) -> bool {
     let name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
 
     let source = match std::fs::read_to_string(path) {
@@ -110,6 +113,7 @@ fn run_one(path: &Path) -> bool {
     let outcome = run::run(&scenario);
     let mut failures = run::check(&scenario, &outcome);
     failures.extend(run::check_replay(&scenario, &outcome));
+    failures.extend(run::check_trace(&scenario, &outcome, path, bless));
 
     if failures.is_empty() {
         report::passed(

@@ -1,0 +1,24 @@
+// The trace's first real customer.
+//
+// A player walking into a crowd and out the far side: contacts appear as the
+// crowd is entered, persist while shoving through it, and stop once clear.
+// None of that is visible in final state — the player ends up somewhere
+// unremarkable and the horde ends up somewhere no one can predict — and all of
+// it is visible in a trace, because a trace records *when*.
+//
+// The golden file is the assertion. A tuning change to speed, radius or mass
+// shows up as a diff in which ticks reported contacts and how many, which is a
+// reviewable artifact rather than a claim that nothing important moved.
+(
+    description: "Walking into a 64-body crowd and out the other side, recorded tick by tick.",
+    setup: (enemies: 64),
+    inputs: [
+        (at: 0, ticks: 60, dir: (1.0, 0.0)),
+    ],
+    budget: (ticks: 60),
+    expect: (
+        enemy_count: 64,
+        contacts: 0,
+        trace: "shoving_through_the_horde.trace",
+    ),
+)

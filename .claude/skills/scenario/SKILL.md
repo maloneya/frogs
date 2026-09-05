@@ -64,9 +64,13 @@ subject.
 `(value, tol)`), `contacts`, `enemy_count`. Every one is optional. The tick
 budget is always checked — the run must take exactly that many ticks.
 
-Not yet: anything about the trace (roadmap chunk 2), anything about the image
-(chunk 6), and placing the player or spawning a body anywhere but the default
-grid (chunk 4). If a scenario needs one of those, say so rather than working
+Plus `trace: "name.trace"`, a checked-in golden file the run's trace must match
+exactly — see below.
+
+Not yet: pointwise trace assertions (`(tick: 417, event: "hitbox.active")`;
+golden files cover the same ground for now), anything about the image (chunk 6),
+and placing the player or spawning a body anywhere but the default grid
+(chunk 4). If a scenario needs one of those, say so rather than working
 around it with a warm-up that makes the prediction unreadable.
 
 ## Every scenario is also a replay test
@@ -116,12 +120,12 @@ accumulation, not for timing slop. A tolerance wide enough to hide a one-tick
 error is not a tolerance — and one tick is 0.15, so a tolerance anywhere near
 that is the assertion switched off. `tol: 0.0` is legitimate and used.
 
-## Asserting over the trace — *not built yet (roadmap chunk 2)*
+## Asserting over the trace
 
-Everything in this section describes the intended shape, not something that
-works today. Do not write it into a scenario file: `deny_unknown_fields` will
-reject it, which is deliberate — a format that silently ignores an assertion you
-wrote is worse than one that refuses it.
+Today this is done with a **golden file** (below). Pointwise assertions —
+`(tick: 417, event: "hitbox.active")` — are not implemented; writing one into a
+scenario is refused by `deny_unknown_fields` rather than silently ignored, which
+is deliberate.
 
 Final state cannot see timing. Anything with a window — attack startup, an
 active hitbox, hitstop, a buffered input — is asserted against the event stream:
@@ -141,7 +145,7 @@ different game.
 Also assert the negative where it is the point: a hit landing one tick outside
 the window must **not** register.
 
-## Golden traces — *not built yet (roadmap chunk 2)*
+## Golden traces
 
 For behaviour too broad to enumerate, check in the whole trace and diff against
 it. A tuning change then produces a reviewable diff instead of a claim.
@@ -149,8 +153,15 @@ it. A tuning change then produces a reviewable diff instead of a claim.
 Regenerate deliberately, never reflexively:
 
 ```sh
-cargo run -p scenario -- scenarios/knockback.ron --bless
+cargo run --quiet -p scenario -- scenarios/knockback.ron --bless
 ```
+
+A golden trace records the **run**, not the setup: the runner clears the trace
+after building the world, so a golden file is not coupled to `DEFAULT_ENEMIES`
+or anything else about construction.
+
+If the ring buffer wrapped, the runner refuses to compare rather than blessing a
+truncated file. Shorten the scenario instead.
 
 **Read the diff before committing it.** A blessed golden file that nobody looked
 at is a test that has been deleted without anyone noticing. If the diff is

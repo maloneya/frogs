@@ -72,16 +72,23 @@ the gap has widened. `gfx` cannot name a sim type, `sim` cannot name a key,
 `scenario` cannot name either a renderer or a window — all enforced at layer 0
 or 1 by allowlists that fail closed.
 
-Inside `sim` it is still one file with a single `step()` doing everything in an
-order held only in control flow, and that order is now genuinely load-bearing:
-`remember()` must run before anything moves or every body on screen streaks. So
-the `add-sim-pass` skill still cannot be followed — it says "register your pass
-in the schedule", and there is no schedule.
+Inside `sim`, **the schedule now exists.** `step` is an ordered list of calls
+into `pass/` and contains no logic of its own; `pass/mod.rs` documents the order
+and why each adjacency is what it is; each pass owns its tuning constants, their
+const asserts and its tests. A pass takes the data it declares rather than
+`&mut World`, so for the horde "this pass touches only positions" is enforced by
+the borrow checker at layer 0.
 
-One thing did change in this stream's favour: a behaviour-preserving pass split
-is now *safe*, because the per-tick hash sequence is a gate that proves a
-refactor changed nothing. Doing it before three combat systems grow into
-`step()` is the cheap moment, and that moment is now.
+It was done at the cheap moment and not later, and it was only *safe* to do
+because chunk 1's per-tick hash makes a behaviour-preserving refactor
+checkable — six scenarios passing unchanged is what proved the split changed
+nothing. That is the two streams paying each other back.
+
+**The remaining gap is the player.** It is a single struct rather than a row in
+the horde's storage, so passes take its individual fields where the horde gets a
+real slice: the horde half of every signature is checked by the compiler, the
+player half by reading it. Both become slices when the player joins SoA storage
+and `EntityId` exists.
 
 **Open work**, best done in the same chunk as SoA storage, because SoA is what
 makes disjoint slices exist:
@@ -107,13 +114,22 @@ Four things count as perception: structured world queries, a tick-stamped event
 trace, deterministic screenshots, and eventually causal introspection ("why did
 entity 93 lose 4 hp" answered with a system, a tick, and the components read).
 
-**Where this stands. The weakest of the five, and now clearly so.** Streams 1
-and 4 moved a long way; this one gained a `tick` field in `state` — which is
-itself an instance of the problem, since rule 3 says not to hand-maintain that
-string.
+**Where this stands. Half solved.** The trace exists: tick-stamped events in a
+ring buffer, `trace since <tick>` on the socket, and golden trace files that a
+scenario compares against, so a timing change is a reviewable diff rather than a
+claim. `TraceSink` is bound to the tick being run, so a pass cannot stamp an
+event with the wrong one — the single error that would have made every timing
+assertion built on it worthless.
 
-The harness is a first-rate *control* surface and a thin *perception* one, and
-the asymmetry is the point. Control has `press`,
+It earned its keep immediately: the first golden file it produced is missing
+tick 3, because the player bounces clear of the crowd for exactly one tick.
+Nothing in final state could show that.
+
+What has *not* moved is the structured query. `state` is still a hand-maintained
+format string, and it gained a `tick` field this session — which is itself an
+instance of the problem rule 3 names. Deterministic screenshots have not moved
+either. So the harness is still a first-rate *control* surface and a
+half-finished *perception* one, and the asymmetry is the point. Control has `press`,
 `release`, `tap`, `hold`, `wait`, `enemies`, `vsync`, all with reply-means-landed
 semantics. Perception has one line of space-separated numbers and a PNG. That
 line is a hand-maintained format string, which by this project's own reasoning
@@ -122,12 +138,6 @@ is a second table to forget. It is also a point sample: nothing that happened
 
 **Open work, in order.**
 
-- **Trace stream.** Tick-stamped typed events in a ring buffer, `trace since
-  <tick>` on the socket, written to file by scenarios. Build this *before* the
-  first hitbox, not after. Attack windows, hitstop and knockback fail silently —
-  no crash, no compiler error — and a snapshot taken afterward cannot see a
-  three-frame timing error inside a twelve-frame window. Absence of explicit
-  trace signals is what makes that class of bug hardest to catch.
 - **Derive `state`** from the data and emit JSON, so adding a field to the world
   makes it observable without a second edit.
 - **Offscreen capture.** `shot` currently rides on the presented surface, so it
