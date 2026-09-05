@@ -122,6 +122,12 @@ impl Input {
     pub(crate) fn sample(&mut self) -> Actions {
         self.state.sample()
     }
+
+    /// What is held right now, without consuming edges. See
+    /// [`arpg_core::InputState::held`].
+    pub(crate) fn held(&self) -> ActionMask {
+        self.state.held()
+    }
 }
 
 #[cfg(test)]

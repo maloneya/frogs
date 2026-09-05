@@ -67,9 +67,24 @@ keys (`[`, `]`, `v`, `p`) to achieve the same thing.
 
 ## Reading state
 
+```json
+{"sim":{"tick":1836,"player_pos":[3.8210,0.6000,-3.8210],"facing":2.3562,
+ "contacts":0,"enemies":1024,"trace_events":57,"trace_dropped":0,
+ "player_prev_pos":[3.6710,0.6000,-3.6710],"prev_facing":2.3562},
+ "render":{"camera_target":[4.5130,0.0000,-4.5130],"instances":17409,
+ "frames":4080,"skipped":1,"frame_ms":16.6400,"vsync":true}}
 ```
-tick 1836 player_pos 3.821 0.600 -3.821 facing 2.3562 camera_target 4.513 -4.513
-enemies 1024 instances 17409 frames 4080 skipped 1 frame_ms 16.64 vsync true
+
+**Read it with `jq`, never by column.** The `sim` half is *derived* — `World`
+is destructured exhaustively, so a field added to the world will not compile
+until it is reported — which means fields appear here without warning and any
+positional reader breaks. That has already happened once, when `tick` was added
+to the front of the old space-separated line.
+
+```sh
+sock state | jq -r .sim.tick
+sock state | jq -r '.sim.player_pos[0]'
+sock state | jq -r '.render.frames, .render.skipped'
 ```
 
 ## Reading the trace
@@ -112,7 +127,7 @@ is `(-X, -Z)/√2`. Yaw is `atan2(dir.x, dir.z)`, so due-east is `3π/4 ≈ 2.35
 
 ```sh
 sock "hold d 500" >/dev/null   # 500ms x 9 u/s / √2 = 3.182 per axis
-sock state                      # -> player_pos 3.183 ... facing 2.3562
+sock state | jq -r '.sim.player_pos[0]'   # -> 3.1830
 ```
 
 Travel is now an exact multiple of one tick's step — `PLAYER_SPEED * Dt::SECS`
@@ -160,8 +175,10 @@ Count frames over a known interval. Do **not** trust `frame_ms` alone — it is 
 EMA and cannot tell a steady 60Hz from a mixture averaging to it.
 
 ```sh
-a=$(sock state); sock "wait 1000" >/dev/null; b=$(sock state)
-# presented = frames(b) - frames(a);  also diff `skipped`
+a=$(sock state | jq .render.frames); sock "wait 1000" >/dev/null
+b=$(sock state | jq .render.frames); echo $((b - a))
+# also diff .render.skipped, and .sim.tick — which should stay at ~60/s in
+# *both* present modes, because the simulation no longer follows the frame rate
 ```
 
 Two ways this lies to you, and both have already happened:
@@ -241,8 +258,9 @@ at 60Hz and the game feels different on faster hardware.
 
 - No mouse, and no scenario setup (no spawn/teleport). Testing combat will want
   the latter, built on `World::spawn` once entity storage exists.
-- `state` is a hand-maintained format string; extend it as the sim grows.
-  `tick` is simulation time and `frames` is wall clock — they are deliberately
+- `state`'s `sim` half is derived and cannot silently omit a field; the
+  `render` half is still hand-written, because `app` has no single struct to
+  destructure. `tick` is simulation time and `frames` is wall clock — they are deliberately
   different numbers now, and their ratio is what says whether the machine is
   keeping up. Uncapped, `frames` runs far ahead of `tick`; that is the fixed
   timestep working, not a fault.

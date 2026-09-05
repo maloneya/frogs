@@ -54,6 +54,9 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A pass touches only what it declares | 0 | passes take slices, not `&mut World` — for the horde; the player is not SoA yet |
 | The trace cannot be written by anything but a pass | 0 | `Trace::sink` is `pub(crate)`; `World::trace()` hands out `&Trace` |
 | Perception cannot change what it observes | 0 | `World::trace()` returns `&Trace`, as `extract` takes `&self` |
+| A world field cannot be unobservable | 1 | `World::report` destructures `Self`; a new field is E0027 until it is reported |
+| A redraw cannot consume a keypress | 0 | presentation reads `InputState::held`, which cannot clear; only `sample` clears, and only a tick calls it |
+| The docs cannot cite code that no longer exists | 3 | `every_identifier_the_docs_cite_exists_in_the_source`; found three real drifts on its first run |
 | The trace is not part of sim state | 1 | `World::hash` destructures it and discards it explicitly; a new field would be E0027 |
 | A truncated golden trace is never blessed | 3 | the runner refuses to compare or write when `Trace::dropped() > 0` |
 | A golden trace is not coupled to world construction | 3 | the runner clears the trace after setup, so it records the run |
@@ -68,15 +71,16 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | The horde is interpolated, not just the player | 3 | `the_horde_is_interpolated_too`; three mutations escaped before it existed |
 | A respawned horde does not streak in from the old one | 3 | `a_respawned_horde_is_drawn_standing_still` — uncapped, most frames run zero ticks, so this is visible |
 | The drawn facing crosses ±PI the short way | 3 | `blend_angle` uses `shortest_arc`; `the_drawn_facing_crosses_the_pi_seam_the_short_way` |
-| Speed and turn rate are the constants they claim | 3 | `the_rates_are_the_constants_they_say_they_are`, predicted from the constants rather than read back |
+| Speed is the constant it claims | 3 | `walking_covers_the_speed_it_claims` in `pass/walk.rs`, predicted from `PLAYER_SPEED` rather than read back |
+| Turn rate is the constant it claims | 3 | `turning_covers_the_rate_it_claims` in `pass/face.rs`, same discipline |
 | Ground + horde + player fit one buffer | 3 | unit test in `sim` at the largest horde the clamp allows |
 | The camera basis agrees with the projection | 3 | unit tests in `gfx/camera.rs` |
 | Camera smoothing is frame-rate independent | 3 | `damp` uses `2^(-dt/half_life)`; unit test in `gfx/camera.rs` |
-| The camera target cannot be set unsmoothed | 0 | private field; `follow` is the only writer |
+| The camera target cannot be set unsmoothed | 0 | private field; `follow` and `snap_to` are its only writers, and `snap_to` is deliberate |
 | The camera never overshoots or bobs vertically | 3 | unit tests in `gfx/camera.rs` |
 | Turning takes the short way round the ±PI seam | 3 | `shortest_arc` wraps the *difference*; unit test in `sim` |
 | Turning is frame-rate independent and never overshoots | 3 | step clamped to the remaining arc; unit tests in `sim` |
-| Facing cannot drift toward the precision limit | 3 | `wrap_angle` after every turn; unit test in `sim` |
+| Facing cannot drift toward the precision limit | 3 | `angle::wrap` after every turn; unit tests in `sim/angle.rs` |
 | Spawning does not swoop the camera in from the origin | 0 | `snap_to`, called in `resumed` before the first frame |
 | A skipped frame is never counted as a rendered one | 1 | `Renderer::render` is `#[must_use]`, so ignoring the result is a denied warning |
 | Readback rows respect the copy alignment | 3 | `padded_bytes_per_row`; unit test in `gfx/capture.rs` |

@@ -6,8 +6,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+use glam::Vec2;
 use arpg_core::{InstanceBuffer, MoveDir};
 use arpg_gfx::{OrthoCamera, Renderer};
+use arpg_core::Report;
 use arpg_sim::{Accumulator, World};
 
 use crate::harness::{self, Command, Request};
@@ -190,29 +192,34 @@ impl App {
         quit
     }
 
-    /// One line of everything worth knowing, so a test can assert on numbers
-    /// instead of inferring them from pixels.
+    /// Everything worth knowing about the running program, as JSON.
+    ///
+    /// **Derived, not hand-written.** The simulation's half comes from
+    /// `World::report`, which destructures `World` exhaustively — so a field
+    /// added to the world fails to compile until it is observable. What is left
+    /// here is the part `sim` genuinely cannot know: how the frame went, what
+    /// the camera is doing, whether the renderer is presenting.
+    ///
+    /// This replaced a `format!` listing fourteen fields positionally. The old
+    /// shape broke the first time a field was inserted at the front of it,
+    /// because a reader was pulling `player_pos` out by column number; `jq -r
+    /// .sim.tick` cannot break that way.
     fn report_state(&self) -> String {
-        let p = self.world.player_pos();
-        let c = self.camera.as_ref().map(|c| c.target()).unwrap_or_default();
-        format!(
-            "tick {} player_pos {:.3} {:.3} {:.3} facing {:.4} camera_target {:.3} {:.3} \
-             enemies {} contacts {} instances {} frames {} skipped {} frame_ms {:.2} vsync {}",
-            self.world.tick(),
-            p.x,
-            p.y,
-            p.z,
-            self.world.player_facing(),
-            c.x,
-            c.z,
-            self.world.enemy_count(),
-            self.world.contacts(),
-            self.instances.as_slice().len(),
-            self.frames,
-            self.skipped,
-            self.clock.frame_ms(),
-            self.renderer.as_ref().is_some_and(Renderer::vsync),
-        )
+        let mut out = Report::default();
+
+        out.object("sim", |sim| self.world.report(sim));
+
+        out.object("render", |r| {
+            let target = self.camera.as_ref().map(OrthoCamera::target).unwrap_or_default();
+            r.vec3("camera_target", target);
+            r.int("instances", self.instances.as_slice().len() as u64);
+            r.int("frames", self.frames);
+            r.int("skipped", self.skipped);
+            r.num("frame_ms", self.clock.frame_ms());
+            r.bool("vsync", self.renderer.as_ref().is_some_and(Renderer::vsync));
+        });
+
+        out.finish()
     }
 
     /// Every trace event from `tick` onward, one per line.
@@ -403,26 +410,35 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 let frame = self.clock.tick();
 
-                // The per-frame spine: sample intent, resolve it against the
-                // view, step, extract.
-                let axis = self.input.sample().move_axis();
-
+                // The per-frame spine: resolve intent against the view, step,
+                // extract.
+                //
                 // Screen space becomes world space here, and only here. The
                 // camera owns the mapping because it owns the angle; `sim` is
                 // handed a direction it can integrate without knowing a screen
                 // exists.
                 let (right, up) = camera.ground_basis();
-                let dir = MoveDir::new(right * axis.x + up * axis.y);
+                let to_world = |axis: Vec2| MoveDir::new(right * axis.x + up * axis.y);
 
                 // Zero, one or several — a frame buys whole ticks and the
-                // remainder waits. The same `dir` feeds every tick of a frame,
-                // which is right for a held direction and will *not* be right
-                // for a press: an attack input sampled once and applied to
-                // three ticks would fire three times. That is the input-buffer
-                // problem, and it belongs to the chunk that adds the first
-                // edge-triggered action rather than to this one.
+                // remainder waits.
+                //
+                // **Intent is sampled per tick, not per frame**, and the
+                // difference is not cosmetic. `sample` clears the latched
+                // edges, so sampling once per frame means a frame that runs no
+                // ticks consumes a keypress and discards it — and uncapped,
+                // most frames run no ticks. Sampling here makes a press wait
+                // for a tick, and gives it to exactly one: the first tick of
+                // the frame sees the edge, the rest see only held state.
+                //
+                // Nothing edge-triggered exists yet, so today this changes no
+                // behaviour. It is done now because the first attack button is
+                // where the bug would appear, and it would appear as "the
+                // attack sometimes does not come out", which points nowhere
+                // near the frame loop.
                 for dt in self.accumulator.pending(frame) {
-                    self.world.step(dt, dir);
+                    let intent = self.input.sample();
+                    self.world.step(dt, to_world(intent.move_axis()));
                 }
 
                 // How far this frame falls between the tick just run and the
@@ -438,7 +454,11 @@ impl ApplicationHandler for App {
                 // The *drawn* position, not the simulated one: the camera is
                 // presentation, and following the raw tick position would put
                 // a stair-step under a rig whose entire job is smoothness.
-                camera.follow(self.world.player_pos_at(alpha), dir, frame);
+                // `held`, not `sample`: presentation reads level-triggered
+                // state and must never consume an edge. A camera that ate a
+                // keypress would be the same bug wearing a different hat.
+                let facing = to_world(self.input.held().move_axis());
+                camera.follow(self.world.player_pos_at(alpha), facing, frame);
 
                 self.world.extract(alpha, self.instances.sink());
                 // Counted only when a frame actually reached the screen. An

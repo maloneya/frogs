@@ -5,7 +5,7 @@
 
 use glam::{Vec2, Vec3};
 
-use arpg_core::{Instance, InstanceSink, MoveDir, MAX_INSTANCES};
+use arpg_core::{Instance, InstanceSink, MoveDir, Report, MAX_INSTANCES};
 
 mod angle;
 mod hash;
@@ -368,6 +368,34 @@ impl World {
         // any tick has run — so it is exactly the kind of thing the trace is
         // for. Stamped with the tick it precedes.
         self.trace.sink(self.tick).emit(Event::Spawned { count: self.enemies.len() });
+    }
+
+    /// Describes itself for an agent, field by field.
+    ///
+    /// **The same exhaustive destructuring as [`World::hash`], for the same
+    /// reason.** A field added to `World` fails to compile until it is
+    /// reported, so "anything an agent must observe is a derived field" stops
+    /// being a rule someone remembers and becomes one the compiler applies.
+    /// That rule previously existed only as prose, and this method's
+    /// predecessor — a hand-written `format!` listing fourteen fields — was the
+    /// standing counterexample to it.
+    pub fn report(&self, out: &mut Report) {
+        let Self { enemies, player, tick, contacts, trace } = self;
+        let Player { pos, facing, prev_pos, prev_facing } = player;
+
+        out.int("tick", *tick);
+        out.vec3("player_pos", on_ground(*pos, PLAYER_HALF_HEIGHT));
+        out.num("facing", *facing);
+        out.int("contacts", *contacts as u64);
+        out.int("enemies", enemies.len() as u64);
+        out.int("trace_events", trace.iter().count() as u64);
+        out.int("trace_dropped", trace.dropped() as u64);
+
+        // Previous-tick state is what render interpolation blends from. Not
+        // interesting most of the time, and exactly the thing to look at when
+        // something on screen is a tick behind where it should be.
+        out.vec3("player_prev_pos", on_ground(*prev_pos, PLAYER_HALF_HEIGHT));
+        out.num("prev_facing", *prev_facing);
     }
 
     /// Discards the trace so far. See [`Trace::clear`] for when that is right.

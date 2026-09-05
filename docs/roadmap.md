@@ -33,8 +33,8 @@ per-tick hash sequences across a ragged frame schedule;
 thread-local counting allocator. Eight mutations were checked against these,
 and two of them escaped the first version — see the notes on
 `every_field_of_the_world_reaches_the_hash` and
-`the_rates_are_the_constants_they_say_they_are`, both of which exist because of
-that.
+`walking_covers_the_speed_it_claims` / `turning_covers_the_rate_it_claims`, both
+of which exist because of that.
 
 ## 1b. Render interpolation — *sim layer* — **done**
 

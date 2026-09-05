@@ -18,9 +18,11 @@
 //! else that wants to live here.
 
 mod input;
+mod report;
 mod instance;
 mod smoothing;
 
 pub use input::{Action, ActionMask, Actions, InputState, MoveDir};
+pub use report::Report;
 pub use instance::{Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES};
 pub use smoothing::{damp, damp_vec3};

@@ -39,13 +39,17 @@ field is a compile error until it is hashed. Every scenario is replayed and
 compared tick by tick, so a divergence reports *which* tick rather than merely
 that one happened.
 
-**Open work.** One known landmine, left deliberately with a comment rather than
-guessed at: input is sampled once per frame but a frame can run several ticks,
-so the first *edge-triggered* action — an attack button — would fire once per
-tick instead of once. That is the input-buffering problem and it belongs to the
-chunk that adds the first such action. Seeded randomness, if it is ever wanted,
-takes a generator from the world with the seed recorded alongside the input
-stream; there is no RNG today, so there is nothing to convert yet.
+**Open work.** Nothing structural. The input landmine that sat here is fixed:
+intent is now sampled once per *tick* rather than once per frame, so a frame
+that runs no ticks — which uncapped is most of them — can no longer consume a
+keypress and discard it. Presentation reads `InputState::held`, which consumes
+nothing. Nothing edge-triggered exists yet, so it changed no behaviour; it was
+done now because the symptom would have been "the attack sometimes does not come
+out", which points nowhere near the frame loop.
+
+Seeded randomness, if it is ever wanted, takes a generator from the world with
+the seed recorded alongside the input stream. There is no RNG today, so there is
+nothing to convert.
 
 **Scope, written down before someone assumes otherwise:** f32 determinism holds
 for one binary on one machine. Given the macOS/M4-only stance that is enough for
@@ -125,21 +129,28 @@ It earned its keep immediately: the first golden file it produced is missing
 tick 3, because the player bounces clear of the crowd for exactly one tick.
 Nothing in final state could show that.
 
-What has *not* moved is the structured query. `state` is still a hand-maintained
-format string, and it gained a `tick` field this session — which is itself an
-instance of the problem rule 3 names. Deterministic screenshots have not moved
-either. So the harness is still a first-rate *control* surface and a
-half-finished *perception* one, and the asymmetry is the point. Control has `press`,
+The structured query moved too. `state` is JSON, and its simulation half is
+*derived*: `World::report` destructures `World` exhaustively, so a field added
+to the world does not compile until it is observable — the same guard, at the
+same layer, as the one that keeps it hashable. The hand-maintained format string
+this replaced was rule 3's standing counterexample, and it had already broken a
+positional reader once.
+
+What has **not** moved is deterministic screenshots. `shot` still rides
+`surface.get_current_texture()`, so it is coupled to window visibility, and
+nothing about an image is assertable from a scenario. That is now the whole of
+the remaining gap in this stream. Control has `press`,
 `release`, `tap`, `hold`, `wait`, `enemies`, `vsync`, all with reply-means-landed
 semantics. Perception has one line of space-separated numbers and a PNG. That
 line is a hand-maintained format string, which by this project's own reasoning
 is a second table to forget. It is also a point sample: nothing that happened
 *between* two `state` calls survives.
 
-**Open work, in order.**
+**Open work.**
 
-- **Derive `state`** from the data and emit JSON, so adding a field to the world
-  makes it observable without a second edit.
+- **The `render` half of `state`** is still hand-written, because `app` has no
+  single struct to destructure the way `World` is. Smaller than it was, and
+  still the same class of problem.
 - **Offscreen capture.** `shot` currently rides on the presented surface, so it
   is coupled to window visibility. Headless wgpu already works in the yaw pixel
   test. Rendering to an offscreen target at a named tick makes screenshots work

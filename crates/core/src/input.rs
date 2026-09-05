@@ -103,12 +103,29 @@ impl InputState {
         self.held = held;
     }
 
+    /// Level-triggered state, read **without** consuming anything.
+    ///
+    /// The counterpart to [`InputState::sample`], and the split is the whole
+    /// point: an edge must be consumed exactly once, so only `sample` may see
+    /// one; held state is a fact about right now, so anything may read it any
+    /// number of times. Presentation — the camera's lead, a HUD — uses this,
+    /// which is what stops the renderer from eating a keypress.
+    pub fn held(&self) -> ActionMask {
+        self.held
+    }
+
     /// Takes one sample of intent and clears the latched edges.
     ///
     /// Clearing happens *here*, in the only reader, for the reason the instance
     /// buffer resets inside `sink()`: "remember to clear the edges afterwards"
     /// is a rule that gets forgotten, and the symptom — one keypress firing an
     /// attack every frame until the next one — points nowhere near the cause.
+    ///
+    /// **Call this once per simulation tick, not once per frame.** Under a
+    /// fixed timestep a frame runs zero, one or several ticks; sampling per
+    /// frame means a frame that runs no ticks consumes an edge and throws it
+    /// away, and uncapped that is most frames. Sampling per tick makes a press
+    /// wait for a tick to consume it, and gives it to exactly one.
     pub fn sample(&mut self) -> Actions {
         let actions =
             Actions { held: self.held, pressed: self.pressed, released: self.released };
@@ -157,7 +174,19 @@ impl Actions {
     /// behaviour that makes rolling a thumb across two keys feel like a stop
     /// instead of a lurch.
     pub fn move_axis(self) -> Vec2 {
-        let axis = |neg, pos| match (self.held(neg), self.held(pos)) {
+        self.held.move_axis()
+    }
+}
+
+impl ActionMask {
+    /// The movement axis this set of held actions describes.
+    ///
+    /// On the *mask* rather than on [`Actions`], because movement is purely
+    /// level-triggered: it asks only what is held, never what changed. That is
+    /// what lets presentation read it without consuming an edge — see
+    /// [`InputState::held`].
+    pub fn move_axis(self) -> Vec2 {
+        let axis = |neg, pos| match (self.contains(neg), self.contains(pos)) {
             (true, false) => -1.0,
             (false, true) => 1.0,
             _ => 0.0,
@@ -227,6 +256,42 @@ mod tests {
         assert!(actions.just_pressed(Action::MoveUp));
         assert!(actions.just_released(Action::MoveUp));
         assert!(!actions.held(Action::MoveUp), "the key is no longer down");
+    }
+
+    /// **A frame that runs no ticks must not eat a keypress.**
+    ///
+    /// Under a fixed timestep a frame buys zero, one or several ticks, and
+    /// uncapped it is usually zero. `sample` clears the latched edges, so
+    /// calling it once per *frame* would consume a press on a frame that
+    /// simulated nothing and throw it away. Presentation therefore reads
+    /// `held`, which consumes nothing, and only a tick calls `sample`.
+    ///
+    /// The symptom this prevents is "the attack sometimes does not come out",
+    /// which points nowhere near the frame loop.
+    #[test]
+    fn reading_held_state_never_consumes_an_edge() {
+        let mut input = InputState::default();
+        input.set_held(held_of(&[Action::MoveRight]));
+
+        // Several frames go by drawing, none of them running a tick.
+        for _ in 0..5 {
+            assert!(input.held().contains(Action::MoveRight));
+        }
+
+        // The tick that finally runs still sees the press exactly once.
+        assert!(input.sample().just_pressed(Action::MoveRight), "the press was eaten by a redraw");
+        assert!(!input.sample().just_pressed(Action::MoveRight), "the press fired twice");
+    }
+
+    /// The axis is level-triggered, so reading it must not depend on which of
+    /// the two doors it came through.
+    #[test]
+    fn the_movement_axis_is_the_same_held_or_sampled() {
+        let mut input = InputState::default();
+        input.set_held(held_of(&[Action::MoveRight, Action::MoveUp]));
+
+        let peeked = input.held().move_axis();
+        assert_eq!(peeked, input.sample().move_axis());
     }
 
     /// Edges are latched, so they must not survive the sample that consumed
