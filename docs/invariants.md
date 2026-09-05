@@ -87,6 +87,12 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A malformed harness command is reported, not ignored | 3 | `parse` returns `Result`; unit test in `app/harness.rs` |
 | A screenshot that never happened is not reported as `ok` | 3 | `capture_has_stalled`; unit tests in `app/app.rs` |
 | A body's position cannot leave the ground plane | 0 | positions are `Vec2`; `on_ground` is the only lift |
+| An `EntityId` cannot be forged | 0 | private fields, no public constructor; `Slots::insert` is the only mint |
+| A retired name cannot resolve to the body that took its row | 3 | generation bumped in `Slots::remove`; `a_despawned_name_stays_dead`, mutation-checked |
+| A zeroed `EntityId` names nothing | 1 | `const _: () = assert!(FIRST_GENERATION > 0)`; `a_zeroed_id_names_nothing` |
+| A despawn cannot desync the parallel arrays | 3 | `Slots::remove` returns the one index to `swap_remove`; `debug_assert` on every length in `Enemies::spawn`/`despawn` |
+| A spawned body never streaks on its first frame | 0 | `Enemies::spawn` seeds `prev_pos` to the spawn point; it is the only door in |
+| Spawn history reaches the determinism hash | 1 | `World::hash` destructures `Enemies`, and `Slots::hash` destructures itself |
 | Nothing spawns already overlapping | 1 | `const _: () = assert!(ENEMY_SPACING > 2.0 * ENEMY_RADIUS)` |
 | Coincident bodies separate deterministically, not into NaN | 3 | `escape_direction`; unit tests in `sim` |
 | The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |

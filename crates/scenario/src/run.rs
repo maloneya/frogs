@@ -3,10 +3,10 @@
 use std::path::Path;
 
 use arpg_core::MoveDir;
-use arpg_sim::{Accumulator, Dt, World};
+use arpg_sim::{Accumulator, Dt, EntityId, World};
 use glam::Vec3;
 
-use crate::spec::{Expect, Scenario};
+use crate::spec::{Action, Expect, Scenario};
 
 /// Everything one run produced. Kept separate from the checking so that the
 /// determinism pass can compare two runs without re-deciding what "passed"
@@ -16,6 +16,17 @@ pub(crate) struct Run {
     /// The world's hash after every tick, in order. This is what makes a
     /// divergence report a tick number instead of a shrug.
     pub(crate) hashes: Vec<u64>,
+    /// The name each `Place` action got back, in the order they appear.
+    ///
+    /// The scenario file names bodies by placement number because it cannot
+    /// hold an `EntityId`; this is the translation. Holding the real ids rather
+    /// than dense indices is what makes an assertion survive a despawn moving
+    /// rows around underneath it.
+    ///
+    /// `None` where a spawn was refused — the horde was already at the instance
+    /// budget. Kept as a slot rather than dropped so that placement numbers do
+    /// not shift under the assertions that refer to them.
+    pub(crate) placed: Vec<Option<EntityId>>,
 }
 
 /// A single failed expectation, phrased so the message is the whole diagnosis.
@@ -60,6 +71,29 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     let mut world = World::default();
     world.set_enemy_count(scenario.setup.enemies);
 
+    // Setup actions come after the horde grid, so a scenario can put a body at
+    // a known spot inside a crowd as well as in an empty arena.
+    //
+    // Applied strictly in order. A `Place` after a `Despawn` reuses the freed
+    // slot, which is the only way a retired name can come back — so the order
+    // here is what makes that case reachable at all.
+    let mut placed: Vec<Option<EntityId>> = Vec::new();
+    for action in &scenario.setup.actions {
+        match action {
+            // A refused spawn still takes a placement number, so every later
+            // `nth` keeps pointing at the body its scenario meant. `None` is
+            // what makes the next assertion about it fail and say so;
+            // renumbering would instead re-point every later assertion at a
+            // different body, silently.
+            Action::Place((x, z)) => placed.push(world.spawn_enemy(glam::Vec2::new(*x, *z))),
+            Action::Despawn(nth) => {
+                if let Some(Some(id)) = placed.get(*nth).copied() {
+                    world.despawn_enemy(id);
+                }
+            }
+        }
+    }
+
     // Setup is not the run. Without this the golden trace would also record
     // `World::default()` building a horde this scenario just replaced, tying
     // every golden file to a constant none of them are about.
@@ -79,7 +113,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
         }
     }
 
-    Run { world, hashes }
+    Run { world, hashes, placed }
 }
 
 /// Flattens the input spans into one direction per tick.
@@ -114,7 +148,7 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
     let mut failures = Vec::new();
     // Exhaustive, so an assertion added to the spec cannot be quietly left
     // unchecked — the same trick `World::hash` uses, for the same reason.
-    let Expect { player_pos, facing, contacts, enemy_count, trace: _ } = &scenario.expect;
+    let Expect { player_pos, facing, contacts, enemy_count, bodies, trace: _ } = &scenario.expect;
 
     let ticks = run.world.tick();
     if ticks != scenario.budget.ticks {
@@ -175,7 +209,95 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
         }
     }
 
+    for body in bodies {
+        check_body(run, body, &mut failures);
+    }
+
     failures
+}
+
+/// Checks one prediction about one placed body.
+///
+/// Looks the body up by the **name** it was given at spawn, never by a dense
+/// index. That is the whole reason `EntityId` exists: the horde is stored
+/// densely, so a despawn swaps the last row into the hole and every index after
+/// it changes without anything touching those bodies.
+fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Failure>) {
+    let id = match run.placed.get(body.nth).copied() {
+        Some(Some(id)) => id,
+        Some(None) => {
+            failures.push(
+                Failure::new(
+                    &format!("bodies[{}]", body.nth),
+                    "a body".into(),
+                    "the spawn was refused".into(),
+                )
+                .with_note("the horde was already at the instance budget".into()),
+            );
+            return;
+        }
+        None => {
+            failures.push(
+                Failure::new(
+                    &format!("bodies[{}]", body.nth),
+                    format!("a placement numbered {}", body.nth),
+                    format!("only {} placement(s) were made", run.placed.len()),
+                )
+                .with_note("`nth` counts `Place` actions in `setup.actions`, from 0".into()),
+            );
+            return;
+        }
+    };
+
+    let alive = run.world.is_alive(id);
+
+    if let Some(want) = body.alive
+        && alive != want
+    {
+        failures.push(
+            Failure::new(
+                &format!("bodies[{}].alive", body.nth),
+                want.to_string(),
+                alive.to_string(),
+            )
+            .with_note(if alive {
+                format!("{id} still resolves — a despawned name must not come back")
+            } else {
+                format!("{id} is dead; it was despawned, or its slot was recycled")
+            }),
+        );
+    }
+
+    let Some(want) = &body.pos else { return };
+
+    let Some(got) = run.world.enemy_pos(id) else {
+        // Only reported when the scenario did not already say it expects this.
+        // A file asserting `alive: false` and no position would otherwise fail
+        // twice for one fact.
+        if body.alive != Some(false) {
+            failures.push(
+                Failure::new(
+                    &format!("bodies[{}].pos", body.nth),
+                    format!("({:.4}, {:.4})", want.x, want.z),
+                    "the body is dead".into(),
+                )
+                .with_note(format!("{id} no longer names a live body")),
+            );
+        }
+        return;
+    };
+
+    let off = (glam::Vec2::new(got.x, got.z) - glam::Vec2::new(want.x, want.z)).length();
+    if off > want.tol {
+        failures.push(
+            Failure::new(
+                &format!("bodies[{}].pos", body.nth),
+                format!("({:.4}, {:.4}) +/- {:.4}", want.x, want.z, want.tol),
+                format!("({:.4}, {:.4})", got.x, got.z),
+            )
+            .with_note(format!("off by {off:.4}, tolerance {:.4}", want.tol)),
+        );
+    }
 }
 
 /// Replays the scenario and compares hashes tick by tick.

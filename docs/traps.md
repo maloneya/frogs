@@ -100,9 +100,17 @@ invisible. That asymmetry is the tell.
 vsync, look for state written outside a tick rather than at the renderer.
 
 **Fix.** Whatever writes state outside `step` must set `prev` to match, the way
-`Enemies::respawn` does. A test asserts the drawn positions are identical at
+`Enemies::spawn` does. A test asserts the drawn positions are identical at
 alpha 0, 0.5 and 1 with no tick in between — that is the shape to copy.
 
-**Promotion candidate.** Spawning through a `World::spawn` that maintains `prev`
-as an invariant of the storage (roadmap chunk 4) removes the class rather than
-testing for it one caller at a time.
+**Partly promoted, 2026-09.** This entry used to ask for exactly one thing: a
+spawn that maintains `prev` as an invariant of the storage, so the class is
+removed rather than tested for one caller at a time. That now exists. Every
+body enters the world through `Enemies::spawn`, which seeds `prev_pos` to the
+spawn point; `World::spawn_enemy` and the bulk `respawn` both go through it,
+and there is no other door in.
+
+**Still live for everything that is not a body.** The player is not in that
+storage, and neither is any state a pass adds outside the schedule later. The
+symptom and the check above are unchanged for those, which is why this entry is
+demoted rather than deleted.

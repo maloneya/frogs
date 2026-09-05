@@ -130,7 +130,11 @@ crates/
 - `sim` — `World`: what exists. `step()` is the input/sim seam and is now
   nothing but an ordered list of calls into `pass/`, one module per named pass,
   each owning its tuning constants and taking the data it declares rather than
-  `&mut World`. `extract()` is the sim/render seam; `trace()` is the sim/agent
+  `&mut World`. `slots.rs` holds `EntityId` and the sparse map from a stable
+  name to a dense row — the horde's arrays stay contiguous, so a despawn moves
+  rows and only a generational id survives that. It deliberately holds no
+  payload, which is what lets the same machinery sit under a behaviour that
+  only some bodies have. `extract()` is the sim/render seam; `trace()` is the sim/agent
   one. Both hand out shared references, which is what makes "perception cannot
   change what it observes" a fact about the types.
 - `app` — the wiring layer, and the only crate that sees both sides. `input.rs`

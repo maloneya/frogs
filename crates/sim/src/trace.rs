@@ -21,6 +21,8 @@
 
 use core::fmt;
 
+use crate::slots::EntityId;
+
 /// How many events are kept.
 ///
 /// A ring buffer rather than a growing log, because the game runs for hours and
@@ -44,6 +46,19 @@ pub enum Event {
         /// How many bodies the horde now holds.
         count: usize,
     },
+    /// One body was deliberately placed. Distinct from `Spawned`, which is the
+    /// whole horde being rebuilt: this is rare and individually interesting,
+    /// so it names *which* body rather than how many.
+    Placed {
+        /// The body's new name.
+        id: EntityId,
+    },
+    /// One body was removed, and its name retired.
+    Removed {
+        /// The name that just went stale. Anything still holding it will now
+        /// resolve to nothing rather than to whichever body took its row.
+        id: EntityId,
+    },
     /// Overlapping pairs the solver pushed apart this tick.
     Contacts {
         /// Overlapping pairs resolved.
@@ -63,6 +78,8 @@ impl fmt::Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Spawned { count } => write!(f, "spawned count={count}"),
+            Self::Placed { id } => write!(f, "placed id={id}"),
+            Self::Removed { id } => write!(f, "removed id={id}"),
             Self::Contacts { count } => write!(f, "contacts count={count}"),
             Self::Clamped { count } => write!(f, "clamped count={count}"),
         }

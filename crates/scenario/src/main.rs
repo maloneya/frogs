@@ -116,10 +116,14 @@ fn run_one(path: &Path, bless: bool) -> bool {
     failures.extend(run::check_trace(&scenario, &outcome, path, bless));
 
     if failures.is_empty() {
+        // The world's own count, not the setup's. They part company the moment
+        // a scenario places or despawns bodies, and a summary line that says
+        // "0 enemies" for a run built entirely out of placements is a line that
+        // teaches the reader to distrust the report.
         report::passed(
             &name,
             scenario.budget.ticks,
-            scenario.setup.enemies,
+            outcome.world.enemy_count(),
             &scenario.description,
         );
         true

@@ -10,10 +10,13 @@ use arpg_core::{Instance, InstanceSink, MoveDir, Report, MAX_INSTANCES};
 mod angle;
 mod hash;
 mod pass;
+mod slots;
 mod time;
 mod trace;
 
 pub use hash::Fnv;
+pub use slots::EntityId;
+use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, Ticks, TICK_HZ};
 pub use trace::{Event, Trace};
 
@@ -198,6 +201,12 @@ const PLAYER_HALF_HEIGHT: f32 = PLAYER_SCALE.y * 0.5;
 /// to a position it does want.
 #[derive(Default)]
 struct Enemies {
+    /// Stable names for these bodies, and the map onto the dense rows below.
+    ///
+    /// The horde stays dense — the passes want a contiguous stream — so a
+    /// body's row moves whenever anything before it dies. This is what lets
+    /// something hold a reference across that: see [`crate::slots`].
+    slots: Slots,
     /// Ground-plane position: `x` is world X and `y` is world **Z** — see
     /// [`on_ground`], which is the only place that swap is spelled out.
     ///
@@ -238,26 +247,81 @@ impl Enemies {
     /// smuggling it in beside the storage change would mean this step could no
     /// longer be checked by the picture staying identical.
     fn respawn(&mut self, n: usize) {
-        // `clear` keeps the allocation, so doubling N repeatedly grows the
-        // buffer a few times rather than reallocating on every press.
-        self.pos.clear();
+        // `clear` keeps the allocations, so doubling N repeatedly grows the
+        // buffers a few times rather than reallocating on every press.
+        self.clear();
         self.pos.reserve(n);
+        self.prev_pos.reserve(n);
 
         let side = (n as f32).sqrt().ceil().max(1.0) as usize;
         let offset = (side as f32 - 1.0) * ENEMY_SPACING * 0.5;
 
         for i in 0..n {
-            self.pos.push(Vec2::new(
+            self.spawn(Vec2::new(
                 (i % side) as f32 * ENEMY_SPACING - offset,
                 (i / side) as f32 * ENEMY_SPACING - offset,
             ));
         }
+    }
 
-        // Spawning where it already was, so the first frame after a respawn
-        // interpolates from the new position rather than streaking every body
-        // across the arena from wherever the old horde happened to stand.
+    /// Empties the horde, retiring every name.
+    ///
+    /// Goes through [`Slots::clear`], which restarts generations — so an id
+    /// from before this call can match a body spawned after it. That is only
+    /// safe because the sole caller is a wholesale rebuild, where by
+    /// construction nothing is holding an id across the boundary.
+    fn clear(&mut self) {
+        self.slots.clear();
+        self.pos.clear();
         self.prev_pos.clear();
-        self.prev_pos.extend_from_slice(&self.pos);
+    }
+
+    /// Puts one body at a chosen place and returns its name.
+    ///
+    /// **`prev_pos` is seeded to `at` here, and that is the point of routing
+    /// every spawn through one function.** A body whose previous position is
+    /// wherever the array happened to hold gets drawn streaking across the
+    /// arena for exactly one frame — invisible under vsync, where nearly every
+    /// frame runs a tick, and obvious uncapped, where most frames run none.
+    /// `docs/traps.md` carries that symptom; maintaining the invariant in the
+    /// storage is what retires it, rather than testing each caller for it.
+    fn spawn(&mut self, at: Vec2) -> EntityId {
+        let id = self.slots.insert();
+        self.pos.push(at);
+        self.prev_pos.push(at);
+
+        // The pairing `Slots` documents but cannot check: it holds no payload,
+        // so keeping the arrays the same length is this function's job. Debug
+        // only, because it is a claim about *this code* rather than about the
+        // world, and it is checked on every test run.
+        debug_assert_eq!(self.slots.len(), self.pos.len(), "slots and pos disagree");
+        debug_assert_eq!(self.slots.len(), self.prev_pos.len(), "slots and prev_pos disagree");
+
+        id
+    }
+
+    /// Removes one body. Returns whether the id named a live one.
+    ///
+    /// Every parallel array is `swap_remove`d at the index `Slots` hands back,
+    /// which is what keeps the rows dense and the correspondence intact. An
+    /// array that is added later and forgotten here is the one bug this shape
+    /// still allows, and the debug assertions are what catch it on the next
+    /// test run rather than at the next contact.
+    fn despawn(&mut self, id: EntityId) -> bool {
+        let Some(dense) = self.slots.remove(id) else { return false };
+
+        self.pos.swap_remove(dense);
+        self.prev_pos.swap_remove(dense);
+
+        debug_assert_eq!(self.slots.len(), self.pos.len(), "slots and pos disagree");
+        debug_assert_eq!(self.slots.len(), self.prev_pos.len(), "slots and prev_pos disagree");
+
+        true
+    }
+
+    /// Where a named body stands, or `None` if it is dead.
+    fn pos_of(&self, id: EntityId) -> Option<Vec2> {
+        self.slots.index(id).map(|i| self.pos[i])
     }
 }
 
@@ -368,6 +432,73 @@ impl World {
         // any tick has run — so it is exactly the kind of thing the trace is
         // for. Stamped with the tick it precedes.
         self.trace.sink(self.tick).emit(Event::Spawned { count: self.enemies.len() });
+    }
+
+    /// Places one body at a chosen spot and returns its name.
+    ///
+    /// `at` is a **ground-plane** position: `x` is world X and `y` is world Z,
+    /// the same convention the storage uses. See [`on_ground`], the one place
+    /// that swap is spelled out.
+    ///
+    /// Returns `None` when the horde is already at [`MAX_ENEMIES`]. That is a
+    /// refusal rather than a clamp because the budget exists to stop the
+    /// instance buffer overrunning, and an overrun is silent — the upload just
+    /// truncates, so bodies stop being drawn with no error anywhere. A caller
+    /// that ignores this gets a compiler warning; a caller that never saw it
+    /// would get an invisible bug.
+    ///
+    /// **This is the door scenarios needed.** Until it existed the only setup
+    /// primitive was a horde count laid out in a grid, so nothing that depends
+    /// on a body being in a *particular* place could be asserted — which is
+    /// most of what steering and hitboxes will want to say.
+    pub fn spawn_enemy(&mut self, at: Vec2) -> Option<EntityId> {
+        if self.enemies.len() >= MAX_ENEMIES {
+            return None;
+        }
+
+        let id = self.enemies.spawn(at);
+
+        // Traced for the same reason `set_enemy_count` is: this happens
+        // *outside* the schedule, and state that changes between ticks is the
+        // hardest kind to account for when reading a trace later.
+        //
+        // Per body rather than summarised, which is the opposite of the rule
+        // the trace doc gives for contacts — and for the reason that rule
+        // gives: deliberate placement is rare. The bulk path does not come
+        // through here; `respawn` writes the storage directly and
+        // `set_enemy_count` emits one summary for the whole horde.
+        self.trace.sink(self.tick).emit(Event::Placed { id });
+
+        Some(id)
+    }
+
+    /// Removes one body. Returns whether the id named a live one.
+    ///
+    /// A stale id is a no-op rather than an error: something holding a
+    /// reference to a body that has already died is the normal case, not a
+    /// mistake, and it is exactly what [`EntityId`]'s generation makes safe to
+    /// ask about.
+    pub fn despawn_enemy(&mut self, id: EntityId) -> bool {
+        if !self.enemies.despawn(id) {
+            return false;
+        }
+
+        self.trace.sink(self.tick).emit(Event::Removed { id });
+        true
+    }
+
+    /// Where a named body stands, lifted to world space, or `None` if it is
+    /// dead. The height is a constant of the body's size rather than state —
+    /// see [`Enemies::pos`].
+    #[must_use]
+    pub fn enemy_pos(&self, id: EntityId) -> Option<Vec3> {
+        self.enemies.pos_of(id).map(|p| on_ground(p, ENEMY_HALF_HEIGHT))
+    }
+
+    /// Whether this id still names a live body.
+    #[must_use]
+    pub fn is_alive(&self, id: EntityId) -> bool {
+        self.enemies.slots.contains(id)
     }
 
     /// Describes itself for an agent, field by field.
@@ -493,7 +624,7 @@ impl World {
         // disagree for a reason that has nothing to do with the simulation.
         let _ = trace;
         let Player { pos, facing, prev_pos, prev_facing } = player;
-        let Enemies { pos: enemy_pos, prev_pos: enemy_prev } = enemies;
+        let Enemies { slots, pos: enemy_pos, prev_pos: enemy_prev } = enemies;
 
         let mut h = Fnv::default();
 
@@ -511,6 +642,12 @@ impl World {
         h.f32(prev_pos.x);
         h.f32(prev_pos.y);
         h.f32(*prev_facing);
+
+        // Identity, not just geometry. Two hordes standing in identical places
+        // are still different worlds if their bodies have different names —
+        // the next thing spawned gets a different id in each, and they diverge
+        // for real a tick later. See `Slots::hash`.
+        slots.hash(&mut h);
 
         // Length as well as contents: two hordes agreeing on every body they
         // share are still different worlds if one has more of them.

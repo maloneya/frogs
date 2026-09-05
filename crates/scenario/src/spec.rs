@@ -41,6 +41,41 @@ pub(crate) struct Setup {
     /// prediction about the contact solver, which cannot be made by hand.
     #[serde(default)]
     pub(crate) enemies: usize,
+
+    /// Bodies placed and removed, in order, after the horde grid is laid out.
+    ///
+    /// **This is what makes a scenario able to say anything precise.** A horde
+    /// count puts N bodies in a grid whose positions nobody wrote down, so the
+    /// only predictions available were about the player. One body at a stated
+    /// place is a prediction anyone can make by hand and check by reading.
+    ///
+    /// **An ordered list rather than a set of placements plus a set of
+    /// removals**, and the order is load-bearing rather than tidy. A slot is
+    /// recycled only when something is spawned *after* a despawn, so unordered
+    /// setup cannot express the case where a retired name might come back to
+    /// life — which is the one failure generational ids exist to prevent, and
+    /// the only one that is silent. A first version of this file had exactly
+    /// that shape, and a scenario written in it passed with the generation bump
+    /// deleted.
+    #[serde(default)]
+    pub(crate) actions: Vec<Action>,
+}
+
+/// One step of scenario setup.
+#[derive(Debug, Deserialize)]
+pub(crate) enum Action {
+    /// Puts a body at a world-space `(x, z)`, on the same terms as
+    /// [`Span::dir`]: the simulation's own axes, never the camera's.
+    ///
+    /// Placements are numbered in the order they appear, across the whole
+    /// list, and that number is what [`BodyExpect::nth`] refers to.
+    Place((f32, f32)),
+
+    /// Removes a previously placed body, by its placement number.
+    ///
+    /// The slot it frees is reused by the next `Place`, which is precisely the
+    /// case worth writing a scenario about.
+    Despawn(usize),
 }
 
 /// Hold a direction for a span of ticks.
@@ -91,6 +126,9 @@ pub(crate) struct Expect {
     pub(crate) contacts: Option<usize>,
     #[serde(default)]
     pub(crate) enemy_count: Option<usize>,
+    /// Predictions about individual placed bodies.
+    #[serde(default)]
+    pub(crate) bodies: Vec<BodyExpect>,
     /// A checked-in trace file, relative to the scenario, that the run's own
     /// trace must match exactly.
     ///
@@ -126,4 +164,33 @@ pub(crate) struct Approx2 {
     pub(crate) z: f32,
     /// Euclidean distance, so this is a radius rather than a per-axis slack.
     pub(crate) tol: f32,
+}
+
+/// What must hold for one body that [`Setup::bodies`] placed.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BodyExpect {
+    /// Which placement this is about, by spawn order in [`Setup::bodies`].
+    ///
+    /// **Deliberately not a dense-array index.** The horde is stored densely
+    /// and a despawn swaps the last row into the hole, so a body's index
+    /// changes without anything touching that body. The runner holds the real
+    /// [`arpg_sim::EntityId`] it got back from each placement and looks it up
+    /// by this, which is exactly the indirection the ids exist to provide — a
+    /// scenario asserting on index 2 would silently start asserting about a
+    /// different body the first time something before it died.
+    pub(crate) nth: usize,
+
+    /// Where the body should be. Omit to say nothing about position.
+    #[serde(default)]
+    pub(crate) pos: Option<Approx2>,
+
+    /// Whether the body should still exist.
+    ///
+    /// `alive: false` is the assertion that a despawned name stays dead. It is
+    /// not the same as saying nothing: a stale id resolving to whichever body
+    /// took its row is the exact bug generational ids exist to prevent, and it
+    /// reads as success to every other assertion in the file.
+    #[serde(default)]
+    pub(crate) alive: Option<bool>,
 }

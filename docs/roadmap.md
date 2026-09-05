@@ -35,16 +35,58 @@ what matters here is what it left behind to build on.
 
 ## 4. SoA entity storage — *hooks*
 
-The pass-decomposition half landed with the trace. What is left is storage:
-`EntityId` from `World::spawn`, and the player joining the horde's arrays so
-passes take slices for it too rather than its individual fields.
+The pass-decomposition half landed with the trace. Identity landed next:
+`EntityId`, `World::spawn_enemy`/`despawn_enemy`, and the `slots` map that
+gives a body a name its dense row cannot. Scenarios can now place a body at a
+stated spot and assert about it by name — which was the binding constraint on
+everything below, because a horde count puts N bodies in a grid whose positions
+nobody wrote down.
 
-**This is the binding constraint on scenarios.** The only setup primitive is a
-horde count, so nothing that needs a body in a *specific place* can be written —
-which is most of what chunks 7 and 8 will want to assert.
+**Gate — met.** `a_despawned_name_stays_dead` asserts a retired name stays dead
+*after its slot is handed to somebody else*, and it is mutation-checked against
+both the generation bump and the swap-remove fixup. The reuse half is
+load-bearing: a first version stopped at the despawn and passed with the
+generation bump deleted, because a vacated slot is caught by the vacancy
+sentinel whether or not generations work.
 
-**Gate:** scenarios stay green across the refactor; one asserts entity identity
-survives despawn and reuse.
+### What is left in this chunk
+
+The player joining the same storage, so passes take slices for it too rather
+than its individual fields.
+
+**This contradicts the argument written on `Player` itself**, which says it
+stays a separate struct because wedging it into the horde would pay for
+player-only fields — facing, attack phase, i-frames — N times. That argument was
+correct against dense arrays and dissolves under the storage decision below:
+player-only state lives in its own sparse set, so the player can be a body
+without any enemy paying for what only it has. Resolve the two before starting,
+rather than leaving a doc that argues against the change being made.
+
+## Storage decision: sparse sets, not a dense table
+
+A behaviour is **its own storage plus a pass that reads it**, not a field on a
+god struct. An enemy "has" a behaviour when it is a member of that behaviour's
+set; the pass iterates the set, so cost scales with membership rather than with
+horde size, and adding a behaviour touches no existing type.
+
+`slots` is deliberately payload-free for this reason — the same machinery sits
+under the horde's positions and under a behaviour only three bodies have. The
+alternative considered and rejected was one dense table with capability flags:
+simpler and faster to write, but it makes every body pay for every behaviour and
+turns the body table into the god class transposed into arrays.
+
+## 4b. Contact as a query, separate from the response — *sim layer*
+
+`pass::separate::pair` currently decides *that* two discs overlap and *what to
+do about it* in one function. An attack wants the first half with a different
+second half: deal damage, emit an event, do not push. Welded together, an attack
+cannot reuse touching — it can only re-implement it.
+
+Splitting it makes the overlap test a pure query returning a contact, with
+separation as one *consumer* of that query and a hitbox as another.
+
+**Gate:** a pure refactor, so the golden trace in `shoving_through_the_horde`
+must come out byte-identical.
 
 ## 5. Uniform-grid spatial hash for broadphase — *sim layer*
 
@@ -64,10 +106,16 @@ present.
 ## 7. Separation steering — *sim layer*
 
 Bodies currently collide only with the player, never with each other, and no
-enemy has ever moved on its own.
+enemy has ever moved on its own. Brute force first, on top of chunk 4b's query:
+the uniform grid in chunk 5 is an *optimisation of something already correct*,
+and it can only be tested by agreeing with a correct thing that already exists.
+
+Then the first real behaviour module — a `seek` set whose members walk toward
+the player, and whose non-members demonstrably do not.
 
 **Gate:** a scenario spawning a deliberately overlapped cluster asserts it
-resolves without explosion, within a tick budget, with no NaN.
+resolves without explosion, within a tick budget, with no NaN. A placed seeker
+closes at the rate its constant claims; a placed non-seeker does not move.
 
 ## 8. Attack state machine — startup / active / recovery, timed hitboxes
 
@@ -87,8 +135,9 @@ change produces a reviewable diff rather than a claim about feel.
 
 ## Known limitations (real, not yet worth fixing)
 
-- **Nothing chases you.** Enemies have a position and nothing else; they collide
-  with the player but not with each other, and none has ever taken a step.
+- **Nothing chases you.** Enemies have a position and a name and nothing else;
+  they collide with the player but not with each other, and none has ever taken
+  a step.
   Chunks 5 and 7 are what make the horde a horde.
 - `World::extract()` rebuilds the 16384 static ground tiles every frame and
   re-uploads the whole instance buffer. Deferred with a number behind it: 17409
