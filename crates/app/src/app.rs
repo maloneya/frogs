@@ -97,7 +97,9 @@ impl App {
             // orders of magnitude, and the knee is easier to find by bisection
             // than by walking. Both directions clamp inside `set_enemy_count`.
             KeyCode::BracketRight => {
-                self.world.set_enemy_count(self.world.enemy_count() * 2);
+                // `max(1)` because doubling zero is zero: the horde can now
+                // be emptied, and without this `]` could not refill it.
+                self.world.set_enemy_count((self.world.enemy_count() * 2).max(1));
                 log::info!("N = {}", self.world.enemy_count());
             }
             KeyCode::BracketLeft => {

@@ -69,10 +69,10 @@ one because every test stepped immediately after a respawn, which hides a stale
 `prev`. The lesson is worth keeping: a test written against the convenient
 entity is not a test of the system.
 
-## 2. Trace stream — *perception*
+### (moved below chunk 3 — see the note there)
 
 Tick-stamped typed events in a ring buffer; `trace since <tick>` on the harness
-socket; written to file by scenarios once those exist.
+socket; written to file by scenarios, which now exist and can assert on them.
 
 Lands *before* the first hitbox rather than after. Attack windows, hitstop and
 knockback fail without a crash or a compiler error, and a state snapshot taken
@@ -81,15 +81,47 @@ afterward cannot see a mistimed frame inside an active window.
 **Gate:** movement and contact events appear in a checked-in golden trace, and a
 deliberate off-by-one in a pass changes that file.
 
-## 3. Scenario runner — *scenarios*
+## 3. Scenario runner — *scenarios* — **done**
 
-`crates/scenario`, depending on `core` + `sim` only. RON setup, tick-indexed
-inputs, assertions over final state and trace, a tick budget. GPU-dependent
-tests move behind `#[cfg(feature = "gpu")]`.
+`crates/scenario`, allowlisted to `core` + `sim` + `glam` + `ron`/`serde`. RON
+setup, tick-indexed input spans, assertions over final state, a tick budget,
+exit 0 or 1. **The `Stop` hook's dormant half is now live**, so rule 4 in
+`CLAUDE.md` is enforced by a process rather than by a paragraph.
 
-**Gate:** `cargo run -p scenario -- scenarios/` exits 0 with no GPU and no
-window, and `cargo test --workspace` passes on a machine without an adapter. The
-`Stop` hook stops being conditional.
+Taken before chunk 2, deliberately reversing the original order. The argument:
+the runner is the *stopping condition* for the other four streams, everything it
+needed already existed after chunk 1, and nothing it needed was waiting on the
+trace. Building it first means the trace lands in chunk 2 with a consumer that
+already asserts on it, rather than as a feature nobody checks.
+
+Two decisions worth knowing before writing a scenario:
+
+- **Directions are world space, not screen space.** The screen mapping belongs
+  to the camera because it depends on the camera's angle, which is presentation
+  and may change. A scenario that spoke screen space would have to be rewritten
+  the day the view rotates.
+- **Every scenario is also a replay test**, run twice and compared by per-tick
+  hash whether or not it asks. Free, and it is the only way a property that
+  subtle stays checked.
+
+`set_enemy_count` now accepts zero. That was wrong on its own terms — enemies
+are going to die, and an empty arena is a state reached by playing well — and it
+was also what made the simplest possible scenario impossible: any horde at all
+starts in contact with the player, so every prediction about movement was really
+a prediction about the solver.
+
+**Gate: met.** `cargo run -p scenario -- scenarios/` exits 0 with no GPU and no
+window; five scenarios pass. Verified by mutation, all caught with the exit code
+and a message naming the cause: `PLAYER_SPEED` drifting 9.0→9.05; the wall
+clamping the centre instead of the body edge; a wall clock inside `step`
+(reported as "diverged at tick 3"); and an off-by-one in the runner's *own*
+input scheduling (reported as "off by 0.1500 — that is 1.00 ticks of walking").
+
+Still true, and still owed: GPU-dependent tests are not yet behind
+`#[cfg(feature = "gpu")]`, so `cargo test --workspace` still needs an adapter.
+The scenario runner does not.
+
+## 2. Trace stream — *perception* — **next**
 
 ## 4. SoA entity storage and pass decomposition — *hooks*
 

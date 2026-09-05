@@ -1,0 +1,26 @@
+// A thousand bodies, five seconds, and a player shoving through the middle of
+// them changing direction twice.
+//
+// It asserts almost nothing about the outcome on purpose. Where the horde ends
+// up after 300 ticks of Gauss-Seidel contact resolution is not something anyone
+// can predict by hand, and a number pasted in from a previous run would assert
+// only that today matches yesterday.
+//
+// What it is really testing is the check that runs on *every* scenario without
+// being asked: the whole thing is replayed and compared tick by tick. This is
+// the one place that check has enough moving parts to be worth much — 1024
+// bodies, thousands of contacts, and an iteration order that a broadphase will
+// eventually change.
+(
+    description: "1024 bodies shoved around for 300 ticks replay identically, tick for tick.",
+    setup: (enemies: 1024),
+    inputs: [
+        (at: 0,   ticks: 100, dir: (1.0, 0.0)),
+        (at: 100, ticks: 100, dir: (0.0, 1.0)),
+        (at: 200, ticks: 100, dir: (-1.0, -1.0)),
+    ],
+    budget: (ticks: 300),
+    expect: (
+        enemy_count: 1024,
+    ),
+)

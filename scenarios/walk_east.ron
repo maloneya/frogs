@@ -1,0 +1,19 @@
+// The simplest thing the simulation does, predicted from the constants and
+// then asserted. If this fails, nothing below it means anything.
+//
+// PLAYER_SPEED 9.0 u/s x 30 ticks x 1/60 s = 4.5 units along +X.
+// Facing turns toward atan2(1, 0) = PI/2 at PLAYER_TURN_RATE 14 rad/s, which
+// covers 1.5708 rad in 6.7 ticks — so by tick 30 it has arrived and clamped.
+(
+    description: "Walking one direction for 30 ticks travels exactly 30 ticks' worth, and the body ends up facing it.",
+    setup: (enemies: 0),
+    inputs: [
+        (at: 0, ticks: 30, dir: (1.0, 0.0)),
+    ],
+    budget: (ticks: 30),
+    expect: (
+        player_pos: (x: 4.5, z: 0.0, tol: 0.001),
+        facing: (value: 1.5708, tol: 0.0001),
+        contacts: 0,
+    ),
+)

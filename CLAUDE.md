@@ -48,10 +48,9 @@ mode none of the machinery above can catch. Predicting a value and then
 asserting it in a scenario is the same act, made durable and checkable.
 
 The `Stop` hook in `.claude/settings.json` enforces this: it runs the test
-suite when a turn ends, and blocks on failure. It runs the scenario runner too
-**once `crates/scenario` exists** — until roadmap chunk 3 lands that half is
-dormant, and rule 4 is enforced by nothing stronger than this paragraph. Say so
-rather than implying a gate that is not running.
+suite **and the scenario runner** when a turn ends, and blocks on failure. Both
+halves are live as of roadmap chunk 3, so rule 4 is now enforced by a process
+exiting nonzero rather than by this paragraph.
 
 ## Commands
 
@@ -61,6 +60,8 @@ cargo run --release       # for any performance measurement — debug numbers ar
 RUST_LOG=info cargo run   # adapter selection + wgpu diagnostics
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace    # includes a headless GPU test; needs a real adapter
+
+cargo run --quiet -p scenario -- scenarios/   # the gate: exits 0 or 1, no GPU, no window
 ```
 
 ### Driving the game from a shell
@@ -126,8 +127,9 @@ crates/
   core/  Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES   glam, bytemuck
          Action, ActionMask, InputState, Actions, MoveDir, damp
   gfx/   Renderer, camera, cube, capture, shader.wgsl            core, wgpu, winit, png
-  sim/   World, Player                                           core, glam  (no wgpu)
+  sim/   World, Player, Dt/Alpha/Accumulator, hash               core, glam  (no wgpu)
   app/   App, Input + BINDINGS, Clock, harness, wiring, main     core, gfx, sim, winit
+  scenario/  the headless gate: run a .ron, assert, exit 0/1     core, sim, ron  (no gfx)
 ```
 
 - `core` is the shared vocabulary and belongs to neither side. It deliberately

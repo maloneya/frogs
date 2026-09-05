@@ -25,17 +25,27 @@ It is load-bearing rather than tidy: replay, save integrity, reproducible bug
 reports, bisecting a regression to a tick, and every scenario in stream 4 all
 rest on it.
 
-**Where this stands.** Further along than it looks. `sim` links neither wgpu nor
-winit, enforced by an allowlist that fails closed. There is no RNG anywhere —
-`escape_direction` uses a golden angle specifically so two identical runs cannot
-diverge. No wall clock inside `World`; `dt` arrives as a parameter. No
-hash-ordered iteration. The only remaining source of nondeterminism is that
-`step` takes whatever the frame handed it.
+**Where this stands. Done, and now checked rather than claimed.** `sim` links
+neither wgpu nor winit, enforced by an allowlist that fails closed. There is no
+RNG anywhere — `escape_direction` uses a golden angle specifically so two
+identical runs cannot diverge. No wall clock inside `World`. No hash-ordered
+iteration. And since chunk 1 the frame rate cannot reach the simulation at all:
+`step` takes a `Dt` that carries no number and can only have come from the
+accumulator, so a variable timestep is unrepresentable rather than merely
+discouraged.
 
-**Open work.** Fixed timestep with `Dt` as a newtype whose constructor is
-private to the accumulator. `World::hash()` over all sim state, called every
-tick — comparing two runs' final positions tells you *that* you diverged, a
-hash sequence tells you *which tick*. A replay scenario asserting the sequence.
+`World::hash()` covers every field, enforced by exhaustive destructuring — a new
+field is a compile error until it is hashed. Every scenario is replayed and
+compared tick by tick, so a divergence reports *which* tick rather than merely
+that one happened.
+
+**Open work.** One known landmine, left deliberately with a comment rather than
+guessed at: input is sampled once per frame but a frame can run several ticks,
+so the first *edge-triggered* action — an attack button — would fire once per
+tick instead of once. That is the input-buffering problem and it belongs to the
+chunk that adds the first such action. Seeded randomness, if it is ever wanted,
+takes a generator from the world with the seed recorded alongside the input
+stream; there is no RNG today, so there is nothing to convert yet.
 
 **Scope, written down before someone assumes otherwise:** f32 determinism holds
 for one binary on one machine. Given the macOS/M4-only stance that is enough for
@@ -57,11 +67,21 @@ alignment.
 fights the first-principles goal and buys nothing at this size. The Rust-native
 version is enough.
 
-**Where this stands.** Excellent at the crate boundary, absent below it. `gfx`
-cannot name a sim type, `sim` cannot name a key, both enforced at layer 0 or 1.
-Inside `sim` it is one file with a single `step()` doing everything in an order
-held only in control flow. Every remaining combat chunk lands by editing that
-function and getting pass ordering right by hand.
+**Where this stands.** Excellent at the crate boundary, absent below it, and
+the gap has widened. `gfx` cannot name a sim type, `sim` cannot name a key,
+`scenario` cannot name either a renderer or a window — all enforced at layer 0
+or 1 by allowlists that fail closed.
+
+Inside `sim` it is still one file with a single `step()` doing everything in an
+order held only in control flow, and that order is now genuinely load-bearing:
+`remember()` must run before anything moves or every body on screen streaks. So
+the `add-sim-pass` skill still cannot be followed — it says "register your pass
+in the schedule", and there is no schedule.
+
+One thing did change in this stream's favour: a behaviour-preserving pass split
+is now *safe*, because the per-tick hash sequence is a gate that proves a
+refactor changed nothing. Doing it before three combat systems grow into
+`step()` is the cheap moment, and that moment is now.
 
 **Open work**, best done in the same chunk as SoA storage, because SoA is what
 makes disjoint slices exist:
@@ -87,8 +107,13 @@ Four things count as perception: structured world queries, a tick-stamped event
 trace, deterministic screenshots, and eventually causal introspection ("why did
 entity 93 lose 4 hp" answered with a system, a tick, and the components read).
 
-**Where this stands.** The harness is a first-rate *control* surface and a thin
-*perception* one, and the asymmetry is the point. Control has `press`,
+**Where this stands. The weakest of the five, and now clearly so.** Streams 1
+and 4 moved a long way; this one gained a `tick` field in `state` — which is
+itself an instance of the problem, since rule 3 says not to hand-maintain that
+string.
+
+The harness is a first-rate *control* surface and a thin *perception* one, and
+the asymmetry is the point. Control has `press`,
 `release`, `tap`, `hold`, `wait`, `enemies`, `vsync`, all with reply-means-landed
 semantics. Perception has one line of space-separated numbers and a PNG. That
 line is a hand-maintained format string, which by this project's own reasoning
@@ -123,16 +148,29 @@ Two things follow. Verification stops being a judgement call. And a prediction
 becomes durable — today the predict-then-measure ritual in the `playtest` skill
 produces a result that is discarded the moment it passes.
 
-**Where this stands.** The clearest gap. What exists is a procedure run by hand.
-The unit tests in `sim`, `core`, `gfx` and `capture` are real and well chosen,
-but they test functions, not behaviour over time. There are no setup primitives,
-no assertion format, no exit code, no persistence.
+**Where this stands. Built.** `crates/scenario` runs `.ron` files headlessly
+against `sim` and exits 0 or 1; the `Stop` hook runs it when a turn ends and
+blocks on failure. A scenario is setup, tick-indexed input spans, a tick budget,
+and assertions over final state.
 
-**Open work.** `crates/scenario`, depending on `core` + `sim` only. See the
-`scenario` skill for the intended shape. Golden trace files checked in, so a
-tuning change produces a diff that *is* the review artifact. GPU tests move
-behind `#[cfg(feature = "gpu")]` so `cargo test --workspace` is green without an
-adapter, which it currently is not.
+Two properties are worth more than the file format. Every scenario is replayed
+and compared by per-tick hash **whether or not it asks**, so determinism is
+checked by every scenario written for any other reason. And
+`deny_unknown_fields` means a scenario asserting something the runner does not
+implement is *refused* rather than silently ignored — an ignored assertion is
+the worst possible outcome, because it reads exactly like a passing one.
+
+The runner was verified the way everything else here is: by breaking the
+simulation on purpose and checking it noticed. A speed constant drifting by
+0.5%, a wall clamp off by a body radius, a wall clock inside `step`, and an
+off-by-one in the runner's own input scheduling were all caught with a message
+naming the cause.
+
+**Open work.** Trace assertions and golden traces, which arrive with the trace
+itself. Setup primitives beyond the enemy count — placing the player, spawning a
+body somewhere specific — which want `World::spawn` and land with SoA storage.
+GPU tests behind `#[cfg(feature = "gpu")]` so `cargo test --workspace` is green
+without an adapter, which it still is not; the scenario runner already is.
 
 Speed is part of the design, not a bonus. `hold d 500` costs 500ms of wall
 clock; the same thirty ticks against `sim` cost microseconds. That is the

@@ -1,0 +1,24 @@
+// Two spans, so this also checks that inputs are scheduled by tick rather than
+// merely applied.
+//
+// 30 ticks east (+4.5) then 30 ticks west (-4.5) returns to the origin, because
+// translation here is instantaneous — there is no momentum to carry over.
+// Facing has to travel from +PI/2 to -PI/2, an arc of PI radians; at 14 rad/s
+// that takes 13.5 ticks, so 30 is comfortably enough to arrive.
+//
+// The seam is the point: a turn that took the long way round would still end at
+// -PI/2 and pass this. What it would not survive is `turning_takes_the_short_way_around`
+// in sim's own tests — the two are complementary, which is why both exist.
+(
+    description: "Reversing direction returns to the origin and ends up facing the new way.",
+    setup: (enemies: 0),
+    inputs: [
+        (at: 0,  ticks: 30, dir: (1.0, 0.0)),
+        (at: 30, ticks: 30, dir: (-1.0, 0.0)),
+    ],
+    budget: (ticks: 60),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.001),
+        facing: (value: -1.5708, tol: 0.0001),
+    ),
+)

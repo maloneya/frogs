@@ -459,8 +459,16 @@ impl World {
     /// The only door in, so the clamp cannot be bypassed or forgotten. A
     /// spawner, a save-load path or a debug console added later inherits it
     /// without having to know `MAX_ENEMIES` exists.
+    ///
+    /// **Zero is allowed.** It used to clamp to a minimum of one, which was
+    /// wrong on its own terms — enemies are going to die, and an empty arena is
+    /// a state this game reaches by playing it well rather than an error. It
+    /// also made the simplest possible scenario impossible to write: the horde
+    /// spawns centred on the origin and so does the player, so *any* horde puts
+    /// the two in contact on tick zero, and every prediction about plain
+    /// movement is really a prediction about the solver.
     pub fn set_enemy_count(&mut self, n: usize) {
-        self.enemies.respawn(n.clamp(1, MAX_ENEMIES));
+        self.enemies.respawn(n.min(MAX_ENEMIES));
     }
 
     /// Advances the world by `dt` seconds.
@@ -1075,6 +1083,30 @@ mod tests {
             assert_ne!(at_half[i], at_zero[i], "body {i} did not move off its previous tick");
             assert_ne!(at_half[i], at_one[i], "body {i} was drawn already arrived");
         }
+    }
+
+    /// An empty arena has to work, not merely not crash: it is where a fight
+    /// ends, and it is the only setup in which a scenario can predict plain
+    /// movement without predicting the solver too.
+    #[test]
+    fn an_empty_horde_is_a_legal_world() {
+        let mut world = World::default();
+        world.set_enemy_count(0);
+        assert_eq!(world.enemy_count(), 0);
+
+        for _ in 0..30 {
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
+        }
+        assert_eq!(world.contacts(), 0, "an empty arena reported a contact");
+
+        // Movement is then exactly the constant, with nothing to interfere.
+        let expected = PLAYER_SPEED * 30.0 * Dt::SECS;
+        assert!((world.player_pos().x - expected).abs() < 1e-4);
+
+        // And it still draws: ground plus the player, no horde.
+        let mut buffer = InstanceBuffer::default();
+        world.extract(Alpha::ONE, buffer.sink());
+        assert_eq!(buffer.as_slice().len(), GROUND_INSTANCES + 1);
     }
 
     /// **Found by mutation, and it is a real artefact.** Every other test here

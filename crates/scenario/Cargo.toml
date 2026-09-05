@@ -1,0 +1,19 @@
+[package]
+name = "scenario"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+# `arpg-gfx` and `winit` are absent on purpose, and that absence *is* the
+# feature: a scenario runs with no GPU, no window and no display server, which
+# is what makes it fast enough to be the gate on every change rather than a
+# thing run occasionally.
+[dependencies]
+arpg-core.workspace = true
+arpg-sim.workspace = true
+glam.workspace = true
+ron = "0.12"
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

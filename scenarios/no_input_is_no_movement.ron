@@ -1,0 +1,13 @@
+// The null case, and it is not trivial: it is what would catch a pass that
+// integrates something every tick regardless of input — a gravity term, a
+// drift, a solver that pushes a body it should have left alone.
+(
+    description: "A second of no input leaves the world exactly where it started.",
+    setup: (enemies: 0),
+    budget: (ticks: 60),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0),
+        facing: (value: 0.0, tol: 0.0),
+        contacts: 0,
+    ),
+)

@@ -1,0 +1,19 @@
+// 1200 ticks east is 180 units of travel in a half-arena of 96, so this walks
+// into the wall and keeps pushing for the rest of the run.
+//
+// The clamp is ARENA_HALF - PLAYER_RADIUS = 96.0 - 0.3 = 95.7. Note it is the
+// *body* that stops, not its centre — a scenario asserting 96.0 here would be
+// asserting that the player stands halfway inside the wall.
+(
+    description: "Walking into the wall stops at the body's edge and stays finite, rather than escaping or drifting.",
+    setup: (enemies: 0),
+    inputs: [
+        (at: 0, ticks: 1200, dir: (1.0, 0.0)),
+    ],
+    budget: (ticks: 1200),
+    expect: (
+        player_pos: (x: 95.7, z: 0.0, tol: 0.001),
+        facing: (value: 1.5708, tol: 0.0001),
+        contacts: 0,
+    ),
+)

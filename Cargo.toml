@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/gfx", "crates/sim", "crates/app"]
+members = ["crates/core", "crates/gfx", "crates/sim", "crates/app", "crates/scenario"]
 resolver = "3"
 
 # So a bare `cargo run` still means "run the game".
@@ -13,6 +13,7 @@ edition = "2024"
 arpg-core = { path = "crates/core" }
 arpg-gfx = { path = "crates/gfx" }
 arpg-sim = { path = "crates/sim" }
+arpg-scenario = { path = "crates/scenario" }
 
 bytemuck = { version = "1.25", features = ["derive"] }
 env_logger = "0.11"
