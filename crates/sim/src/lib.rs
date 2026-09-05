@@ -7,6 +7,12 @@ use glam::{Vec2, Vec3, Vec3Swizzles};
 
 use arpg_core::{Instance, InstanceSink, MoveDir, MAX_INSTANCES};
 
+mod hash;
+mod time;
+
+pub use hash::Fnv;
+pub use time::{Accumulator, Dt, Ticks, TICK_HZ};
+
 /// Lifts a ground-plane position into world space at a given height.
 ///
 /// The one place `Vec2::y` is allowed to mean world **Z**. Spelling the swap
@@ -360,6 +366,16 @@ struct Player {
 pub struct World {
     enemies: Enemies,
     player: Player,
+    /// Simulation ticks completed since this world was created.
+    ///
+    /// The index everything an agent needs to observe is keyed by: trace
+    /// events are stamped with it, scenario inputs are scheduled at it, and a
+    /// replay divergence is reported as one. It counts *completed* steps, so
+    /// during a step it names the tick being run, 0-based.
+    ///
+    /// `u64` because wrapping is not a failure mode anyone should have to
+    /// think about: at 60Hz this overflows in roughly ten billion years.
+    tick: u64,
     /// Contacts resolved by the last [`World::step`].
     ///
     /// The instrument the collision work is measured with, and it exists
@@ -375,7 +391,7 @@ pub struct World {
 impl Default for World {
     fn default() -> Self {
         let mut world =
-            Self { enemies: Enemies::default(), player: Player::default(), contacts: 0 };
+            Self { enemies: Enemies::default(), player: Player::default(), tick: 0, contacts: 0 };
         world.set_enemy_count(DEFAULT_ENEMIES);
         world
     }
@@ -402,16 +418,18 @@ impl World {
     /// Advances the world by `dt` seconds.
     ///
     /// `dt` is the raw frame time and movement is integrated against it, so
-    /// speed is frame-rate independent today. It is a plain `f32` rather than
-    /// the `Dt` newtype the roadmap wants, and deliberately so: the whole point
-    /// of `Dt` is that it is *fixed*, and minting one from a variable frame time
-    /// would be a type asserting something untrue. It arrives with the
-    /// fixed-timestep accumulator, not before.
+    /// speed is frame-rate independent today.
+    ///
+    /// `dt` is a [`Dt`], which carries no number and can only have come from an
+    /// [`Accumulator`]. That is what makes "the simulation advances in fixed
+    /// steps" checkable by the compiler rather than by review: there is no
+    /// value a caller could pass to make this integrate a frame's worth of wall
+    /// clock, because the type has no room to hold one.
     ///
     /// `move_dir` is world-space and already unit-or-zero — the type says so,
     /// so this does not have to check.
-    pub fn step(&mut self, dt: f32, move_dir: MoveDir) {
-        self.player.pos += move_dir.as_vec3().xz() * PLAYER_SPEED * dt;
+    pub fn step(&mut self, dt: Dt, move_dir: MoveDir) {
+        self.player.pos += move_dir.as_vec3().xz() * PLAYER_SPEED * dt.secs();
 
         // Order matters, and this is the whole of it: move first, then push
         // bodies out of each other, then put everything back inside the world.
@@ -422,6 +440,62 @@ impl World {
         self.clamp_to_arena();
 
         self.turn_toward(move_dir, dt);
+
+        // Last, so that during the step above `self.tick` names the tick being
+        // run and afterwards it names how many have finished. Trace events will
+        // be stamped from inside a pass, so which of the two this is has to be
+        // decided once and written down rather than rediscovered per pass.
+        self.tick += 1;
+    }
+
+    /// Ticks completed since this world was created.
+    #[must_use]
+    pub fn tick(&self) -> u64 {
+        self.tick
+    }
+
+    /// A stable hash of **all** simulation state.
+    ///
+    /// Sampled every tick, two runs' hash sequences say which tick they
+    /// diverged on rather than merely that they did. That is the whole
+    /// instrument: `sim` is claimed to be a pure function of (state, inputs),
+    /// and this is the thing that can exit nonzero when it stops being one.
+    ///
+    /// **Every field of `World` must be fed to this**, and the destructuring is
+    /// what makes that a compile error rather than a rule someone remembers.
+    /// Add a field and this stops building until it is hashed; leave it out and
+    /// the replay gate reports a blind spot as agreement, because the failure
+    /// mode of an incomplete hash is silence rather than noise. That is layer 1
+    /// of the ladder in `CLAUDE.md`, where prose would have been layer 4.
+    ///
+    /// `contacts` goes in even though it is derived from the positions, and for
+    /// a specific reason: a broadphase that finds a different number of pairs
+    /// while leaving every body in the same place is exactly the bug the
+    /// uniform grid will introduce, and positions alone would call it agreement.
+    #[must_use]
+    pub fn hash(&self) -> u64 {
+        // Exhaustive on purpose — see above. Do not replace with `..`.
+        let Self { enemies, player, tick, contacts } = self;
+        let Player { pos, facing } = player;
+        let Enemies { pos: enemy_pos } = enemies;
+
+        let mut h = Fnv::default();
+
+        h.u64(*tick);
+        h.f32(pos.x);
+        h.f32(pos.y);
+        h.f32(*facing);
+        h.usize(*contacts);
+
+        // Length as well as contents: two hordes agreeing on every body they
+        // share are still different worlds if one has more of them.
+        h.usize(enemy_pos.len());
+        for p in enemy_pos {
+            h.f32(p.x);
+            h.f32(p.y);
+        }
+
+        h.finish()
     }
 
     /// Separates every pair of bodies that overlap.
@@ -482,7 +556,7 @@ impl World {
     /// it makes the behaviour a number you can state: 180° in `PI / rate`
     /// seconds. Clamping the step to the remaining arc is what keeps it from
     /// overshooting and oscillating around the target.
-    fn turn_toward(&mut self, move_dir: MoveDir, dt: f32) {
+    fn turn_toward(&mut self, move_dir: MoveDir, dt: Dt) {
         let dir = move_dir.as_vec3();
         if dir == Vec3::ZERO {
             // Standing still keeps the last facing. Snapping back to a default
@@ -492,7 +566,7 @@ impl World {
         }
 
         let arc = shortest_arc(self.player.facing, f32::atan2(dir.x, dir.z));
-        let step = (PLAYER_TURN_RATE * dt).min(arc.abs());
+        let step = (PLAYER_TURN_RATE * dt.secs()).min(arc.abs());
         self.player.facing = wrap_angle(self.player.facing + step * arc.signum());
     }
 
@@ -574,10 +648,97 @@ impl World {
     }
 }
 
+/// Counts allocations made on the calling thread.
+///
+/// Per-thread rather than a single global counter, and that is the whole trick:
+/// `cargo test` runs tests in parallel, so a global count would be measuring
+/// every other test's allocations too. The assertion would then fail at random,
+/// which is the surest way to get a test deleted.
+///
+/// The thread-local is `const`-initialised so that first touch does not
+/// allocate — an allocating allocator recurses into itself.
+#[cfg(test)]
+mod alloc_counter {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) struct Counting;
+
+    #[expect(
+        unsafe_code,
+        reason = "GlobalAlloc is an unsafe trait by definition; this is the opt-out the \
+                  workspace lint was set to `deny` rather than `forbid` to allow"
+    )]
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            // `try_with`, not `with`: during thread teardown the local is gone,
+            // and a panic inside the allocator aborts the process.
+            let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    /// How many allocations `f` made on this thread.
+    pub(crate) fn allocations(f: impl FnOnce()) -> u64 {
+        let before = COUNT.with(Cell::get);
+        f();
+        COUNT.with(Cell::get).wrapping_sub(before)
+    }
+}
+
+#[cfg(test)]
+#[global_allocator]
+static COUNTING: alloc_counter::Counting = alloc_counter::Counting;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arpg_core::InstanceBuffer;
+
+    /// One tick's `Dt`.
+    ///
+    /// Goes through a real [`Accumulator`], because there is no other route —
+    /// not even in here. A `#[cfg(test)]` back door would have been one line
+    /// and would have quietly made the invariant "no variable timestep, except
+    /// in the tests that define what correct means".
+    fn tick_dt() -> Dt {
+        Accumulator::default().pending(Dt::SECS).next().expect("one tick's worth buys one tick")
+    }
+
+    /// Steps a fresh world `ticks` times and returns the hash after each one.
+    ///
+    /// The sequence, not the final value: two runs that end up in the same
+    /// place having taken different routes are still a divergence, and a final
+    /// -state comparison calls them equal.
+    fn hash_sequence(enemies: usize, ticks: usize, dir_at: impl Fn(u64) -> MoveDir) -> Vec<u64> {
+        let mut world = World::default();
+        world.set_enemy_count(enemies);
+
+        let mut acc = Accumulator::default();
+        let mut seq = Vec::with_capacity(ticks);
+
+        while seq.len() < ticks {
+            for dt in acc.pending(Dt::SECS) {
+                let dir = dir_at(world.tick());
+                world.step(dt, dir);
+                seq.push(world.hash());
+            }
+        }
+        seq
+    }
 
     /// A world whose player is clear of every body, so a test can measure
     /// movement without measuring contact.
@@ -593,40 +754,237 @@ mod tests {
         // The lone body spawns on top of the player. Two seconds east at
         // `PLAYER_SPEED` clears it by 18 units.
         for _ in 0..120 {
-            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
         }
         world
     }
 
-    /// Speed must come from `dt`, not from how often `step` happens. Two half
-    /// steps and one whole step have to land in the same place, or the game
-    /// runs faster on a faster machine — the oldest bug in the medium.
+    /// **The gate this chunk exists to pass.** Feed one input stream at
+    /// different frame rates; the simulation must not be able to tell.
     ///
-    /// This is about the *integrator*, so it is measured in open ground.
-    /// Walking through a crowd is a different question and has a different
-    /// answer: contacts are resolved once per tick, so a step count that
-    /// depends on frame rate resolves a different number of them. That is the
-    /// bill the fixed timestep is there to pay, and it is not yet paid.
+    /// This is strictly stronger than the position check it replaces, in two
+    /// ways. It compares a hash of *all* state after *every* tick rather than
+    /// two final positions, so a divergence is reported at the tick it
+    /// happened. And it runs in a crowd rather than in open ground — which the
+    /// old test could not do, and said so: contacts are resolved once per tick,
+    /// so under a variable timestep a faster machine resolved more of them and
+    /// the horde behaved differently. That was the bill the fixed timestep was
+    /// there to pay. This is the receipt.
     #[test]
-    fn movement_is_frame_rate_independent() {
-        let east = MoveDir::new(Vec3::X);
+    fn frame_rate_cannot_change_the_simulation() {
+        // Powers of two, so every delta is exact in binary floating point: the
+        // claim under test is about the accumulator, not about whether a third
+        // of a tick rounds. Capped by `MAX_TICKS_PER_FRAME`, so 8 would silently
+        // measure the stall path instead.
+        let at = |ticks_per_frame: usize| {
+            let mut world = World::default();
+            world.set_enemy_count(64);
 
-        let mut coarse = in_open_ground();
-        coarse.step(0.2, east);
+            let mut acc = Accumulator::default();
+            let mut seq = Vec::new();
 
-        let mut fine = in_open_ground();
-        for _ in 0..20 {
-            fine.step(0.01, east);
+            for _ in 0..(120 / ticks_per_frame) {
+                for dt in acc.pending(Dt::SECS * ticks_per_frame as f32) {
+                    world.step(dt, MoveDir::new(Vec3::X));
+                    seq.push(world.hash());
+                }
+            }
+            seq
+        };
+
+        let reference = at(1);
+        assert_eq!(reference.len(), 120, "the reference run did not take the ticks it was given");
+
+        for n in [2, 4] {
+            let other = at(n);
+            assert_eq!(other.len(), reference.len(), "{n} ticks per frame ran a different number");
+
+            let diverged = reference.iter().zip(&other).position(|(a, b)| a != b);
+            assert_eq!(diverged, None, "{n} ticks per frame diverged at tick {diverged:?}");
         }
+    }
 
-        assert!((coarse.player_pos() - fine.player_pos()).length() < 1e-4);
+    /// Determinism itself: the same run twice, compared tick by tick.
+    ///
+    /// The frame schedule is deliberately ragged — the shape a real machine
+    /// produces, and the shape a variable timestep leaks through.
+    #[test]
+    fn one_input_stream_replays_to_the_same_hash_every_tick() {
+        let ragged = [0.004, 0.019, 0.016_1, 0.033, 0.000_9, 0.017_2];
+
+        let run = || {
+            let mut world = World::default();
+            world.set_enemy_count(256);
+
+            let mut acc = Accumulator::default();
+            let mut seq = Vec::new();
+
+            for (i, &frame) in ragged.iter().cycle().take(300).enumerate() {
+                // Something that keeps turning, so facing is under test too.
+                let dir = MoveDir::new(if i % 40 < 20 { Vec3::X } else { Vec3::NEG_Z });
+                for dt in acc.pending(frame) {
+                    world.step(dt, dir);
+                    seq.push(world.hash());
+                }
+            }
+            seq
+        };
+
+        let first = run();
+        assert!(first.len() > 100, "the schedule ran only {} ticks", first.len());
+        assert_eq!(first, run(), "two identical runs disagreed");
+    }
+
+    /// **The sensitivity check, and it is not optional.** A `hash()` that
+    /// returned a constant would pass both tests above and every replay
+    /// scenario ever written against it. So: two streams that agree until tick
+    /// 60 must hash identically up to there and differ from there on.
+    #[test]
+    fn the_hash_localises_where_two_streams_diverge() {
+        let east = MoveDir::new(Vec3::X);
+        let north = MoveDir::new(Vec3::NEG_Z);
+        const SPLIT: u64 = 60;
+
+        let straight = hash_sequence(32, 120, |_| east);
+        let turning = hash_sequence(32, 120, |t| if t < SPLIT { east } else { north });
+
+        let split = SPLIT as usize;
+        assert_eq!(straight[..split], turning[..split], "streams differed before they differed");
+        assert_ne!(straight[split], turning[split], "the first differing tick hashed the same");
+        assert_ne!(straight.last(), turning.last(), "the divergence washed out");
+    }
+
+    /// **Predicted from the constant, then asserted** — the discipline the
+    /// `scenario` skill is built around, applied to the two rates that exist.
+    ///
+    /// Also found by mutation: replacing `dt.secs()` in `turn_toward` with a
+    /// hard-coded `0.02` passed every determinism test here, and correctly so.
+    /// Under a fixed step both runs use the same wrong number and agree
+    /// perfectly. Reproducibility cannot see a rate that is simply the wrong
+    /// rate; only a prediction from `PLAYER_TURN_RATE` can.
+    #[test]
+    fn the_rates_are_the_constants_they_say_they_are() {
+        const TICKS: u32 = 6;
+
+        // Turning: from facing 0 toward +X, which is a quarter turn away, so
+        // the arc clamp is not what is being measured here.
+        let mut world = World::default();
+        for _ in 0..TICKS {
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
+        }
+        let turned = PLAYER_TURN_RATE * TICKS as f32 * Dt::SECS;
+        assert!(turned < core::f32::consts::FRAC_PI_2, "the prediction ran past its target");
+        assert!(
+            (world.player.facing - turned).abs() < 1e-5,
+            "turned {} in {TICKS} ticks, predicted {turned}",
+            world.player.facing
+        );
+
+        // Walking, out of the crowd so the solver is not part of the answer.
+        let mut world = in_open_ground();
+        let start = world.player_pos();
+        for _ in 0..TICKS {
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
+        }
+        let walked = PLAYER_SPEED * TICKS as f32 * Dt::SECS;
+        let travelled = (world.player_pos() - start).length();
+        assert!(
+            (travelled - walked).abs() < 1e-3,
+            "walked {travelled} in {TICKS} ticks, predicted {walked}"
+        );
+    }
+
+    /// **Found by mutation, not by design.** Deleting the horde from `hash()`
+    /// entirely — `let _ = enemy_pos;` — passed every other test in this file,
+    /// including both replay gates. They only ever vary the *player's* input,
+    /// so the player's state carries the whole signal and a hash that sees
+    /// nothing else agrees with itself perfectly.
+    ///
+    /// The destructuring in `hash()` catches a field nobody *binds*. This
+    /// catches a field bound and then dropped on the floor, which is what an
+    /// incomplete hash actually looks like when someone is refactoring.
+    #[test]
+    fn every_field_of_the_world_reaches_the_hash() {
+        /// A field of `World` and the smallest change that touches it.
+        type Poke = (&'static str, fn(&mut World));
+
+        let fields: [Poke; 5] = [
+            ("player.pos", |w| w.player.pos.x += 0.001),
+            ("player.facing", |w| w.player.facing += 0.001),
+            ("tick", |w| w.tick += 1),
+            ("contacts", |w| w.contacts += 1),
+            ("enemies.pos", |w| w.enemies.pos[0].x += 0.001),
+        ];
+
+        for (field, poke) in fields {
+            let mut world = World::default();
+            let before = world.hash();
+            poke(&mut world);
+            assert_ne!(world.hash(), before, "{field} never reaches the hash");
+        }
+    }
+
+    /// The horde is what the player's own state cannot stand in for: walking
+    /// through the crowd displaces bodies, and a replay that agrees on the
+    /// player while the horde drifts is the divergence that matters most once
+    /// enemies do anything on their own.
+    #[test]
+    fn the_horde_is_part_of_what_a_replay_compares() {
+        let mut world = World::default();
+        world.set_enemy_count(64);
+
+        // Stand still. Only the solver moves anything, so any change in the
+        // hash from here is the horde's.
+        let settled = {
+            for _ in 0..30 {
+                world.step(tick_dt(), MoveDir::NONE);
+            }
+            world.hash()
+        };
+
+        world.enemies.pos[7] += Vec2::new(0.01, -0.01);
+        assert_ne!(world.hash(), settled, "displacing a body left the hash unchanged");
+    }
+
+    /// A steady-state frame must not touch the allocator.
+    ///
+    /// Not a micro-optimisation: an allocation in the tick path is a latency
+    /// spike with no fixed size, and frame pacing is the foundation every feel
+    /// mechanic here gets measured against. It is also the cheapest possible
+    /// guard against someone adding a `Vec` inside a pass, which is the natural
+    /// way to write a broadphase and the wrong way to run one.
+    ///
+    /// Warmed up first, because the first tick of a fresh world is not a steady
+    /// state and asserting on it would measure spawning.
+    #[test]
+    fn a_steady_state_frame_allocates_nothing() {
+        let east = MoveDir::new(Vec3::X);
+        let dt = tick_dt();
+
+        let mut world = World::default();
+        world.set_enemy_count(512);
+        let mut buffer = InstanceBuffer::default();
+
+        world.step(dt, east);
+        world.extract(buffer.sink());
+
+        let allocations = alloc_counter::allocations(|| {
+            for _ in 0..60 {
+                world.step(dt, east);
+                world.extract(buffer.sink());
+            }
+        });
+
+        assert_eq!(allocations, 0, "60 steady-state frames allocated {allocations} times");
     }
 
     #[test]
     fn no_input_does_not_move_the_player() {
         let mut world = in_open_ground();
         let start = world.player_pos();
-        world.step(1.0, MoveDir::NONE);
+        for _ in 0..60 {
+            world.step(tick_dt(), MoveDir::NONE);
+        }
         assert_eq!(world.player_pos(), start);
     }
 
@@ -636,8 +994,11 @@ mod tests {
     fn the_player_cannot_walk_off_the_arena() {
         let mut world = World::default();
         for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
-            for _ in 0..100 {
-                world.step(1.0, MoveDir::new(dir));
+            // Twenty seconds at `PLAYER_SPEED` is 180 units — comfortably past
+            // the far wall from anywhere in a 96-unit half-arena, so this
+            // reaches the clamp rather than merely walking toward it.
+            for _ in 0..1200 {
+                world.step(tick_dt(), MoveDir::new(dir));
             }
             let pos = world.player_pos();
             assert!(pos.is_finite());
@@ -664,13 +1025,13 @@ mod tests {
     fn facing_follows_the_direction_of_travel() {
         let mut world = World::default();
         for _ in 0..120 {
-            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
         }
         // atan2(dir.x, dir.z): due east is +X, so a quarter turn from +Z.
         assert!((world.player.facing - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
 
         for _ in 0..120 {
-            world.step(1.0 / 60.0, MoveDir::new(Vec3::Z));
+            world.step(tick_dt(), MoveDir::new(Vec3::Z));
         }
         assert!(world.player.facing.abs() < 1e-4, "should face +Z");
     }
@@ -682,15 +1043,24 @@ mod tests {
     fn turning_is_frame_rate_independent() {
         let west = MoveDir::new(Vec3::NEG_X);
 
+        // One frame worth five ticks against five frames worth one, which is
+        // the same comparison as before now that a frame cannot hand the sim
+        // an arbitrary delta.
         let mut coarse = World::default();
-        coarse.step(0.05, west);
-
-        let mut fine = World::default();
-        for _ in 0..5 {
-            fine.step(0.01, west);
+        let mut coarse_acc = Accumulator::default();
+        for dt in coarse_acc.pending(Dt::SECS * 5.0) {
+            coarse.step(dt, west);
         }
 
-        assert!((coarse.player.facing - fine.player.facing).abs() < 1e-5);
+        let mut fine = World::default();
+        let mut fine_acc = Accumulator::default();
+        for _ in 0..5 {
+            for dt in fine_acc.pending(Dt::SECS) {
+                fine.step(dt, west);
+            }
+        }
+
+        assert_eq!(coarse.hash(), fine.hash());
     }
 
     #[test]
@@ -699,7 +1069,7 @@ mod tests {
         let target = std::f32::consts::FRAC_PI_2;
 
         for _ in 0..200 {
-            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
             assert!(world.player.facing >= 0.0);
             assert!(world.player.facing <= target, "overshot to {}", world.player.facing);
         }
@@ -711,12 +1081,12 @@ mod tests {
     fn standing_still_keeps_the_last_facing() {
         let mut world = World::default();
         for _ in 0..120 {
-            world.step(1.0 / 60.0, MoveDir::new(Vec3::NEG_Z));
+            world.step(tick_dt(), MoveDir::new(Vec3::NEG_Z));
         }
         let settled = world.player.facing;
 
         for _ in 0..120 {
-            world.step(1.0 / 60.0, MoveDir::NONE);
+            world.step(tick_dt(), MoveDir::NONE);
         }
         assert_eq!(world.player.facing, settled);
     }
@@ -730,7 +1100,7 @@ mod tests {
 
         for lap in 0..50 {
             for _ in 0..30 {
-                world.step(1.0 / 60.0, MoveDir::new(circle[lap % 4]));
+                world.step(tick_dt(), MoveDir::new(circle[lap % 4]));
             }
             assert!(
                 world.player.facing.abs() <= std::f32::consts::PI + 1e-6,
@@ -940,7 +1310,7 @@ mod tests {
 
         // Walk into the middle of the horde and keep going.
         for _ in 0..240 {
-            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
         }
 
         let contact = PLAYER_RADIUS + ENEMY_RADIUS;
@@ -962,7 +1332,7 @@ mod tests {
 
         let mut ever_touched = 0;
         for _ in 0..240 {
-            world.step(1.0 / 60.0, MoveDir::new(Vec3::X));
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
             ever_touched += world.contacts();
         }
 
@@ -982,13 +1352,13 @@ mod tests {
     #[test]
     fn the_contact_count_tracks_whether_anything_is_touching() {
         let mut clear = in_open_ground();
-        clear.step(1.0 / 60.0, MoveDir::NONE);
+        clear.step(tick_dt(), MoveDir::NONE);
         assert_eq!(clear.contacts(), 0, "nothing is near the player out here");
 
         // The horde is centred on the origin and so is the player, so the
         // spawn itself puts bodies in contact.
         let mut crowded = World::default();
-        crowded.step(1.0 / 60.0, MoveDir::NONE);
+        crowded.step(tick_dt(), MoveDir::NONE);
         assert!(crowded.contacts() > 0, "spawned inside the horde and touched nothing");
     }
 
@@ -1001,7 +1371,7 @@ mod tests {
 
         for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
             for _ in 0..600 {
-                world.step(1.0 / 60.0, MoveDir::new(dir));
+                world.step(tick_dt(), MoveDir::new(dir));
             }
             for &enemy in &world.enemies.pos {
                 assert!(enemy.is_finite(), "poisoned position {enemy}");

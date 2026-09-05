@@ -2,10 +2,10 @@ use std::time::Instant;
 
 /// Frame timing.
 ///
-/// Right now this only measures. Next chunk it grows the fixed-timestep
-/// accumulator, and becomes the thing that decides how many simulation steps a
-/// frame is worth — which is why it's its own module rather than two fields on
-/// `App`.
+/// This measures, and only measures. Deciding how much *simulation* a frame is
+/// worth belongs to `sim::Accumulator`, next to the `Dt` it mints — so the one
+/// crate that can read a clock cannot convert what it reads into simulation
+/// time, and the one crate that defines simulation time cannot read a clock.
 pub(crate) struct Clock {
     last: Instant,
     /// Exponential moving average of frame time, in seconds.
@@ -25,22 +25,6 @@ const _: () = assert!(SMOOTHING > 0.0 && SMOOTHING <= 1.0, "outside (0, 1] the a
 const HUD_INTERVAL: f32 = 0.1;
 const _: () = assert!(HUD_INTERVAL > 0.0);
 
-/// The longest delta the simulation is allowed to see, in seconds.
-///
-/// Dragging the window, waiting on a shader compile or sitting at a breakpoint
-/// produces a frame worth hundreds of milliseconds. Integrated honestly that is
-/// a teleport — through a wall, past a hitbox, out of the arena. Every game
-/// clamps this somewhere; the choice is only whether it happens on purpose.
-///
-/// ~6 frames at 60Hz. Beyond that the game deliberately runs in slow motion
-/// rather than skipping space, which is the right trade when the alternative is
-/// losing collisions.
-const MAX_FRAME_TIME: f32 = 0.1;
-const _: () = assert!(
-    MAX_FRAME_TIME >= 1.0 / 60.0,
-    "clamping below a real frame would run the game permanently in slow motion"
-);
-
 impl Default for Clock {
     fn default() -> Self {
         Self { last: Instant::now(), smoothed: 1.0 / 60.0, since_hud: 0.0 }
@@ -48,12 +32,17 @@ impl Default for Clock {
 }
 
 impl Clock {
-    /// Call once per frame. Returns the delta to simulate, in seconds, clamped
-    /// to [`MAX_FRAME_TIME`].
+    /// Call once per frame. Returns how long the frame took, in seconds.
     ///
-    /// The measurement side is fed the *raw* value on purpose: the clamp exists
-    /// to protect the simulation, and letting it reach into the HUD as well
-    /// would hide the very hitches the HUD is there to show.
+    /// Unclamped, and that is a change: this used to cap the value at 0.1s so a
+    /// stalled frame could not teleport the player through a wall. The cap did
+    /// not disappear, it moved — `sim`'s accumulator now caps the number of
+    /// *ticks* a frame may run, which is the same guard expressed in the unit
+    /// that decides it, and enforced by the only code that can mint a step.
+    ///
+    /// So what leaves here is the honest measurement, which is what the HUD and
+    /// the harness want anyway: a clamp reaching into the frame-time readout
+    /// would hide the very hitches it exists to report.
     pub(crate) fn tick(&mut self) -> f32 {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f32();
@@ -61,7 +50,7 @@ impl Clock {
 
         self.smoothed += (dt - self.smoothed) * SMOOTHING;
         self.since_hud += dt;
-        dt.min(MAX_FRAME_TIME)
+        dt
     }
 
     pub(crate) fn frame_ms(&self) -> f32 {

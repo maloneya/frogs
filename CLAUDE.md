@@ -48,7 +48,10 @@ mode none of the machinery above can catch. Predicting a value and then
 asserting it in a scenario is the same act, made durable and checkable.
 
 The `Stop` hook in `.claude/settings.json` enforces this: it runs the test
-suite and the scenario runner when a turn ends, and blocks on failure.
+suite when a turn ends, and blocks on failure. It runs the scenario runner too
+**once `crates/scenario` exists** — until roadmap chunk 3 lands that half is
+dormant, and rule 4 is enforced by nothing stronger than this paragraph. Say so
+rather than implying a gate that is not running.
 
 ## Commands
 
@@ -144,8 +147,9 @@ crates/
   is built in `resumed`, not `main`, because winit models surface loss as
   suspend/resume. `about_to_wait` requests a redraw every time the queue drains,
   converting winit's event-driven default into a continuous game loop.
-  `time.rs` holds `Clock`; the fixed-timestep accumulator lands in `sim`
-  instead, next to the `Dt` it will mint.
+  `time.rs` holds `Clock`, which now only *measures*: the fixed-timestep
+  accumulator lives in `sim`, next to the `Dt` it mints, so the crate that can
+  read a clock cannot turn what it reads into simulation time.
 
 ### Controls
 

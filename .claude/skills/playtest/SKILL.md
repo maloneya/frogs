@@ -67,7 +67,7 @@ keys (`[`, `]`, `v`, `p`) to achieve the same thing.
 ## Reading state
 
 ```
-player_pos 3.821 0.600 -3.821 facing 2.3562 camera_target 4.513 -4.513
+tick 1836 player_pos 3.821 0.600 -3.821 facing 2.3562 camera_target 4.513 -4.513
 enemies 1024 instances 17409 frames 4080 skipped 1 frame_ms 16.64 vsync true
 ```
 
@@ -95,8 +95,15 @@ sock "hold d 500" >/dev/null   # 500ms x 9 u/s / √2 = 3.182 per axis
 sock state                      # -> player_pos 3.183 ... facing 2.3562
 ```
 
-Expect agreement to within one frame of travel (~0.15 units at 60Hz), because
-`dt` is still wall-clock. Exact reproducibility arrives with the fixed timestep.
+Travel is now an exact multiple of one tick's step — `PLAYER_SPEED * Dt::SECS`
+= 0.15 units — because the simulation only advances in whole ticks. Measured:
+`hold d 500` in open ground moved exactly 4.5000 units, 3.182 per axis.
+
+So predict in **ticks**, not milliseconds. The remaining slack is entirely in
+*how many ticks the key was actually down*: a `hold` is wall clock, and the
+socket round-trips either side of it are worth a tick or two. Above, 32 ticks
+elapsed and exactly 30 of them had the key held. If a distance is not a multiple
+of 0.15, something is touching the player — check `contacts`.
 
 ## Screenshots
 
@@ -215,3 +222,7 @@ at 60Hz and the game feels different on faster hardware.
 - No mouse, and no scenario setup (no spawn/teleport). Testing combat will want
   the latter, built on `World::spawn` once entity storage exists.
 - `state` is a hand-maintained format string; extend it as the sim grows.
+  `tick` is simulation time and `frames` is wall clock — they are deliberately
+  different numbers now, and their ratio is what says whether the machine is
+  keeping up. Uncapped, `frames` runs far ahead of `tick`; that is the fixed
+  timestep working, not a fault.

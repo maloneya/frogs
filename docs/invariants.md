@@ -31,7 +31,6 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Tuning constants stay in their valid range | 1 | a `const _: () = assert!(…)` beside each one |
 | The lead eases slower than the follow | 1 | const assert; swapping them reintroduces the whip |
 | The player footprint is never square | 1 | const assert; a square one makes facing invisible |
-| A dt clamp cannot fall below one frame | 1 | const assert in `time.rs` |
 | The yaw convention matches the shader | 3 | pixel-readback test in `gfx/src/lib.rs`, mutation-checked |
 | Smoothing is frame-rate independent | 3 | `core::damp` and its tests, including the naive lerp failing the same check |
 | The lint wall runs however the edit was made | 1 | `PostToolUse` hook matches Bash as well as Edit/Write |
@@ -42,10 +41,18 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Input edges are consumed exactly once | 0 | the clear lives in `InputState::sample`, the only reader |
 | Two keys on one action cannot desync | 0 | `Input.down` tracks *keys*; the action set is derived, never stored |
 | The binding table fits its bitset | 1 | `const _: () = assert!(BINDINGS.len() <= u32::BITS …)` |
-| A frame's dt cannot teleport the player | 0 | `Clock::tick` clamps what it returns; raw only reaches the HUD |
+| A frame's dt cannot teleport the player | 0 | `Accumulator::pending` caps ticks per frame; `Clock` no longer clamps, so the HUD sees the real hitch |
+| The simulation cannot see a variable timestep | 0 | `Dt` is a unit struct with a private field — there is no room in the type for a wrong duration |
+| A `Dt` can only come from the accumulator | 0 | private field in `sim::time`; even `sim`'s own tests go through `Accumulator::pending` |
+| A stalled frame cannot spiral | 1 | `const _: () = assert!(MAX_TICKS_PER_FRAME >= 1)`, plus the discard beside it; unit test in `sim/time.rs` |
+| Every field of `World` reaches its hash | 1 | `World::hash` destructures `Self` exhaustively — a new field is E0027 |
+| A field that is bound but never hashed | 3 | `every_field_of_the_world_reaches_the_hash`; mutation-checked, and it caught a real gap |
+| The simulation is reproducible tick for tick | 3 | `one_input_stream_replays_to_the_same_hash_every_tick` |
+| Frame rate cannot change the simulation | 3 | `frame_rate_cannot_change_the_simulation` — 1, 2 and 4 ticks per frame compared by hash sequence |
+| A steady-state frame allocates nothing | 3 | thread-local counting allocator; `a_steady_state_frame_allocates_nothing` |
+| Speed and turn rate are the constants they claim | 3 | `the_rates_are_the_constants_they_say_they_are`, predicted from the constants rather than read back |
 | Ground + horde + player fit one buffer | 3 | unit test in `sim` at the largest horde the clamp allows |
 | The camera basis agrees with the projection | 3 | unit tests in `gfx/camera.rs` |
-| Movement speed is frame-rate independent | 3 | unit test in `sim` |
 | Camera smoothing is frame-rate independent | 3 | `damp` uses `2^(-dt/half_life)`; unit test in `gfx/camera.rs` |
 | The camera target cannot be set unsmoothed | 0 | private field; `follow` is the only writer |
 | The camera never overshoots or bobs vertically | 3 | unit tests in `gfx/camera.rs` |

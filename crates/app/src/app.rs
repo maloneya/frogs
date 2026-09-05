@@ -8,7 +8,7 @@ use winit::window::{Window, WindowId};
 
 use arpg_core::{InstanceBuffer, MoveDir};
 use arpg_gfx::{OrthoCamera, Renderer};
-use arpg_sim::World;
+use arpg_sim::{Accumulator, World};
 
 use crate::harness::{self, Command, Request};
 use crate::input::Input;
@@ -58,6 +58,13 @@ pub(crate) struct App {
     instances: InstanceBuffer,
     input: Input,
     clock: Clock,
+    /// Turns the frame's elapsed seconds into whole simulation ticks.
+    ///
+    /// Owned by `app` because the frame loop is here, but defined in `sim`,
+    /// which is the only thing that may mint a `Dt`. That split is the point:
+    /// this crate measures wall clock and is structurally unable to hand any of
+    /// it to the simulation.
+    accumulator: Accumulator,
 }
 
 /// One notch of zoom per keypress.
@@ -186,7 +193,9 @@ impl App {
         let p = self.world.player_pos();
         let c = self.camera.as_ref().map(|c| c.target()).unwrap_or_default();
         format!(
-            "player_pos {:.3} {:.3} {:.3} facing {:.4} camera_target {:.3} {:.3} enemies {} contacts {} instances {} frames {} skipped {} frame_ms {:.2} vsync {}",
+            "tick {} player_pos {:.3} {:.3} {:.3} facing {:.4} camera_target {:.3} {:.3} \
+             enemies {} contacts {} instances {} frames {} skipped {} frame_ms {:.2} vsync {}",
+            self.world.tick(),
             p.x,
             p.y,
             p.z,
@@ -366,11 +375,10 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
-                let dt = self.clock.tick();
+                let frame = self.clock.tick();
 
                 // The per-frame spine: sample intent, resolve it against the
-                // view, step, extract. A fixed-timestep loop lands around the
-                // step later; nothing else here has to change for it.
+                // view, step, extract.
                 let axis = self.input.sample().move_axis();
 
                 // Screen space becomes world space here, and only here. The
@@ -380,13 +388,24 @@ impl ApplicationHandler for App {
                 let (right, up) = camera.ground_basis();
                 let dir = MoveDir::new(right * axis.x + up * axis.y);
 
-                self.world.step(dt, dir);
+                // Zero, one or several — a frame buys whole ticks and the
+                // remainder waits. The same `dir` feeds every tick of a frame,
+                // which is right for a held direction and will *not* be right
+                // for a press: an attack input sampled once and applied to
+                // three ticks would fire three times. That is the input-buffer
+                // problem, and it belongs to the chunk that adds the first
+                // edge-triggered action rather than to this one.
+                for dt in self.accumulator.pending(frame) {
+                    self.world.step(dt, dir);
+                }
 
                 // After the step, not before: following last tick's position
                 // would add a frame of lag on top of the smoothing that is
-                // there deliberately. Per frame rather than per tick, because
-                // where the camera points is presentation, not simulation.
-                camera.follow(self.world.player_pos(), dir, dt);
+                // there deliberately. Per frame rather than per tick, and on
+                // the frame's own delta rather than a tick's, because where the
+                // camera points is presentation — the one place wall clock is
+                // still allowed to be read directly.
+                camera.follow(self.world.player_pos(), dir, frame);
 
                 self.world.extract(self.instances.sink());
                 // Counted only when a frame actually reached the screen. An

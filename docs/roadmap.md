@@ -14,16 +14,37 @@ even though none of them is a game feature.
 - ~~device input bound to actions, a player-controlled character that moves and
   faces where it walks, and a camera that tracks it~~
 
-## 1. Fixed timestep and render interpolation — *sim layer*
+## 1a. Fixed timestep — *sim layer* — **done**
 
-`Dt` and `Alpha` as newtypes with private constructors, so a variable timestep
-cannot be smuggled in and interpolation cannot leak into sim state. The
-accumulator lands in `sim`, next to the `Dt` it mints. `World::hash()` over all
-sim state.
+`Dt` is a unit struct with a private field, minted only by `sim::Accumulator`.
+It carries no number at all, which is a stronger claim than a newtype around
+`f32`: a wrong duration is unrepresentable rather than merely hard to build.
+`World` counts ticks and hashes all of its state, exhaustively by
+destructuring, so a field added without being hashed is E0027.
 
-**Gate:** a test replaying one recorded input stream twice asserts an identical
-per-tick hash sequence, not merely identical final positions. An allocation
-counter asserts a steady-state frame allocates zero.
+The `MAX_FRAME_TIME` clamp moved out of `app`'s `Clock` and became
+`MAX_TICKS_PER_FRAME` in the accumulator — the same guard, expressed in the unit
+that decides it, next to the discard that stops a stall being repaid.
+
+**Gate: met.** `one_input_stream_replays_to_the_same_hash_every_tick` compares
+per-tick hash sequences across a ragged frame schedule;
+`frame_rate_cannot_change_the_simulation` compares 1, 2 and 4 ticks per frame;
+`a_steady_state_frame_allocates_nothing` runs 60 sim+extract frames under a
+thread-local counting allocator. Eight mutations were checked against these,
+and two of them escaped the first version — see the notes on
+`every_field_of_the_world_reaches_the_hash` and
+`the_rates_are_the_constants_they_say_they_are`, both of which exist because of
+that.
+
+## 1b. Render interpolation — *sim layer*
+
+`Alpha` as a newtype, previous positions stored, the blend applied at
+`extract()`. `Accumulator::carry_secs` is already there for it. Presentation
+only: `extract` takes `&self`, so interpolation is structurally incapable of
+reaching sim state.
+
+**Gate:** a test that alpha 0 and alpha 1 reproduce the two tick endpoints
+exactly, and that no interpolated value ever reaches `World`.
 
 ## 2. Trace stream — *perception*
 
