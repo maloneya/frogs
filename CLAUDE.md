@@ -134,7 +134,10 @@ crates/
   name to a dense row — the horde's arrays stay contiguous, so a despawn moves
   rows and only a generational id survives that. It deliberately holds no
   payload, which is what lets the same machinery sit under a behaviour that
-  only some bodies have. `extract()` is the sim/render seam; `trace()` is the sim/agent
+  only some bodies have. `contact.rs` answers *whether two bodies touch, and
+  along what line*, and stops there: separation, a hitbox and a trigger are
+  three different responses to that one question, so the question does not live
+  inside any of them. `extract()` is the sim/render seam; `trace()` is the sim/agent
   one. Both hand out shared references, which is what makes "perception cannot
   change what it observes" a fact about the types.
 - `app` — the wiring layer, and the only crate that sees both sides. `input.rs`

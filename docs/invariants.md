@@ -94,6 +94,8 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A spawned body never streaks on its first frame | 0 | `Enemies::spawn` seeds `prev_pos` to the spawn point; it is the only door in |
 | Spawn history reaches the determinism hash | 1 | `World::hash` destructures `Enemies`, and `Slots::hash` destructures itself |
 | Nothing spawns already overlapping | 1 | `const _: () = assert!(ENEMY_SPACING > 2.0 * ENEMY_RADIUS)` |
-| Coincident bodies separate deterministically, not into NaN | 3 | `escape_direction`; unit tests in `sim` |
+| Coincident bodies separate deterministically, not into NaN | 3 | `escape_direction`; unit tests in `sim/contact.rs` |
+| A contact normal is unit length | 0 | private fields on `Contact`; `contact::between` is the only constructor |
+| Asking whether two bodies touch cannot move them | 0 | `contact::between` takes `Vec2` by value and returns a `Contact` |
 | The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
 | The harness cannot fall behind the bindings | 0 | key names live *in* `BINDINGS`; there is no second table to forget |

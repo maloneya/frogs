@@ -8,6 +8,7 @@ use glam::{Vec2, Vec3};
 use arpg_core::{Instance, InstanceSink, MoveDir, Report, MAX_INSTANCES};
 
 mod angle;
+mod contact;
 mod hash;
 mod pass;
 mod slots;

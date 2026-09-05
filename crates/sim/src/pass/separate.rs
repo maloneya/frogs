@@ -1,7 +1,13 @@
 //! Pushes overlapping bodies apart.
+//!
+//! **The response half of a contact.** Whether two bodies touch, and along what
+//! line, is [`crate::contact`]'s question; this module only decides what to do
+//! about the answer. An attack asks the same question and does something else
+//! entirely with it.
 
 use glam::Vec2;
 
+use crate::contact::{self, Contact};
 use crate::trace::{Event, TraceSink};
 use crate::{ENEMY_RADIUS, PLAYER_RADIUS};
 
@@ -16,12 +22,6 @@ const _: () = assert!(
     PLAYER_INV_MASS < ENEMY_INV_MASS,
     "an equal or lighter player is shoved around by fodder"
 );
-
-/// Below this separation two bodies have no line between them to push along,
-/// and normalising their difference yields NaN — a position no clamp recovers.
-/// Squared, since that is what the overlap test already has to hand.
-const COINCIDENT_SQ: f32 = 1e-12;
-const _: () = assert!(COINCIDENT_SQ > 0.0);
 
 /// Separates every body overlapping the player, and reports how many.
 ///
@@ -38,11 +38,16 @@ const _: () = assert!(COINCIDENT_SQ > 0.0);
 /// than anything that varies run to run. It is also why
 /// [`crate::pass::remember`] copies rather than swapping two buffers.
 pub(crate) fn separate(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink<'_>) -> usize {
-    let contact = PLAYER_RADIUS + ENEMY_RADIUS;
+    let contact_distance = PLAYER_RADIUS + ENEMY_RADIUS;
     let mut contacts = 0;
 
     for (i, enemy) in horde.iter_mut().enumerate() {
-        contacts += usize::from(pair(player, enemy, contact, PLAYER_INV_MASS, ENEMY_INV_MASS, i));
+        // Ask, then answer. The index is the coincident-pair tiebreak, which is
+        // what keeps a crowd stacked on one point fanning out reproducibly.
+        if let Some(found) = contact::between(*player, *enemy, contact_distance, i) {
+            resolve(player, enemy, found, PLAYER_INV_MASS, ENEMY_INV_MASS);
+            contacts += 1;
+        }
     }
 
     // Summarised, not per pair: a thousand overlapping bodies would otherwise
@@ -55,8 +60,8 @@ pub(crate) fn separate(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSi
     contacts
 }
 
-/// Pushes two overlapping bodies apart along the line joining them, splitting
-/// the correction between them by inverse mass. Returns whether they touched.
+/// Pushes two overlapping bodies apart along the contact normal, splitting the
+/// correction between them by inverse mass.
 ///
 /// **Position projection, not an impulse.** There is no velocity here and no
 /// momentum to conserve, which is the right model for a game whose movement is
@@ -74,66 +79,31 @@ pub(crate) fn separate(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSi
 /// feels and corrupt the measurement `V` is for. Full correction is exactly
 /// dt-independent, and it keeps that question shut until the fixed timestep
 /// makes it answerable.
-fn pair(
-    a: &mut Vec2,
-    b: &mut Vec2,
-    contact_distance: f32,
-    a_inv_mass: f32,
-    b_inv_mass: f32,
-    tiebreak: usize,
-) -> bool {
-    let delta = *b - *a;
-    let gap_sq = delta.length_squared();
-    if gap_sq >= contact_distance * contact_distance {
-        return false;
-    }
-
+fn resolve(a: &mut Vec2, b: &mut Vec2, contact: Contact, a_inv_mass: f32, b_inv_mass: f32) {
     // Two immovable bodies have no correction to share out. Bailing keeps the
     // division below from being a zero-divide that quietly yields NaN.
     let share = a_inv_mass + b_inv_mass;
     if share <= 0.0 {
-        return false;
+        return;
     }
 
-    let (normal, gap) = if gap_sq > COINCIDENT_SQ {
-        let gap = gap_sq.sqrt();
-        (delta / gap, gap)
-    } else {
-        (escape_direction(tiebreak), 0.0)
-    };
-
-    let overlap = contact_distance - gap;
-    *a -= normal * (overlap * a_inv_mass / share);
-    *b += normal * (overlap * b_inv_mass / share);
-    true
-}
-
-/// A separation direction for two bodies occupying exactly the same point.
-///
-/// It has to come from somewhere, and it has to be the *same* somewhere every
-/// run: a random direction would make two identical simulations diverge, which
-/// is precisely what the determinism the fixed timestep is for would be
-/// claiming. Deriving it from the pair's index costs nothing and is exactly
-/// reproducible.
-///
-/// Golden-angle steps rather than a fixed direction, so a clump of coincident
-/// bodies fans out instead of every one of them being pushed the same way and
-/// re-stacking on the next tick.
-fn escape_direction(tiebreak: usize) -> Vec2 {
-    /// `PI * (3 - sqrt(5))`, written out because `sqrt` is not const.
-    const GOLDEN_ANGLE: f32 = 2.399_963_2;
-
-    let angle = tiebreak as f32 * GOLDEN_ANGLE;
-    Vec2::new(angle.cos(), angle.sin())
+    *a -= contact.normal() * (contact.depth() * a_inv_mass / share);
+    *b += contact.normal() * (contact.depth() * b_inv_mass / share);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Moved here with the code it tests. A pass owns its constants, its const
-    /// asserts and its tests; scattering them leaves the next person reading
-    /// `separate` with no way to know what is already covered.
+    /// Drives the pair the way `separate` does — ask, then answer — so these
+    /// stay tests of the *response* rather than re-testing the query. Returns
+    /// whether there was anything to respond to.
+    fn settle(a: &mut Vec2, b: &mut Vec2, distance: f32, ia: f32, ib: f32, tiebreak: usize) -> bool {
+        let Some(found) = contact::between(*a, *b, distance, tiebreak) else { return false };
+        resolve(a, b, found, ia, ib);
+        true
+    }
+
     /// What separation is *for*: afterwards the two are exactly touching, not
     /// merely less overlapped.
     #[test]
@@ -141,7 +111,7 @@ mod tests {
         let mut a = Vec2::new(-0.1, 0.0);
         let mut b = Vec2::new(0.1, 0.0);
 
-        assert!(pair(&mut a, &mut b, 1.0, 1.0, 1.0, 0));
+        assert!(settle(&mut a, &mut b, 1.0, 1.0, 1.0, 0));
         assert!((a.distance(b) - 1.0).abs() < 1e-5, "settled at {}", a.distance(b));
     }
 
@@ -152,39 +122,22 @@ mod tests {
         let mut a = Vec2::new(-1.0, 0.0);
         let mut b = Vec2::new(1.0, 0.0);
 
-        assert!(!pair(&mut a, &mut b, 1.0, 1.0, 1.0, 0));
+        assert!(!settle(&mut a, &mut b, 1.0, 1.0, 1.0, 0));
         assert_eq!((a, b), (Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
     }
 
-    /// **The case that produces NaN if it is not handled.** Two bodies at the
-    /// same point have no line between them, and normalising their difference
-    /// poisons a position beyond any clamp's ability to recover. It happens for
-    /// real: a crowd converging on one target arrives at one point.
+    /// Coincident bodies must come apart to a real distance rather than to a
+    /// pair of NaNs. The finite *normal* is the query's job and is tested
+    /// there; this is the half that says the response actually uses it.
     #[test]
     fn coincident_bodies_separate_instead_of_producing_nan() {
         let mut a = Vec2::new(5.0, -3.0);
         let mut b = Vec2::new(5.0, -3.0);
 
-        assert!(pair(&mut a, &mut b, 1.0, 1.0, 1.0, 7));
+        assert!(settle(&mut a, &mut b, 1.0, 1.0, 1.0, 7));
 
         assert!(a.is_finite() && b.is_finite(), "poisoned: {a} {b}");
         assert!((a.distance(b) - 1.0).abs() < 1e-5);
-    }
-
-    /// The escape direction must be reproducible, or two identical runs
-    /// diverge the first time anything lands on top of anything else.
-    #[test]
-    fn the_escape_from_a_coincident_pair_is_deterministic() {
-        let run = || {
-            let (mut a, mut b) = (Vec2::ZERO, Vec2::ZERO);
-            pair(&mut a, &mut b, 1.0, 1.0, 1.0, 42);
-            (a, b)
-        };
-        assert_eq!(run(), run());
-
-        // And neighbouring pairs must not all escape the same way, or a clump
-        // separates into a line and re-stacks on the next tick.
-        assert!(escape_direction(3).distance(escape_direction(4)) > 0.1);
     }
 
     /// Projection moves bodies apart without moving the pair: the mass-weighted
@@ -200,20 +153,25 @@ mod tests {
         let mut b = Vec2::new(-0.1, 0.2);
         let before = centre(a, b);
 
-        pair(&mut a, &mut b, 1.0, ia, ib, 0);
+        settle(&mut a, &mut b, 1.0, ia, ib, 0);
         assert!((centre(a, b) - before).length() < 1e-5);
     }
 
     /// Two immovable bodies cannot be pushed apart, and asking must not divide
     /// by their combined zero and yield NaN. Corpses and props will be exactly
     /// this case.
+    ///
+    /// Note this now *does* report a contact — they are overlapping, which is a
+    /// true fact — and then declines to act on it. Splitting the query from the
+    /// response is what makes those two different answers, and a trigger volume
+    /// on an immovable prop is the case that needs them to be.
     #[test]
     fn two_immovable_bodies_are_left_where_they_are() {
         let mut a = Vec2::ZERO;
         let mut b = Vec2::new(0.1, 0.0);
 
-        assert!(!pair(&mut a, &mut b, 1.0, 0.0, 0.0, 0));
-        assert_eq!((a, b), (Vec2::ZERO, Vec2::new(0.1, 0.0)));
+        assert!(settle(&mut a, &mut b, 1.0, 0.0, 0.0, 0), "they do overlap");
+        assert_eq!((a, b), (Vec2::ZERO, Vec2::new(0.1, 0.0)), "but neither may move");
     }
 
     /// **The mechanic, at the level of one contact.** The heavy body barely
@@ -225,7 +183,7 @@ mod tests {
         let mut enemy = Vec2::new(0.5, 0.0);
         let (start_player, start_enemy) = (player, enemy);
 
-        pair(&mut player, &mut enemy, 1.0, PLAYER_INV_MASS, ENEMY_INV_MASS, 0);
+        settle(&mut player, &mut enemy, 1.0, PLAYER_INV_MASS, ENEMY_INV_MASS, 0);
 
         let player_moved = player.distance(start_player);
         let enemy_moved = enemy.distance(start_enemy);
