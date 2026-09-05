@@ -17,41 +17,41 @@ avoidable at layer 0–1 for free.
 
 ## The contract
 
-**Take slices, not the world.** A pass declares what it touches in its
-signature and gets exactly that. The borrow checker then enforces the
-declaration — layer 0, no test needed:
+**Take the data, not the world.** A pass declares what it touches in its
+signature and gets exactly that; the borrow checker then enforces the
+declaration at layer 0, with no test needed. The passes in
+`crates/sim/src/pass/` are the worked examples — copy their shape:
 
 ```rust
-pub(crate) fn separate(
-    positions: &mut [Vec2],
-    radii: &[f32],
-    inv_mass: &[f32],
-    dt: Dt,
-) { … }
+pub(crate) fn contain(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink<'_>) { … }
 ```
 
-Not `fn separate(world: &mut World, dt: f32)`.
+Not `fn contain(world: &mut World)`.
 
-**Take `Dt`, never `f32`.** `Dt` has a private constructor, minted only by the
-fixed-timestep accumulator. Accepting a bare float is how a variable timestep
-gets smuggled back into the sim.
+One honest limit: the player is still a single struct rather than a row in the
+horde's storage, so passes take its individual fields where the horde gets a
+real slice. The horde half of each signature is checked by the compiler, the
+player half by reading it.
+
+**Take `Dt`, never `f32`.** `Dt` carries no number at all and can only have come
+from `Accumulator::pending`, so a variable timestep is not something a caller
+can express.
+
+**Register, do not inline.** `World::step` is a list of calls into `pass/` and
+contains no logic. If your change adds logic to `step`, it is in the wrong
+place. `pass/mod.rs` documents the order and why each adjacency is what it is;
+a new pass adds its reason there.
+
+**Own your constants, with their asserts.** A constant describing a *behaviour*
+— speed, turn rate, mass ratio — lives in the pass module beside the code that
+reads it, each with a `const _: () = assert!(…)` covering its valid range. A
+constant describing an *entity* — radius, scale, spacing — stays with the
+storage. The plausible wrong edit should fail to compile.
 
 **Be a pure function of its inputs.** No wall clock, no `Instant`, no unseeded
-randomness, no iteration over a hash-ordered container. Where a pass needs to
-break a tie — coincident bodies, spawn placement — derive it deterministically;
-`escape_direction`'s golden angle is the pattern to copy. If a pass genuinely
-needs randomness, it takes a seeded generator from the world, and the seed is
-recorded with the input stream.
-
-**Own your constants, with their asserts.** Tuning constants live in the pass's
-module beside the code that reads them, each with a `const _: () = assert!(…)`
-covering its valid range. The plausible wrong edit — a negative speed, a zero
-rate, a spacing narrower than the bodies — should fail to compile rather than
-produce silently wrong behaviour.
-
-**Register, do not inline.** Add the pass to the ordered schedule. If your pass
-must run before or after another, that dependency belongs written down at the
-registration site, not implied by where you happened to paste it.
+randomness, no iteration over a hash-ordered container. Where a pass must break
+a tie, derive it deterministically; `escape_direction`'s golden angle is the
+pattern to copy.
 
 ## Before writing it
 
@@ -81,8 +81,21 @@ all produce no crash, no compiler error and no failing unit test. A `state`
 snapshot read afterward cannot see a three-frame error inside a twelve-frame
 window. The trace can.
 
-Do not add a field to the hand-maintained `state` format string to make
-something observable. Emit an event.
+`state` is derived now, so a *world field* becomes observable by existing. An
+**event** is for something that happened, which a field cannot represent.
+
+Add a variant to `sim::trace::Event` with a `Display` arm, take a
+`TraceSink<'_>` in your signature, and `emit`. The sink already knows the tick,
+so an event cannot be stamped with the wrong one.
+
+**Summarise per tick; do not emit per body.** `separate` reports
+`contacts count=37`, not thirty-seven events. A pass emitting per body fills the
+ring buffer in seconds and pushes out the rare events the trace exists for.
+
+**Trace anything that changes state outside a tick**, as `set_enemy_count` does.
+Between-tick writes are the hardest to account for afterwards, and uncapped most
+frames run zero ticks — so they are also the most likely to be drawn before
+anything has run.
 
 ## Done means
 
@@ -94,15 +107,14 @@ something observable. Emit an event.
 4. If the pass has a cost that scales with the horde, it carries a perf
    assertion in that scenario.
 
-Point 3 is the one that is easy to skip and is the whole point. Driving the
-game through the harness, reading `state`, and satisfying yourself the numbers
-look right is not verification — it is the agent grading its own homework, and
-it reads from the inside exactly like success. Predicting a value and asserting
-it in a scenario is the same act made durable.
+Point 3 is the one that is easy to skip and is the whole point — rule 4 in
+`CLAUDE.md` says why. The runner exists; there is no version of this step that
+consists of reading `state` and being satisfied.
 
-If the scenario runner does not exist yet (roadmap chunk 3), say so explicitly
-rather than quietly substituting a manual harness check, and add the unit test
-that most nearly covers the behaviour over time.
+Two things it gives you free, so do not hand-roll them: every scenario is
+replayed and hash-compared per tick, and a scenario naming a golden trace turns
+a timing change into a reviewable diff. Add `trace: "name.trace"` to `expect`,
+run once with `--bless`, then **read the file before committing it**.
 
 ## Feel is not in scope here
 

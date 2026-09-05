@@ -93,7 +93,7 @@ sock state | jq -r '.render.frames, .render.skipped'
 with a window — an attack, hitstop, a buffered input — exists only in that gap.
 
 ```sh
-a=$(sock state | awk '{print $2}')   # the tick right now
+a=$(sock state | jq .sim.tick)   # the tick right now
 sock "hold d 400" >/dev/null
 sock "trace since $a"
 # 328 contacts count=4
@@ -143,31 +143,16 @@ of 0.15, something is touching the player — check `contacts`.
 ## Screenshots
 
 ```sh
-sock "shot /tmp/scratch/frame.png"   # replies once written
+sock "shot /tmp/scratch/frame.png"   # replies once the file is on disk
 ```
 
-Then read the PNG directly — it is the exact surface, correctly framed, so no
-cropping is needed. `P` in the app does the same thing interactively, writing to
+Read the PNG directly — it is the exact surface, correctly framed, so no
+cropping is needed. `P` in the app does the same interactively, writing to
 `$ARPG_CAPTURE_DIR` (default: the temp dir).
 
-**Screenshots are the one thing here that a buried window breaks.** Everything
-else on this page works on an unfocused window behind others, but a *fully
-occluded* one hands back no surface texture, the draw is skipped, and the
-capture — which is recorded between drawing a frame and presenting it — never
-happens. Unfocused is fine; covered is not.
-
-That used to be silent: the reply was sent whether or not the frame was drawn,
-so `shot` answered `ok` with no file on disk, and a broken screenshot was
-indistinguishable from a change that did nothing. It now waits a few seconds of
-skipped frames and then says
-
-```
-error: no frame was presented, so nothing could be captured — the window is
-occluded or minimised
-```
-
-Diff `frames` across a `wait` first if you are unsure: a `frames` that is not
-rising means no screenshot is going to work until the window is uncovered.
+**A fully occluded window is the one thing here that breaks.** Unfocused is
+fine; covered is not. It now fails loudly rather than replying `ok` with no file
+on disk — see `docs/traps.md`, first entry.
 
 ## Measuring performance
 
@@ -177,37 +162,26 @@ EMA and cannot tell a steady 60Hz from a mixture averaging to it.
 ```sh
 a=$(sock state | jq .render.frames); sock "wait 1000" >/dev/null
 b=$(sock state | jq .render.frames); echo $((b - a))
-# also diff .render.skipped, and .sim.tick — which should stay at ~60/s in
-# *both* present modes, because the simulation no longer follows the frame rate
 ```
 
-Two ways this lies to you, and both have already happened:
+Diff `.render.skipped` too, and **measure both present modes**: if uncapped is
+not several times vsync, the app is throttled and the number is not a
+measurement. Both ways this lies are in `docs/traps.md`, keyed by what you see.
 
-1. **Skipped frames counted as speed.** An occluded window hands back no
-   texture, the draw is skipped, and the loop spins freely — once reported
-   *12,467 fps with vsync on*, entirely skipped frames. Diff `skipped` across
-   the window; a small constant from startup is normal, a rising one is not.
-2. **Background throttling, with `skipped` at zero.** A backgrounded app still
-   presents, just slowly. Measured 63/s vsync and 65/s uncapped with zero
-   skipped — versus 62/s and 302/s for the same build with the window up.
+Also diff `.sim.tick`. It should hold ~60/s in *both* modes — that is the fixed
+timestep working, and a tick rate that follows the frame rate is a real bug.
 
-So the check that actually works: **measure both present modes and compare.** If
-uncapped is not several times vsync, the app is throttled and the number is not
-a measurement. Bring the window to the front and repeat.
-
-Reference, window frontmost, 17409 instances on an M4: **62/s vsync at 16.59ms,
-302/s uncapped at 3.62ms, 0 skipped.**
+Reference, window frontmost, 17409 instances on an M4: **62/s vsync,
+~300/s uncapped, 0 skipped.**
 
 ## This is not the completion gate
 
-The harness proves a change *ran*. It does not prove it is *correct*, because
-the comparison happens in your head — reading `player_pos 3.183` and deciding
-it matches the 3.182 you predicted is the agent grading its own homework, and it
-reads from the inside exactly like success.
+The harness proves a change *ran*, not that it is *correct* — the comparison
+happens in your head. That is rule 4 in `CLAUDE.md`; write the prediction as a
+scenario assertion instead, which costs the same and persists.
 
-Write the same prediction as a scenario assertion instead; it costs the same and
-it persists. See the `scenario` skill. Use this skill for what a scenario cannot
-do: looking at the running game, checking an image, and measuring render cost.
+Use this skill for what a scenario cannot do: looking at the running game,
+checking an image, and measuring render cost.
 
 ## Before diagnosing anything surprising
 

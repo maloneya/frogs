@@ -11,10 +11,8 @@ budget. It runs headless against `sim` — no GPU, no window, microseconds per
 run — and it exits 0 or 1.
 
 The harness socket (`playtest` skill) stays useful for the interactive and
-visual cases, where a real window is the point. It is not the completion gate.
-Reading `player_pos 3.183` and judging it correct is the agent grading its own
-work; the same prediction written as an assertion is durable and checkable, and
-it costs the same to write.
+visual cases, where a real window is the point. It is not the completion gate —
+rule 4 in `CLAUDE.md` says why.
 
 ```sh
 . "$HOME/.cargo/env" && cargo run --quiet -p scenario -- scenarios/

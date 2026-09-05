@@ -67,45 +67,26 @@ cargo run --quiet -p scenario -- scenarios/   # the gate: exits 0 or 1, no GPU, 
 ### Driving the game from a shell
 
 `ARPG_HARNESS` opens a unix socket that plays the game: real keys through the
-real binding table, screenshots the app takes of itself, and simulation state as
-numbers. Unset, none of it exists — no socket, no thread, no way in.
+real binding table, screenshots the app takes of itself, simulation state as
+JSON, and the event trace. Unset, none of it exists — no socket, no thread, no
+way in.
 
 ```sh
 ARPG_HARNESS=/tmp/arpg.sock cargo run --release
-echo 'hold d 500' | nc -U /tmp/arpg.sock     # walk east for 500ms, replies when done
-echo 'shot /tmp/f.png' | nc -U /tmp/arpg.sock # replies once the file exists
-echo state | nc -U /tmp/arpg.sock
+echo 'hold d 500' | nc -U /tmp/arpg.sock
 ```
 
 `press`/`release`/`tap`/`hold <key> <ms>` · `wait <ms>` · `shot <path>` ·
 `state` · `trace since <tick>` · `enemies <n>` · `vsync on|off` · `quit`
 
-`state` is a point sample; `trace since` is the interval between two of them.
-Anything with a window — an attack, hitstop, a buffered input — exists only in
-that gap, so a snapshot taken afterward cannot see a mistimed frame inside it.
-
-Key names are a column of `BINDINGS` rather than a table beside the harness, so
-binding a key makes it drivable in the same edit.
-
-Every command replies, and the reply means the effect has *landed* — `hold`
+Every command replies, and the reply means the effect has **landed** — `hold`
 answers after the key comes back up, `shot` after the file is on disk. So a test
-is a sequence of commands, not a sequence of sleeps and hopes.
+is a sequence of commands, not a sequence of sleeps and hopes. Key names are a
+column of `BINDINGS`, so binding a key makes it drivable in the same edit.
 
-Why it exists: driving the game through the OS instead (synthetic keystrokes
-plus a desktop screenshot tool) needs the window frontmost, the display awake,
-and accessibility permission, and when any of those is false it does not fail —
-the keys go to whatever *is* focused and the screenshot comes back black. Both
-look exactly like the game being broken. Building this cost less than the time
-already lost to a stray keypress silently resizing the horde mid-test.
-
-**Reading perf from it:** compare `frames` across a `wait`, rather than trusting
-`frame_ms`, which is an EMA and cannot tell a steady 60Hz from a mix averaging
-to it. Then sanity-check against `skipped` *and* against the other present mode.
-An occluded window hands back no texture, the draw is skipped, and a loop
-spinning on nothing reports thousands of frames a second; a merely *backgrounded*
-window presents honestly but throttled, with `skipped` at zero. Uncapped that is
-not several times vsync means the app is throttled, not that the renderer is
-slow.
+**The `playtest` skill is the rest of this** — measuring throughput without
+being lied to, what a screenshot needs, and why driving the game through the OS
+instead fails silently. Do not reproduce it here.
 
 Rust was installed via rustup with `--no-modify-path`, so `~/.cargo/bin` is
 **not** on PATH by default. Prefix commands with `. "$HOME/.cargo/env" &&`, or
@@ -199,32 +180,25 @@ table is a table that can silently disagree with the first — the exact failure
 `BINDINGS` was restructured to avoid. Read it when auditing; do not treat it as
 authoritative over the code.
 
-The lint wall is applied at write time, not just at build time: the
-`PostToolUse` hook in `.claude/settings.json` runs
-`cargo clippy --workspace --all-targets -- -D warnings` after every file-editing
-tool **and after every Bash call**, and blocks on failure. The Bash matcher is
-load-bearing rather than belt-and-braces — an agent editing through a shell
-heredoc produces no `file_path`, so a hook keyed only on Edit/Write never fires
-and the gate silently degrades to "remember to run clippy", which this file's
-own table rates as the weakest layer there is.
+The lint wall applies at **write** time, not just at build time: the
+`PostToolUse` hook in `.claude/settings.json` runs clippy after every
+file-editing tool **and after every Bash call**, and blocks on failure. The Bash
+matcher is load-bearing rather than belt-and-braces — an agent editing through a
+shell heredoc produces no `file_path`, so a hook keyed only on Edit/Write never
+fires and the gate degrades to "remember to run clippy", which the table above
+rates as the weakest layer there is.
 
 **Escape hatch:** `#[expect(lint, reason = "…")]`, never `#[allow]`. `expect`
-stops compiling once the violation it covers disappears, so suppressions cannot
+stops compiling once the violation it covers disappears, so a suppression cannot
 go stale unnoticed and each one carries a written reason.
 
-One correction worth recording, because the reasoning is tempting and wrong:
-splitting into crates does **not** make `gfx → sim` a Cargo cycle. They are
-siblings, both depending only on `core`, so Cargo accepts that edge without
-complaint. The `build.rs` guards exist precisely because the cycle argument
-does not hold.
-
-Those guards are **allowlists**, and the reason is worth keeping. They began as
-denylists naming `arpg-gfx`, `wgpu` and `winit` — which caught exactly the three
-mistakes someone had already imagined, and let `bevy`, `hecs` and `rapier` walk
-straight into `sim`, against the loudest rule the project has. A denylist fails
-open; you have to predict the mistake. An allowlist fails closed. Widening one is
-a deliberate, visible edit to a file whose whole job is saying what may be
-depended on.
+**Crate dependencies are allowlists**, in `crates/{gfx,sim,scenario}/build.rs`,
+and they fail closed. Two things about them are tempting to get wrong, so both
+are argued at the definition site: splitting into crates does *not* make
+`gfx → sim` a Cargo cycle — they are siblings, and Cargo accepts that edge — so
+the guards are doing work nothing else does. And a denylist would fail open:
+naming `wgpu` and `winit` catches the mistakes someone already imagined and lets
+`bevy` walk straight in.
 
 ### Decisions already made, and why
 
@@ -253,79 +227,52 @@ Metal surface) for measurement. Measure uncapped; tune feel under vsync.
 the hardware encodes on write. Passing the sRGB value you want yields something
 roughly five times too bright.
 
-**The camera smooths by half-life, not by a per-frame lerp.** `pos.lerp(target,
-0.1)` once a frame keeps 90% of the error *per frame* rather than per second:
-after one second that is `0.9^60 ≈ 0.002` left at 60Hz but `0.9^144 ≈ 3e-7` at
-144Hz — a camera thousands of times tighter purely because the machine is
-faster. Here that would be worse than usual, because pressing `V` to uncap the
-frame rate would change how the game *feels*, corrupting the measurement `V`
-exists to take. `2^(-dt/half_life)` composes exactly under subdivision, so any
-number of small steps equals one big one.
+**The camera smooths by half-life, not by a per-frame lerp.** A per-frame lerp
+keeps 90% of the error *per frame* rather than per second, so the camera is
+thousands of times tighter at 144Hz than at 60Hz — and pressing `V` would then
+change how the game feels, corrupting the measurement `V` exists to take.
+`2^(-dt/half_life)` composes exactly under subdivision. The arithmetic is in
+`core::damp` and `gfx/camera.rs`.
 
 **The camera leads the character, and the lead is smoothed separately.** A rigid
 offset whips the camera two lead-lengths across the screen the instant you
-reverse; a slower half-life on the offset turns that into an ease. The lead is
-in world units, not screen ones, so it reveals the same distance in every
-direction — the axis threats live on — which is why the vertical lead looks
-shorter on screen, foreshortened by sin(35.26°).
+reverse. The lead is in world units rather than screen ones, so it reveals the
+same distance in every direction.
 
 ### Deliberate choices that look like smells
 
-Do not "clean up" these without understanding why they're there — each one is
-load-bearing, and several will compile fine while producing wrong output. Where
-a mechanism now enforces one, it is named; the last two are enforced by nothing
-but this paragraph, which is precisely why they are worth reading twice.
+Do not "clean up" these without understanding why they are there — each is
+load-bearing, and several compile fine while producing wrong output.
 
-- **`Instance` carries `yaw` plus two `_pad` floats.** *(enforced: private
-  fields + size assert)* Not waste. Vertex buffers have no 16-byte alignment
-  requirement so the struct *could* pack to 36 bytes, but the 48-byte stride
-  keeps offset maths trivial and reserved room for rotation, hit-flash and team
-  id. The reservation has now paid off once: `yaw` moved into the first slot and
-  gained the character a facing without touching the vertex layout, the
-  attribute array or the `@location` slots. The other two are still spoken for.
-  Removing them means rewriting the vertex attribute layout and the shader
-  together.
-- **Yaw 0 faces `+Z`, positive turns toward `+X`.** *(enforced: pixel test)*
-  `Instance::with_yaw`, `World::turn_toward` and `rotate_y` in `shader.wgsl` all
-  depend on this one convention, and wgpu cannot check it — it validates the
-  *types* crossing into WGSL, never the meaning of the numbers, so a sign flip
-  compiles, validates, draws, and points every character 90° off in silence.
-  `yaw_points_the_body_where_the_convention_says` renders a long bar headless and
-  reads the pixels back. Note its second half: a bounding box is
-  **reflection-invariant**, so swapping `sin` and `cos` — which mirrors every
-  direction across the screen vertical — passed a box-only version of this test.
-  Measuring which way the bar *leans* is what catches it. Verified by mutation:
-  sign flip, dropped rotation, swapped sin/cos, negated yaw, and scale-after-
-  rotation are all caught.
-- **The player is deeper than it is wide** (`0.45 x 1.2 x 0.8`). *(enforced:
-  const assert)* A square footprint rotated about the vertical axis looks
-  near-identical at every angle, so facing would be real and invisible. The
-  asymmetry is what makes the turn readable, so it is a compile error to remove
-  it rather than a note somebody might read.
-- **The instance buffer is allocated at full `MAX_INSTANCES` capacity** and only
-  partially written. *(enforced: `InstanceSink`)* Capacity and count are separate
-  on purpose — regrowing a GPU buffer mid-run means syncing against in-flight
-  frames. The CPU-side `InstanceBuffer` preallocates to match.
-- **The cube has 24 vertices, not 8.** *(unenforced — no test yet)* Each face
-  needs its own normal and a vertex carries one. Deduplicating to 8 corners
-  silently destroys the shading.
+**Where a mechanism enforces one, only the mechanism is named here**: the
+argument lives at the definition site, which is where someone about to change it
+is already looking. The unenforced ones keep their full reasoning, because for
+those this paragraph *is* the enforcement — which is exactly why they are the
+ones worth reading twice.
+
+Enforced, so this is a pointer and not an argument:
+
+- **`Instance` carries `yaw` plus two `_pad` floats.** Reserved headroom, not
+  waste. *(private fields + size assert; see `core/instance.rs`)*
+- **Yaw 0 faces `+Z`, positive turns toward `+X`.** A sign flip compiles,
+  validates, draws, and points every character 90° off in silence. *(pixel
+  test in `gfx/src/lib.rs`, mutation-checked)*
+- **The player is deeper than it is wide** (`0.45 x 1.2 x 0.8`), or its facing
+  would be real and invisible. *(const assert)*
+- **The instance buffer is allocated at full `MAX_INSTANCES`** and only
+  partially written. *(`InstanceSink`)*
+
+Enforced by nothing but this list:
+
+- **The cube has 24 vertices, not 8.** Each face needs its own normal and a
+  vertex carries one. Deduplicating to 8 corners silently destroys the shading.
 - **Cube winding is derived from a per-face orthonormal basis**, not written out
-  as a literal table. *(unenforced — no test yet)* That's what guarantees correct
-  outward winding under back-face culling; a hand-written table is where
-  inside-out faces come from.
-- **Colour literals look far too dark.** *(unenforced; a `LinearRgb` newtype
-  would fix this and is worth doing)* They're linear; the surface is sRGB and the
-  hardware encodes on write. `0.05` on screen is `0.0039` in source.
-- **`about_to_wait` requests a redraw unconditionally.** *(prose only — not
-  mechanisable)* This is what makes the loop continuous rather than
-  event-driven. It is not a busy-wait bug.
-- **Depth uses `StoreOp::Discard`.** *(prose only — not mechanisable)* Nothing
-  reads depth after the pass; storing it would waste real bandwidth on a tiled
-  GPU.
-
-### Known limitations, and the roadmap
-
-Both moved to [`docs/roadmap.md`](docs/roadmap.md), which now carries an exit-code
-gate per chunk. They lived here, were read once at session start, and grew; the
-roadmap is consulted when choosing work rather than while editing, so it belongs
-in a file loaded on demand.
+  as a literal table. That is what guarantees correct outward winding under
+  back-face culling; a hand-written table is where inside-out faces come from.
+- **Colour literals look far too dark.** They are linear; the surface is sRGB
+  and the hardware encodes on write. `0.05` on screen is `0.0039` in source. A
+  `LinearRgb` newtype would move this up the ladder and is worth doing.
+- **`about_to_wait` requests a redraw unconditionally.** This is what makes the
+  loop continuous rather than event-driven. It is not a busy-wait bug.
+- **Depth uses `StoreOp::Discard`.** Nothing reads depth after the pass; storing
+  it would waste real bandwidth on a tiled GPU.
