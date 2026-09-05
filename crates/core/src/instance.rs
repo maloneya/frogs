@@ -78,6 +78,27 @@ impl Instance {
         self.yaw = yaw;
         self
     }
+
+    /// Where this instance will be drawn.
+    ///
+    /// Read-only, and that keeps the invariant above intact rather than
+    /// weakening it: the fields are private so nothing can *write* garbage into
+    /// the reserved slots, which a getter cannot do. What it buys is the
+    /// ability to check what actually crossed the extract seam — render
+    /// interpolation happens on the way into an `Instance`, so a test that
+    /// cannot read one back can only assert that `extract` was called, not that
+    /// it produced the right picture.
+    #[must_use]
+    pub fn pos(&self) -> Vec3 {
+        Vec3::from(self.pos)
+    }
+
+    /// Which way this instance is turned, in radians. See [`Instance::with_yaw`]
+    /// for the convention.
+    #[must_use]
+    pub fn yaw(&self) -> f32 {
+        self.yaw
+    }
 }
 
 /// The CPU-side staging buffer, allocated once at full capacity for the same

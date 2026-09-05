@@ -36,15 +36,38 @@ and two of them escaped the first version — see the notes on
 `the_rates_are_the_constants_they_say_they_are`, both of which exist because of
 that.
 
-## 1b. Render interpolation — *sim layer*
+## 1b. Render interpolation — *sim layer* — **done**
 
-`Alpha` as a newtype, previous positions stored, the blend applied at
-`extract()`. `Accumulator::carry_secs` is already there for it. Presentation
-only: `extract` takes `&self`, so interpolation is structurally incapable of
-reaching sim state.
+`Alpha` from `Accumulator::alpha()`, previous positions kept beside current
+ones, the blend applied at `extract()`. Presentation only, enforced at layer 0
+rather than by a rule: `extract` takes `&self`, so there is no `&mut` for a
+blended value to be written back through.
 
-**Gate:** a test that alpha 0 and alpha 1 reproduce the two tick endpoints
-exactly, and that no interpolated value ever reaches `World`.
+The trade, written down because it is a real cost and not an oversight:
+interpolating between the last two ticks puts the image a *constant* one tick
+(16.7ms) behind the simulation, where drawing the latest tick directly is
+between 0 and 16.7ms behind. Constant latency is the better deal here — hands
+adapt to a fixed offset within minutes, and variable pacing is exactly what
+makes two identical hits feel different, which is the thing this project exists
+to measure.
+
+Facing blends the short way round the ±PI seam. A naive lerp there spins the
+body 6.26 radians the wrong way for a single frame, which reads as a flicker and
+gets blamed on the renderer.
+
+**Gate: met.** `the_blend_endpoints_are_the_two_ticks_themselves`,
+`the_blend_crosses_the_gap_once_and_in_order`, `the_horde_is_interpolated_too`,
+`drawing_never_touches_sim_state`,
+`the_drawn_facing_crosses_the_pi_seam_the_short_way`,
+`the_previous_tick_is_the_previous_tick` and
+`a_respawned_horde_is_drawn_standing_still`.
+
+Eight mutations checked, of which **four escaped the first version**: three
+because every blend test read the player (the last instance, and so the easy
+one) while the horde — a thousand of the bodies on screen — went unchecked, and
+one because every test stepped immediately after a respawn, which hides a stale
+`prev`. The lesson is worth keeping: a test written against the convenient
+entity is not a test of the system.
 
 ## 2. Trace stream — *perception*
 

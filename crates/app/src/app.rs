@@ -399,15 +399,22 @@ impl ApplicationHandler for App {
                     self.world.step(dt, dir);
                 }
 
+                // How far this frame falls between the tick just run and the
+                // next one. Everything below draws; nothing below simulates.
+                let alpha = self.accumulator.alpha();
+
                 // After the step, not before: following last tick's position
                 // would add a frame of lag on top of the smoothing that is
                 // there deliberately. Per frame rather than per tick, and on
                 // the frame's own delta rather than a tick's, because where the
                 // camera points is presentation — the one place wall clock is
                 // still allowed to be read directly.
-                camera.follow(self.world.player_pos(), dir, frame);
+                // The *drawn* position, not the simulated one: the camera is
+                // presentation, and following the raw tick position would put
+                // a stair-step under a rig whose entire job is smoothness.
+                camera.follow(self.world.player_pos_at(alpha), dir, frame);
 
-                self.world.extract(self.instances.sink());
+                self.world.extract(alpha, self.instances.sink());
                 // Counted only when a frame actually reached the screen. An
                 // occluded window skips the draw entirely, and counting those
                 // would report thousands of frames a second for drawing nothing.

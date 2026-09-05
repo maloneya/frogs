@@ -79,3 +79,30 @@ unfocused window buried behind others.
 **Promoted.** The `playtest` skill description names this explicitly so the
 wrong tool is not reached for in the first place. The harness itself cannot be
 bypassed accidentally — without `ARPG_HARNESS` there is no socket at all.
+
+---
+
+## symptom: a visual glitch that only happens uncapped, or only for one frame
+
+*2026-09 — found by mutation testing, before it was ever seen.*
+
+**Cause.** Under the fixed timestep a frame runs **zero** ticks whenever it is
+shorter than 16.7ms, which uncapped is most of them. Anything that changes world
+state *outside* `step` — `enemies <n>`, `[`, `]`, and later spawning, teleports
+and scenario setup — is therefore drawn before any tick has run, with
+`prev` still holding the old values. Every body streaks from where it was to
+where it now is, for one frame.
+
+Under vsync at 60Hz nearly every frame runs exactly one tick, so the same bug is
+invisible. That asymmetry is the tell.
+
+**Check.** Does the glitch survive `V`? If it appears uncapped and not under
+vsync, look for state written outside a tick rather than at the renderer.
+
+**Fix.** Whatever writes state outside `step` must set `prev` to match, the way
+`Enemies::respawn` does. A test asserts the drawn positions are identical at
+alpha 0, 0.5 and 1 with no tick in between — that is the shape to copy.
+
+**Promotion candidate.** Spawning through a `World::spawn` that maintains `prev`
+as an invariant of the storage (roadmap chunk 4) removes the class rather than
+testing for it one caller at a time.

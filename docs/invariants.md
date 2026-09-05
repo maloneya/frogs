@@ -50,6 +50,13 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | The simulation is reproducible tick for tick | 3 | `one_input_stream_replays_to_the_same_hash_every_tick` |
 | Frame rate cannot change the simulation | 3 | `frame_rate_cannot_change_the_simulation` — 1, 2 and 4 ticks per frame compared by hash sequence |
 | A steady-state frame allocates nothing | 3 | thread-local counting allocator; `a_steady_state_frame_allocates_nothing` |
+| Interpolation cannot reach sim state | 0 | `World::extract` takes `&self`; there is no `&mut` to write a blended value back through |
+| `Alpha` stays in `0..=1` | 0 | private field; `Accumulator::alpha` clamps and is the only mint besides the two endpoint consts |
+| The drawn position is a blend, never the sim's own | 0 | `player_pos` and `player_pos_at` are separate methods answering separate questions |
+| Every body remembers where it was, every tick | 3 | `the_previous_tick_is_the_previous_tick`, measured in the crowd where bodies actually move |
+| The horde is interpolated, not just the player | 3 | `the_horde_is_interpolated_too`; three mutations escaped before it existed |
+| A respawned horde does not streak in from the old one | 3 | `a_respawned_horde_is_drawn_standing_still` — uncapped, most frames run zero ticks, so this is visible |
+| The drawn facing crosses ±PI the short way | 3 | `blend_angle` uses `shortest_arc`; `the_drawn_facing_crosses_the_pi_seam_the_short_way` |
 | Speed and turn rate are the constants they claim | 3 | `the_rates_are_the_constants_they_say_they_are`, predicted from the constants rather than read back |
 | Ground + horde + player fit one buffer | 3 | unit test in `sim` at the largest horde the clamp allows |
 | The camera basis agrees with the projection | 3 | unit tests in `gfx/camera.rs` |

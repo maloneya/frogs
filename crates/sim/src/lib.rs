@@ -11,7 +11,7 @@ mod hash;
 mod time;
 
 pub use hash::Fnv;
-pub use time::{Accumulator, Dt, Ticks, TICK_HZ};
+pub use time::{Accumulator, Alpha, Dt, Ticks, TICK_HZ};
 
 /// Lifts a ground-plane position into world space at a given height.
 ///
@@ -216,6 +216,21 @@ fn shortest_arc(from: f32, to: f32) -> f32 {
 /// Golden-angle steps rather than a fixed direction, so a clump of coincident
 /// bodies fans out instead of every one of them being pushed the same way and
 /// re-stacking on the next tick.
+/// Blends between two facings the short way round.
+///
+/// A plain lerp is wrong here and wrong *invisibly*: `facing` is wrapped to
+/// `-PI..=PI`, so a character turning through south goes from `3.13` to `-3.13`
+/// in one tick — a real turn of 0.02 radians. Lerping those endpoints sends the
+/// body spinning 6.26 radians the other way, across a single frame, for one
+/// frame. It reads as a flicker rather than as a spin, which is exactly the
+/// kind of artefact that gets blamed on the renderer.
+///
+/// `shortest_arc` already solves this for the simulation's own turning; this is
+/// the same fix applied to the drawing of it.
+fn blend_angle(from: f32, to: f32, alpha: Alpha) -> f32 {
+    wrap_angle(from + shortest_arc(from, to) * alpha.get())
+}
+
 fn escape_direction(tiebreak: usize) -> Vec2 {
     /// `PI * (3 - sqrt(5))`, written out because `sqrt` is not const.
     const GOLDEN_ANGLE: f32 = 2.399_963_2;
@@ -304,11 +319,34 @@ struct Enemies {
     /// is no stacking, which is the case that forces general solvers into four
     /// to eight iterations.
     pos: Vec<Vec2>,
+    /// Where each body was at the end of the *previous* tick.
+    ///
+    /// Read only by `extract`, and written only by `step` copying `pos` before
+    /// it changes. It is simulation-owned data that exists purely for
+    /// presentation, which sounds like a contradiction and is not: the
+    /// alternative is `app` snapshotting a thousand positions every tick to
+    /// hand back later, which is the same copy done further from the data and
+    /// with a chance of being skipped.
+    ///
+    /// Kept exactly the same length as `pos` — `respawn` is the only thing that
+    /// changes either, and it rebuilds both.
+    prev_pos: Vec<Vec2>,
 }
 
 impl Enemies {
     fn len(&self) -> usize {
         self.pos.len()
+    }
+
+    /// Called at the top of every tick, before anything moves.
+    ///
+    /// A flat copy rather than a swap of two buffers. A swap would be cheaper
+    /// and would be wrong the moment a pass reads a position it has already
+    /// written this tick — with a swap, `pos` starts the tick holding the
+    /// tick-before-last's values, and the Gauss-Seidel solver in
+    /// `resolve_contacts` reads exactly that way.
+    fn remember(&mut self) {
+        self.prev_pos.copy_from_slice(&self.pos);
     }
 
     /// Lays `n` enemies out in a square grid centred on the origin.
@@ -335,6 +373,12 @@ impl Enemies {
                 (i / side) as f32 * ENEMY_SPACING - offset,
             ));
         }
+
+        // Spawning where it already was, so the first frame after a respawn
+        // interpolates from the new position rather than streaking every body
+        // across the arena from wherever the old horde happened to stand.
+        self.prev_pos.clear();
+        self.prev_pos.extend_from_slice(&self.pos);
     }
 }
 
@@ -359,6 +403,10 @@ struct Player {
     /// will be oriented by, so it has to be something the sim owns and can be
     /// reasoned about without a GPU.
     facing: f32,
+    /// The pair above as they stood at the end of the previous tick. See
+    /// `Enemies::prev_pos`.
+    prev_pos: Vec2,
+    prev_facing: f32,
 }
 
 /// What exists. This is where the simulation will live as it grows —
@@ -429,6 +477,14 @@ impl World {
     /// `move_dir` is world-space and already unit-or-zero — the type says so,
     /// so this does not have to check.
     pub fn step(&mut self, dt: Dt, move_dir: MoveDir) {
+        // First, before anything moves: what is about to become the past.
+        // Every body, not just the ones this tick will touch — a body left
+        // alone must interpolate from where it is to where it is, and a stale
+        // `prev` would streak it back to wherever it last happened to move.
+        self.player.prev_pos = self.player.pos;
+        self.player.prev_facing = self.player.facing;
+        self.enemies.remember();
+
         self.player.pos += move_dir.as_vec3().xz() * PLAYER_SPEED * dt.secs();
 
         // Order matters, and this is the whole of it: move first, then push
@@ -476,8 +532,8 @@ impl World {
     pub fn hash(&self) -> u64 {
         // Exhaustive on purpose — see above. Do not replace with `..`.
         let Self { enemies, player, tick, contacts } = self;
-        let Player { pos, facing } = player;
-        let Enemies { pos: enemy_pos } = enemies;
+        let Player { pos, facing, prev_pos, prev_facing } = player;
+        let Enemies { pos: enemy_pos, prev_pos: enemy_prev } = enemies;
 
         let mut h = Fnv::default();
 
@@ -487,10 +543,19 @@ impl World {
         h.f32(*facing);
         h.usize(*contacts);
 
+        // The previous tick goes in too. It is derived — it is just last tick's
+        // values — so it adds no information to a comparison of two runs, and
+        // it is included anyway, because the rule is *every field* and an
+        // exception is how that rule stops being checkable. The compile error
+        // that brought you here is the guard working.
+        h.f32(prev_pos.x);
+        h.f32(prev_pos.y);
+        h.f32(*prev_facing);
+
         // Length as well as contents: two hordes agreeing on every body they
         // share are still different worlds if one has more of them.
         h.usize(enemy_pos.len());
-        for p in enemy_pos {
+        for p in enemy_pos.iter().chain(enemy_prev) {
             h.f32(p.x);
             h.f32(p.y);
         }
@@ -577,6 +642,21 @@ impl World {
         on_ground(self.player.pos, PLAYER_HALF_HEIGHT)
     }
 
+    /// Where the character should be *drawn* this frame, blended between the
+    /// last two ticks.
+    ///
+    /// Separate from [`World::player_pos`] rather than replacing it, because
+    /// the two answer different questions and confusing them is how
+    /// presentation leaks into simulation. `player_pos` is where the character
+    /// **is** — what a hitbox is tested against, what a scenario asserts on,
+    /// what the harness reports. This is where it *appears*, which is a
+    /// fractional tick behind and is nobody's business but the renderer's and
+    /// the camera's.
+    #[must_use]
+    pub fn player_pos_at(&self, alpha: Alpha) -> Vec3 {
+        on_ground(self.player.prev_pos.lerp(self.player.pos, alpha.get()), PLAYER_HALF_HEIGHT)
+    }
+
     /// Which way the character is pointing, in radians. The attack state
     /// machine will orient its hitbox by this.
     pub fn player_facing(&self) -> f32 {
@@ -594,24 +674,29 @@ impl World {
     /// Takes the sink by value, so it is single-use and cannot outlive the
     /// frame. Everything about the buffer — that it was reset, that it is
     /// capacity-bounded, that pushing is the only thing anyone may do to it —
-    /// is settled by the type rather than by remembering. Next chunk this
-    /// grows an `alpha` parameter for interpolating between simulation ticks.
-    pub fn extract(&self, mut out: InstanceSink<'_>) {
+    /// is settled by the type rather than by remembering.
+    ///
+    /// `alpha` blends between the last two ticks. **This method takes `&self`,
+    /// and that is the entire enforcement of "interpolation must never reach
+    /// sim state"** — there is no `&mut` here for a blended value to be written
+    /// back through, so the rule is layer 0 rather than a paragraph someone
+    /// reads at session start.
+    pub fn extract(&self, alpha: Alpha, mut out: InstanceSink<'_>) {
         self.extract_ground(&mut out);
-        self.extract_enemies(&mut out);
-        self.extract_player(&mut out);
+        self.extract_enemies(alpha, &mut out);
+        self.extract_player(alpha, &mut out);
     }
 
     /// The player is not a special case to the renderer either — one more cube
     /// in the same draw call. Only the colour and the silhouette distinguish it.
-    fn extract_player(&self, out: &mut InstanceSink<'_>) {
+    fn extract_player(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
         // Linear, and it looks wrong here on purpose: the surface is sRGB, so
         // the hardware encodes on write. This is roughly sRGB (0.35, 0.72, 0.95)
         // — a bright cyan-blue, chosen to sit opposite the horde's muted red on
         // the colour wheel so the eye separates them without effort.
         out.push(
-            Instance::new(self.player_pos(), PLAYER_SCALE, Vec3::new(0.10, 0.47, 0.88))
-                .with_yaw(self.player.facing),
+            Instance::new(self.player_pos_at(alpha), PLAYER_SCALE, Vec3::new(0.10, 0.47, 0.88))
+                .with_yaw(blend_angle(self.player.prev_facing, self.player.facing, alpha)),
         );
     }
 
@@ -636,14 +721,17 @@ impl World {
     /// Reads the horde's stored positions rather than re-deriving them, which
     /// is the whole difference this step makes: what is drawn is now what the
     /// simulation believes, so moving a body moves its cube.
-    fn extract_enemies(&self, out: &mut InstanceSink<'_>) {
-        for (i, &pos) in self.enemies.pos.iter().enumerate() {
+    fn extract_enemies(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
+        let a = alpha.get();
+
+        for (i, (&pos, &prev)) in self.enemies.pos.iter().zip(&self.enemies.prev_pos).enumerate() {
             // Linear-space colour, since the surface is sRGB and the hardware
             // encodes on write. These look darker here than they will on screen.
             let t = (i % 7) as f32 / 7.0;
             let color = Vec3::new(0.30 + t * 0.12, 0.06 + t * 0.05, 0.05);
 
-            out.push(Instance::new(on_ground(pos, ENEMY_HALF_HEIGHT), ENEMY_SCALE, color));
+            let drawn = prev.lerp(pos, a);
+            out.push(Instance::new(on_ground(drawn, ENEMY_HALF_HEIGHT), ENEMY_SCALE, color));
         }
     }
 }
@@ -854,6 +942,276 @@ mod tests {
         assert_ne!(straight.last(), turning.last(), "the divergence washed out");
     }
 
+    /// Where every enemy was drawn. `extract` pushes ground, then the horde,
+    /// then the player, so the horde is the middle slice.
+    fn drawn_enemies(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec<Vec3> {
+        world.extract(alpha, buffer.sink());
+        buffer.as_slice()[GROUND_INSTANCES..][..world.enemy_count()]
+            .iter()
+            .map(Instance::pos)
+            .collect()
+    }
+
+    /// Puts the player inside the horde and walks, so the solver is displacing
+    /// bodies every tick. Anything asking whether the *horde* is drawn right
+    /// has to be measured somewhere the horde actually moves — in open ground
+    /// every body sits still and a broken blend is indistinguishable from a
+    /// working one.
+    fn shoving_through_the_crowd(enemies: usize) -> World {
+        let mut world = World::default();
+        world.set_enemy_count(enemies);
+
+        // Only a few ticks: at `PLAYER_SPEED` the player clears a small horde
+        // in well under a second, and then contacts drop to zero and this
+        // measures open ground again. 20 ticks is 3.0 units, which walks
+        // straight out of a 64-body crowd (5.6 units across).
+        for _ in 0..5 {
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
+        }
+        assert!(world.contacts() > 0, "nothing is in contact, so nothing is being pushed");
+        world
+    }
+
+    /// Reads the position of the last instance a sink was given — the player,
+    /// since `extract` pushes it last.
+    fn drawn_player(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec3 {
+        world.extract(alpha, buffer.sink());
+        buffer.as_slice().last().expect("extract pushes at least the player").pos()
+    }
+
+    /// **The gate for render interpolation.** The endpoints have to be exact,
+    /// or the blend is drawing something the simulation never believed.
+    #[test]
+    fn the_blend_endpoints_are_the_two_ticks_themselves() {
+        let mut world = in_open_ground();
+        world.set_enemy_count(4);
+        let mut buffer = InstanceBuffer::default();
+
+        let before = world.player_pos();
+        world.step(tick_dt(), MoveDir::new(Vec3::X));
+        let after = world.player_pos();
+        assert_ne!(before, after, "the tick under test did not move anything");
+
+        assert_eq!(drawn_player(&world, Alpha::ZERO, &mut buffer), before, "alpha 0 is not the previous tick");
+        assert_eq!(drawn_player(&world, Alpha::ONE, &mut buffer), after, "alpha 1 is not the current tick");
+    }
+
+    /// Between the endpoints it has to actually be *between*, and monotonic —
+    /// a blend that jumps or backtracks is judder wearing a different hat.
+    #[test]
+    fn the_blend_crosses_the_gap_once_and_in_order() {
+        let mut world = in_open_ground();
+        world.set_enemy_count(4);
+        let mut buffer = InstanceBuffer::default();
+
+        let before = world.player_pos();
+        world.step(tick_dt(), MoveDir::new(Vec3::X));
+        let after = world.player_pos();
+        let span = (after - before).length();
+
+        // Nine tenths, then the endpoint. An accumulator *cannot* produce alpha
+        // 1: a full tick's worth of carry is a tick, not a blend, so `pending`
+        // consumes it and leaves zero behind. That is why `Alpha::ONE` is a
+        // constant rather than something a frame ever asks for, and asking for
+        // it here by feeding a whole tick would silently sample alpha 0 again.
+        let sampled = (0..10).map(|i| {
+            let mut acc = Accumulator::default();
+            acc.pending(Dt::SECS * i as f32 / 10.0);
+            acc.alpha()
+        });
+
+        let mut furthest = -1.0;
+
+        for alpha in sampled.chain(core::iter::once(Alpha::ONE)) {
+            let drawn = drawn_player(&world, alpha, &mut buffer);
+            let a = alpha.get();
+
+            // On the segment: the two legs sum to the whole only for a point
+            // between the ends.
+            let off = (drawn - before).length() + (after - drawn).length() - span;
+            assert!(off.abs() < 1e-4, "the drawn position left the segment at alpha {a} by {off}");
+
+            // And moving forward along it, never back.
+            let progress = (drawn - before).length();
+            assert!(progress >= furthest - 1e-6, "the blend went backwards at alpha {a}");
+            furthest = progress;
+        }
+
+        assert!((furthest - span).abs() < 1e-4, "the blend reached {furthest}, the tick moved {span}");
+    }
+
+    /// **Found by mutation.** Every other blend test here reads the player,
+    /// because the player is the last instance and therefore the easy one. So
+    /// three separate breakages of the *horde's* interpolation — not blending
+    /// it at all, blending it backwards, and never recording where it was —
+    /// passed the entire suite. The horde is a thousand of the bodies on screen
+    /// and one of them was being checked.
+    #[test]
+    fn the_horde_is_interpolated_too() {
+        let mut world = shoving_through_the_crowd(256);
+        let mut buffer = InstanceBuffer::default();
+
+        let before: Vec<Vec2> = world.enemies.pos.clone();
+        world.step(tick_dt(), MoveDir::new(Vec3::X));
+        let after: Vec<Vec2> = world.enemies.pos.clone();
+
+        let moved: Vec<usize> =
+            (0..after.len()).filter(|&i| before[i] != after[i]).collect();
+        assert!(!moved.is_empty(), "no body moved during the tick under test");
+
+        let at_zero = drawn_enemies(&world, Alpha::ZERO, &mut buffer);
+        let at_one = drawn_enemies(&world, Alpha::ONE, &mut buffer);
+        let at_half = drawn_enemies(&world, half(), &mut buffer);
+
+        for i in 0..after.len() {
+            assert_eq!(at_zero[i], on_ground(before[i], ENEMY_HALF_HEIGHT), "body {i} at alpha 0");
+            assert_eq!(at_one[i], on_ground(after[i], ENEMY_HALF_HEIGHT), "body {i} at alpha 1");
+        }
+
+        for &i in &moved {
+            let span = (at_one[i] - at_zero[i]).length();
+            let off = (at_half[i] - at_zero[i]).length() + (at_one[i] - at_half[i]).length() - span;
+            assert!(off.abs() < 1e-5, "body {i} left the segment between its two ticks");
+            assert_ne!(at_half[i], at_zero[i], "body {i} did not move off its previous tick");
+            assert_ne!(at_half[i], at_one[i], "body {i} was drawn already arrived");
+        }
+    }
+
+    /// **Found by mutation, and it is a real artefact.** Every other test here
+    /// steps immediately after changing the horde, and `step` overwrites `prev`
+    /// — so a respawn that leaves a stale `prev` behind is invisible to all of
+    /// them.
+    ///
+    /// It is visible on screen, though, and the fixed timestep is what makes it
+    /// so: uncapped at ~300fps most frames run **zero** ticks, so a frame is
+    /// drawn between `set_enemy_count` and the next `step` most of the time.
+    /// With a stale `prev` the whole horde streaks in from wherever the old one
+    /// stood — pressing `]` would flicker a thousand bodies across the arena.
+    #[test]
+    fn a_respawned_horde_is_drawn_standing_still() {
+        let mut world = shoving_through_the_crowd(256);
+        let mut buffer = InstanceBuffer::default();
+
+        // Change the count and draw with no tick in between.
+        world.set_enemy_count(64);
+
+        let standing: Vec<Vec3> =
+            world.enemies.pos.iter().map(|&p| on_ground(p, ENEMY_HALF_HEIGHT)).collect();
+
+        for alpha in [Alpha::ZERO, half(), Alpha::ONE] {
+            assert_eq!(
+                drawn_enemies(&world, alpha, &mut buffer),
+                standing,
+                "a horde that has not been stepped was drawn mid-move at alpha {}",
+                alpha.get()
+            );
+        }
+    }
+
+    /// **The rule that makes interpolation safe**, checked rather than assumed:
+    /// drawing must not change what the simulation believes. `extract` takes
+    /// `&self`, so this cannot fail without the signature changing — which is
+    /// the point, and is why the assertion is cheap enough to keep.
+    #[test]
+    fn drawing_never_touches_sim_state() {
+        let mut world = World::default();
+        world.set_enemy_count(64);
+        for _ in 0..10 {
+            world.step(tick_dt(), MoveDir::new(Vec3::X));
+        }
+
+        let untouched = world.hash();
+        let mut buffer = InstanceBuffer::default();
+
+        for i in 0..=8 {
+            let mut acc = Accumulator::default();
+            acc.pending(Dt::SECS * i as f32 / 8.0);
+            world.extract(acc.alpha(), buffer.sink());
+            assert_eq!(world.hash(), untouched, "extract at {i}/8 of a tick changed the world");
+        }
+    }
+
+    /// **The seam again, one layer up.** `facing` is wrapped to `-PI..=PI`, so
+    /// a body turning through south steps from `+3.13` to `-3.13` — a real turn
+    /// of 0.02 radians whose naive lerp spins it 6.26 the other way for exactly
+    /// one frame. That reads as a flicker, and flickers get blamed on the
+    /// renderer rather than on the maths.
+    #[test]
+    fn the_drawn_facing_crosses_the_pi_seam_the_short_way() {
+        use core::f32::consts::PI;
+
+        let from = PI - 0.01;
+        let to = -PI + 0.01;
+
+        let mid = blend_angle(from, to, half());
+        assert!(
+            mid.abs() > PI - 0.02,
+            "the drawn facing took the long way round the seam: {mid} should be near ±PI"
+        );
+
+        // And the endpoints still land exactly where they should.
+        assert!((blend_angle(from, to, Alpha::ZERO) - from).abs() < 1e-6);
+        assert!((blend_angle(from, to, Alpha::ONE) - to).abs() < 1e-6);
+
+        // Wrapped, so repeated blending cannot drift out of range.
+        assert!(mid.abs() <= PI, "the drawn facing left -PI..=PI");
+    }
+
+    /// Half a tick in, minted the only way an `Alpha` can be.
+    fn half() -> Alpha {
+        let mut acc = Accumulator::default();
+        acc.pending(Dt::SECS / 2.0);
+        acc.alpha()
+    }
+
+    /// A body nothing touched must be drawn where it stands, not streaked back
+    /// to wherever it last happened to move. This is what `remember()` being
+    /// called for *every* body, every tick, buys.
+    #[test]
+    fn a_body_that_did_not_move_is_drawn_where_it_is() {
+        let mut world = in_open_ground();
+        world.set_enemy_count(16);
+
+        // Out in the open, standing still: nothing moves at all.
+        for _ in 0..5 {
+            world.step(tick_dt(), MoveDir::NONE);
+        }
+        assert_eq!(world.contacts(), 0, "something is touching, so this measures the solver");
+
+        let mut buffer = InstanceBuffer::default();
+        world.extract(half(), buffer.sink());
+        let blended: Vec<Vec3> = buffer.as_slice().iter().map(Instance::pos).collect();
+
+        world.extract(Alpha::ONE, buffer.sink());
+        for (i, (a, b)) in blended.iter().zip(buffer.as_slice()).enumerate() {
+            assert_eq!(*a, b.pos(), "instance {i} moved between alphas while nothing was moving");
+        }
+    }
+
+    /// `prev` has to be *last tick's* value, not two ticks ago and not this
+    /// tick's. Nothing else in this file pins that: the sim is unaffected by a
+    /// missing `remember()`, so both runs of a replay would agree perfectly
+    /// while every body on screen streaked.
+    #[test]
+    fn the_previous_tick_is_the_previous_tick() {
+        // In the crowd, not in open ground: out there no enemy ever moves, so
+        // `prev_pos` trivially equals `pos` and skipping `remember()` entirely
+        // passes. That is how the first version of this test was written, and
+        // mutation is how it was caught.
+        let mut world = shoving_through_the_crowd(256);
+        let east = MoveDir::new(Vec3::X);
+
+        for _ in 0..4 {
+            let expected = world.player.pos;
+            let enemies_before = world.enemies.pos.clone();
+
+            world.step(tick_dt(), east);
+
+            assert_eq!(world.player.prev_pos, expected, "the player's prev is not last tick");
+            assert_eq!(world.enemies.prev_pos, enemies_before, "the horde's prev is not last tick");
+        }
+    }
+
     /// **Predicted from the constant, then asserted** — the discipline the
     /// `scenario` skill is built around, applied to the two rates that exist.
     ///
@@ -966,12 +1324,12 @@ mod tests {
         let mut buffer = InstanceBuffer::default();
 
         world.step(dt, east);
-        world.extract(buffer.sink());
+        world.extract(Alpha::ONE, buffer.sink());
 
         let allocations = alloc_counter::allocations(|| {
             for _ in 0..60 {
                 world.step(dt, east);
-                world.extract(buffer.sink());
+                world.extract(Alpha::ONE, buffer.sink());
             }
         });
 
@@ -1118,7 +1476,7 @@ mod tests {
         world.set_enemy_count(usize::MAX);
 
         let mut buf = InstanceBuffer::default();
-        world.extract(buf.sink());
+        world.extract(Alpha::ONE, buf.sink());
 
         assert_eq!(buf.as_slice().len(), MAX_INSTANCES);
     }

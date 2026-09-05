@@ -105,14 +105,59 @@ impl Accumulator {
         Ticks { remaining: (owed as u32).min(MAX_TICKS_PER_FRAME) }
     }
 
-    /// How far past the last tick the accumulator sits, in seconds.
+    /// How far the frame sits between the last tick and the next.
     ///
-    /// Presentation only — this is what render interpolation will divide by
-    /// `Dt::SECS` to get its blend factor. Nothing in `sim` may read it, or the
-    /// frame rate is back inside the simulation by the side door.
+    /// Presentation only. Nothing inside a pass may read this, or the frame
+    /// rate is back in the simulation by the side door — and unlike `Dt`, that
+    /// cannot be enforced by the type, because an `Alpha` is a perfectly
+    /// ordinary number once you have one. What enforces it is that the only
+    /// thing taking an `Alpha` is `World::extract`, which takes `&self`.
     #[must_use]
-    pub fn carry_secs(&self) -> f32 {
-        self.carry
+    pub fn alpha(&self) -> Alpha {
+        // Always in range already — `pending` removes every whole tick — so the
+        // clamp is for a caller who built an accumulator and never stepped it.
+        Alpha((self.carry / Dt::SECS).clamp(0.0, 1.0))
+    }
+}
+
+/// How far the frame being drawn sits between the last simulation tick and the
+/// next, from 0 to 1.
+///
+/// **This is the one number in the program that is allowed to be smooth.** The
+/// simulation moves in whole ticks; without a blend, a display running at any
+/// rate that is not exactly the tick rate shows some ticks twice and others
+/// never, which reads as judder even at a high frame rate.
+///
+/// The cost is worth writing down rather than discovering later. Interpolating
+/// between the last two ticks means the image is one tick behind the
+/// simulation — a *constant* 16.7ms, where drawing the latest tick directly is
+/// between 0 and 16.7ms behind. Constant latency is the better trade for this
+/// game: a fixed offset is something hands adapt to within minutes, and
+/// variable pacing is exactly what makes two identical hits feel different,
+/// which is the thing the whole project is trying to measure.
+///
+/// Unlike [`Dt`], the private constructor here is not what keeps this out of
+/// the simulation — an `Alpha` is an ordinary number once minted. What keeps it
+/// out is that the only thing that accepts one is `World::extract`, which takes
+/// `&self` and so cannot write anything.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct Alpha(f32);
+
+impl Alpha {
+    /// Exactly the previous tick.
+    pub const ZERO: Self = Self(0.0);
+    /// Exactly the current tick — the simulation as it actually is.
+    ///
+    /// A frame never asks for this (the accumulator's carry is always less than
+    /// a whole tick), but a test, and later a screenshot taken at a tick
+    /// boundary, wants to see the state itself rather than a blend.
+    pub const ONE: Self = Self(1.0);
+
+    /// The blend factor, in `0..=1`.
+    #[inline]
+    #[must_use]
+    pub fn get(self) -> f32 {
+        self.0
     }
 }
 
@@ -155,8 +200,8 @@ mod tests {
         // Another two-thirds makes one whole tick, with a third left over.
         assert_eq!(acc.pending(Dt::SECS * 2.0 / 3.0).len(), 1);
 
-        let left = acc.carry_secs();
-        assert!(left > 0.0 && left < Dt::SECS, "carry must stay a fraction of a tick, got {left}");
+        let left = acc.alpha().get();
+        assert!(left > 0.0 && left < 1.0, "carry must stay a fraction of a tick, got {left}");
     }
 
     /// A long stall must not be repaid. See `MAX_TICKS_PER_FRAME`.
@@ -166,7 +211,7 @@ mod tests {
 
         assert_eq!(acc.pending(10.0).len() as u32, MAX_TICKS_PER_FRAME);
         assert!(
-            acc.carry_secs() < Dt::SECS,
+            acc.alpha().get() < 1.0,
             "the debt from a stalled frame was kept, so the next frame owes even more"
         );
         // The frame after a stall is an ordinary frame again.
@@ -181,9 +226,36 @@ mod tests {
 
         assert_eq!(acc.pending(f32::NAN).len(), 0);
         assert_eq!(acc.pending(-1.0).len(), 0);
-        assert!(acc.carry_secs().is_finite());
+        assert!(acc.alpha().get().is_finite());
 
         assert_eq!(acc.pending(Dt::SECS).len(), 1, "the accumulator stopped working after bad input");
+    }
+
+    #[test]
+    fn alpha_tracks_the_way_through_a_tick() {
+        let mut acc = Accumulator::default();
+
+        assert_eq!(acc.alpha(), Alpha::ZERO, "a fresh accumulator is on a tick boundary");
+
+        acc.pending(Dt::SECS / 4.0);
+        assert!((acc.alpha().get() - 0.25).abs() < 1e-6, "got {}", acc.alpha().get());
+
+        acc.pending(Dt::SECS / 4.0);
+        assert!((acc.alpha().get() - 0.5).abs() < 1e-6, "got {}", acc.alpha().get());
+
+        // Crossing a tick boundary resets the blend rather than running past it.
+        acc.pending(Dt::SECS / 2.0);
+        assert_eq!(acc.alpha(), Alpha::ZERO);
+    }
+
+    #[test]
+    fn alpha_never_leaves_its_range() {
+        let mut acc = Accumulator::default();
+        for frame in [0.0, f32::NAN, -5.0, 1000.0, Dt::SECS * 0.999, Dt::SECS * 5.5] {
+            acc.pending(frame);
+            let a = acc.alpha().get();
+            assert!((0.0..=1.0).contains(&a), "alpha {a} out of range after a {frame}s frame");
+        }
     }
 
     /// Exactness matters more here than it looks: it is what lets a scenario
@@ -198,6 +270,6 @@ mod tests {
         }
 
         assert_eq!(ticks, 600, "feeding exactly one tick per frame produced a different count");
-        assert_eq!(acc.carry_secs(), 0.0, "whole ticks left a remainder behind");
+        assert_eq!(acc.alpha(), Alpha::ZERO, "whole ticks left a remainder behind");
     }
 }
