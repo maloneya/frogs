@@ -17,9 +17,8 @@
 //! attack that connects one tick early is not a bug you can see: the swing
 //! plays, the enemy is hit, nothing crashes and the final state is the state a
 //! correct swing would have left. It exists only in the interval between two
-//! samples, which is exactly why `Trace` was built before the first hitbox
-//! rather than after it. Every timing claim below is asserted against a golden
-//! trace, because a golden trace is the only artefact that can see an interval.
+//! samples. Every timing claim below is therefore asserted against a golden
+//! trace, which is the only artefact that can see an interval.
 
 use glam::Vec2;
 

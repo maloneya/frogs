@@ -8,6 +8,20 @@
 
 use core::f32::consts::{PI, TAU};
 
+/// The angle successive indices should be spread by, in radians.
+///
+/// `PI * (3 - sqrt(5))`, written out because `sqrt` is not const.
+///
+/// **A stable substitute for randomness, and the reason it is shared.** Two
+/// callers need a direction that has to come from *somewhere*, must be the same
+/// somewhere every run, and must not agree with its neighbours: separating
+/// bodies that sit on exactly the same point, and placing successive bodies
+/// around a spawn ring. A random angle would make two identical simulations
+/// diverge, and a fixed one would stack every body in the same direction and
+/// re-stack them on the next tick. Golden-angle steps never repeat and never
+/// clump, which is the property both want.
+pub(crate) const GOLDEN_ANGLE: f32 = 2.399_963_2;
+
 /// Folds an angle into `-PI..=PI`.
 ///
 /// Applied after every turn, so a character spinning for an hour cannot walk

@@ -1,0 +1,33 @@
+// Destroying the thing that makes bodies stops bodies being made.
+//
+// The same source as `a_source_fires_on_the_ticks_it_promises`, removed at tick
+// 15. It fires at 0 and 10, and the ticks it would have fired on — 20 and 30 —
+// pass with nothing in the trace at all. The run is deliberately long enough to
+// contain both of them: a budget of 15 would prove only that the removal
+// happened, not that it stuck.
+//
+// **A source is removed by name, not killed as a body**, because a source is
+// not a body. Whatever a game decides ends one — a nest destroyed, a room
+// cleared, a timer — calls the same function this line does.
+(
+    description: "A source removed at tick 15 makes nothing after it, and the ticks it would have fired on pass empty.",
+    setup: (
+        sources: [
+            (pos: (30.0, 0.0), radius: 3.0, every: 10, seeks: true),
+        ],
+    ),
+    inputs: [],
+    remove_sources: [
+        (at: 15, source: 0),
+    ],
+    budget: (ticks: 31),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
+        enemy_count: 2,
+        seekers: 2,
+        sources: 0,
+        contacts: 0,
+        crowd_contacts: 0,
+        trace: "removing_a_source_stops_the_flow.trace",
+    ),
+)

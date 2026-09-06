@@ -1,0 +1,29 @@
+// A source that maintains a population rather than keeping a promise.
+//
+// `FewerThan(3)` with a cadence of one tick: it fires on ticks 0, 1 and 2, and
+// on tick 3 the count it reads is 3 and it stops. Twenty-seven further ticks
+// pass with the source live, ready, and silent — which is the assertion. A gate
+// that was checked once, or checked against the wrong tick's count, would run
+// away and fill the arena.
+//
+// The count the condition reads is the horde at the *top* of the tick, before
+// anything spawns, which is why three ticks produce exactly three bodies rather
+// than four.
+(
+    description: "A FewerThan source fills the arena to its number and then stops, staying live.",
+    setup: (
+        sources: [
+            (pos: (30.0, 0.0), radius: 3.0, when: FewerThan(3)),
+        ],
+    ),
+    inputs: [],
+    budget: (ticks: 30),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
+        enemy_count: 3,
+        sources: 1,
+        contacts: 0,
+        crowd_contacts: 0,
+        trace: "a_population_condition_fills_and_stops.trace",
+    ),
+)

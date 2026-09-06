@@ -55,6 +55,9 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `trace since <tick>` | every event from that tick on, plus a `# n event(s)` count |
 | `enemies <n>` | clamped count, **and the seeker count**, which a respawn resets to 0 |
 | `seekers <n>` | how many of the bodies now chase the player |
+| `spawn <x> <z> [seek]` | `queued`, not `spawned` — it lands on the next tick |
+| `source <x> <z> [flags]` | the source's name, e.g. `source s0` |
+| `source remove <id>` | takes the name as printed, `s0` |
 | `vsync on\|off` | resulting state |
 | `quit` | then exits |
 
@@ -67,11 +70,37 @@ also how to ask what exists. Malformed input is always reported, never ignored.
 Meta commands say what they mean (`enemies 512`); do **not** simulate the debug
 keys (`[`, `]`, `v`, `p`) to achieve the same thing.
 
-`seekers` is how to see the horde move at all: bodies spawn inert, and chasing
-is a behaviour granted to them. Order matters, because `enemies <n>` respawns
-the horde and retires every name — which revokes every behaviour with them. So
-it is `enemies 200` *then* `seekers 200`, and the reply to the first says
-`seekers 0` to make that hard to miss.
+`seekers` is how to see the *bulk* horde move at all: bodies from `enemies <n>`
+spawn inert, and chasing is a behaviour granted to them. Order matters, because
+`enemies <n>` respawns the horde and retires every name — which revokes every
+behaviour with them. So it is `enemies 200` *then* `seekers 200`, and the reply
+to the first says `seekers 0` to make that hard to miss.
+
+`spawn` and `source` are the other way in, and they go through the simulation's
+own doors rather than a debug dial. `spawn` queues one body, which appears on
+the next tick — the reply says `queued` for exactly that reason, so a `state`
+taken immediately after does not look like a bug. `source` adds something that
+keeps asking:
+
+```sh
+sock "source 12 0 seek every 20 ring 4 near 14"   # a nest, only while the player is close
+sock "source 40 0 fewer 8"                        # keeps eight bodies alive
+sock "source remove s0"                           # and the flow stops
+```
+
+Flags are named, in any order: `seek`, `every <ticks>`, `ring <radius>`,
+`near <radius>` (fire only while the player is within it), `fewer <n>` (fire
+only while the horde is smaller than that). No flags means every tick, forever,
+on one spot. `trace since` then says which source asked for what:
+
+```
+422 fired source=s0
+422 placed id=#2v2
+```
+
+**The game keeps running between your commands.** A source at `every 20` makes
+three bodies a second while you are thinking, so count over a `wait` you asked
+for rather than across two tool calls.
 
 ## Reading state
 
@@ -261,8 +290,11 @@ at 60Hz and the game feels different on faster hardware.
 
 ## Current gaps in the harness
 
-- No mouse, and no scenario setup (no spawn/teleport). Testing combat will want
-  the latter, built on `World::spawn` once entity storage exists.
+- No mouse, and no way to teleport the player — it can only be walked. Placing
+  *bodies* is covered by `spawn` and `source`.
+- `source` cannot describe every source the simulation can hold: the scenario
+  language is the full one. Anything the flags cannot say belongs in a `.ron`
+  file, which is where it should be asserted anyway.
 - `state`'s `sim` half is derived and cannot silently omit a field; the
   `render` half is still hand-written, because `app` has no single struct to
   destructure. `tick` is simulation time and `frames` is wall clock — they are deliberately

@@ -49,8 +49,8 @@ asserting it in a scenario is the same act, made durable and checkable.
 
 The `Stop` hook in `.claude/settings.json` enforces this: it runs the test
 suite **and the scenario runner** when a turn ends, and blocks on failure. Both
-halves are live as of roadmap chunk 3, so rule 4 is now enforced by a process
-exiting nonzero rather than by this paragraph.
+halves are live, so rule 4 is enforced by a process exiting nonzero rather than
+by this paragraph.
 
 ## Commands
 
@@ -77,7 +77,10 @@ echo 'hold d 500' | nc -U /tmp/arpg.sock
 ```
 
 `press`/`release`/`tap`/`hold <key> <ms>` · `wait <ms>` · `shot <path>` ·
-`state` · `trace since <tick>` · `enemies <n>` · `seekers <n>` · `vsync on|off` · `quit`
+`state` · `trace since <tick>` · `enemies <n>` · `seekers <n>` ·
+`spawn <x> <z> [seek]` ·
+`source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>]` ·
+`source remove <id>` · `vsync on|off` · `quit`
 
 Every command replies, and the reply means the effect has **landed** — `hold`
 answers after the key comes back up, `shot` after the file is on disk. So a test
@@ -103,14 +106,17 @@ ban on blocking the main thread, and none of that complexity is warranted here.
 
 **The rule the layout enforces: `gfx` never knows what an enemy is, and `sim`
 never knows what a key is.** Outward, the vocabulary is `Instance` — position,
-scale, colour — and `sim` describes itself in it via `extract()`. Inward, the
-vocabulary is `Action` — intent — and `app` translates devices into it. Both
-dependencies run one way.
+scale, colour — and `sim` describes itself in it via `extract()`. Inward, a
+device becomes an `Action`, named in *screen* directions; `app` asks the camera
+to resolve those to world space and hands `sim` an `Intent`. Both dependencies
+run one way, and the simulation sees neither a key nor a screen.
 
 ```
 crates/
   core/  Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES   glam, bytemuck
-         Action, ActionMask, InputState, Actions, MoveDir, damp
+         Action, ActionMask, InputState, Actions            (input.rs)
+         MoveDir, Intent                                    (intent.rs)
+         Report, damp
   gfx/   Renderer, camera, cube, capture, shader.wgsl            core, wgpu, winit, png
   sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace       core, glam  (no wgpu)
   app/   App, Input + BINDINGS, Clock, harness, wiring, main     core, gfx, sim, winit
@@ -142,7 +148,20 @@ crates/
   - `contact.rs` — whether two bodies touch, and along what line. It stops
     there, because separation, a hitbox and a trigger are three answers to that
     one question.
-  - `pass/seek.rs`, `pass/attack.rs` — the first behaviour, and the swing. The
+  - `pass/` — one module per named pass: `source`, `spawn`, `remember`, `walk`,
+    `seek`, `separate`, `contain`, `face`, `attack`, in that order. The first
+    two are *decide* and *perform*, split on purpose: `source` works out which
+    sources fire and may only push onto the spawn queue — it is handed no
+    storage, so the code that decides new bodies exist cannot make one — and
+    `spawn` is the only pass that changes *what exists*. The horde's length is
+    then constant for the rest of the tick, so no other pass has to defend
+    against a row moving underneath it.
+  - `source.rs` — who asks for spawns, and when. A source is **not** a kind of
+    body: it is what makes bodies, so hanging it off one of its own products
+    inverts the layering and breaks as soon as the thing made is not a body. It
+    is four independent axes — cadence, condition, placement, template — rather
+    than one enum of every useful combination. `pass/mod.rs` is the readable
+    copy of the schedule and must agree with the body of `World::step`. The
     hitbox is `contact`'s question with a different answer, and the signatures
     say so: the solver takes `&mut [Vec2]`, the hitbox `&[Vec2]`.
 - `app` — the wiring layer, and the only crate that sees both sides. `input.rs`

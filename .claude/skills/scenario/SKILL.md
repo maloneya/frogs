@@ -56,19 +56,54 @@ and a prediction about movement then becomes a prediction about the contact
 solver, which cannot be made by hand. Spawn a horde when the horde is the
 subject.
 
+## Putting bodies where you want them
+
+A horde count lays N bodies in a grid nobody wrote down, so predictions about
+them cannot be made by hand. Three ways to place one deliberately, and they are
+different tools:
+
+```ron
+setup: (
+    // Before tick zero. `Seek` is granted separately from placing, because a
+    // body is a body and what makes it an enemy is the list of things it does.
+    actions: [ Place((10.0, 0.0)), Seek(0) ],
+
+    // Something that asks for spawns while the run is going. Four axes:
+    // cadence, gate, placement, template. A source starts *ready*, so its
+    // first body lands on the first tick its gate is open.
+    sources: [
+        (pos: (30.0, 0.0), radius: 3.0, every: 10, when: PlayerWithin(20.0), seeks: true),
+    ],
+),
+// One body, asked for mid-run, through the same queue a source uses.
+spawns: [ (at: 10, pos: (10.0, 0.0), seeks: true) ],
+// A source removed partway. It does not fire on the tick it is removed on.
+remove_sources: [ (at: 15, source: 0) ],
+```
+
+`when` is `Always` (the default), `FewerThan(n)` or `PlayerWithin(r)`; a
+`radius` of zero puts every body on the one point, which stacks them on purpose.
+Bodies that appear mid-run continue the placement numbering `actions` starts, in
+the order they were granted, so `bodies: [(nth: 1, ...)]` can name one.
+
 ## What can be asserted today
 
 `player_pos` (as `(x, z)` with a radius tolerance), `facing` (radians,
-`(value, tol)`), `contacts`, `enemy_count`. Every one is optional. The tick
-budget is always checked — the run must take exactly that many ticks.
+`(value, tol)`), `contacts`, `crowd_contacts`, `struck`, `hitbox`,
+`enemy_count`, `seekers`, `sources`, and `bodies` — a list of `(nth:, pos:,
+seeking:, alive:)` predictions about individually placed bodies. Every one is
+optional. The tick budget is always checked — the run must take exactly that
+many ticks.
 
 Plus `trace: "name.trace"`, a checked-in golden file the run's trace must match
-exactly — see below.
+exactly — see below. **For anything with a window — when a hitbox opened, which
+tick a source fired on — the golden trace is the assertion and the final state
+is not.** A point sample cannot see an interval.
 
 Not yet: pointwise trace assertions (`(tick: 417, event: "hitbox.active")`;
 golden files cover the same ground for now), anything about the image (chunk 6),
-and placing the player or spawning a body anywhere but the default grid
-(chunk 4). If a scenario needs one of those, say so rather than working
+placing the *player* anywhere but the origin (chunk 4), and killing a body
+mid-run (chunk 8). If a scenario needs one of those, say so rather than working
 around it with a warm-up that makes the prediction unreadable.
 
 ## Every scenario is also a replay test

@@ -7,10 +7,10 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use glam::Vec2;
-use arpg_core::{Action, InstanceBuffer, Intent, MoveDir};
+
+use arpg_core::{Action, InstanceBuffer, Intent, MoveDir, Report};
 use arpg_gfx::{OrthoCamera, Renderer};
-use arpg_core::Report;
-use arpg_sim::{Accumulator, World};
+use arpg_sim::{Accumulator, Condition, Placement, Source, Template, World};
 
 use crate::harness::{self, Command, Request};
 use crate::input::Input;
@@ -41,20 +41,16 @@ pub(crate) struct App {
     frames: u64,
     /// Present only when `ARPG_HARNESS` asked for a control socket.
     harness: Option<std::sync::mpsc::Receiver<Request>>,
-    /// Keys to release, and replies to send, once the game clock reaches them.
-    /// Deadlines are the game's own, so a `hold` lasts that long *in the world*.
-    scheduled: Vec<(std::time::Instant, Option<KeyCode>, Option<std::sync::mpsc::Sender<String>>)>,
+    /// Keys to release, and replies to send, once their deadline passes.
+    scheduled: Vec<Deferred>,
     /// Replies owed to callers waiting on a frame to be captured.
     awaiting_frame: Vec<std::sync::mpsc::Sender<String>>,
     /// Frames skipped since the oldest pending screenshot was asked for.
     ///
     /// A capture is recorded between drawing a frame and presenting it, so a
-    /// frame that is never drawn never captures. An occluded window skips every
-    /// frame, and the screenshot then simply never happens — which used to be
-    /// reported as `ok`, because the reply was sent whether or not the draw
-    /// went through. That is the worst possible failure for a test harness
-    /// whose entire contract is that a reply means the effect landed: it turned
-    /// "your window is covered" into "your change did nothing", silently.
+    /// frame that is never drawn never captures, and an occluded window skips
+    /// every frame. Counting them is what lets the reply say "your window is
+    /// covered" rather than a silent `ok` — see [`App::capture_has_stalled`].
     capture_stall: u32,
     /// Reused every frame so a steady state allocates nothing.
     instances: InstanceBuffer,
@@ -67,6 +63,19 @@ pub(crate) struct App {
     /// this crate measures wall clock and is structurally unable to hand any of
     /// it to the simulation.
     accumulator: Accumulator,
+}
+
+/// A key release, a harness reply, or both, owed once `due` passes.
+///
+/// Named rather than a tuple because two of its three fields are optional and
+/// which combination is in play is the whole meaning: `tap` is a release with
+/// no reply, `wait` is a reply with no release, `hold` is both.
+struct Deferred {
+    due: std::time::Instant,
+    /// The key to lift, if this deadline releases one.
+    release: Option<KeyCode>,
+    /// The caller to answer, if one is blocked on this deadline.
+    reply: Option<std::sync::mpsc::Sender<String>>,
 }
 
 /// One notch of zoom per keypress.
@@ -146,18 +155,18 @@ impl App {
                 }
                 Command::Tap(key) => {
                     self.input.on_key(key, true, false);
-                    self.scheduled.push((now, Some(key), None));
+                    self.scheduled.push(Deferred { due: now, release: Some(key), reply: None });
                     "ok".to_string()
                 }
                 Command::Hold(key, ms) => {
                     self.input.on_key(key, true, false);
                     let due = now + std::time::Duration::from_millis(ms);
-                    self.scheduled.push((due, Some(key), Some(reply)));
+                    self.scheduled.push(Deferred { due, release: Some(key), reply: Some(reply) });
                     continue; // replies once the key comes back up
                 }
                 Command::Wait(ms) => {
                     let due = now + std::time::Duration::from_millis(ms);
-                    self.scheduled.push((due, None, Some(reply)));
+                    self.scheduled.push(Deferred { due, release: None, reply: Some(reply) });
                     continue;
                 }
                 Command::Shot(path) => {
@@ -176,6 +185,41 @@ impl App {
                     // to be discovered, because "I set the horde and the
                     // chasing stopped" is otherwise a puzzle.
                     format!("enemies {} seekers {}", self.world.enemy_count(), self.world.seeker_count())
+                }
+                Command::Spawn { x, z, seeks } => {
+                    let what =
+                        if seeks { Template::BODY.seeking() } else { Template::BODY };
+                    // The reply says *queued*, not spawned, because that is what
+                    // happened: the body appears when the next tick runs. A
+                    // reply claiming otherwise would make a `state` taken
+                    // immediately afterwards look like a bug.
+                    if self.world.request_spawn(Vec2::new(x, z), what) {
+                        format!("queued at ({x}, {z}) seeks={seeks}")
+                    } else {
+                        "error: spawn queue full".to_string()
+                    }
+                }
+                Command::Source { x, z, every, radius, seeks, near, fewer } => {
+                    let placement = Placement::around(Vec2::new(x, z), radius);
+                    let what = if seeks { Template::BODY.seeking() } else { Template::BODY };
+                    // Last flag wins, rather than silently combining two gates
+                    // into one nobody wrote.
+                    let condition = match (near, fewer) {
+                        (Some(radius), _) => Condition::PlayerWithin(radius),
+                        (None, Some(n)) => Condition::FewerThan(n),
+                        (None, None) => Condition::Always,
+                    };
+
+                    let id = self
+                        .world
+                        .add_source(Source::new(placement, what).every(every).when(condition));
+                    format!("source {id}")
+                }
+                Command::RemoveSource(id) => {
+                    match self.world.remove_source(id) {
+                        true => format!("removed {id}"),
+                        false => format!("error: no live source {id}"),
+                    }
                 }
                 Command::SetSeekers(n) => {
                     self.world.set_seeker_count(n);
@@ -208,10 +252,9 @@ impl App {
     /// here is the part `sim` genuinely cannot know: how the frame went, what
     /// the camera is doing, whether the renderer is presenting.
     ///
-    /// This replaced a `format!` listing fourteen fields positionally. The old
-    /// shape broke the first time a field was inserted at the front of it,
-    /// because a reader was pulling `player_pos` out by column number; `jq -r
-    /// .sim.tick` cannot break that way.
+    /// JSON rather than a positional line, because the consumer is usually a
+    /// program: `jq -r .sim.tick` does not care what order the fields are in or
+    /// how many were added since it was written.
     fn report_state(&self) -> String {
         let mut out = Report::default();
 
@@ -253,23 +296,18 @@ impl App {
         out
     }
 
-    /// Fails a pending screenshot once it is clear no frame is coming.
+    /// Counts one skipped frame against any pending screenshot, and reports
+    /// whether the wait should be abandoned.
     ///
     /// Waiting forever would be honest and useless: the caller blocks on a
-    /// socket read with no idea why. Waiting a bounded number of skipped frames
-    /// and then saying what went wrong keeps the harness's promise — every
-    /// command replies, and the reply is true — while making the one condition
-    /// that breaks screenshots name itself.
+    /// socket read with no idea why. Giving up after a bounded run of skipped
+    /// frames keeps the harness's promise — every command replies, and the
+    /// reply is true — while making the one condition that breaks screenshots
+    /// name itself.
     ///
-    /// The threshold only has to exceed the skips a healthy run produces, and
-    /// a healthy run captures on the very next frame. A few seconds' worth is
-    /// generous enough that a momentary hiccup does not trip it.
-    ///
-    /// Counts one skipped frame against any pending screenshot and reports
-    /// whether the wait should be abandoned. Split from the abandoning itself
-    /// so the rule is a plain function over a counter: the condition it exists
-    /// for is one this environment cannot reliably produce on demand, and an
-    /// untested error path is one that has never run.
+    /// Split from the abandoning itself so the rule is a plain function over a
+    /// counter. The condition it fires on is one this environment cannot
+    /// produce on demand, and an untested error path is one that has never run.
     fn capture_has_stalled(waiting: bool, stall: &mut u32) -> bool {
         /// Frames of nothing before a screenshot is declared impossible. Only
         /// has to exceed what a healthy run produces, and a healthy run
@@ -295,19 +333,119 @@ impl App {
         let now = std::time::Instant::now();
         let mut still_pending = Vec::new();
 
-        for (due, key, reply) in std::mem::take(&mut self.scheduled) {
-            if now >= due {
-                if let Some(key) = key {
-                    self.input.on_key(key, false, false);
-                }
-                if let Some(reply) = reply {
-                    let _ = reply.send("ok".to_string());
-                }
-            } else {
-                still_pending.push((due, key, reply));
+        for deferred in std::mem::take(&mut self.scheduled) {
+            if now < deferred.due {
+                still_pending.push(deferred);
+                continue;
+            }
+            if let Some(key) = deferred.release {
+                self.input.on_key(key, false, false);
+            }
+            if let Some(reply) = deferred.reply {
+                let _ = reply.send("ok".to_string());
             }
         }
         self.scheduled = still_pending;
+    }
+
+    /// One frame: measure it, run whatever ticks it bought, then draw.
+    ///
+    /// Everything below the `alpha` line is presentation. Nothing there may
+    /// write simulation state, and nothing there may consume an input edge.
+    fn redraw(&mut self) {
+        let (Some(renderer), Some(camera)) = (self.renderer.as_mut(), self.camera.as_mut())
+        else {
+            return;
+        };
+
+        let frame = self.clock.tick();
+
+        // Screen space becomes world space here, and only here. The camera owns
+        // the mapping because it owns the angle; `sim` is handed a direction it
+        // can integrate without knowing a screen exists.
+        let (right, up) = camera.ground_basis();
+        let to_world = |axis: Vec2| MoveDir::new(right * axis.x + up * axis.y);
+
+        // Zero, one or several — a frame buys whole ticks and the remainder
+        // waits.
+        //
+        // **Intent is sampled per tick, not per frame.** `sample` clears the
+        // latched edges, so sampling once per frame means a frame that runs no
+        // ticks consumes a keypress and discards it — and uncapped, most frames
+        // run no ticks. Sampling here makes a press wait for a tick and gives it
+        // to exactly one. The symptom otherwise is "the attack sometimes does
+        // not come out", which points nowhere near the frame loop.
+        for dt in self.accumulator.pending(frame) {
+            let intent = self.input.sample();
+            // `just_pressed`, not `held`: a swing is an edge. Holding the key
+            // must not swing every tick, and a tap shorter than a frame must
+            // still swing exactly once.
+            self.world.step(
+                dt,
+                Intent::new(
+                    to_world(intent.move_axis()),
+                    intent.just_pressed(Action::Attack),
+                ),
+            );
+        }
+
+        // How far this frame falls between the tick just run and the next one.
+        // Everything below draws; nothing below simulates.
+        let alpha = self.accumulator.alpha();
+
+        // Presentation, in three ways at once. **After** the step, or it would
+        // add a frame of lag on top of the smoothing that is there on purpose.
+        // The **drawn** position and the **frame's** delta, not the tick's,
+        // because a rig whose whole job is smoothness must not be given a
+        // stair-step to follow. And `held`, never `sample` — a camera that
+        // consumed a keypress would be the same bug wearing a different hat.
+        let facing = to_world(self.input.held().move_axis());
+        camera.follow(self.world.player_pos_at(alpha), facing, frame);
+
+        self.world.extract(alpha, self.instances.sink());
+        // Counted only when a frame actually reached the screen. An occluded
+        // window skips the draw entirely, and counting those would report
+        // thousands of frames a second for drawing nothing.
+        if renderer.render(camera, self.instances.as_slice()) {
+            self.frames += 1;
+
+            // The capture is written inside `render`, and only on the path that
+            // presents — so this is the first moment the file is known to exist,
+            // and the only place `ok` is honest.
+            self.capture_stall = 0;
+            for reply in std::mem::take(&mut self.awaiting_frame) {
+                let _ = reply.send("ok".to_string());
+            }
+        } else {
+            self.skipped += 1;
+
+            let waiting = !self.awaiting_frame.is_empty();
+            if Self::capture_has_stalled(waiting, &mut self.capture_stall) {
+                // Drop the request too, so it cannot fire minutes later and
+                // write a file after the caller was told it failed.
+                renderer.cancel_capture();
+                for reply in std::mem::take(&mut self.awaiting_frame) {
+                    let _ = reply.send(
+                        "error: no frame was presented, so nothing could be \
+                         captured — the window is occluded or minimised"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+
+        if self.clock.hud_due()
+            && let Some(window) = &self.window
+        {
+            window.set_title(&format!(
+                "arpg — {:.2}ms  {:.0}fps  N={}  ({} instances){}",
+                self.clock.frame_ms(),
+                self.clock.fps(),
+                self.world.enemy_count(),
+                self.instances.as_slice().len(),
+                if renderer.vsync() { "  [vsync]" } else { "  [uncapped]" },
+            ));
+        }
     }
 
     pub(crate) fn run() {
@@ -415,115 +553,7 @@ impl ApplicationHandler for App {
                 camera.set_viewport(size.width, size.height);
             }
 
-            WindowEvent::RedrawRequested => {
-                let frame = self.clock.tick();
-
-                // The per-frame spine: resolve intent against the view, step,
-                // extract.
-                //
-                // Screen space becomes world space here, and only here. The
-                // camera owns the mapping because it owns the angle; `sim` is
-                // handed a direction it can integrate without knowing a screen
-                // exists.
-                let (right, up) = camera.ground_basis();
-                let to_world = |axis: Vec2| MoveDir::new(right * axis.x + up * axis.y);
-
-                // Zero, one or several — a frame buys whole ticks and the
-                // remainder waits.
-                //
-                // **Intent is sampled per tick, not per frame**, and the
-                // difference is not cosmetic. `sample` clears the latched
-                // edges, so sampling once per frame means a frame that runs no
-                // ticks consumes a keypress and discards it — and uncapped,
-                // most frames run no ticks. Sampling here makes a press wait
-                // for a tick, and gives it to exactly one: the first tick of
-                // the frame sees the edge, the rest see only held state.
-                //
-                // Nothing edge-triggered exists yet, so today this changes no
-                // behaviour. It is done now because the first attack button is
-                // where the bug would appear, and it would appear as "the
-                // attack sometimes does not come out", which points nowhere
-                // near the frame loop.
-                for dt in self.accumulator.pending(frame) {
-                    let intent = self.input.sample();
-                    // `just_pressed`, not `held`: a swing is an edge. Holding
-                    // the key must not swing every tick, and a tap shorter
-                    // than a frame must still swing exactly once — which is
-                    // what `InputState` latches edges for.
-                    self.world.step(
-                        dt,
-                        Intent::new(
-                            to_world(intent.move_axis()),
-                            intent.just_pressed(Action::Attack),
-                        ),
-                    );
-                }
-
-                // How far this frame falls between the tick just run and the
-                // next one. Everything below draws; nothing below simulates.
-                let alpha = self.accumulator.alpha();
-
-                // After the step, not before: following last tick's position
-                // would add a frame of lag on top of the smoothing that is
-                // there deliberately. Per frame rather than per tick, and on
-                // the frame's own delta rather than a tick's, because where the
-                // camera points is presentation — the one place wall clock is
-                // still allowed to be read directly.
-                // The *drawn* position, not the simulated one: the camera is
-                // presentation, and following the raw tick position would put
-                // a stair-step under a rig whose entire job is smoothness.
-                // `held`, not `sample`: presentation reads level-triggered
-                // state and must never consume an edge. A camera that ate a
-                // keypress would be the same bug wearing a different hat.
-                let facing = to_world(self.input.held().move_axis());
-                camera.follow(self.world.player_pos_at(alpha), facing, frame);
-
-                self.world.extract(alpha, self.instances.sink());
-                // Counted only when a frame actually reached the screen. An
-                // occluded window skips the draw entirely, and counting those
-                // would report thousands of frames a second for drawing nothing.
-                if renderer.render(camera, self.instances.as_slice()) {
-                    self.frames += 1;
-
-                    // The capture is written inside `render`, and only on the
-                    // path that presents — so this is the first moment the file
-                    // is known to exist, and the only place `ok` is honest.
-                    self.capture_stall = 0;
-                    for reply in std::mem::take(&mut self.awaiting_frame) {
-                        let _ = reply.send("ok".to_string());
-                    }
-                } else {
-                    self.skipped += 1;
-
-                    let waiting = !self.awaiting_frame.is_empty();
-                    if Self::capture_has_stalled(waiting, &mut self.capture_stall) {
-                        // Drop the request too, so it cannot fire minutes later
-                        // and write a file after the caller was told it failed.
-                        renderer.cancel_capture();
-                        for reply in std::mem::take(&mut self.awaiting_frame) {
-                            let _ = reply.send(
-                                "error: no frame was presented, so nothing could be \
-                                 captured — the window is occluded or minimised"
-                                    .to_string(),
-                            );
-                        }
-                    }
-                }
-
-
-                if self.clock.hud_due()
-                    && let Some(window) = &self.window
-                {
-                    window.set_title(&format!(
-                        "arpg — {:.2}ms  {:.0}fps  N={}  ({} instances){}",
-                        self.clock.frame_ms(),
-                        self.clock.fps(),
-                        self.world.enemy_count(),
-                        self.instances.as_slice().len(),
-                        if renderer.vsync() { "  [vsync]" } else { "  [uncapped]" },
-                    ));
-                }
-            }
+            WindowEvent::RedrawRequested => self.redraw(),
 
             _ => {}
         }
@@ -557,10 +587,10 @@ impl ApplicationHandler for App {
 mod tests {
     use super::App;
 
-    /// A screenshot that cannot be taken has to *say so*. The reply used to be
-    /// sent whether or not the frame was drawn, which turned "your window is
-    /// covered" into "your change did nothing" — the worst failure available to
-    /// a harness whose whole contract is that a reply means the effect landed.
+    /// A screenshot that cannot be taken has to *say so*. A reply sent whether
+    /// or not the frame was drawn turns "your window is covered" into "your
+    /// change did nothing" — the worst failure available to a harness whose
+    /// whole contract is that a reply means the effect landed.
     #[test]
     fn a_screenshot_gives_up_only_after_a_long_run_of_skipped_frames() {
         let mut stall = 0;

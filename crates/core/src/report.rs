@@ -8,9 +8,8 @@
 //!
 //! The reason it exists rather than a `format!` at each call site: a
 //! hand-maintained format string is a second list of the world's fields, and a
-//! second list is one that can silently disagree with the first. It is the same
-//! failure `BINDINGS` was restructured to avoid, and the same one that made
-//! `docs/invariants.md` cite three tests that no longer existed.
+//! second list is one that can silently disagree with the first — the same
+//! failure `BINDINGS` was restructured to avoid.
 //!
 //! What it does **not** do by itself is guarantee completeness. Writing every
 //! field is the producer's job, and the way to make that checkable is to
@@ -23,12 +22,10 @@ use glam::Vec3;
 
 /// Collects named fields into a JSON object.
 ///
-/// JSON rather than the space-separated line this replaces, because the
-/// consumer is usually a program: `jq -r .tick` does not care what order the
-/// fields are in or how many were added since it was written, where an `awk
-/// '{print $2}'` breaks the day anything is inserted before column two. That
-/// brittleness was real — a positional reader of the old format broke the first
-/// time `tick` was added to the front of it.
+/// JSON rather than a space-separated line, because the consumer is usually a
+/// program: `jq -r .tick` does not care what order the fields are in or how
+/// many were added since it was written, where `awk '{print $2}'` breaks the
+/// day anything is inserted before column two.
 pub struct Report {
     out: String,
     empty: bool,
@@ -52,13 +49,20 @@ impl Report {
     /// not show up as churn in a diff.
     pub fn num(&mut self, name: &str, value: f32) {
         self.key(name);
-        let _ = write!(self.out, "{value:.4}");
+        self.number(value);
     }
 
     /// A world position, as `[x, y, z]`.
     pub fn vec3(&mut self, name: &str, value: Vec3) {
         self.key(name);
-        let _ = write!(self.out, "[{:.4},{:.4},{:.4}]", value.x, value.y, value.z);
+        self.out.push('[');
+        for (i, v) in [value.x, value.y, value.z].into_iter().enumerate() {
+            if i > 0 {
+                self.out.push(',');
+            }
+            self.number(v);
+        }
+        self.out.push(']');
     }
 
     /// A flag.
@@ -81,6 +85,22 @@ impl Report {
     pub fn finish(mut self) -> String {
         self.out.push('}');
         self.out
+    }
+
+    /// **A non-finite value is written as `null`, not as `NaN`.**
+    ///
+    /// JSON has no NaN or infinity, and `write!` would emit the bare word,
+    /// which no parser accepts. That would break this report at exactly the
+    /// moment it is most needed: a poisoned position is the failure the
+    /// `finite` field exists to announce, and announcing it by making the whole
+    /// object unparseable is announcing nothing. `null` is legal, survives
+    /// `jq`, and is visibly not a number.
+    fn number(&mut self, value: f32) {
+        if value.is_finite() {
+            let _ = write!(self.out, "{value:.4}");
+        } else {
+            self.out.push_str("null");
+        }
     }
 
     fn key(&mut self, name: &str) {
@@ -116,6 +136,16 @@ mod tests {
         r.object("sim", |s| s.int("tick", 7));
         r.int("frames", 9);
         assert_eq!(r.finish(), r#"{"sim":{"tick":7},"frames":9}"#);
+    }
+
+    /// JSON has no NaN. Emitting the bare word would make the whole report
+    /// unparseable at the one moment it matters most — see [`Report::number`].
+    #[test]
+    fn a_value_that_is_not_a_number_is_null() {
+        let mut r = Report::default();
+        r.num("facing", f32::NAN);
+        r.vec3("pos", Vec3::new(1.0, f32::INFINITY, 0.0));
+        assert_eq!(r.finish(), r#"{"facing":null,"pos":[1.0000,null,0.0000]}"#);
     }
 
     #[test]

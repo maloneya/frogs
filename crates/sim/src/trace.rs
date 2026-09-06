@@ -8,9 +8,9 @@
 //! indistinguishable from the correct one; the mistake exists only in the
 //! interval between two samples, and a sample cannot see an interval.
 //!
-//! So this lands **before** the first hitbox rather than after, which is the
-//! whole reason it is worth building while the only things to record are
-//! contacts and wall hits.
+//! So anything with a *window* — an attack, hitstop, a buffered input — can
+//! only be checked here. `state` says where the swing is; this says when it
+//! opened and shut.
 //!
 //! The shape deliberately mirrors `InstanceSink`, the other seam out of `sim`.
 //! There, a pass can only `push` an `Instance` and cannot resize or reset the
@@ -21,6 +21,7 @@
 
 use core::fmt;
 
+use crate::pass::source::SourceId;
 use crate::slots::EntityId;
 
 /// How many events are kept.
@@ -52,6 +53,45 @@ pub enum Event {
     Placed {
         /// The body's new name.
         id: EntityId,
+    },
+    /// A source was added, or removed.
+    ///
+    /// Traced because both happen *outside* a tick, which is the hardest kind
+    /// of state change to account for when reading a trace afterwards — and
+    /// because a source is the explanation for every body it goes on to make.
+    /// A trace that shows bodies appearing with no record of what was asked to
+    /// make them is a trace that answers the wrong question.
+    SourceAdded {
+        /// The source's name, for the life of the world.
+        id: SourceId,
+    },
+    /// A source was removed. Nothing it would have made will be made.
+    SourceRemoved {
+        /// The name that just stopped resolving. Ids are never recycled, so it
+        /// resolves to nothing rather than to a source added later.
+        id: SourceId,
+    },
+    /// A source asked for a body.
+    ///
+    /// **The causal half of a spawn**, and the reason it is separate from
+    /// `Placed`: that one says a body appeared, this one says who asked. With
+    /// two sources running, nothing else in the trace can tell their output
+    /// apart.
+    Fired {
+        /// Which source asked.
+        source: SourceId,
+    },
+    /// Requests the world could not grant this tick.
+    ///
+    /// **The event that exists so a dropped spawn cannot be silent.** Nothing
+    /// appears, nothing errors, and the only other evidence would be a body a
+    /// designer expected and did not get. Summarised per tick, because the
+    /// interesting fact is that asking outran granting, not which particular
+    /// request lost.
+    Refused {
+        /// Requests dropped: the queue was full, or the horde was already at
+        /// the instance budget.
+        count: usize,
     },
     /// One body was removed, and its name retired.
     Removed {
@@ -88,9 +128,8 @@ pub enum Event {
     ///
     /// Separate from `Contacts`, which is the player's own. They answer
     /// different questions — "is the character being jostled" and "is the crowd
-    /// settling" — and the one number that used to be both could not tell a
-    /// player wading into a pack from a pack shaking itself apart with nobody
-    /// near it.
+    /// settling" — and one number covering both could not tell a player wading
+    /// into a pack from a pack shaking itself apart with nobody near it.
     Crowded {
         /// Enemy pairs resolved.
         count: usize,
@@ -110,6 +149,10 @@ impl fmt::Display for Event {
         match self {
             Self::Spawned { count } => write!(f, "spawned count={count}"),
             Self::Placed { id } => write!(f, "placed id={id}"),
+            Self::SourceAdded { id } => write!(f, "source added id={id}"),
+            Self::SourceRemoved { id } => write!(f, "source removed id={id}"),
+            Self::Fired { source } => write!(f, "fired source={source}"),
+            Self::Refused { count } => write!(f, "refused count={count}"),
             Self::Removed { id } => write!(f, "removed id={id}"),
             Self::Swung => write!(f, "swung"),
             Self::HitboxOpened => write!(f, "hitbox opened"),

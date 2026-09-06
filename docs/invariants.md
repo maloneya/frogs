@@ -103,6 +103,18 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Every enemy pair is resolved once, not twice | 3 | `crowd` walks `j > i` via `split_at_mut`; `an_overlapped_pair_settles_at_touching` |
 | A recycled slot does not inherit a behaviour | 3 | `Members::index` compares the whole id, not the slot; `a_recycled_slot_does_not_inherit_the_behaviour` |
 | A behaviour costs its membership, not the horde | 0 | `pass::seek` iterates `Members::ids`, and is handed no way to reach a non-member |
+| Nothing inside a tick can change what exists | 0 | no pass is handed `&mut Enemies` except `pass::spawn::drain`, which is first in the schedule; every other pass takes slices |
+| A request cannot be granted late | 3 | `a_request_becomes_a_body_on_the_next_tick_and_not_before`, and `a_queued_spawn_lands_on_its_own_tick` pins the tick by position, mutation-checked |
+| A refused spawn cannot be silent | 3 | `request_spawn` is `#[must_use]`; `Event::Refused` is emitted by the drain; `a_full_queue_refuses_out_loud` |
+| A template grants what it names and nothing else | 3 | one line per behaviour in `pass::spawn::place`; `two_kinds_of_enemy_from_one_description`, whose bystander is the control |
+| Pending requests reach the determinism hash | 1 | `World::hash` destructures `queue`; `SpawnQueue::hash` and `Template::hash_into` destructure themselves |
+| The code that decides a spawn cannot perform one | 0 | `pass::source::trigger` is handed the queue and two facts, and no storage at all |
+| A source fires on the ticks its cadence claims | 3 | `a_source_fires_on_the_ticks_it_promises`, whose golden trace is the tick list; mutation-checked against `every` vs `every - 1` |
+| A gated source does not lose its turn | 3 | cadence is checked before the condition and a shut gate leaves the countdown alone; `a_source_waits_for_the_player_to_arrive` with `every: 60` inside a 40-tick budget, mutation-checked |
+| A removed source stops making bodies | 3 | `removing_a_source_stops_the_flow`, whose budget covers two ticks it would otherwise have fired on |
+| A source id can never be recycled | 0 | `Sources` is never compacted; a removed row stays `None`, which is why `SourceId` needs no generation |
+| A ring never stacks what it makes | 3 | golden-angle step per emission; `a_ring_does_not_stack_what_it_makes` |
+| Source state reaches the determinism hash | 1 | `World::hash` destructures `sources`; `Sources::hash` walks dead rows too, so ids line up on replay |
 | The horde can always be outrun | 1 | `const _: () = assert!(SPEED < PLAYER_SPEED)` in `pass/seek.rs` |
 | A chaser arrives without grinding | 3 | step clamped to `remaining`; `a_seeker_stops_where_it_touches`, whose golden trace is empty |
 | A hitbox cannot move what it touches | 0 | `pass::attack` takes `&[Vec2]`; there is no `&mut` to write through |
@@ -119,3 +131,5 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Asking whether two bodies touch cannot move them | 0 | `contact::between` takes `Vec2` by value and returns a `Contact` |
 | The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
 | The harness cannot fall behind the bindings | 0 | key names live *in* `BINDINGS`; there is no second table to forget |
+| A state report stays parseable when a value is not a number | 3 | `Report::number` writes `null`; `a_value_that_is_not_a_number_is_null` |
+| The readable schedule cannot silently disagree with `World::step` | 4 | prose in `pass/mod.rs` — the one ordering claim nothing checks |

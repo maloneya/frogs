@@ -74,10 +74,9 @@ pub(crate) fn player(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink
 
 /// Separates the horde against itself, and reports how many pairs it resolved.
 ///
-/// **This is what makes the horde a crowd.** Until it existed the bodies were a
-/// grid of positions that happened to be drawn near one another: they collided
-/// with the player and passed straight through each other, so shoving into them
-/// compressed them to a point instead of displacing them outward.
+/// **This is what makes the horde a crowd** rather than a grid of positions
+/// drawn near one another. Without it, shoving into the pack compresses it to a
+/// point instead of displacing it outward.
 ///
 /// Every unordered pair once — `j` starts past `i` — so a pair is never
 /// resolved twice, which would double the correction and make the crowd

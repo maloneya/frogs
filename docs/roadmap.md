@@ -51,12 +51,11 @@ what matters here is what it left behind to build on.
 Identity landed; what is left is the player becoming a row like everything else,
 so passes take slices for it too rather than its individual fields.
 
-**Resolve a contradiction first.** The doc comment on `Player` argues it stays a
-separate struct because folding it into the horde would pay for player-only
-fields N times. That was correct against dense arrays and dissolves under sparse
-sets: player-only state lives in its own membership set, so the player can be a
-body without any enemy paying for what only it has. Fix the comment or abandon
-the chunk — do not leave a doc arguing against the change being made.
+The old objection — that folding the player into the horde would pay for
+player-only fields N times — was correct against dense arrays and dissolves
+under sparse sets: player-only state lives in its own membership set, so the
+player can be a body without any enemy paying for what only it has. The doc on
+`Player` now says so rather than arguing the other way.
 
 **Gate:** scenarios stay green across the refactor.
 
@@ -81,18 +80,47 @@ the remaining gap in the perception stream.
 **Gate:** the yaw pixel test and a `shot` scenario both pass with no window
 present.
 
-## 7. A real spawner — *hooks*
+## 7. A real spawner — *hooks* — **done**
 
-Bodies spawn inert and `seekers <n>` is a debug dial, not a spawner: "the first
-n" is a fact about storage order rather than about the game. A real one grants
-behaviours per body as it places them, from something describing what *kind* of
-enemy this is.
+Two halves, built in that order.
 
-Whether the default horde chases is a game decision, not an engine one, and it
-will churn three golden traces when it is made.
+**The machinery under a spawner.** A bounded queue of requests, one pass
+(`pass::spawn::drain`) that grants them, and a `Template` saying which
+behaviours a new body is given. Spawning is structural — it moves rows other
+passes hold indices into — so the drain is the only pass that changes what
+exists, and it is first.
 
-**Gate:** a scenario places two kinds of enemy from one description and asserts
-they behave differently.
+**The thing that asks.** `pass::source::trigger` runs immediately before the
+drain, is handed no storage, and may only push onto the queue: the code that
+decides bodies exist cannot make one. A source is four independent axes —
+cadence, `Condition`, `Placement`, `Template` — rather than one enum of every
+combination, and it lives in its own list rather than on a body, because a
+source is what *makes* bodies.
+
+Two decisions worth knowing before changing anything here, both mutation-checked
+against scenarios: a source starts **ready**, so its first body lands on the
+first tick its gate is open rather than one cadence later; and a ready source
+whose gate is shut **stays** ready, so enemies appear when the player walks in
+rather than up to a cadence afterwards.
+
+Whether the default horde chases is still a game decision, not an engine one,
+and it will churn three golden traces when it is made.
+
+**Gate:** met — `a_source_fires_on_the_ticks_it_promises` (the golden trace *is*
+the tick list), `removing_a_source_stops_the_flow`, `a_source_waits_for_the_player_to_arrive`
+(the tick predicted from `PLAYER_SPEED` before running),
+`a_population_condition_fills_and_stops`, and
+`two_kinds_of_enemy_from_one_description`.
+
+### Left out on purpose
+
+- **One body per fire.** Three at once is three sources or three ticks. A
+  `count` axis is a field and a loop; it was cut because nothing needs it yet.
+- **No budget.** A source runs until it is removed. `FewerThan` covers
+  maintaining a population, which is what most uses of a count are reaching for.
+- **Nothing in the simulation removes a source.** `remove_source` exists and is
+  called by a scenario or the harness; a nest that dies when a body dies waits
+  on chunk 8.
 
 ## 8. Health, damage and death — *sim layer*
 
@@ -118,8 +146,20 @@ change produces a reviewable diff rather than a claim about feel.
 
 - **Nothing dies.** A swing registers hits and that is all it does — no health,
   no damage, no corpses. Chunk 8.
-- **Every chaser is identical.** One speed, one behaviour, granted in bulk by a
-  debug dial. Chunk 7.
+- **Every chaser is identical.** One speed, one behaviour. A `Template` grants
+  it per body and a source picks the template, so two kinds of enemy are
+  describable; what is missing is a second thing for them to differ *in*.
+- **`set_enemy_count` is a second spawn door, and it ignores templates.**
+  `Enemies::respawn` writes the storage directly: it grants no behaviours and
+  emits no `placed` events, where `place` and the drain do both. That is
+  tolerable because it is a debug dial — `[`, `]` and `enemies <n>` — and not
+  how the game will ever make a body. Unifying it means `set_enemy_count`
+  taking a `Template`, which churns the scenario spec, the harness and a dozen
+  tests to make a debug key more principled. Left alone deliberately; if the
+  bulk path ever becomes gameplay, fix it then.
+- **A source is never destroyed by the game.** Sources fire on a cadence and a
+  condition, and only a scenario, the harness or explicit code removes one —
+  nothing inside the simulation does, because nothing can die yet. Chunk 8.
 - `World::extract()` rebuilds the 16384 static ground tiles every frame and
   re-uploads the whole instance buffer. Deferred with a number behind it: 17409
   instances render in ~3ms uncapped on the M4, so a static/dynamic split is not

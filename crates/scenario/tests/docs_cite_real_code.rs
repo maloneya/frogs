@@ -1,22 +1,16 @@
 //! Every identifier the documentation names must exist in the source.
 //!
 //! `docs/invariants.md` opens by admitting it is "a snapshot, not the source of
-//! truth" and that "an entry here can silently disagree with the code". On the
-//! first run of this check it disagreed three ways: two tests cited by name had
-//! been renamed when their constants moved into pass modules, and one helper
-//! had been renamed when it was shared with the render blend. Nothing failed;
-//! the docs simply described a program that no longer existed.
-//!
-//! That is the exact failure the `BINDINGS` table was restructured to avoid —
-//! a second list that drifts from the first — and it had reappeared in the file
-//! whose job is to describe how such drift is prevented.
+//! truth" and that "an entry here can silently disagree with the code". This is
+//! what stops the cheapest kind of disagreement: a doc naming a test or a helper
+//! that was renamed out from under it. Nothing fails when that happens — the
+//! docs simply describe a program that no longer exists.
 //!
 //! **What this cannot check.** It verifies that a cited name *exists*, not that
-//! the claim about it is *true*. The same audit turned up a row asserting
-//! "`follow` is the only writer" of the camera target when `snap_to` writes it
-//! too — both names exist, and the sentence was still wrong. Semantic claims
-//! stay a reading job. This catches renames and deletions, which is the bulk of
-//! real drift and all of the silent kind.
+//! the claim about it is *true*. A row asserting "`follow` is the only writer"
+//! of the camera target while `snap_to` also writes it names two real functions
+//! and is still wrong. Semantic claims stay a reading job. This catches renames
+//! and deletions, which is the bulk of real drift and all of the silent kind.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -117,7 +111,7 @@ fn read_all(root: &Path, roots: &[&str]) -> String {
 
     // Paths as well as contents. A doc naming `walk_east` is citing
     // `scenarios/walk_east.ron`, and that file existing is exactly the thing
-    // being asserted — the first run flagged both scenario filenames for this.
+    // being asserted.
     let names = files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n");
 
     let bodies =

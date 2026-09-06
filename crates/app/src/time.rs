@@ -34,11 +34,10 @@ impl Default for Clock {
 impl Clock {
     /// Call once per frame. Returns how long the frame took, in seconds.
     ///
-    /// Unclamped, and that is a change: this used to cap the value at 0.1s so a
-    /// stalled frame could not teleport the player through a wall. The cap did
-    /// not disappear, it moved — `sim`'s accumulator now caps the number of
-    /// *ticks* a frame may run, which is the same guard expressed in the unit
-    /// that decides it, and enforced by the only code that can mint a step.
+    /// **Unclamped.** The guard against a stalled frame teleporting the player
+    /// lives in `sim`'s accumulator, which caps the number of *ticks* a frame
+    /// may run — the same rule expressed in the unit that decides it, and
+    /// enforced by the only code that can mint a step.
     ///
     /// So what leaves here is the honest measurement, which is what the HUD and
     /// the harness want anyway: a clamp reaching into the frame-time readout

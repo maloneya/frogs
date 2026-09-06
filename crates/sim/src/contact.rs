@@ -10,10 +10,9 @@
 //! - a trigger volume emits an event and does not even look at the depth,
 //! - knockback wants the normal and throws the body along it.
 //!
-//! Those are four different passes over the same question. While the question
-//! and one of its answers lived in the same function — as they did, in
-//! `pass::separate::pair` — an attack could not *reuse* touching, only
-//! re-implement it, and the second implementation is where the two quietly
+//! Those are four different passes over the same question. Fuse the question
+//! into any one of its answers and the others cannot *reuse* touching, only
+//! re-implement it — and the second implementation is where the two quietly
 //! stop agreeing about what "overlapping" means.
 //!
 //! ## Discs
@@ -156,10 +155,7 @@ pub(crate) fn between(a: Vec2, b: Vec2, contact_distance: f32, tiebreak: usize) 
 /// bodies fans out instead of every one of them being pushed the same way and
 /// re-stacking on the next tick.
 fn escape_direction(tiebreak: usize) -> Vec2 {
-    /// `PI * (3 - sqrt(5))`, written out because `sqrt` is not const.
-    const GOLDEN_ANGLE: f32 = 2.399_963_2;
-
-    let angle = tiebreak as f32 * GOLDEN_ANGLE;
+    let angle = tiebreak as f32 * crate::angle::GOLDEN_ANGLE;
     Vec2::new(angle.cos(), angle.sin())
 }
 

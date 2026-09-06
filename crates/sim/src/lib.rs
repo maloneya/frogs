@@ -17,8 +17,16 @@ mod time;
 mod trace;
 
 pub use hash::Fnv;
+/// What to make, and what behaviours it should be granted. See
+/// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
+pub use pass::spawn::Template;
+/// Who asks for spawns, and when. See [`crate::pass::source`] for why a source
+/// is its own thing rather than a behaviour on a body.
+pub use pass::source::{Condition, Placement, Source, SourceId};
 pub use slots::EntityId;
 use members::Members;
+use pass::source::Sources;
+use pass::spawn::SpawnQueue;
 use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, Ticks, TICK_HZ};
 pub use trace::{Event, Trace};
@@ -56,18 +64,16 @@ fn on_ground(p: Vec2, height: f32) -> Vec3 {
 
 /// Ground plane size, in tiles.
 ///
-/// Sized so the world is comfortably larger than the view. A tracking camera
-/// is meaningless otherwise: if the whole arena fits on screen there is nothing
+/// Sized so the world is comfortably larger than the view. A tracking camera is
+/// meaningless otherwise: if the whole arena fits on screen there is nothing
 /// for the camera to reveal, and following just slides the floor around inside
 /// a frame that already showed everything.
 ///
-/// The size is also what keeps the void off screen, and it is why the camera
-/// does *not* clamp itself to the world bounds. Under this projection the view
-/// covers roughly 57x55 world units of floor, whose axis-aligned footprint is
-/// ~40 units either side of the focus. Subtract that from a 48-unit arena and a
-/// bounds-clamped camera could travel +/-8 units total — it would be pinned,
-/// and following would stop working before the player reached the edge. Making
-/// the world bigger is the fix that a camera clamp only pretends to be.
+/// It is also why the camera does *not* clamp itself to the world bounds. The
+/// view covers ~57x55 world units of floor, a footprint of ~40 units either
+/// side of the focus, so an arena has to be several times that before a clamp
+/// leaves the camera any room to move at all. A bigger world is the fix a
+/// camera clamp only pretends to be.
 const GROUND_TILES: usize = 128;
 const TILE: f32 = 1.5;
 
@@ -87,11 +93,10 @@ const _: () = assert!(GROUND_INSTANCES < MAX_INSTANCES, "the floor alone must fi
 /// same instance buffer in the same draw call, so the enemy budget is whatever
 /// they leave behind.
 ///
-/// This constant lives next to the field it bounds rather than in the caller.
-/// That placement is the whole point: previously the subtraction happened in
-/// `app.rs`, which meant `World` did not know its own limit and any *second*
-/// writer of `enemy_count` would silently overrun the GPU buffer — a failure
-/// with no error message, since the upload just truncates.
+/// It lives next to the field it bounds rather than in the caller, so `World`
+/// knows its own limit. A second writer of the horde that had to remember the
+/// subtraction would silently overrun the GPU buffer — a failure with no error
+/// message, since the upload just truncates.
 const MAX_ENEMIES: usize = MAX_INSTANCES - GROUND_INSTANCES - 1;
 
 /// How large the horde starts. Big enough to read as a crowd, small enough that
@@ -179,15 +184,8 @@ const PLAYER_HALF_HEIGHT: f32 = PLAYER_SCALE.y * 0.5;
 
 /// Where the horde is.
 ///
-/// Until now an enemy had no position. `extract_enemies` derived one from the
-/// loop index on the way to the GPU and threw it away, which made the horde a
-/// *drawing* rather than a thing — there was nothing for a shove to move,
-/// because there was nothing there between frames. Storing it is the whole
-/// content of this step, and every interaction downstream needs it first.
-///
-/// Structure-of-arrays rather than `Vec<Enemy>`, decided now while there is
-/// nothing to migrate. The broadphase that lands next walks positions and
-/// nothing else, and a contiguous stream is what it wants; fields an enemy
+/// Structure-of-arrays rather than `Vec<Enemy>`. The solvers walk positions and
+/// nothing else, and a contiguous stream is what they want; fields an enemy
 /// gains later — health, AI state, cooldowns — belong in their own arrays
 /// beside this one, so the hot loop never drags them through cache on its way
 /// to a position it does want.
@@ -212,15 +210,13 @@ struct Enemies {
     pos: Vec<Vec2>,
     /// Where each body was at the end of the *previous* tick.
     ///
-    /// Read only by `extract`, and written only by `step` copying `pos` before
-    /// it changes. It is simulation-owned data that exists purely for
-    /// presentation, which sounds like a contradiction and is not: the
-    /// alternative is `app` snapshotting a thousand positions every tick to
-    /// hand back later, which is the same copy done further from the data and
-    /// with a chance of being skipped.
+    /// Read only by `extract`, written only by [`crate::pass::remember`]. It is
+    /// simulation-owned data that exists purely for presentation, which sounds
+    /// like a contradiction and is not: the alternative is `app` snapshotting a
+    /// thousand positions every tick to hand back later — the same copy, done
+    /// further from the data and with a chance of being skipped.
     ///
-    /// Kept exactly the same length as `pos` — `respawn` is the only thing that
-    /// changes either, and it rebuilds both.
+    /// Always exactly as long as `pos`; see [`Enemies::debug_check_paired`].
     prev_pos: Vec<Vec2>,
 }
 
@@ -231,13 +227,11 @@ impl Enemies {
 
     /// Lays `n` enemies out in a square grid centred on the origin.
     ///
-    /// Respawns the whole horde rather than appending to it, which keeps `[`
-    /// and `]` behaving exactly as they did: the layout is a function of N, so
-    /// halving it re-centres what is left rather than deleting a corner.
-    /// Enemies that persist across a count change is the better model and it is
-    /// what real spawning will want — but it is a *spawning* decision, and
-    /// smuggling it in beside the storage change would mean this step could no
-    /// longer be checked by the picture staying identical.
+    /// Respawns the whole horde rather than appending to it, so the layout
+    /// stays a function of N alone: halving it re-centres what is left rather
+    /// than deleting a corner. Bodies that persist across a count change is the
+    /// better model, and it belongs to the real spawner (roadmap chunk 7)
+    /// rather than to a debug dial.
     fn respawn(&mut self, n: usize) {
         // `clear` keeps the allocations, so doubling N repeatedly grows the
         // buffers a few times rather than reallocating on every press.
@@ -293,10 +287,9 @@ impl Enemies {
     /// Removes one body. Returns whether the id named a live one.
     ///
     /// Every parallel array is `swap_remove`d at the index `Slots` hands back,
-    /// which is what keeps the rows dense and the correspondence intact. An
-    /// array that is added later and forgotten here is the one bug this shape
-    /// still allows, and the debug assertions are what catch it on the next
-    /// test run rather than at the next contact.
+    /// which keeps the rows dense and the correspondence intact. An array added
+    /// later and forgotten here is the one bug this shape still allows, and
+    /// [`Enemies::debug_check_paired`] is what catches it.
     fn despawn(&mut self, id: EntityId) -> bool {
         let Some(dense) = self.slots.remove(id) else { return false };
 
@@ -314,17 +307,20 @@ impl Enemies {
 
 /// The player-controlled character.
 ///
-/// A single struct held apart from the horde, and it stays that way even once
-/// enemy storage becomes SoA arrays: there is exactly one of these, it is the
-/// only thing input drives, and it will accumulate state no enemy has — facing,
-/// attack phase, i-frames, buffered inputs. Wedging it into the horde's storage
-/// to avoid a "special case" would mean paying for those fields N times.
+/// A single struct held apart from the horde, and **that is a limitation rather
+/// than a design**. The original argument for it — that player-only fields
+/// would cost N times if the player were a row — dissolved when behaviours
+/// became sparse sets: state only the player has lives in its own membership
+/// set, so the player can be a body without any enemy paying for it. What
+/// remains is that the passes take its fields individually where the horde gets
+/// a slice, so the borrow checker checks half of every signature. Roadmap
+/// chunk 4 closes that.
 #[derive(Default)]
 struct Player {
     /// Ground-plane position, on the same terms as the horde's: the height a
     /// body is drawn at is a constant of its size, so there is no Y here for
-    /// movement to leave the floor through. That used to be a unit test; it is
-    /// now unrepresentable, which is where an invariant belongs.
+    /// movement to leave the floor through. Unrepresentable rather than tested,
+    /// which is where an invariant belongs.
     pos: Vec2,
     /// Which way the body points, in radians. Yaw 0 faces world +Z and positive
     /// turns toward +X, matching `Instance::with_yaw` and `shader.wgsl`.
@@ -347,8 +343,8 @@ struct Player {
     attack: pass::attack::Attack,
 }
 
-/// What exists. This is where the simulation will live as it grows —
-/// fixed-timestep stepping, entity storage, spatial partitioning.
+/// What exists: the horde, the player, and the bookkeeping the two seams —
+/// [`World::extract`] and [`World::trace`] — hand out.
 pub struct World {
     enemies: Enemies,
     player: Player,
@@ -369,15 +365,14 @@ pub struct World {
     /// be unavailable to the scenario runner, which is the consumer that
     /// matters most.
     trace: Trace,
-    /// Contacts resolved by the last [`World::step`].
+    /// Player-against-horde contacts resolved by the last [`World::step`].
     ///
-    /// The instrument the collision work is measured with, and it exists
-    /// because the alternative was reading pixels: a body is nine pixels across
-    /// at this zoom and a contact displaces it by a fraction of that, so
-    /// "is anything actually touching" is invisible on screen and obvious as a
-    /// number. It earns its keep twice — when the broadphase lands, a grid that
-    /// finds a different number of contacts than brute force is wrong, and this
-    /// is how that gets caught.
+    /// The instrument the collision work is measured with. A body is nine
+    /// pixels across at this zoom and a contact displaces it by a fraction of
+    /// that, so "is anything actually touching" is invisible on screen and
+    /// obvious as a number. It earns its keep again when the broadphase lands:
+    /// a grid that finds a different number of pairs than brute force is wrong,
+    /// and this is what catches it.
     contacts: usize,
     /// Which bodies chase the player.
     ///
@@ -390,30 +385,42 @@ pub struct World {
     /// See [`crate::members`] for why the set is sparse, and
     /// [`crate::pass::seek`] for the pass that walks it.
     seekers: Members,
+    /// What has been asked for and not yet made.
+    ///
+    /// **The seam that lets anything ask for a spawn without being able to
+    /// perform one.** Spawning moves rows, and every pass in the schedule holds
+    /// an index into them, so exactly one pass grants — first, before anything
+    /// reads a position. See [`crate::pass::spawn`], which carries the argument.
+    queue: SpawnQueue,
+    /// Everything that asks for spawns, and the state each needs to decide.
+    ///
+    /// A list of its own rather than a behaviour attached to a body: a source
+    /// is what *makes* bodies, so hanging it off one of its products inverts
+    /// the layering and breaks as soon as the thing being made is not a body.
+    /// See [`crate::pass::source`].
+    sources: Sources,
     /// Enemy pairs the crowd solver pushed apart in the last [`World::step`].
     ///
-    /// Kept apart from `contacts` rather than summed into it, for the reason
-    /// `contacts` exists at all: it is the instrument the collision work is
-    /// measured with. One number covering both cannot distinguish the player
-    /// wading into a pack from the pack settling on its own, and it is
-    /// precisely the crowd half that the uniform grid will change — so the
-    /// test "the grid finds the same pairs as brute force" wants to compare
-    /// this number specifically.
+    /// Kept apart from `contacts` rather than summed into it: one number
+    /// covering both cannot distinguish the player wading into a pack from the
+    /// pack settling on its own, and it is the crowd half specifically that the
+    /// uniform grid will change.
     crowd_contacts: usize,
 }
 
 impl Default for World {
     fn default() -> Self {
-        let mut world =
-            Self {
-                enemies: Enemies::default(),
-                player: Player::default(),
-                tick: 0,
-                trace: Trace::default(),
-                seekers: Members::default(),
-                contacts: 0,
-                crowd_contacts: 0,
-            };
+        let mut world = Self {
+            enemies: Enemies::default(),
+            player: Player::default(),
+            tick: 0,
+            trace: Trace::default(),
+            seekers: Members::default(),
+            queue: SpawnQueue::default(),
+            sources: Sources::default(),
+            contacts: 0,
+            crowd_contacts: 0,
+        };
         world.set_enemy_count(DEFAULT_ENEMIES);
         world
     }
@@ -434,23 +441,38 @@ impl World {
     /// spawner, a save-load path or a debug console added later inherits it
     /// without having to know `MAX_ENEMIES` exists.
     ///
-    /// **Zero is allowed.** It used to clamp to a minimum of one, which was
-    /// wrong on its own terms — enemies are going to die, and an empty arena is
-    /// a state this game reaches by playing it well rather than an error. It
-    /// also made the simplest possible scenario impossible to write: the horde
-    /// spawns centred on the origin and so does the player, so *any* horde puts
-    /// the two in contact on tick zero, and every prediction about plain
-    /// movement is really a prediction about the solver.
+    /// **Zero is allowed.** An empty arena is a state this game reaches by
+    /// playing it well, not an error. It is also what makes the simplest
+    /// scenarios writable: the horde and the player both spawn centred on the
+    /// origin, so *any* horde puts the two in contact on tick zero, and a
+    /// prediction about plain movement becomes a prediction about the solver.
     pub fn set_enemy_count(&mut self, n: usize) {
         // **Exhaustive, for the reason `hash` and `report` are.** This is one of
-        // the two doors where a behaviour set must be considered, and it was the
-        // only kind of place in `World` that could forget one silently. Now a
-        // new field stops the crate compiling until someone has decided here
-        // whether a wholesale respawn should revoke it.
-        let Self { enemies, seekers, trace, tick, player: _, contacts: _, crowd_contacts: _ } =
-            self;
+        // the two doors where a behaviour set must be considered, so a new field
+        // stops the crate compiling until someone has decided here whether a
+        // wholesale respawn should revoke it.
+        // `sources` is deliberately untouched. This dial resizes the *horde*,
+        // and a source is not a body: clearing the level's sources because
+        // somebody asked for a different number of enemies would be a debug
+        // key deleting content.
+        let Self {
+            enemies,
+            seekers,
+            queue,
+            trace,
+            tick,
+            sources: _,
+            player: _,
+            contacts: _,
+            crowd_contacts: _,
+        } = self;
 
         enemies.respawn(n.min(MAX_ENEMIES));
+
+        // Pending requests are decisions made *before* this reset, and granting
+        // them afterwards would put bodies in an arena that was just rebuilt to
+        // hold a stated number. The dial is a reset; this is part of resetting.
+        queue.clear();
 
         // Every name the horde had is now retired, so a set that survived would
         // hold only ids that resolve to nothing. Cleared anyway, because the
@@ -477,29 +499,76 @@ impl World {
     /// that ignores this gets a compiler warning; a caller that never saw it
     /// would get an invisible bug.
     ///
-    /// **This is the door scenarios needed.** Until it existed the only setup
-    /// primitive was a horde count laid out in a grid, so nothing that depends
-    /// on a body being in a *particular* place could be asserted — which is
-    /// most of what steering and hitboxes will want to say.
-    pub fn spawn_enemy(&mut self, at: Vec2) -> Option<EntityId> {
-        if self.enemies.len() >= MAX_ENEMIES {
-            return None;
+    /// **The door scenarios place bodies through.** A horde count lays N bodies
+    /// out in a grid nobody wrote down; this is what lets an assertion be about
+    /// a body at a *particular* spot.
+    ///
+    /// **Immediate, which is what makes it a setup door rather than a gameplay
+    /// one.** Nothing inside the simulation can call this, and that is a fact
+    /// rather than a rule: a spawn during a tick moves rows out from under
+    /// indices the passes have already taken, and no pass is ever handed a
+    /// `&mut World` to reach it with. Setup and the harness may, because
+    /// neither runs while the schedule does. Everything else asks — see
+    /// [`World::request_spawn`].
+    pub fn place(&mut self, at: Vec2, what: Template) -> Option<EntityId> {
+        // Traced for the same reason `set_enemy_count` is: it happens *outside*
+        // the schedule, and state that changes between ticks is the hardest kind
+        // to account for when reading a trace later. The event is emitted by
+        // `pass::spawn::place`, so both doors record it identically. The bulk
+        // path does not come through here — `respawn` writes the storage
+        // directly.
+        let mut trace = self.trace.sink(self.tick);
+        pass::spawn::place(&mut self.enemies, &mut self.seekers, at, what, &mut trace)
+    }
+
+    /// Adds something that asks for spawns, and returns its name.
+    ///
+    /// Sources are evaluated at the top of every tick, in the order they were
+    /// added — which is the order they take slots in, so a replay puts bodies
+    /// in the same places.
+    pub fn add_source(&mut self, source: Source) -> SourceId {
+        let id = self.sources.add(source);
+
+        // Traced because it happens outside the schedule, and because a source
+        // is the explanation for every body it goes on to make.
+        self.trace.sink(self.tick).emit(Event::SourceAdded { id });
+        id
+    }
+
+    /// Removes a source. Returns whether it named a live one.
+    ///
+    /// **This is what "destroying a spawner stops the flow" means**, and it is
+    /// deliberately not tied to killing a body: whatever a game decides ends a
+    /// source — a body dying, a room clearing, a timer — calls this.
+    pub fn remove_source(&mut self, id: SourceId) -> bool {
+        if !self.sources.remove(id) {
+            return false;
         }
+        self.trace.sink(self.tick).emit(Event::SourceRemoved { id });
+        true
+    }
 
-        let id = self.enemies.spawn(at);
+    /// How many sources are live.
+    #[must_use]
+    pub fn source_count(&self) -> usize {
+        self.sources.len()
+    }
 
-        // Traced for the same reason `set_enemy_count` is: this happens
-        // *outside* the schedule, and state that changes between ticks is the
-        // hardest kind to account for when reading a trace later.
-        //
-        // Per body rather than summarised, which is the opposite of the rule
-        // the trace doc gives for contacts — and for the reason that rule
-        // gives: deliberate placement is rare. The bulk path does not come
-        // through here; `respawn` writes the storage directly and
-        // `set_enemy_count` emits one summary for the whole horde.
-        self.trace.sink(self.tick).emit(Event::Placed { id });
-
-        Some(id)
+    /// Asks for something to be made. It exists at the end of the next tick to
+    /// run.
+    ///
+    /// **The door for anything that runs while the simulation does**, and the
+    /// only one that is safe there: this touches no storage, so it cannot move
+    /// a row under a pass that is mid-iteration. The request is granted by
+    /// `pass::spawn::drain`, first in the next schedule.
+    ///
+    /// Returns `false` when the queue is full, in which case the request is
+    /// dropped and counted — a `Refused` trace event follows on the next tick.
+    /// A caller that ignores this gets a warning; a caller that never saw it
+    /// would get a body that silently never appears.
+    #[must_use]
+    pub fn request_spawn(&mut self, at: Vec2, what: Template) -> bool {
+        self.queue.push(at, what)
     }
 
     /// Removes one body. Returns whether the id named a live one.
@@ -509,14 +578,24 @@ impl World {
     /// mistake, and it is exactly what [`EntityId`]'s generation makes safe to
     /// ask about.
     pub fn despawn_enemy(&mut self, id: EntityId) -> bool {
-        // Exhaustive for the same reason as `set_enemy_count`: this is the other
-        // door a new behaviour has to be considered at. A line per behaviour
-        // rather than a registry is deliberate — a list of sets to sweep is a
-        // second hand-maintained record of which behaviours exist, at the same
-        // layer as the line it replaces — but the *forgetting* is what the
-        // destructure makes impossible.
-        let Self { enemies, seekers, trace, tick, player: _, contacts: _, crowd_contacts: _ } =
-            self;
+        // Exhaustive for the same reason as `set_enemy_count`: the other door a
+        // new behaviour has to be considered at. A line per behaviour rather
+        // than a registry is deliberate — a list of sets to sweep would be a
+        // second hand-maintained record of which behaviours exist.
+        // `queue` is deliberately untouched: a request names a place and a
+        // template, never a body, so nothing pending can refer to the name
+        // being retired here.
+        let Self {
+            enemies,
+            seekers,
+            trace,
+            tick,
+            queue: _,
+            sources: _,
+            player: _,
+            contacts: _,
+            crowd_contacts: _,
+        } = self;
 
         if !enemies.despawn(id) {
             return false;
@@ -601,13 +680,11 @@ impl World {
     ///
     /// **The same exhaustive destructuring as [`World::hash`], for the same
     /// reason.** A field added to `World` fails to compile until it is
-    /// reported, so "anything an agent must observe is a derived field" stops
-    /// being a rule someone remembers and becomes one the compiler applies.
-    /// That rule previously existed only as prose, and this method's
-    /// predecessor — a hand-written `format!` listing fourteen fields — was the
-    /// standing counterexample to it.
+    /// reported, so "anything an agent must observe is a derived field" is a
+    /// rule the compiler applies rather than one someone remembers.
     pub fn report(&self, out: &mut Report) {
-        let Self { enemies, player, tick, seekers, contacts, crowd_contacts, trace } = self;
+        let Self { enemies, player, tick, seekers, queue, sources, contacts, crowd_contacts, trace } =
+            self;
         let Player { pos, facing, prev_pos, prev_facing, attack } = player;
 
         out.int("tick", *tick);
@@ -622,6 +699,12 @@ impl World {
         out.bool("finite", self.all_positions_finite());
         out.int("enemies", enemies.len() as u64);
         out.int("seekers", seekers.len() as u64);
+
+        // Asked for and not yet made. Without it, "the spawn has not happened
+        // yet" and "the spawn was refused" look identical from out here — and
+        // one of those is a bug.
+        out.int("queued", queue.len() as u64);
+        out.int("sources", sources.len() as u64);
 
         // The swing, as three derived facts. `state` is a point sample and
         // cannot show a window, so these say where in the window the sample
@@ -681,6 +764,25 @@ impl World {
         // simulation belongs in `pass/`, so that the order stays something you
         // can read in one screen and each pass's inputs stay visible in its
         // signature. `pass/mod.rs` carries why each adjacency is what it is.
+        // **Decide, then perform.** `trigger` reads two facts about the world
+        // and may only push onto the queue — it is handed no storage, so the
+        // code that decides new bodies exist cannot make one. `drain` is the
+        // only pass that changes what exists, and running it here means nothing
+        // below has to defend against the horde changing length or moving rows
+        // underneath it. See `pass::source` and `pass::spawn`.
+        pass::source::trigger(
+            &mut self.sources,
+            &mut self.queue,
+            self.player.pos,
+            self.enemies.len(),
+            trace.reborrow(),
+        );
+        pass::spawn::drain(
+            &mut self.queue,
+            &mut self.enemies,
+            &mut self.seekers,
+            trace.reborrow(),
+        );
         pass::remember::remember(
             self.player.pos,
             self.player.facing,
@@ -761,7 +863,8 @@ impl World {
     #[must_use]
     pub fn hash(&self) -> u64 {
         // Exhaustive on purpose — see above. Do not replace with `..`.
-        let Self { enemies, player, tick, seekers, contacts, crowd_contacts, trace } = self;
+        let Self { enemies, player, tick, seekers, queue, sources, contacts, crowd_contacts, trace } =
+            self;
 
         // **Deliberately not hashed**, and the exhaustive destructuring above is
         // what forced this line to be written rather than forgotten. The trace
@@ -781,6 +884,18 @@ impl World {
         h.f32(*facing);
         h.usize(*contacts);
         h.usize(*crowd_contacts);
+
+        // Pending requests are state, and the kind a point sample is worst at:
+        // two worlds identical in every body still diverge on the next tick if
+        // one of them is about to grant a spawn the other is not.
+        queue.hash(&mut h);
+
+        // A source's countdown and emission count are what decide *when* and
+        // *where* the next body appears, so two worlds identical in every body
+        // diverge from here. Sources are also the one piece of state a replay
+        // could otherwise agree on for a hundred ticks and then disagree about
+        // all at once.
+        sources.hash(&mut h);
 
         // Membership is state. Two worlds whose bodies stand in identical
         // places are different worlds if one of them chases and the other does
@@ -931,9 +1046,8 @@ impl World {
         }
     }
 
-    /// Reads the horde's stored positions rather than re-deriving them, which
-    /// is the whole difference this step makes: what is drawn is now what the
-    /// simulation believes, so moving a body moves its cube.
+    /// Draws the horde from its stored positions, blended between the last two
+    /// ticks. What is drawn is what the simulation believes.
     fn extract_enemies(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
         let a = alpha.get();
 
@@ -949,918 +1063,9 @@ impl World {
     }
 }
 
-/// Counts allocations made on the calling thread.
-///
-/// Per-thread rather than a single global counter, and that is the whole trick:
-/// `cargo test` runs tests in parallel, so a global count would be measuring
-/// every other test's allocations too. The assertion would then fail at random,
-/// which is the surest way to get a test deleted.
-///
-/// The thread-local is `const`-initialised so that first touch does not
-/// allocate — an allocating allocator recurses into itself.
 #[cfg(test)]
-mod alloc_counter {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
-
-    thread_local! {
-        static COUNT: Cell<u64> = const { Cell::new(0) };
-    }
-
-    pub(crate) struct Counting;
-
-    #[expect(
-        unsafe_code,
-        reason = "GlobalAlloc is an unsafe trait by definition; this is the opt-out the \
-                  workspace lint was set to `deny` rather than `forbid` to allow"
-    )]
-    unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            // `try_with`, not `with`: during thread teardown the local is gone,
-            // and a panic inside the allocator aborts the process.
-            let _ = COUNT.try_with(|c| c.set(c.get() + 1));
-            unsafe { System.alloc(layout) }
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            unsafe { System.dealloc(ptr, layout) }
-        }
-
-        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-            let _ = COUNT.try_with(|c| c.set(c.get() + 1));
-            unsafe { System.realloc(ptr, layout, new_size) }
-        }
-    }
-
-    /// How many allocations `f` made on this thread.
-    pub(crate) fn allocations(f: impl FnOnce()) -> u64 {
-        let before = COUNT.with(Cell::get);
-        f();
-        COUNT.with(Cell::get).wrapping_sub(before)
-    }
-}
+mod tests;
 
 #[cfg(test)]
 #[global_allocator]
-static COUNTING: alloc_counter::Counting = alloc_counter::Counting;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arpg_core::{Intent, MoveDir};
-    use arpg_core::InstanceBuffer;
-
-    /// One tick's `Dt`.
-    ///
-    /// Goes through a real [`Accumulator`], because there is no other route —
-    /// not even in here. A `#[cfg(test)]` back door would have been one line
-    /// and would have quietly made the invariant "no variable timestep, except
-    /// in the tests that define what correct means".
-    fn tick_dt() -> Dt {
-        Accumulator::default().pending(Dt::SECS).next().expect("one tick's worth buys one tick")
-    }
-
-    /// Steps a fresh world `ticks` times and returns the hash after each one.
-    ///
-    /// The sequence, not the final value: two runs that end up in the same
-    /// place having taken different routes are still a divergence, and a final
-    /// -state comparison calls them equal.
-    fn hash_sequence(enemies: usize, ticks: usize, dir_at: impl Fn(u64) -> MoveDir) -> Vec<u64> {
-        let mut world = World::default();
-        world.set_enemy_count(enemies);
-
-        let mut acc = Accumulator::default();
-        let mut seq = Vec::with_capacity(ticks);
-
-        while seq.len() < ticks {
-            for dt in acc.pending(Dt::SECS) {
-                let dir = dir_at(world.tick());
-                world.step(dt, Intent::new(dir, false));
-                seq.push(world.hash());
-            }
-        }
-        seq
-    }
-
-    /// A world whose player is clear of every body, so a test can measure
-    /// movement without measuring contact.
-    ///
-    /// Needed from the moment bodies touch: the horde spawns centred on the
-    /// origin and so does the player, which puts the two in contact on the
-    /// very first tick. Anything asking a question about *movement* has to get
-    /// out of the crowd first, or it is really asking about the solver.
-    fn in_open_ground() -> World {
-        let mut world = World::default();
-        world.set_enemy_count(1);
-
-        // The lone body spawns on top of the player. Two seconds east at
-        // `PLAYER_SPEED` clears it by 18 units.
-        for _ in 0..120 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-        }
-        world
-    }
-
-    /// **The gate this chunk exists to pass.** Feed one input stream at
-    /// different frame rates; the simulation must not be able to tell.
-    ///
-    /// This is strictly stronger than the position check it replaces, in two
-    /// ways. It compares a hash of *all* state after *every* tick rather than
-    /// two final positions, so a divergence is reported at the tick it
-    /// happened. And it runs in a crowd rather than in open ground — which the
-    /// old test could not do, and said so: contacts are resolved once per tick,
-    /// so under a variable timestep a faster machine resolved more of them and
-    /// the horde behaved differently. That was the bill the fixed timestep was
-    /// there to pay. This is the receipt.
-    #[test]
-    fn frame_rate_cannot_change_the_simulation() {
-        // Powers of two, so every delta is exact in binary floating point: the
-        // claim under test is about the accumulator, not about whether a third
-        // of a tick rounds. Capped by `MAX_TICKS_PER_FRAME`, so 8 would silently
-        // measure the stall path instead.
-        let at = |ticks_per_frame: usize| {
-            let mut world = World::default();
-            world.set_enemy_count(64);
-
-            let mut acc = Accumulator::default();
-            let mut seq = Vec::new();
-
-            for _ in 0..(120 / ticks_per_frame) {
-                for dt in acc.pending(Dt::SECS * ticks_per_frame as f32) {
-                    world.step(dt, Intent::new(MoveDir::new(Vec3::X), false));
-                    seq.push(world.hash());
-                }
-            }
-            seq
-        };
-
-        let reference = at(1);
-        assert_eq!(reference.len(), 120, "the reference run did not take the ticks it was given");
-
-        for n in [2, 4] {
-            let other = at(n);
-            assert_eq!(other.len(), reference.len(), "{n} ticks per frame ran a different number");
-
-            let diverged = reference.iter().zip(&other).position(|(a, b)| a != b);
-            assert_eq!(diverged, None, "{n} ticks per frame diverged at tick {diverged:?}");
-        }
-    }
-
-    /// Determinism itself: the same run twice, compared tick by tick.
-    ///
-    /// The frame schedule is deliberately ragged — the shape a real machine
-    /// produces, and the shape a variable timestep leaks through.
-    /// A wholesale respawn retires every name, so any behaviour still attached
-    /// to one would be attached to whoever inherits it. Asserted rather than
-    /// left to the ordering comment in `set_enemy_count`, because the failure —
-    /// a body nobody asked to chase, chasing — is silent.
-    #[test]
-    fn a_respawn_revokes_every_behaviour() {
-        let mut world = World::default();
-        world.set_enemy_count(0);
-
-        let id = world.spawn_enemy(Vec2::new(3.0, 0.0)).expect("room for one body");
-        assert!(world.add_seek(id));
-        assert_eq!(world.seeker_count(), 1);
-
-        world.set_enemy_count(4);
-
-        assert_eq!(world.seeker_count(), 0, "a behaviour survived the respawn that retired its name");
-        assert!(!world.is_alive(id), "the old name outlived the horde it belonged to");
-    }
-    #[test]
-    fn one_input_stream_replays_to_the_same_hash_every_tick() {
-        let ragged = [0.004, 0.019, 0.016_1, 0.033, 0.000_9, 0.017_2];
-
-        let run = || {
-            let mut world = World::default();
-            world.set_enemy_count(256);
-
-            let mut acc = Accumulator::default();
-            let mut seq = Vec::new();
-
-            for (i, &frame) in ragged.iter().cycle().take(300).enumerate() {
-                // Something that keeps turning, so facing is under test too.
-                let dir = MoveDir::new(if i % 40 < 20 { Vec3::X } else { Vec3::NEG_Z });
-                for dt in acc.pending(frame) {
-                    world.step(dt, Intent::new(dir, false));
-                    seq.push(world.hash());
-                }
-            }
-            seq
-        };
-
-        let first = run();
-        assert!(first.len() > 100, "the schedule ran only {} ticks", first.len());
-        assert_eq!(first, run(), "two identical runs disagreed");
-    }
-
-    /// **The sensitivity check, and it is not optional.** A `hash()` that
-    /// returned a constant would pass both tests above and every replay
-    /// scenario ever written against it. So: two streams that agree until tick
-    /// 60 must hash identically up to there and differ from there on.
-    #[test]
-    fn the_hash_localises_where_two_streams_diverge() {
-        let east = MoveDir::new(Vec3::X);
-        let north = MoveDir::new(Vec3::NEG_Z);
-        const SPLIT: u64 = 60;
-
-        let straight = hash_sequence(32, 120, |_| east);
-        let turning = hash_sequence(32, 120, |t| if t < SPLIT { east } else { north });
-
-        let split = SPLIT as usize;
-        assert_eq!(straight[..split], turning[..split], "streams differed before they differed");
-        assert_ne!(straight[split], turning[split], "the first differing tick hashed the same");
-        assert_ne!(straight.last(), turning.last(), "the divergence washed out");
-    }
-
-    /// Where every enemy was drawn. `extract` pushes ground, then the horde,
-    /// then the player, so the horde is the middle slice.
-    fn drawn_enemies(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec<Vec3> {
-        world.extract(alpha, buffer.sink());
-        buffer.as_slice()[GROUND_INSTANCES..][..world.enemy_count()]
-            .iter()
-            .map(Instance::pos)
-            .collect()
-    }
-
-    /// Puts the player inside the horde and walks, so the solver is displacing
-    /// bodies every tick. Anything asking whether the *horde* is drawn right
-    /// has to be measured somewhere the horde actually moves — in open ground
-    /// every body sits still and a broken blend is indistinguishable from a
-    /// working one.
-    fn shoving_through_the_crowd(enemies: usize) -> World {
-        let mut world = World::default();
-        world.set_enemy_count(enemies);
-
-        // Only a few ticks: at `PLAYER_SPEED` the player clears a small horde
-        // in well under a second, and then contacts drop to zero and this
-        // measures open ground again. 20 ticks is 3.0 units, which walks
-        // straight out of a 64-body crowd (5.6 units across).
-        for _ in 0..5 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-        }
-        assert!(world.contacts() > 0, "nothing is in contact, so nothing is being pushed");
-        world
-    }
-
-    /// Reads the position of the last instance a sink was given — the player,
-    /// since `extract` pushes it last.
-    fn drawn_player(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec3 {
-        world.extract(alpha, buffer.sink());
-        buffer.as_slice().last().expect("extract pushes at least the player").pos()
-    }
-
-    /// **The gate for render interpolation.** The endpoints have to be exact,
-    /// or the blend is drawing something the simulation never believed.
-    #[test]
-    fn the_blend_endpoints_are_the_two_ticks_themselves() {
-        let mut world = in_open_ground();
-        world.set_enemy_count(4);
-        let mut buffer = InstanceBuffer::default();
-
-        let before = world.player_pos();
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-        let after = world.player_pos();
-        assert_ne!(before, after, "the tick under test did not move anything");
-
-        assert_eq!(drawn_player(&world, Alpha::ZERO, &mut buffer), before, "alpha 0 is not the previous tick");
-        assert_eq!(drawn_player(&world, Alpha::ONE, &mut buffer), after, "alpha 1 is not the current tick");
-    }
-
-    /// Between the endpoints it has to actually be *between*, and monotonic —
-    /// a blend that jumps or backtracks is judder wearing a different hat.
-    #[test]
-    fn the_blend_crosses_the_gap_once_and_in_order() {
-        let mut world = in_open_ground();
-        world.set_enemy_count(4);
-        let mut buffer = InstanceBuffer::default();
-
-        let before = world.player_pos();
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-        let after = world.player_pos();
-        let span = (after - before).length();
-
-        // Nine tenths, then the endpoint. An accumulator *cannot* produce alpha
-        // 1: a full tick's worth of carry is a tick, not a blend, so `pending`
-        // consumes it and leaves zero behind. That is why `Alpha::ONE` is a
-        // constant rather than something a frame ever asks for, and asking for
-        // it here by feeding a whole tick would silently sample alpha 0 again.
-        let sampled = (0..10).map(|i| {
-            let mut acc = Accumulator::default();
-            acc.pending(Dt::SECS * i as f32 / 10.0);
-            acc.alpha()
-        });
-
-        let mut furthest = -1.0;
-
-        for alpha in sampled.chain(core::iter::once(Alpha::ONE)) {
-            let drawn = drawn_player(&world, alpha, &mut buffer);
-            let a = alpha.get();
-
-            // On the segment: the two legs sum to the whole only for a point
-            // between the ends.
-            let off = (drawn - before).length() + (after - drawn).length() - span;
-            assert!(off.abs() < 1e-4, "the drawn position left the segment at alpha {a} by {off}");
-
-            // And moving forward along it, never back.
-            let progress = (drawn - before).length();
-            assert!(progress >= furthest - 1e-6, "the blend went backwards at alpha {a}");
-            furthest = progress;
-        }
-
-        assert!((furthest - span).abs() < 1e-4, "the blend reached {furthest}, the tick moved {span}");
-    }
-
-    /// **Found by mutation.** Every other blend test here reads the player,
-    /// because the player is the last instance and therefore the easy one. So
-    /// three separate breakages of the *horde's* interpolation — not blending
-    /// it at all, blending it backwards, and never recording where it was —
-    /// passed the entire suite. The horde is a thousand of the bodies on screen
-    /// and one of them was being checked.
-    #[test]
-    fn the_horde_is_interpolated_too() {
-        let mut world = shoving_through_the_crowd(256);
-        let mut buffer = InstanceBuffer::default();
-
-        let before: Vec<Vec2> = world.enemies.pos.clone();
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-        let after: Vec<Vec2> = world.enemies.pos.clone();
-
-        let moved: Vec<usize> =
-            (0..after.len()).filter(|&i| before[i] != after[i]).collect();
-        assert!(!moved.is_empty(), "no body moved during the tick under test");
-
-        let at_zero = drawn_enemies(&world, Alpha::ZERO, &mut buffer);
-        let at_one = drawn_enemies(&world, Alpha::ONE, &mut buffer);
-        let at_half = drawn_enemies(&world, half(), &mut buffer);
-
-        for i in 0..after.len() {
-            assert_eq!(at_zero[i], on_ground(before[i], ENEMY_HALF_HEIGHT), "body {i} at alpha 0");
-            assert_eq!(at_one[i], on_ground(after[i], ENEMY_HALF_HEIGHT), "body {i} at alpha 1");
-        }
-
-        for &i in &moved {
-            let span = (at_one[i] - at_zero[i]).length();
-            let off = (at_half[i] - at_zero[i]).length() + (at_one[i] - at_half[i]).length() - span;
-            assert!(off.abs() < 1e-5, "body {i} left the segment between its two ticks");
-            assert_ne!(at_half[i], at_zero[i], "body {i} did not move off its previous tick");
-            assert_ne!(at_half[i], at_one[i], "body {i} was drawn already arrived");
-        }
-    }
-
-    /// An empty arena has to work, not merely not crash: it is where a fight
-    /// ends, and it is the only setup in which a scenario can predict plain
-    /// movement without predicting the solver too.
-    #[test]
-    fn an_empty_horde_is_a_legal_world() {
-        let mut world = World::default();
-        world.set_enemy_count(0);
-        assert_eq!(world.enemy_count(), 0);
-
-        for _ in 0..30 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-        }
-        assert_eq!(world.contacts(), 0, "an empty arena reported a contact");
-
-        // Movement is then exactly the constant, with nothing to interfere.
-        let expected = 30.0 * pass::walk::PER_TICK;
-        assert!((world.player_pos().x - expected).abs() < 1e-4);
-
-        // And it still draws: ground plus the player, no horde.
-        let mut buffer = InstanceBuffer::default();
-        world.extract(Alpha::ONE, buffer.sink());
-        assert_eq!(buffer.as_slice().len(), GROUND_INSTANCES + 1);
-    }
-
-    /// **Found by mutation, and it is a real artefact.** Every other test here
-    /// steps immediately after changing the horde, and `step` overwrites `prev`
-    /// — so a respawn that leaves a stale `prev` behind is invisible to all of
-    /// them.
-    ///
-    /// It is visible on screen, though, and the fixed timestep is what makes it
-    /// so: uncapped at ~300fps most frames run **zero** ticks, so a frame is
-    /// drawn between `set_enemy_count` and the next `step` most of the time.
-    /// With a stale `prev` the whole horde streaks in from wherever the old one
-    /// stood — pressing `]` would flicker a thousand bodies across the arena.
-    #[test]
-    fn a_respawned_horde_is_drawn_standing_still() {
-        let mut world = shoving_through_the_crowd(256);
-        let mut buffer = InstanceBuffer::default();
-
-        // Change the count and draw with no tick in between.
-        world.set_enemy_count(64);
-
-        let standing: Vec<Vec3> =
-            world.enemies.pos.iter().map(|&p| on_ground(p, ENEMY_HALF_HEIGHT)).collect();
-
-        for alpha in [Alpha::ZERO, half(), Alpha::ONE] {
-            assert_eq!(
-                drawn_enemies(&world, alpha, &mut buffer),
-                standing,
-                "a horde that has not been stepped was drawn mid-move at alpha {}",
-                alpha.get()
-            );
-        }
-    }
-
-    /// **The rule that makes interpolation safe**, checked rather than assumed:
-    /// drawing must not change what the simulation believes. `extract` takes
-    /// `&self`, so this cannot fail without the signature changing — which is
-    /// the point, and is why the assertion is cheap enough to keep.
-    #[test]
-    fn drawing_never_touches_sim_state() {
-        let mut world = World::default();
-        world.set_enemy_count(64);
-        for _ in 0..10 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-        }
-
-        let untouched = world.hash();
-        let mut buffer = InstanceBuffer::default();
-
-        for i in 0..=8 {
-            let mut acc = Accumulator::default();
-            acc.pending(Dt::SECS * i as f32 / 8.0);
-            world.extract(acc.alpha(), buffer.sink());
-            assert_eq!(world.hash(), untouched, "extract at {i}/8 of a tick changed the world");
-        }
-    }
-
-    /// **The seam again, one layer up.** `facing` is wrapped to `-PI..=PI`, so
-    /// a body turning through south steps from `+3.13` to `-3.13` — a real turn
-    /// of 0.02 radians whose naive lerp spins it 6.26 the other way for exactly
-    /// one frame. That reads as a flicker, and flickers get blamed on the
-    /// renderer rather than on the maths.
-    #[test]
-    fn the_drawn_facing_crosses_the_pi_seam_the_short_way() {
-        use core::f32::consts::PI;
-
-        let from = PI - 0.01;
-        let to = -PI + 0.01;
-
-        let mid = blend_angle(from, to, half());
-        assert!(
-            mid.abs() > PI - 0.02,
-            "the drawn facing took the long way round the seam: {mid} should be near ±PI"
-        );
-
-        // And the endpoints still land exactly where they should.
-        assert!((blend_angle(from, to, Alpha::ZERO) - from).abs() < 1e-6);
-        assert!((blend_angle(from, to, Alpha::ONE) - to).abs() < 1e-6);
-
-        // Wrapped, so repeated blending cannot drift out of range.
-        assert!(mid.abs() <= PI, "the drawn facing left -PI..=PI");
-    }
-
-    /// Half a tick in, minted the only way an `Alpha` can be.
-    fn half() -> Alpha {
-        let mut acc = Accumulator::default();
-        acc.pending(Dt::SECS / 2.0);
-        acc.alpha()
-    }
-
-    /// A body nothing touched must be drawn where it stands, not streaked back
-    /// to wherever it last happened to move. This is what `remember()` being
-    /// called for *every* body, every tick, buys.
-    #[test]
-    fn a_body_that_did_not_move_is_drawn_where_it_is() {
-        let mut world = in_open_ground();
-        world.set_enemy_count(16);
-
-        // Out in the open, standing still: nothing moves at all.
-        for _ in 0..5 {
-            world.step(tick_dt(), Intent::NONE);
-        }
-        assert_eq!(world.contacts(), 0, "something is touching, so this measures the solver");
-
-        let mut buffer = InstanceBuffer::default();
-        world.extract(half(), buffer.sink());
-        let blended: Vec<Vec3> = buffer.as_slice().iter().map(Instance::pos).collect();
-
-        world.extract(Alpha::ONE, buffer.sink());
-        for (i, (a, b)) in blended.iter().zip(buffer.as_slice()).enumerate() {
-            assert_eq!(*a, b.pos(), "instance {i} moved between alphas while nothing was moving");
-        }
-    }
-
-    /// `prev` has to be *last tick's* value, not two ticks ago and not this
-    /// tick's. Nothing else in this file pins that: the sim is unaffected by a
-    /// missing `remember()`, so both runs of a replay would agree perfectly
-    /// while every body on screen streaked.
-    #[test]
-    fn the_previous_tick_is_the_previous_tick() {
-        // In the crowd, not in open ground: out there no enemy ever moves, so
-        // `prev_pos` trivially equals `pos` and skipping `remember()` entirely
-        // passes. That is how the first version of this test was written, and
-        // mutation is how it was caught.
-        let mut world = shoving_through_the_crowd(256);
-        let east = MoveDir::new(Vec3::X);
-
-        for _ in 0..4 {
-            let expected = world.player.pos;
-            let enemies_before = world.enemies.pos.clone();
-
-            world.step(tick_dt(), Intent::new(east, false));
-
-            assert_eq!(world.player.prev_pos, expected, "the player's prev is not last tick");
-            assert_eq!(world.enemies.prev_pos, enemies_before, "the horde's prev is not last tick");
-        }
-    }
-
-    /// **Found by mutation, not by design.** Deleting the horde from `hash()`
-    /// entirely — `let _ = enemy_pos;` — passed every other test in this file,
-    /// including both replay gates. They only ever vary the *player's* input,
-    /// so the player's state carries the whole signal and a hash that sees
-    /// nothing else agrees with itself perfectly.
-    ///
-    /// The destructuring in `hash()` catches a field nobody *binds*. This
-    /// catches a field bound and then dropped on the floor, which is what an
-    /// incomplete hash actually looks like when someone is refactoring.
-    #[test]
-    fn every_field_of_the_world_reaches_the_hash() {
-        /// A field of `World` and the smallest change that touches it.
-        type Poke = (&'static str, fn(&mut World));
-
-        let fields: [Poke; 5] = [
-            ("player.pos", |w| w.player.pos.x += 0.001),
-            ("player.facing", |w| w.player.facing += 0.001),
-            ("tick", |w| w.tick += 1),
-            ("contacts", |w| w.contacts += 1),
-            ("enemies.pos", |w| w.enemies.pos[0].x += 0.001),
-        ];
-
-        for (field, poke) in fields {
-            let mut world = World::default();
-            let before = world.hash();
-            poke(&mut world);
-            assert_ne!(world.hash(), before, "{field} never reaches the hash");
-        }
-    }
-
-    /// The horde is what the player's own state cannot stand in for: walking
-    /// through the crowd displaces bodies, and a replay that agrees on the
-    /// player while the horde drifts is the divergence that matters most once
-    /// enemies do anything on their own.
-    #[test]
-    fn the_horde_is_part_of_what_a_replay_compares() {
-        let mut world = World::default();
-        world.set_enemy_count(64);
-
-        // Stand still. Only the solver moves anything, so any change in the
-        // hash from here is the horde's.
-        let settled = {
-            for _ in 0..30 {
-                world.step(tick_dt(), Intent::NONE);
-            }
-            world.hash()
-        };
-
-        world.enemies.pos[7] += Vec2::new(0.01, -0.01);
-        assert_ne!(world.hash(), settled, "displacing a body left the hash unchanged");
-    }
-
-    /// A steady-state frame must not touch the allocator.
-    ///
-    /// Not a micro-optimisation: an allocation in the tick path is a latency
-    /// spike with no fixed size, and frame pacing is the foundation every feel
-    /// mechanic here gets measured against. It is also the cheapest possible
-    /// guard against someone adding a `Vec` inside a pass, which is the natural
-    /// way to write a broadphase and the wrong way to run one.
-    ///
-    /// Warmed up first, because the first tick of a fresh world is not a steady
-    /// state and asserting on it would measure spawning.
-    #[test]
-    fn a_steady_state_frame_allocates_nothing() {
-        let east = MoveDir::new(Vec3::X);
-        let dt = tick_dt();
-
-        let mut world = World::default();
-        world.set_enemy_count(512);
-        let mut buffer = InstanceBuffer::default();
-
-        world.step(dt, Intent::new(east, false));
-        world.extract(Alpha::ONE, buffer.sink());
-
-        let allocations = alloc_counter::allocations(|| {
-            for tick in 0..60 {
-                // **Swings included.** The guard used to pass `false` on every
-                // tick, so the one allocating line the attack added — pushing a
-                // struck body onto a list reserved for sixteen — was never
-                // reached by the thing whose job is to notice. A wider hitbox
-                // or a bigger body radius would have gone unremarked.
-                //
-                // Every 20 ticks is exactly the swing length, so this runs three
-                // back-to-back swings rather than one and then idling.
-                world.step(dt, Intent::new(east, tick % 20 == 0));
-                world.extract(Alpha::ONE, buffer.sink());
-            }
-        });
-
-        assert_eq!(allocations, 0, "60 steady-state frames allocated {allocations} times");
-    }
-
-    #[test]
-    fn no_input_does_not_move_the_player() {
-        let mut world = in_open_ground();
-        let start = world.player_pos();
-        for _ in 0..60 {
-            world.step(tick_dt(), Intent::NONE);
-        }
-        assert_eq!(world.player_pos(), start);
-    }
-
-    /// Walking into the wall must stop, not leave the ground plane — and must
-    /// stay finite, since a NaN position would silently vanish the character.
-    #[test]
-    fn the_player_cannot_walk_off_the_arena() {
-        let mut world = World::default();
-        for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
-            // Twenty seconds at `PLAYER_SPEED` is 180 units — comfortably past
-            // the far wall from anywhere in a 96-unit half-arena, so this
-            // reaches the clamp rather than merely walking toward it.
-            for _ in 0..1200 {
-                world.step(tick_dt(), Intent::new(MoveDir::new(dir), false));
-            }
-            let pos = world.player_pos();
-            assert!(pos.is_finite());
-            assert!(pos.x.abs() <= ARENA_HALF && pos.z.abs() <= ARENA_HALF, "escaped: {pos}");
-        }
-    }
-
-    /// **The seam that turning exists to get right.** Crossing the ±PI branch
-    /// cut must be a small step, not an almost-full revolution the other way.
-    #[test]
-    fn turning_takes_the_short_way_around() {
-        let nearly_half_turn = std::f32::consts::PI - 0.1;
-        let just_past = -nearly_half_turn;
-
-        let arc = angle::shortest_arc(nearly_half_turn, just_past);
-        assert!(arc.abs() < 0.3, "went the long way: {arc}");
-
-        // And the naive subtraction this replaces really does get it wrong,
-        // which is why the wrapping is not decoration.
-        assert!((just_past - nearly_half_turn).abs() > 6.0);
-    }
-
-    #[test]
-    fn facing_follows_the_direction_of_travel() {
-        let mut world = World::default();
-        for _ in 0..120 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-        }
-        // atan2(dir.x, dir.z): due east is +X, so a quarter turn from +Z.
-        assert!((world.player.facing - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
-
-        for _ in 0..120 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::Z), false));
-        }
-        assert!(world.player.facing.abs() < 1e-4, "should face +Z");
-    }
-
-    /// A fixed turn rate is only frame-rate independent if the step is clamped
-    /// to the remaining arc; without the clamp the coarse step overshoots and
-    /// the two disagree.
-    #[test]
-    fn turning_is_frame_rate_independent() {
-        let west = MoveDir::new(Vec3::NEG_X);
-
-        // One frame worth five ticks against five frames worth one, which is
-        // the same comparison as before now that a frame cannot hand the sim
-        // an arbitrary delta.
-        let mut coarse = World::default();
-        let mut coarse_acc = Accumulator::default();
-        for dt in coarse_acc.pending(Dt::SECS * 5.0) {
-            coarse.step(dt, Intent::new(west, false));
-        }
-
-        let mut fine = World::default();
-        let mut fine_acc = Accumulator::default();
-        for _ in 0..5 {
-            for dt in fine_acc.pending(Dt::SECS) {
-                fine.step(dt, Intent::new(west, false));
-            }
-        }
-
-        assert_eq!(coarse.hash(), fine.hash());
-    }
-
-    #[test]
-    fn turning_never_overshoots_its_target() {
-        let mut world = World::default();
-        let target = std::f32::consts::FRAC_PI_2;
-
-        for _ in 0..200 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-            assert!(world.player.facing >= 0.0);
-            assert!(world.player.facing <= target, "overshot to {}", world.player.facing);
-        }
-    }
-
-    /// Releasing the keys must not reorient the character — it would turn away
-    /// from whatever it just walked up to.
-    #[test]
-    fn standing_still_keeps_the_last_facing() {
-        let mut world = World::default();
-        for _ in 0..120 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::NEG_Z), false));
-        }
-        let settled = world.player.facing;
-
-        for _ in 0..120 {
-            world.step(tick_dt(), Intent::NONE);
-        }
-        assert_eq!(world.player.facing, settled);
-    }
-
-    /// Facing must stay canonical however long the session runs, rather than
-    /// accumulating toward the range where f32 loses angular precision.
-    #[test]
-    fn facing_stays_wrapped_while_spinning() {
-        let mut world = World::default();
-        let circle = [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z];
-
-        for lap in 0..50 {
-            for _ in 0..30 {
-                world.step(tick_dt(), Intent::new(MoveDir::new(circle[lap % 4]), false));
-            }
-            assert!(
-                world.player.facing.abs() <= std::f32::consts::PI + 1e-6,
-                "drifted to {}",
-                world.player.facing
-            );
-        }
-    }
-
-    /// The whole world — floor, horde and player — has to fit the one buffer
-    /// they share, at the largest horde the clamp permits.
-    #[test]
-    fn a_full_horde_still_fits_alongside_the_ground_and_the_player() {
-        let mut world = World::default();
-        world.set_enemy_count(usize::MAX);
-
-        let mut buf = InstanceBuffer::default();
-        world.extract(Alpha::ONE, buf.sink());
-
-        assert_eq!(buf.as_slice().len(), MAX_INSTANCES);
-    }
-
-    /// The count is derived from the storage, so asking for N must actually
-    /// produce N bodies — not N draw calls over a formula.
-    #[test]
-    fn the_horde_holds_exactly_the_requested_count() {
-        let mut world = World::default();
-        assert_eq!(world.enemy_count(), DEFAULT_ENEMIES);
-
-        for n in [1, 17, 512, 1024, 4096] {
-            world.set_enemy_count(n);
-            assert_eq!(world.enemy_count(), n);
-            assert_eq!(world.enemies.pos.len(), n);
-        }
-    }
-
-    /// Nothing may spawn already overlapping.
-    ///
-    /// The const assert beside `ENEMY_SPACING` covers the constants; this
-    /// covers the *layout* they produce, which is the thing that actually has
-    /// to hold. Once bodies push each other apart, an interpenetrated spawn
-    /// resolves every overlap on frame one and detonates the horde — a failure
-    /// that looks like a physics bug and is a spawning bug.
-    #[test]
-    fn the_horde_spawns_with_a_gap_between_every_body() {
-        let mut world = World::default();
-        world.set_enemy_count(1024);
-
-        let pos = &world.enemies.pos;
-        let mut closest = f32::MAX;
-        for i in 0..pos.len() {
-            for j in i + 1..pos.len() {
-                closest = closest.min(pos[i].distance(pos[j]));
-            }
-        }
-
-        assert!(
-            closest > ENEMY_SCALE.x,
-            "spawned {closest} apart, but a body is {} wide",
-            ENEMY_SCALE.x
-        );
-    }
-
-    /// The grid is centred on the origin, which is what puts the player inside
-    /// the horde rather than beside it.
-    ///
-    /// Exactly centred only when N is a perfect square. Otherwise the last row
-    /// is partial and drags the centroid by up to one spacing — which is the
-    /// real behaviour and worth pinning at that bound rather than pretending
-    /// the grid is always square.
-    #[test]
-    fn the_horde_is_centred_on_the_origin() {
-        let mut world = World::default();
-
-        let centroid_at = |world: &World| {
-            let pos = &world.enemies.pos;
-            pos.iter().fold(Vec2::ZERO, |acc, &p| acc + p) / pos.len() as f32
-        };
-
-        for n in [1, 4, 1024] {
-            world.set_enemy_count(n);
-            let c = centroid_at(&world);
-            assert!(c.length() < 1e-3, "square N={n} should be exactly centred, got {c}");
-        }
-
-        for n in [17, 500, 4095] {
-            world.set_enemy_count(n);
-            let c = centroid_at(&world);
-            assert!(c.length() < ENEMY_SPACING, "ragged N={n} drifted {c}, more than one row");
-        }
-    }
-
-    /// The one place `Vec2::y` means world Z, so it is worth pinning: a
-    /// transposition here is horizontal either way and would draw the whole
-    /// horde mirrored along a diagonal without a single test failing elsewhere.
-    #[test]
-    fn a_ground_position_keeps_x_and_lifts_y_into_z() {
-        assert_eq!(on_ground(Vec2::new(3.0, -7.0), 0.25), Vec3::new(3.0, 0.25, -7.0));
-    }
-
-    /// **The invariant the pass exists to establish**, checked on the real
-    /// world rather than on a pair: after a step, nothing is inside the player.
-    #[test]
-    fn no_enemy_is_left_overlapping_the_player() {
-        let mut world = World::default();
-
-        // Walk into the middle of the horde and keep going.
-        for _ in 0..240 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-        }
-
-        let contact = PLAYER_RADIUS + ENEMY_RADIUS;
-        let player = world.player.pos;
-        for (i, &enemy) in world.enemies.pos.iter().enumerate() {
-            let gap = player.distance(enemy);
-            assert!(gap >= contact - 1e-4, "enemy {i} is {gap} from the player, needs {contact}");
-        }
-    }
-
-    /// Walking through the horde must displace it. A player that leaves the
-    /// crowd exactly as it found it is not colliding with anything, which is a
-    /// failure the previous test cannot see — it passes trivially if nothing
-    /// ever overlaps because nothing ever touches.
-    #[test]
-    fn walking_through_the_horde_displaces_it() {
-        let mut world = World::default();
-        let before = world.enemies.pos.clone();
-
-        let mut ever_touched = 0;
-        for _ in 0..240 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-            ever_touched += world.contacts();
-        }
-
-        let moved = before
-            .iter()
-            .zip(&world.enemies.pos)
-            .filter(|(a, b)| a.distance(**b) > 1e-4)
-            .count();
-
-        assert!(ever_touched > 0, "nothing was ever in contact");
-        assert!(moved > 0, "the player walked straight through {} bodies", before.len());
-    }
-
-    /// The contact count has to mean something, or it is a comforting number
-    /// that would keep reporting zero if the solver stopped working. Standing
-    /// clear of everything is zero; standing inside the horde is not.
-    #[test]
-    fn the_contact_count_tracks_whether_anything_is_touching() {
-        let mut clear = in_open_ground();
-        clear.step(tick_dt(), Intent::NONE);
-        assert_eq!(clear.contacts(), 0, "nothing is near the player out here");
-
-        // The horde is centred on the origin and so is the player, so the
-        // spawn itself puts bodies in contact.
-        let mut crowded = World::default();
-        crowded.step(tick_dt(), Intent::NONE);
-        assert!(crowded.contacts() > 0, "spawned inside the horde and touched nothing");
-    }
-
-    /// Everything stays inside the world, including bodies that only moved
-    /// because something shoved them.
-    #[test]
-    fn nothing_is_pushed_out_of_the_arena() {
-        let mut world = World::default();
-        world.set_enemy_count(256);
-
-        for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
-            for _ in 0..600 {
-                world.step(tick_dt(), Intent::new(MoveDir::new(dir), false));
-            }
-            for &enemy in &world.enemies.pos {
-                assert!(enemy.is_finite(), "poisoned position {enemy}");
-                assert!(
-                    enemy.x.abs() <= ARENA_HALF && enemy.y.abs() <= ARENA_HALF,
-                    "escaped to {enemy}"
-                );
-            }
-        }
-    }
-}
+static COUNTING: tests::alloc_counter::Counting = tests::alloc_counter::Counting;

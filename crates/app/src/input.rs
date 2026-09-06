@@ -110,8 +110,8 @@ impl Input {
     }
 
     /// Recomputes the action set from the keys actually down. Cheap enough to
-    /// do on every event — the table is eight entries — and the only way the
-    /// derived state can be wrong is if the physical state is.
+    /// do on every event — the table is a handful of entries — and the only way
+    /// the derived state can be wrong is if the physical state is.
     fn sync(&mut self) {
         let mut held = ActionMask::EMPTY;
         for (i, (_, _, action)) in BINDINGS.iter().enumerate() {

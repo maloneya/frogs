@@ -1,0 +1,33 @@
+// A body asked for mid-run appears at the tick it was asked for, and the whole
+// of that tick belongs to it.
+//
+// **The position is the assertion about timing, not the count.** `enemy_count`
+// at the end says a body arrived; it cannot say when. A chaser placed 10.0 out
+// closes at 3.5 units/sec, so 60 ticks of seeking put it at exactly 6.5 — and a
+// drain that ran a tick late would leave it at 6.5583, which is outside the
+// tolerance by a factor of fifty. That is what pins the latency: a request made
+// between ticks is granted by the first pass of the *next* tick, and the body
+// then walks on that tick like anything else.
+//
+// The golden trace is the readable half of the same claim: one `placed`, at
+// tick 10, and nothing at tick 9.
+(
+    description: "A spawn requested at tick 10 exists from the start of tick 10, and moves on it.",
+    setup: (),
+    inputs: [],
+    spawns: [
+        (at: 10, pos: (10.0, 0.0), seeks: true),
+    ],
+    budget: (ticks: 70),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
+        enemy_count: 1,
+        seekers: 1,
+        contacts: 0,
+        crowd_contacts: 0,
+        bodies: [
+            (nth: 0, seeking: true, pos: (x: 6.5, z: 0.0, tol: 0.001)),
+        ],
+        trace: "a_queued_spawn_lands_on_its_own_tick.trace",
+    ),
+)

@@ -5,8 +5,8 @@
 //! window frontmost, the display awake, and accessibility permission, and when
 //! any of those is not true it does not fail: the keys go to whatever *is*
 //! focused and the screenshot comes back black. Both look exactly like the game
-//! being broken. This session lost a stray keypress into another window and
-//! silently changed the horde size while apparently testing something else.
+//! being broken — and a stray keypress landing in another window can change
+//! the game's state while apparently testing something else.
 //!
 //! A socket has none of those dependencies. It works on an unfocused window
 //! behind other windows on a sleeping display, it reports its own failures, and
@@ -29,6 +29,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use winit::keyboard::KeyCode;
+
+use arpg_sim::SourceId;
 
 use crate::input::{key_named, key_names};
 
@@ -61,6 +63,27 @@ pub(crate) enum Command {
     TraceSince(u64),
     SetEnemies(usize),
     SetSeekers(usize),
+    /// Ask for one body at a world-space `(x, z)`, and what to grant it.
+    ///
+    /// Goes through the spawn queue rather than placing directly — the same
+    /// door anything inside the simulation uses — so what a shell drives here
+    /// is the real path, latency included. The body exists after the next tick.
+    Spawn { x: f32, z: f32, seeks: bool },
+    /// Add something that asks for spawns, or remove one by name.
+    ///
+    /// The flags after the position are **named, not positional**, because a
+    /// source is four independent choices and a column nobody can read is how
+    /// three of them end up unused.
+    Source {
+        x: f32,
+        z: f32,
+        every: u32,
+        radius: f32,
+        seeks: bool,
+        near: Option<f32>,
+        fewer: Option<usize>,
+    },
+    RemoveSource(SourceId),
     SetVsync(bool),
     Quit,
 }
@@ -81,6 +104,12 @@ fn key(arg: Option<&str>) -> Result<KeyCode, String> {
         format!("unknown key {name:?}; bound keys are {}", key_names().collect::<Vec<_>>().join(" "))
     })
 }
+
+/// Named once, because it is quoted from four error paths and a usage message
+/// that disagrees with the parser is worse than none.
+const USAGE: &str =
+    "expected: source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>], \
+     or source remove <id>";
 
 fn parse(line: &str) -> Result<Command, String> {
     let mut it = line.split_whitespace();
@@ -109,6 +138,58 @@ fn parse(line: &str) -> Result<Command, String> {
             (Some("since"), None) => return Err("expected a tick: trace since <tick>".into()),
             _ => return Err("expected: trace since <tick>".into()),
         },
+        "spawn" => {
+            let coord = |arg: Option<&str>| {
+                arg.ok_or_else(|| "expected: spawn <x> <z> [seek]".to_string())
+                    .and_then(|v| v.parse::<f32>().map_err(|e| e.to_string()))
+            };
+            let x = coord(arg)?;
+            let z = coord(it.next())?;
+            // Behaviours are named, not positional, so the next one is another
+            // word here rather than another column nobody can read.
+            let seeks = it.next() == Some("seek");
+            Command::Spawn { x, z, seeks }
+        }
+        "source" => {
+            if arg == Some("remove") {
+                // Named in the form the trace prints — `s0`, not `0` — so an id
+                // read out of `trace since` can be handed straight back.
+                let name = it.next().unwrap_or("");
+                let id = SourceId::parse(name)
+                    .ok_or_else(|| format!("expected a source name like s0, got {name:?}"))?;
+                return Ok(Command::RemoveSource(id));
+            }
+
+            // Both failures quote the usage: `source bogus` otherwise replies
+            // "invalid float literal", which is true and tells nobody what to
+            // type instead.
+            let coord = |arg: Option<&str>| {
+                arg.ok_or_else(|| USAGE.to_string())
+                    .and_then(|v| v.parse::<f32>().map_err(|e| format!("{e}; {USAGE}")))
+            };
+            let x = coord(arg)?;
+            let z = coord(it.next())?;
+
+            let (mut every, mut radius, mut seeks) = (1, 0.0, false);
+            let (mut near, mut fewer) = (None, None);
+
+            // Flags in any order, each either a word or a word and a number.
+            // An unknown one is an error rather than a shrug: a typo that
+            // silently produced a source with no gate would look exactly like
+            // the gate not working.
+            while let Some(flag) = it.next() {
+                match flag {
+                    "seek" => seeks = true,
+                    "every" => every = number(it.next())? as u32,
+                    "ring" => radius = coord(it.next())?,
+                    "near" => near = Some(coord(it.next())?),
+                    "fewer" => fewer = Some(number(it.next())? as usize),
+                    other => return Err(format!("unknown source flag {other:?}; {USAGE}")),
+                }
+            }
+
+            Command::Source { x, z, every, radius, seeks, near, fewer }
+        }
         "enemies" => Command::SetEnemies(number(arg)? as usize),
         "seekers" => Command::SetSeekers(number(arg)? as usize),
         "vsync" => Command::SetVsync(matches!(arg, Some("on") | Some("1"))),

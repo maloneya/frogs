@@ -1,0 +1,35 @@
+// A source at a stated cadence puts bodies in on the ticks it promises.
+//
+// **The golden trace is the assertion, not the count.** `enemy_count: 4` says
+// four bodies arrived and cannot say when; the trace says tick 0, 10, 20 and
+// 30, which is the whole claim. A source that started cold rather than ready
+// would produce the same four bodies one cadence later and satisfy every other
+// line in this file.
+//
+// `fired` and `placed` are both there on purpose: one says which source asked,
+// the other says a body appeared. With one source they are redundant; with two
+// they are the only way to tell whose output is whose.
+//
+// The template rides along — the source makes chasers, so `seekers: 4` says the
+// grants flow through a source exactly as they do through a direct placement.
+// Thirty units out at 3.5 units/sec, none of them gets anywhere near the player
+// inside the budget, so nothing here is about the solver.
+(
+    description: "A source at every=10 fires on ticks 0, 10, 20 and 30, and what it makes chases.",
+    setup: (
+        sources: [
+            (pos: (30.0, 0.0), radius: 3.0, every: 10, seeks: true),
+        ],
+    ),
+    inputs: [],
+    budget: (ticks: 31),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
+        enemy_count: 4,
+        seekers: 4,
+        sources: 1,
+        contacts: 0,
+        crowd_contacts: 0,
+        trace: "a_source_fires_on_the_ticks_it_promises.trace",
+    ),
+)

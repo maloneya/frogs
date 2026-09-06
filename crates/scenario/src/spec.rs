@@ -34,6 +34,28 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) attacks: Vec<u64>,
 
+    /// Things asked for *while the scenario runs*, each at a stated tick.
+    ///
+    /// **Distinct from [`Setup::actions`], and the distinction is the whole
+    /// point of the spawn queue.** A setup placement happens before tick zero,
+    /// with the schedule stopped; this goes through the same door a trigger
+    /// inside the simulation will use, so what a scenario exercises is the real
+    /// path rather than a test-only shortcut.
+    ///
+    /// A request made between ticks is granted by the first pass of the next
+    /// tick, so a spawn `at: 10` is a body from the start of tick 10 and does
+    /// not exist at the end of tick 9.
+    ///
+    /// Bodies that appear this way continue the placement numbering that
+    /// [`Setup::actions`] starts, in the order they were granted, so
+    /// [`BodyExpect::nth`] can name one.
+    #[serde(default)]
+    pub(crate) spawns: Vec<Spawn>,
+
+    /// Sources removed partway through, each at a stated tick.
+    #[serde(default)]
+    pub(crate) remove_sources: Vec<SourceRemoval>,
+
     pub(crate) budget: Budget,
 
     #[serde(default)]
@@ -68,6 +90,78 @@ pub(crate) struct Setup {
     /// deleted.
     #[serde(default)]
     pub(crate) actions: Vec<Action>,
+
+    /// Things that ask for spawns while the scenario runs.
+    ///
+    /// Added before tick zero and numbered in the order they appear, which is
+    /// what [`SourceRemoval::source`] refers to. A source is not a body and
+    /// takes no placement number.
+    #[serde(default)]
+    pub(crate) sources: Vec<SourceSpec>,
+}
+
+/// One source: a cadence, a gate, a place and a template.
+///
+/// **Four independent axes, written flat.** Each field is one of them, so a new
+/// kind of source is a combination rather than a new variant — which is what
+/// keeps a scenario able to describe one without the runner growing a case for
+/// it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceSpec {
+    /// World-space `(x, z)`: the point bodies appear at, or the centre of the
+    /// ring they appear around.
+    pub(crate) pos: (f32, f32),
+    /// Radius of the ring around `pos`. Zero — the default — means the one
+    /// point, which stacks successive bodies on each other on purpose.
+    #[serde(default)]
+    pub(crate) radius: f32,
+    /// Ticks between emissions. A source starts *ready*, so the first lands on
+    /// the first tick its gate is open, not one cadence later.
+    #[serde(default = "one")]
+    pub(crate) every: u32,
+    /// The gate checked when the cadence comes ready.
+    #[serde(default)]
+    pub(crate) when: Cond,
+    /// Whether what it makes chases the player.
+    #[serde(default)]
+    pub(crate) seeks: bool,
+}
+
+/// A cadence of one is "every tick", which is the useful default: a gated
+/// source then reacts as fast as its gate changes.
+fn one() -> u32 {
+    1
+}
+
+/// The scenario-file spelling of [`arpg_sim::Condition`].
+///
+/// A separate type from the simulation's, deliberately. `Deserialize` on the
+/// sim's own enum would make a `.ron` file a consumer of its internals, so a
+/// rename in `sim` would silently change the scenario language — and the
+/// scenario language is the thing every gate in this repository is written in.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) enum Cond {
+    #[default]
+    Always,
+    FewerThan(usize),
+    PlayerWithin(f32),
+}
+
+/// A source removed partway through the run.
+///
+/// **The other half of the flow being controllable.** A source that can only be
+/// added describes a level that starts; one that can be removed describes a
+/// level that can be finished.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceRemoval {
+    /// The tick it is removed on, before that tick runs. A source removed at
+    /// `at` does not fire on `at`.
+    pub(crate) at: u64,
+    /// Which source, by its position in [`Setup::sources`].
+    pub(crate) source: usize,
 }
 
 /// One step of scenario setup.
@@ -96,6 +190,25 @@ pub(crate) enum Action {
     /// and it means the next behaviour is a new action rather than a new kind
     /// of placement.
     Seek(usize),
+}
+
+/// One thing asked for at a stated tick.
+///
+/// The fields after `at` and `pos` are the *template* — what the body will be
+/// granted once it exists. One field per behaviour, which is what keeps "two
+/// kinds of enemy" a difference in a description rather than a difference in
+/// code.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Spawn {
+    /// The tick the request is made on, counting from 0. The body exists for
+    /// the whole of that tick.
+    pub(crate) at: u64,
+    /// World-space `(x, z)`, on the same terms as [`Action::Place`].
+    pub(crate) pos: (f32, f32),
+    /// Whether the new body chases the player.
+    #[serde(default)]
+    pub(crate) seeks: bool,
 }
 
 /// Hold a direction for a span of ticks.
@@ -155,7 +268,14 @@ pub(crate) struct Expect {
     pub(crate) hitbox: Option<bool>,
     #[serde(default)]
     pub(crate) enemy_count: Option<usize>,
-    /// Predictions about individual placed bodies.
+    /// How many bodies chase the player. The cheapest way to assert that two
+    /// bodies made from different templates were granted different behaviours.
+    #[serde(default)]
+    pub(crate) seekers: Option<usize>,
+    /// How many sources are still live at the end.
+    #[serde(default)]
+    pub(crate) sources: Option<usize>,
+    /// Predictions about individual bodies placed by [`Setup::actions`].
     #[serde(default)]
     pub(crate) bodies: Vec<BodyExpect>,
     /// A checked-in trace file, relative to the scenario, that the run's own
@@ -219,7 +339,7 @@ impl Approx2 {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BodyExpect {
-    /// Which placement this is about, by spawn order in [`Setup::bodies`].
+    /// Which placement this is about, by spawn order in [`Setup::actions`].
     ///
     /// **Deliberately not a dense-array index.** The horde is stored densely
     /// and a despawn swaps the last row into the hole, so a body's index

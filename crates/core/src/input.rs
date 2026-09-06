@@ -1,10 +1,11 @@
-//! What the player is trying to do — the vocabulary of *intent*.
+//! What a device is asking for, in **screen** terms.
 //!
 //! Nothing here names a key, a mouse button or a gamepad axis, for the same
 //! reason nothing in `arpg-gfx` names an enemy. The binding from a physical
 //! input to an [`Action`] lives in `arpg` (app), the only crate that talks to
-//! winit. The simulation asks "is the player trying to move up", never "is W
-//! down".
+//! winit. The simulation never sees this module's types at all — it sees
+//! [`crate::Intent`], which is what these become once the camera has turned
+//! "toward the top of the screen" into a world direction.
 //!
 //! That indirection is the entire point of an action layer, and it pays for
 //! itself three times over: rebindable keys, a gamepad that pushes the same
@@ -12,7 +13,7 @@
 //! actions with no device behind them at all. None of those need the simulation
 //! to change.
 
-use glam::{Vec2, Vec3};
+use glam::Vec2;
 
 /// Something the player can intend.
 ///
@@ -206,40 +207,6 @@ impl ActionMask {
     }
 }
 
-/// A horizontal world-space direction of travel: unit length, or exactly zero.
-///
-/// A newtype rather than a bare `Vec3` because "normalise the input vector" is
-/// a rule everyone forgets exactly once, and the symptom is subtle enough to
-/// ship: holding two keys moves you √2 ≈ 1.41 times faster than holding one, so
-/// the fastest way across the arena is permanently diagonal. Doing it at the
-/// only constructor means no caller can be the one who forgets — including the
-/// analog stick that arrives later and does not clamp itself.
-///
-/// Horizontal because the ground plane is where movement happens; letting a Y
-/// component through would have the character walk into the floor.
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub struct MoveDir(Vec3);
-
-impl MoveDir {
-    /// Standing still.
-    pub const NONE: Self = Self(Vec3::ZERO);
-
-    /// The only door: flattens onto the ground plane, then normalises.
-    ///
-    /// `normalize_or_zero` rather than `normalize`, because the zero vector is
-    /// the common case — nobody is pressing anything — and normalising it
-    /// yields NaN, which then propagates into a position that no clamp can
-    /// recover.
-    pub fn new(v: Vec3) -> Self {
-        Self(Vec3::new(v.x, 0.0, v.z).normalize_or_zero())
-    }
-
-    /// The direction as a vector, for whoever is doing the integrating.
-    pub fn as_vec3(self) -> Vec3 {
-        self.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,75 +303,13 @@ mod tests {
         assert_eq!(input.sample().move_axis(), Vec2::ZERO);
     }
 
-    /// The bug the newtype exists to prevent: diagonals must not be faster.
+    /// The raw axis is deliberately **not** normalised — normalising is
+    /// `MoveDir`'s job, at the point screen becomes world. See
+    /// `a_diagonal_is_unit_length` in `intent.rs` for the other half.
     #[test]
-    fn a_diagonal_is_unit_length() {
+    fn the_raw_axis_is_a_screen_axis_not_a_direction() {
         let mut input = InputState::default();
         input.set_held(held_of(&[Action::MoveUp, Action::MoveRight]));
-        let axis = input.sample().move_axis();
-        assert_eq!(axis, Vec2::new(1.0, 1.0), "the raw axis is not normalised");
-
-        let dir = MoveDir::new(Vec3::new(axis.x, 0.0, -axis.y));
-        assert!((dir.as_vec3().length() - 1.0).abs() < 1e-6);
-    }
-
-    /// Standing still must stay exactly zero, not NaN.
-    #[test]
-    fn no_input_is_no_movement() {
-        assert_eq!(MoveDir::new(Vec3::ZERO).as_vec3(), Vec3::ZERO);
-    }
-
-    /// Any vertical component is dropped, so movement cannot leave the ground
-    /// plane or lose length to a Y term.
-    #[test]
-    fn move_dir_is_flattened_before_normalising() {
-        let dir = MoveDir::new(Vec3::new(0.0, 99.0, 2.0));
-        assert_eq!(dir.as_vec3(), Vec3::new(0.0, 0.0, 1.0));
-    }
-}
-
-/// One tick's worth of intent, in the **simulation's** vocabulary.
-///
-/// The seam between `app` and `sim`, and it exists because [`Actions`] cannot
-/// be that seam: the movement actions are named in *screen* directions, and
-/// which world direction "up" means is the camera's business. Handing `Actions`
-/// to the simulation would put a presentation decision inside it.
-///
-/// So `app` resolves screen to world, and this is what comes out the other
-/// side: a world-space direction and the discrete things the player asked for
-/// this tick. Adding an intent later — dodge, block — adds a field here rather
-/// than a parameter to `World::step`, which is what stops that signature
-/// growing a tail of booleans nobody can read at the call site.
-#[derive(Clone, Copy, Default, Debug)]
-pub struct Intent {
-    move_dir: MoveDir,
-    attack: bool,
-}
-
-impl Intent {
-    /// Nothing at all. What a tick with no input looks like.
-    pub const NONE: Self = Self { move_dir: MoveDir::NONE, attack: false };
-
-    /// Builds one tick's intent.
-    ///
-    /// `attack` is an **edge**: true on the tick the swing was asked for, not
-    /// while a key is held. Passing `held` here would swing every tick the
-    /// button is down, which is the bug the `pressed`/`held` split in
-    /// [`Actions`] exists to make hard.
-    #[must_use]
-    pub fn new(move_dir: MoveDir, attack: bool) -> Self {
-        Self { move_dir, attack }
-    }
-
-    /// Where the player is trying to go, in world space.
-    #[must_use]
-    pub fn move_dir(self) -> MoveDir {
-        self.move_dir
-    }
-
-    /// Whether a swing was asked for on this tick.
-    #[must_use]
-    pub fn attack(self) -> bool {
-        self.attack
+        assert_eq!(input.sample().move_axis(), Vec2::new(1.0, 1.0));
     }
 }

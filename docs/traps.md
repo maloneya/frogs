@@ -114,7 +114,7 @@ alpha 0, 0.5 and 1 with no tick in between — that is the shape to copy.
 spawn that maintains `prev` as an invariant of the storage, so the class is
 removed rather than tested for one caller at a time. That now exists. Every
 body enters the world through `Enemies::spawn`, which seeds `prev_pos` to the
-spawn point; `World::spawn_enemy` and the bulk `respawn` both go through it,
+spawn point; `World::place` and the bulk `respawn` both go through it,
 and there is no other door in.
 
 **Still live for everything that is not a body.** The player is not in that

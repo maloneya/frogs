@@ -1,0 +1,37 @@
+// A source that fires when the player comes close, and not before.
+//
+// **The tick is predicted from the constants, not read back.** The source sits
+// at (10, 0) with a 5-unit radius; the player starts at the origin and walks
+// due `+X` at `PLAYER_SPEED` 9.0 units/sec, which is 0.15 per tick. The
+// condition is checked at the top of a tick, against where the player stood at
+// the end of the previous one — so at the top of tick T the player is at
+// `0.15T`, and `10 - 0.15T <= 5` first holds at `T = 34` (33.33 rounded up).
+//
+// **`every: 60` against a 40-tick budget is the point of the file.** The
+// cadence comes ready on tick 0 and the gate is shut, so a source that lost its
+// turn would not come round again inside this run at all. Firing on tick 34 is
+// ready-and-waiting working: the enemies appear when the player walks in, not
+// up to a cadence later.
+(
+    description: "A proximity source fires on the exact tick the player crosses its radius, having waited ready since tick 0.",
+    setup: (
+        sources: [
+            (pos: (10.0, 0.0), every: 60, when: PlayerWithin(5.0)),
+        ],
+    ),
+    inputs: [
+        (at: 0, ticks: 40, dir: (1.0, 0.0)),
+    ],
+    budget: (ticks: 40),
+    expect: (
+        player_pos: (x: 6.0, z: 0.0, tol: 0.001),
+        enemy_count: 1,
+        seekers: 0,
+        sources: 1,
+        contacts: 0,
+        bodies: [
+            (nth: 0, seeking: false, pos: (x: 10.0, z: 0.0, tol: 0.0001)),
+        ],
+        trace: "a_source_waits_for_the_player_to_arrive.trace",
+    ),
+)

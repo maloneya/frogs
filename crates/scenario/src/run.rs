@@ -3,10 +3,12 @@
 use std::path::Path;
 
 use arpg_core::{Intent, MoveDir};
-use arpg_sim::{Accumulator, Dt, EntityId, World};
+use arpg_sim::{
+    Accumulator, Condition, Dt, EntityId, Event, Placement, Source, SourceId, Template, World,
+};
 use glam::Vec3;
 
-use crate::spec::{Action, Expect, Scenario};
+use crate::spec::{Action, Cond, Expect, Scenario, SourceSpec};
 
 /// Everything one run produced. Kept separate from the checking so that the
 /// determinism pass can compare two runs without re-deciding what "passed"
@@ -84,7 +86,9 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             // what makes the next assertion about it fail and say so;
             // renumbering would instead re-point every later assertion at a
             // different body, silently.
-            Action::Place((x, z)) => placed.push(world.spawn_enemy(glam::Vec2::new(*x, *z))),
+            Action::Place((x, z)) => {
+                placed.push(world.place(glam::Vec2::new(*x, *z), Template::BODY));
+            }
             // `spec::Action` is designed to grow, so resolving a placement
             // number is written once rather than pasted into each new arm.
             Action::Despawn(nth) => {
@@ -100,6 +104,15 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
         }
     }
 
+    // Sources last, so a source is described against a world that is already
+    // laid out — and, more practically, so that adding one cannot renumber the
+    // placements a scenario's assertions refer to.
+    // The name each source got, in the order the scenario listed them: the
+    // translation from a scenario's source number, exactly as `placed` is for a
+    // body's placement number.
+    let sources: Vec<SourceId> =
+        scenario.setup.sources.iter().map(|spec| world.add_source(build(spec))).collect();
+
     // Setup is not the run. Without this the golden trace would also record
     // `World::default()` building a horde this scenario just replaced, tying
     // every golden file to a constant none of them are about.
@@ -108,19 +121,106 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     let budget = scenario.budget.ticks as usize;
     let schedule = input_schedule(scenario);
 
+    // Whether any body can appear mid-run at all. Hoisted because the check
+    // below costs a walk of the whole trace ring, and the overwhelming majority
+    // of scenarios place everything in setup and nothing after — for those,
+    // 16384 events would be filtered on every tick to find nothing.
+    let watching = !scenario.spawns.is_empty() || !sources.is_empty();
+
     let mut accumulator = Accumulator::default();
     let mut hashes = Vec::with_capacity(budget);
 
     while hashes.len() < budget {
         for dt in accumulator.pending(Dt::SECS) {
-            let tick = hashes.len();
-            let swing = scenario.attacks.contains(&(tick as u64));
-            world.step(dt, Intent::new(schedule[tick], swing));
+            let tick = hashes.len() as u64;
+
+            // Asked for *before* the step, through the same queue anything
+            // inside the simulation will use. The first pass of this tick
+            // grants them, so the body exists for the whole of tick `at`.
+            // Removals before the tick they name, so a source removed at `at`
+            // does not fire on `at`. Stated in the spec, and it is the kind of
+            // off-by-one that would otherwise be discovered by a golden trace
+            // diff nobody could explain.
+            for removal in scenario.remove_sources.iter().filter(|r| r.at == tick) {
+                if let Some(id) = sources.get(removal.source).copied() {
+                    world.remove_source(id);
+                }
+            }
+
+            let mut asked = 0;
+            for spawn in scenario.spawns.iter().filter(|s| s.at == tick) {
+                let template = if spawn.seeks { Template::BODY.seeking() } else { Template::BODY };
+                let _ = world.request_spawn(glam::Vec2::new(spawn.pos.0, spawn.pos.1), template);
+                asked += 1;
+            }
+
+            let swing = scenario.attacks.contains(&tick);
+            world.step(dt, Intent::new(schedule[tick as usize], swing));
             hashes.push(world.hash());
+
+            if watching {
+                record_placed(&world, tick, asked, &mut placed);
+            }
         }
     }
 
     Run { world, hashes, placed }
+}
+
+/// Builds one source from its scenario description.
+///
+/// **The one place the scenario language is translated into the simulation's,**
+/// which is why `spec::Cond` is a separate type from `Condition` rather than
+/// `Deserialize` on the sim's own enum: a rename inside `sim` would otherwise
+/// silently change what a `.ron` file means, and the `.ron` files are where
+/// every gate in this repository is written.
+fn build(spec: &SourceSpec) -> Source {
+    let placement = Placement::around(glam::Vec2::new(spec.pos.0, spec.pos.1), spec.radius);
+
+    let what = if spec.seeks { Template::BODY.seeking() } else { Template::BODY };
+    let condition = match spec.when {
+        Cond::Always => Condition::Always,
+        Cond::FewerThan(n) => Condition::FewerThan(n),
+        Cond::PlayerWithin(r) => Condition::PlayerWithin(r),
+    };
+
+    Source::new(placement, what).every(spec.every).when(condition)
+}
+
+/// Continues the placement numbering with every body the queue granted this
+/// tick, whoever asked for it.
+///
+/// **Read out of the trace rather than returned by an API**, and that is worth
+/// a sentence because it looks like the long way round. A queued spawn is
+/// granted inside `step`, by a pass, on behalf of an asker that may not be the
+/// runner at all — so there is nothing for a return value to hang off. The
+/// trace is the channel the simulation already reports what it did on, and
+/// binding names through it means this keeps working unchanged when the asker
+/// is a trigger inside the simulation rather than a line in the `.ron`.
+///
+/// A request that was refused leaves no `Placed` event, so the shortfall is
+/// padded with `None` — placement numbers must not shift under the assertions
+/// that refer to them. Refusal means the horde hit its budget, which cannot
+/// un-happen, so the shortfall is always the tail of what was asked for.
+fn record_placed(world: &World, tick: u64, asked: usize, placed: &mut Vec<Option<EntityId>>) {
+    let granted: Vec<EntityId> = world
+        .trace()
+        .since(tick)
+        .filter_map(|(_, event)| match event {
+            Event::Placed { id } => Some(id),
+            _ => None,
+        })
+        .collect();
+
+    // The runner's own requests were queued *before* the tick began and a
+    // source's are pushed during it, and the queue is FIFO — so within a tick
+    // the scenario's own spawns are granted first and everything after them
+    // came from a source.
+    let (mine, from_sources) = granted.split_at(granted.len().min(asked));
+
+    placed.extend(mine.iter().copied().map(Some));
+    placed.extend(std::iter::repeat_n(None, asked - mine.len()));
+    placed.extend(from_sources.iter().copied().map(Some));
 }
 
 /// Flattens the input spans into one direction per tick.
@@ -163,6 +263,8 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
         struck,
         hitbox,
         enemy_count,
+        seekers,
+        sources,
         bodies,
         trace: _,
     } = &scenario.expect;
@@ -209,6 +311,8 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
     check_eq("struck", struck, run.world.struck(), &mut failures);
     check_eq("hitbox", hitbox, run.world.hitbox_is_live(), &mut failures);
     check_eq("enemy_count", enemy_count, run.world.enemy_count(), &mut failures);
+    check_eq("seekers", seekers, run.world.seeker_count(), &mut failures);
+    check_eq("sources", sources, run.world.source_count(), &mut failures);
 
     for body in bodies {
         check_body(run, body, &mut failures);
