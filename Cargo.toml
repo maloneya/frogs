@@ -56,3 +56,13 @@ print_stderr = "deny"
 # in debug keeps builds fast to iterate on and fast to run.
 [profile.dev.package."*"]
 opt-level = 3
+
+# The simulation is optimised in debug builds too, and that is about the *gate*
+# rather than about the game. `sim` is pure arithmetic over flat arrays with no
+# frame path to step through, and the scenario runner — which must be fast
+# enough to run on every turn end — is nothing but that arithmetic. Unoptimised,
+# the O(N^2) crowd solver at 1024 bodies took 4.4s for one scenario; optimised
+# it is a fraction of that, and `debug_assertions` and overflow checks are set
+# by the profile rather than by `opt-level`, so every assertion still fires.
+[profile.dev.package.arpg-sim]
+opt-level = 3

@@ -90,6 +90,12 @@ must come out byte-identical.
 
 ## 5. Uniform-grid spatial hash for broadphase — *sim layer*
 
+Deferred with a number behind it. Brute-force crowd separation at the default
+1024 bodies measures **0.217ms per tick** headless in release — about 1.3% of a
+60Hz frame — so the grid buys nothing yet. It goes as the square, so 4096 is
+~3.5ms and 8192 eats most of the frame; that is where it stops being an
+optimisation and becomes the only way to raise N.
+
 **Gate:** brute force and the grid produce identical contact sets over a
 replayed input stream. A headless perf assertion enters the scenario runner
 here: `step()` at 4096 enemies stays under budget, with no GPU and no window.

@@ -124,6 +124,9 @@ pub(crate) struct Expect {
     pub(crate) facing: Option<Approx>,
     #[serde(default)]
     pub(crate) contacts: Option<usize>,
+    /// Enemy pairs the crowd solver pushed apart on the final tick.
+    #[serde(default)]
+    pub(crate) crowd_contacts: Option<usize>,
     #[serde(default)]
     pub(crate) enemy_count: Option<usize>,
     /// Predictions about individual placed bodies.

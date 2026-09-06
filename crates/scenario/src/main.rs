@@ -112,6 +112,7 @@ fn run_one(path: &Path, bless: bool) -> bool {
 
     let outcome = run::run(&scenario);
     let mut failures = run::check(&scenario, &outcome);
+    failures.extend(run::check_finite(&outcome));
     failures.extend(run::check_replay(&scenario, &outcome));
     failures.extend(run::check_trace(&scenario, &outcome, path, bless));
 

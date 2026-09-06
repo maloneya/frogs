@@ -5,6 +5,23 @@ use glam::Vec2;
 use crate::trace::{Event, TraceSink};
 use crate::{ARENA_HALF, ENEMY_RADIUS, PLAYER_RADIUS};
 
+/// What a clamp does to a NaN, and why this pass has to refuse one.
+///
+/// `f32::max` returns the operand that is *not* NaN, so clamping a poisoned
+/// position does not propagate the poison — it silently replaces it with the
+/// arena limit. Every NaN body teleports to the same corner, and by the end of
+/// the tick every position is finite again and looks legal.
+///
+/// That laundering is worse than the NaN. The real fault is upstream, in the
+/// solver, where two coincident bodies were normalised without a guard; the
+/// symptom is "the entire horde jumped to the corner", which points at this
+/// pass and at the arena bounds instead. So this is asserted where the poison
+/// arrives rather than left to be discovered where it lands.
+const POISONED: &str = "a position was NaN or infinite before it was clamped. \
+                        The clamp would have hidden it by returning the arena limit. \
+                        Look upstream in the solver for a normalise of a zero-length \
+                        difference — two bodies at exactly the same point";
+
 /// Clamps positions to the floor, and reports how many bodies it had to stop.
 ///
 /// The limit is inset by each body's radius, so it is the *body* that stops at
@@ -17,6 +34,8 @@ use crate::{ARENA_HALF, ENEMY_RADIUS, PLAYER_RADIUS};
 pub(crate) fn contain(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink<'_>) {
     let mut stopped = 0;
 
+    debug_assert!(player.is_finite(), "{}", POISONED);
+
     let player_limit = Vec2::splat(ARENA_HALF - PLAYER_RADIUS);
     let clamped = player.clamp(-player_limit, player_limit);
     if clamped != *player {
@@ -26,6 +45,8 @@ pub(crate) fn contain(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSin
 
     let enemy_limit = Vec2::splat(ARENA_HALF - ENEMY_RADIUS);
     for pos in horde.iter_mut() {
+        debug_assert!(pos.is_finite(), "{}", POISONED);
+
         let clamped = pos.clamp(-enemy_limit, enemy_limit);
         if clamped != *pos {
             stopped += 1;

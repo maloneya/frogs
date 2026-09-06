@@ -148,7 +148,8 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
     let mut failures = Vec::new();
     // Exhaustive, so an assertion added to the spec cannot be quietly left
     // unchecked — the same trick `World::hash` uses, for the same reason.
-    let Expect { player_pos, facing, contacts, enemy_count, bodies, trace: _ } = &scenario.expect;
+    let Expect { player_pos, facing, contacts, crowd_contacts, enemy_count, bodies, trace: _ } =
+        &scenario.expect;
 
     let ticks = run.world.tick();
     if ticks != scenario.budget.ticks {
@@ -199,6 +200,13 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
         let got = run.world.contacts();
         if got != *want {
             failures.push(Failure::new("contacts", want.to_string(), got.to_string()));
+        }
+    }
+
+    if let Some(want) = crowd_contacts {
+        let got = run.world.crowd_contacts();
+        if got != *want {
+            failures.push(Failure::new("crowd_contacts", want.to_string(), got.to_string()));
         }
     }
 
@@ -298,6 +306,41 @@ fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Fail
             .with_note(format!("off by {off:.4}, tolerance {:.4}", want.tol)),
         );
     }
+}
+
+/// Refuses a run that ended with a position that is not a number.
+///
+/// **Unconditional, like the replay check**, and for the same reason: it is a
+/// property every scenario should have and none would think to ask for. It is
+/// also the one failure a scenario's own assertions cannot catch. Every
+/// positional check here has the shape `if (got - want).length() > tolerance`,
+/// and `NaN > tolerance` is `false` — so a poisoned position sails through a
+/// prediction it does not remotely satisfy and reports success.
+///
+/// **A backstop rather than the primary detector, and it is worth knowing
+/// which.** `pass::contain` clamps every position at the end of every tick, and
+/// clamping a NaN does not propagate it: `f32::max` returns the operand that is
+/// not NaN, so the body is quietly moved to the arena limit and is finite again
+/// before this ever looks. The assertion inside `contain` is what actually
+/// names that failure, at the point the poison arrives.
+///
+/// This still earns its place: it costs one pass over the bodies, and it holds
+/// for the cases `contain` cannot launder — a position written after it, or a
+/// pass order that changes.
+pub(crate) fn check_finite(run: &Run) -> Option<Failure> {
+    if run.world.all_positions_finite() {
+        return None;
+    }
+
+    Some(
+        Failure::new("finite", "every position a real number".into(), "a position is NaN or infinite".into())
+            .with_note(
+                "the solver poisoned a position, and no clamp recovers one. Look for a \
+                 normalise of a zero-length difference — two bodies at exactly the same \
+                 point — or a divide by a combined mass of zero"
+                    .into(),
+            ),
+    )
 }
 
 /// Replays the scenario and compares hashes tick by tick.

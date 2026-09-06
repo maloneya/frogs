@@ -33,6 +33,35 @@ use glam::Vec2;
 const COINCIDENT_SQ: f32 = 1e-12;
 const _: () = assert!(COINCIDENT_SQ > 0.0);
 
+/// How deeply two bodies must overlap before it counts as touching.
+///
+/// **Not a fudge factor — the fix for a real defect, found by a scenario.**
+/// Separation leaves a pair at *exactly* the contact distance, and "exactly" is
+/// not a thing `f32` has: the result lands within an ulp either side. Half the
+/// time it lands a hair under, the pair reports contact again on the next tick,
+/// a correction of about 1e-7 is applied, and this repeats forever.
+///
+/// The symptom is not a wrong position — the bodies are visually settled and
+/// stable to four decimal places. It is that the *contact* never goes away: a
+/// trace event every tick for a crowd that is standing still, `crowd_contacts`
+/// that never reaches zero, and a per-tick cost that never subsides. A settled
+/// pack of a thousand bodies would churn permanently and say so in the trace,
+/// drowning the rare events the ring buffer exists to keep.
+///
+/// So contact needs a definition that is stable under the arithmetic that
+/// produces it, and that belongs to the *question* rather than to any one
+/// answer: it is a fact about asking, not about pushing. Box2D calls its
+/// version `linearSlop` and reaches for it for the same reason.
+///
+/// The value has to clear the noise and stay invisible. An `f32` ulp at the
+/// arena's far corner — coordinates near 96 — is about 8e-6, so this is a
+/// hundred times the error it must absorb; and it is a five-hundredth of a
+/// body's diameter, so a pack resting this deep into one another is not
+/// something a pixel can show.
+const SLOP: f32 = 1e-3;
+const _: () = assert!(SLOP > 1e-5, "below the f32 noise floor at arena scale, so contacts churn");
+const _: () = assert!(SLOP < 0.01, "deep enough to see bodies resting inside one another");
+
 /// Two bodies overlapping, described completely.
 ///
 /// Carries no identity — not which bodies, not what kind. It is a fact about a
@@ -81,11 +110,18 @@ impl Contact {
 /// The `sqrt` happens only once an overlap is confirmed, which is what keeps
 /// the negative case — overwhelmingly the common one — down to a multiply and a
 /// compare.
+///
+/// Bodies overlapping by less than [`SLOP`] are reported as **not** touching.
+/// That is what makes a settled crowd actually settle rather than churning on
+/// the float boundary forever; the constant carries the full argument.
 pub(crate) fn between(a: Vec2, b: Vec2, contact_distance: f32, tiebreak: usize) -> Option<Contact> {
     let delta = b - a;
     let gap_sq = delta.length_squared();
 
-    if gap_sq >= contact_distance * contact_distance {
+    // The threshold is inset by the slop, and squared here so the common case
+    // stays a multiply and a compare with no `sqrt`.
+    let touching = contact_distance - SLOP;
+    if gap_sq >= touching * touching {
         return None;
     }
 
@@ -138,6 +174,41 @@ mod tests {
     #[test]
     fn bodies_exactly_touching_are_not_overlapping() {
         assert!(between(Vec2::ZERO, Vec2::new(1.0, 0.0), 1.0, 0).is_none());
+    }
+
+    /// **The regression the slop exists for.** A pair the solver has just
+    /// separated sits at the contact distance plus or minus an ulp, and the
+    /// under side must not report contact — or the pair churns forever, one
+    /// negligible correction and one trace event per tick, for a crowd that is
+    /// standing still.
+    ///
+    /// Checked at arena-scale coordinates rather than at the origin, because
+    /// that is where an `f32` ulp is largest and the problem is worst.
+    #[test]
+    fn a_pair_resting_a_whisker_inside_touching_is_not_a_contact() {
+        let a = Vec2::new(90.0, -90.0);
+
+        for steps in 1..=8 {
+            // Walk down from exactly touching by single ulps.
+            let mut distance = 1.0_f32;
+            for _ in 0..steps {
+                distance = f32::from_bits(distance.to_bits() - 1);
+            }
+
+            let b = a + Vec2::new(distance, 0.0);
+            assert!(
+                between(a, b, 1.0, 0).is_none(),
+                "{steps} ulp inside touching reported a contact, which is the churn"
+            );
+        }
+    }
+
+    /// The slop must not swallow a real overlap. A body pushed a genuine
+    /// fraction of its width into another is touching, and has to be reported.
+    #[test]
+    fn an_overlap_deeper_than_the_slop_is_still_a_contact() {
+        let c = between(Vec2::ZERO, Vec2::new(0.99, 0.0), 1.0, 0);
+        assert!(c.is_some(), "a hundredth of the contact distance is a real overlap");
     }
 
     /// The normal points from the first body toward the second, and the depth

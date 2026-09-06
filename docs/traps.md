@@ -114,3 +114,29 @@ and there is no other door in.
 storage, and neither is any state a pass adds outside the schedule later. The
 symptom and the check above are unchanged for those, which is why this entry is
 demoted rather than deleted.
+
+---
+
+## symptom: the whole horde teleports to one corner of the arena
+
+*2026-09 — found by mutation testing while building the crowd solver.*
+
+**Cause.** A position went NaN in the solver, and `pass::contain` laundered it.
+Clamping does not propagate a NaN: `f32::max` returns whichever operand is *not*
+NaN, so a poisoned body is silently replaced with the arena limit. Every NaN
+body lands on the same corner, and by the end of the tick every position is
+finite again and looks perfectly legal.
+
+The symptom therefore points at the wall and at the arena bounds, which is the
+one place the bug is not. The fault is upstream — a normalise of a zero-length
+difference, which is two bodies at exactly the same point.
+
+**Check.** The `finite` field in `state`, and — much more directly — run it in a
+debug build. A release build has no assertions and will happily show you the
+corner.
+
+**Promoted.** `pass::contain` now asserts every position is finite *before* it
+clamps, and the message names the likely cause. The failure is loud, and at the
+point the poison arrives rather than where it lands. The scenario runner also
+checks finiteness unconditionally at the end of every run, as a backstop for a
+position written where `contain` cannot reach it.

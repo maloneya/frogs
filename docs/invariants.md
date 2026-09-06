@@ -96,6 +96,10 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Nothing spawns already overlapping | 1 | `const _: () = assert!(ENEMY_SPACING > 2.0 * ENEMY_RADIUS)` |
 | Coincident bodies separate deterministically, not into NaN | 3 | `escape_direction`; unit tests in `sim/contact.rs` |
 | A contact normal is unit length | 0 | private fields on `Contact`; `contact::between` is the only constructor |
+| A settled crowd stops reporting contacts | 3 | `SLOP` in `contact.rs`; `a_pair_resting_a_whisker_inside_touching_is_not_a_contact` |
+| A clamp cannot launder a NaN into a legal position | 3 | `debug_assert` in `pass::contain` naming the cause; `POISONED` |
+| A scenario cannot end with a poisoned position | 3 | `check_finite` runs unconditionally, like `check_replay` |
+| Every enemy pair is resolved once, not twice | 3 | `crowd` walks `j > i` via `split_at_mut`; `an_overlapped_pair_settles_at_touching` |
 | Asking whether two bodies touch cannot move them | 0 | `contact::between` takes `Vec2` by value and returns a `Contact` |
 | The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
 | The harness cannot fall behind the bindings | 0 | key names live *in* `BINDINGS`; there is no second table to forget |

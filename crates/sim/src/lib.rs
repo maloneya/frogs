@@ -385,6 +385,16 @@ pub struct World {
     /// finds a different number of contacts than brute force is wrong, and this
     /// is how that gets caught.
     contacts: usize,
+    /// Enemy pairs the crowd solver pushed apart in the last [`World::step`].
+    ///
+    /// Kept apart from `contacts` rather than summed into it, for the reason
+    /// `contacts` exists at all: it is the instrument the collision work is
+    /// measured with. One number covering both cannot distinguish the player
+    /// wading into a pack from the pack settling on its own, and it is
+    /// precisely the crowd half that the uniform grid will change — so the
+    /// test "the grid finds the same pairs as brute force" wants to compare
+    /// this number specifically.
+    crowd_contacts: usize,
 }
 
 impl Default for World {
@@ -396,6 +406,7 @@ impl Default for World {
                 tick: 0,
                 trace: Trace::default(),
                 contacts: 0,
+                crowd_contacts: 0,
             };
         world.set_enemy_count(DEFAULT_ENEMIES);
         world
@@ -512,13 +523,19 @@ impl World {
     /// predecessor — a hand-written `format!` listing fourteen fields — was the
     /// standing counterexample to it.
     pub fn report(&self, out: &mut Report) {
-        let Self { enemies, player, tick, contacts, trace } = self;
+        let Self { enemies, player, tick, contacts, crowd_contacts, trace } = self;
         let Player { pos, facing, prev_pos, prev_facing } = player;
 
         out.int("tick", *tick);
         out.vec3("player_pos", on_ground(*pos, PLAYER_HALF_HEIGHT));
         out.num("facing", *facing);
         out.int("contacts", *contacts as u64);
+        out.int("crowd_contacts", *crowd_contacts as u64);
+
+        // Derived, and reported because "everything is still a number" is not
+        // visible in any of the values above — a NaN position prints as a
+        // position and compares equal to nothing.
+        out.bool("finite", self.all_positions_finite());
         out.int("enemies", enemies.len() as u64);
         out.int("trace_events", trace.iter().count() as u64);
         out.int("trace_dropped", trace.dropped() as u64);
@@ -576,8 +593,14 @@ impl World {
             &mut self.enemies.prev_pos,
         );
         pass::walk::walk(&mut self.player.pos, move_dir, dt);
-        self.contacts =
-            pass::separate::separate(&mut self.player.pos, &mut self.enemies.pos, trace.reborrow());
+        // Crowd before player, so the player's correction is the one that
+        // survives the tick. `pass::separate` carries the argument.
+        self.crowd_contacts = pass::separate::crowd(&mut self.enemies.pos, trace.reborrow());
+        self.contacts = pass::separate::player(
+            &mut self.player.pos,
+            &mut self.enemies.pos,
+            trace.reborrow(),
+        );
         pass::contain::contain(&mut self.player.pos, &mut self.enemies.pos, trace.reborrow());
         pass::face::face(&mut self.player.facing, move_dir, dt);
 
@@ -615,7 +638,7 @@ impl World {
     #[must_use]
     pub fn hash(&self) -> u64 {
         // Exhaustive on purpose — see above. Do not replace with `..`.
-        let Self { enemies, player, tick, contacts, trace } = self;
+        let Self { enemies, player, tick, contacts, crowd_contacts, trace } = self;
 
         // **Deliberately not hashed**, and the exhaustive destructuring above is
         // what forced this line to be written rather than forgotten. The trace
@@ -634,6 +657,7 @@ impl World {
         h.f32(pos.y);
         h.f32(*facing);
         h.usize(*contacts);
+        h.usize(*crowd_contacts);
 
         // The previous tick goes in too. It is derived — it is just last tick's
         // values — so it adds no information to a comparison of two runs, and
@@ -689,9 +713,39 @@ impl World {
         self.player.facing
     }
 
-    /// How many overlapping pairs the last step pushed apart.
+    /// How many overlapping pairs the last step pushed apart, player against
+    /// horde.
     pub fn contacts(&self) -> usize {
         self.contacts
+    }
+
+    /// How many overlapping enemy pairs the last step pushed apart.
+    #[must_use]
+    pub fn crowd_contacts(&self) -> usize {
+        self.crowd_contacts
+    }
+
+    /// Whether every position in the world is a real number.
+    ///
+    /// **A poisoned position is the one failure that reads as success.** NaN
+    /// propagates through arithmetic silently, survives `clamp` — which is what
+    /// `pass::contain` would otherwise be expected to catch it with — and, worst
+    /// of all, compares `false` to everything. A test written as
+    /// `if (got - want).length() > tolerance` therefore *passes* when `got` is
+    /// NaN, because `NaN > tolerance` is false. Every positional assertion in
+    /// the scenario runner had that shape.
+    ///
+    /// So the check has to be an explicit "is this finite", asked separately,
+    /// and it cannot be folded into a comparison. The solver is the thing that
+    /// produces one: normalising the difference between two coincident bodies
+    /// is a division by zero, which is why `contact::between` has a coincident
+    /// case at all.
+    #[must_use]
+    pub fn all_positions_finite(&self) -> bool {
+        self.player.pos.is_finite()
+            && self.player.prev_pos.is_finite()
+            && self.enemies.pos.iter().all(|p| p.is_finite())
+            && self.enemies.prev_pos.iter().all(|p| p.is_finite())
     }
 
     /// **The seam.** The world describes itself in the renderer's vocabulary;

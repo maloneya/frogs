@@ -1,0 +1,55 @@
+// **The case that produces NaN**, driven through the whole simulation rather
+// than through one unit test.
+//
+// Five bodies at exactly the same point. There is no line between them to push
+// along, so normalising their difference is a division by zero — and a NaN
+// position is not merely wrong, it is wrong in a way that reads as success:
+// `clamp` does not recover it, and it compares `false` to everything, so the
+// usual `if off > tolerance` shape of a positional assertion *passes*. The
+// runner's unconditional finiteness check is what actually catches it; these
+// assertions on top say the cluster resolved sensibly rather than merely
+// remaining numeric.
+//
+// It is not a contrived case. A crowd converging on one target arrives at one
+// point, which is exactly what the seek behaviour will produce.
+//
+// Measured: the cluster settles on tick 15, and the trace records the whole
+// descent — ten pairs in contact on tick 0, then five, then four while the line
+// straightens out, then nothing. The budget is 60 so that "and then it stays
+// settled" is part of what the golden file asserts.
+//
+// The tolerances below are **bounds, not precisions** — the deliberate
+// exception to the rule that a wide tolerance is an assertion switched off.
+// What is being asserted is that the cluster did not detonate: after settling,
+// every body is still within a body's-length or so of where it started. The
+// golden trace is what pins the exact behaviour, tick by tick, including how
+// many pairs were in contact on each one.
+//
+// Away from the origin so the player, which is not moving, is never involved.
+(
+    description: "Five bodies at one point fan out to a stable ring instead of NaN.",
+    setup: (
+        actions: [
+            Place((20.0, 0.0)),
+            Place((20.0, 0.0)),
+            Place((20.0, 0.0)),
+            Place((20.0, 0.0)),
+            Place((20.0, 0.0)),
+        ],
+    ),
+    inputs: [],
+    budget: (ticks: 60),
+    expect: (
+        contacts: 0,
+        crowd_contacts: 0,
+        enemy_count: 5,
+        bodies: [
+            (nth: 0, alive: true, pos: (x: 20.0, z: 0.0, tol: 1.5)),
+            (nth: 1, alive: true, pos: (x: 20.0, z: 0.0, tol: 1.5)),
+            (nth: 2, alive: true, pos: (x: 20.0, z: 0.0, tol: 1.5)),
+            (nth: 3, alive: true, pos: (x: 20.0, z: 0.0, tol: 1.5)),
+            (nth: 4, alive: true, pos: (x: 20.0, z: 0.0, tol: 1.5)),
+        ],
+        trace: "a_coincident_cluster_fans_out.trace",
+    ),
+)

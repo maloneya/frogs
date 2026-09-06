@@ -4,6 +4,18 @@
 //! line, is [`crate::contact`]'s question; this module only decides what to do
 //! about the answer. An attack asks the same question and does something else
 //! entirely with it.
+//!
+//! ## Two passes, one module
+//!
+//! [`crowd`] resolves the horde against itself; [`player`] resolves the horde
+//! against the player. They are separate entries in the schedule because the
+//! **order between them is load-bearing** and belongs somewhere readable, and
+//! they share this module because they are the same behaviour over different
+//! pair sets — same response, same constants, and only the pairing differs.
+//!
+//! They also diverge in cost in a way that matters later: [`player`] is O(N)
+//! and [`crowd`] is O(N^2), so the uniform grid, when it lands, optimises one
+//! of them and leaves the other alone.
 
 use glam::Vec2;
 
@@ -25,19 +37,19 @@ const _: () = assert!(
 
 /// Separates every body overlapping the player, and reports how many.
 ///
-/// Brute force, deliberately, and only against the player for now. It is O(N),
-/// so at the default horde it is a thousand distance checks a tick and costs
-/// nothing worth measuring. The uniform grid this eventually wants is an
-/// *optimisation of something already correct* — which means it can be tested
-/// by agreeing with this, and that test only exists if this exists first.
+/// Brute force, deliberately. It is O(N), so at the default horde it is a
+/// thousand distance checks a tick and costs nothing worth measuring.
 ///
-/// Gauss-Seidel: each correction is written immediately, so the next pair sees
-/// it. That converges faster per pass than accumulating and applying at the
-/// end, and its one real cost — the result depends on the order pairs are
-/// visited — is fine here because the order is a fixed walk over storage rather
-/// than anything that varies run to run. It is also why
-/// [`crate::pass::remember`] copies rather than swapping two buffers.
-pub(crate) fn separate(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink<'_>) -> usize {
+/// **Runs after [`crowd`]**, and that order is a decision rather than an
+/// accident. One Gauss-Seidel sweep leaves residual overlap wherever a body was
+/// pushed by two things at once, and whichever of these two runs *last* is the
+/// one whose result survives the tick. Last here means the player's personal
+/// space is inviolate: no enemy ends a tick standing inside it. The residual
+/// lands instead on enemy-against-enemy, where it is a fraction of a body's
+/// width inside a mass of identical cubes and nobody can see it. Reverse the
+/// order and the visible artefact is a body clipping into the character the
+/// camera is centred on.
+pub(crate) fn player(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink<'_>) -> usize {
     let contact_distance = PLAYER_RADIUS + ENEMY_RADIUS;
     let mut contacts = 0;
 
@@ -55,6 +67,75 @@ pub(crate) fn separate(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSi
     // rare enough to be worth keeping.
     if contacts > 0 {
         trace.emit(Event::Contacts { count: contacts });
+    }
+
+    contacts
+}
+
+/// Separates the horde against itself, and reports how many pairs it resolved.
+///
+/// **This is what makes the horde a crowd.** Until it existed the bodies were a
+/// grid of positions that happened to be drawn near one another: they collided
+/// with the player and passed straight through each other, so shoving into them
+/// compressed them to a point instead of displacing them outward.
+///
+/// Every unordered pair once — `j` starts past `i` — so a pair is never
+/// resolved twice, which would double the correction and make the crowd
+/// springy.
+///
+/// **O(N^2), and knowingly so.** At the default horde of 1024 that is 523,776
+/// pair tests a tick. Measured headless in release: **0.217ms per tick**, which
+/// is about 1.3% of a 60Hz frame. So the uniform grid is not urgent at this
+/// size, and the number is what says so rather than a feeling.
+///
+/// The number is also what says when it *will* be. The cost goes as the square,
+/// so 4096 bodies is sixteen times this — around 3.5ms, a fifth of the frame —
+/// and 8192 would eat most of it. That is the point at which the grid stops
+/// being an optimisation and starts being the only way to raise N.
+///
+/// When it comes, it is an *optimisation of something already correct*, and the
+/// way it gets tested is by producing the same contact set as this over a
+/// replayed input stream — a test that can only exist if this exists first.
+///
+/// Gauss-Seidel, as [`player`] is: each correction is written immediately, so
+/// the next pair sees it. That converges faster per sweep than accumulating and
+/// applying at the end, and its one real cost — the result depends on the order
+/// pairs are visited — is fine because the order is a fixed walk over storage
+/// rather than anything that varies run to run. It is also why
+/// [`crate::pass::remember`] copies rather than swapping two buffers.
+///
+/// **One sweep, not iterated to convergence.** A body squeezed between two
+/// others ends the tick still slightly overlapped, and the next tick takes
+/// another bite. That reads as a crowd settling, which is what it should look
+/// like; iterating here to a hard constraint would instead make a dense pack
+/// rigid and jolt everything the moment the player entered it.
+pub(crate) fn crowd(horde: &mut [Vec2], mut trace: TraceSink<'_>) -> usize {
+    let contact_distance = 2.0 * ENEMY_RADIUS;
+    let mut contacts = 0;
+
+    for i in 0..horde.len() {
+        // `split_at_mut` is what makes two simultaneous `&mut` into one slice
+        // legal. The alternative — index and copy out, compute, write back — is
+        // the same arithmetic with the borrow checker switched off for the one
+        // thing it is actually good at here.
+        let (head, tail) = horde.split_at_mut(i + 1);
+        let a = &mut head[i];
+
+        for (offset, b) in tail.iter_mut().enumerate() {
+            // Every pair gets its own tiebreak, so a stack of coincident bodies
+            // fans out instead of every pair escaping along the same line and
+            // re-stacking next tick.
+            let tiebreak = i + (i + 1 + offset);
+
+            if let Some(found) = contact::between(*a, *b, contact_distance, tiebreak) {
+                resolve(a, b, found, ENEMY_INV_MASS, ENEMY_INV_MASS);
+                contacts += 1;
+            }
+        }
+    }
+
+    if contacts > 0 {
+        trace.emit(Event::Crowded { count: contacts });
     }
 
     contacts

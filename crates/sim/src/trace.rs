@@ -64,6 +64,17 @@ pub enum Event {
         /// Overlapping pairs resolved.
         count: usize,
     },
+    /// Overlapping enemy pairs the crowd solver pushed apart this tick.
+    ///
+    /// Separate from `Contacts`, which is the player's own. They answer
+    /// different questions — "is the character being jostled" and "is the crowd
+    /// settling" — and the one number that used to be both could not tell a
+    /// player wading into a pack from a pack shaking itself apart with nobody
+    /// near it.
+    Crowded {
+        /// Enemy pairs resolved.
+        count: usize,
+    },
     /// Bodies the arena wall stopped this tick.
     Clamped {
         /// Bodies the wall stopped.
@@ -81,6 +92,7 @@ impl fmt::Display for Event {
             Self::Placed { id } => write!(f, "placed id={id}"),
             Self::Removed { id } => write!(f, "removed id={id}"),
             Self::Contacts { count } => write!(f, "contacts count={count}"),
+            Self::Crowded { count } => write!(f, "crowded count={count}"),
             Self::Clamped { count } => write!(f, "clamped count={count}"),
         }
     }
