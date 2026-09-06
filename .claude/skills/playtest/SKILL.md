@@ -53,7 +53,8 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `shot <path>` | **after the PNG is on disk**, or an error if no frame presented |
 | `state` | one line of numbers (below) |
 | `trace since <tick>` | every event from that tick on, plus a `# n event(s)` count |
-| `enemies <n>` | clamped count |
+| `enemies <n>` | clamped count, **and the seeker count**, which a respawn resets to 0 |
+| `seekers <n>` | how many of the bodies now chase the player |
 | `vsync on\|off` | resulting state |
 | `quit` | then exits |
 
@@ -64,6 +65,12 @@ also how to ask what exists. Malformed input is always reported, never ignored.
 
 Meta commands say what they mean (`enemies 512`); do **not** simulate the debug
 keys (`[`, `]`, `v`, `p`) to achieve the same thing.
+
+`seekers` is how to see the horde move at all: bodies spawn inert, and chasing
+is a behaviour granted to them. Order matters, because `enemies <n>` respawns
+the horde and retires every name — which revokes every behaviour with them. So
+it is `enemies 200` *then* `seekers 200`, and the reply to the first says
+`seekers 0` to make that hard to miss.
 
 ## Reading state
 

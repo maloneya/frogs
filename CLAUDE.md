@@ -77,7 +77,7 @@ echo 'hold d 500' | nc -U /tmp/arpg.sock
 ```
 
 `press`/`release`/`tap`/`hold <key> <ms>` · `wait <ms>` · `shot <path>` ·
-`state` · `trace since <tick>` · `enemies <n>` · `vsync on|off` · `quit`
+`state` · `trace since <tick>` · `enemies <n>` · `seekers <n>` · `vsync on|off` · `quit`
 
 Every command replies, and the reply means the effect has **landed** — `hold`
 answers after the key comes back up, `shot` after the file is on disk. So a test
@@ -137,7 +137,11 @@ crates/
   only some bodies have. `contact.rs` answers *whether two bodies touch, and
   along what line*, and stops there: separation, a hitbox and a trigger are
   three different responses to that one question, so the question does not live
-  inside any of them. `extract()` is the sim/render seam; `trace()` is the sim/agent
+  inside any of them. `members.rs` is the other half of the storage decision —
+  a sparse set saying which entities have a given behaviour. A behaviour is its
+  own membership plus a pass that walks it, so adding one touches no existing
+  type and costs what it uses rather than what the horde costs;
+  `pass/seek.rs` is the first and the shape to copy. `extract()` is the sim/render seam; `trace()` is the sim/agent
   one. Both hand out shared references, which is what makes "perception cannot
   change what it observes" a fact about the types.
 - `app` — the wiring layer, and the only crate that sees both sides. `input.rs`

@@ -91,6 +91,11 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                     world.despawn_enemy(id);
                 }
             }
+            Action::Seek(nth) => {
+                if let Some(Some(id)) = placed.get(*nth).copied() {
+                    world.add_seek(id);
+                }
+            }
         }
     }
 
@@ -258,6 +263,17 @@ fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Fail
     };
 
     let alive = run.world.is_alive(id);
+
+    if let Some(want) = body.seeking {
+        let got = run.world.is_seeker(id);
+        if got != want {
+            failures.push(Failure::new(
+                &format!("bodies[{}].seeking", body.nth),
+                want.to_string(),
+                got.to_string(),
+            ));
+        }
+    }
 
     if let Some(want) = body.alive
         && alive != want

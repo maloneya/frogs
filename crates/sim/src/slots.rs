@@ -56,6 +56,32 @@ pub struct EntityId {
     generation: u32,
 }
 
+impl EntityId {
+    /// Which slot this name occupies.
+    ///
+    /// For indexing a table keyed by entity — see [`crate::members`], where it
+    /// is the sparse half of a sparse set. It is *not* a name: two ids from
+    /// different generations share a slot, which is exactly why the generation
+    /// has to be compared as well before a lookup is believed.
+    ///
+    /// Exposing it does not weaken the no-forging argument above: there is
+    /// still no constructor, so a slot number cannot be turned back into an id.
+    pub(crate) fn slot(self) -> usize {
+        self.index as usize
+    }
+
+    /// Feeds the whole name into a hash.
+    ///
+    /// Named `hash_into` rather than `hash` so it cannot be mistaken for the
+    /// derived `core::hash::Hash`, which uses a different hasher for a
+    /// different purpose — `Fnv` is the reproducible one the determinism gate
+    /// rests on, and std's is explicitly allowed to change between releases.
+    pub(crate) fn hash_into(self, h: &mut Fnv) {
+        h.u64(u64::from(self.index));
+        h.u64(u64::from(self.generation));
+    }
+}
+
 impl core::fmt::Display for EntityId {
     /// `#12v3` — slot 12, third occupant. Compact because it appears in trace
     /// events and failure messages, where the surrounding text is what carries
@@ -210,6 +236,15 @@ impl Slots {
         self.index(id).is_some()
     }
 
+    /// Every live name, in storage order.
+    ///
+    /// For granting a behaviour in bulk. Deliberately a slice rather than a
+    /// way to *reach* a body: it hands out names, and a name still has to be
+    /// resolved through the same door as any other.
+    pub(crate) fn ids(&self) -> &[EntityId] {
+        &self.dense
+    }
+
     /// Retires every name and forgets every slot.
     ///
     /// **Ids minted before this are not merely dead, they may come back to
@@ -246,8 +281,7 @@ impl Slots {
 
         h.usize(dense.len());
         for id in dense {
-            h.u64(u64::from(id.index));
-            h.u64(u64::from(id.generation));
+            id.hash_into(h);
         }
 
         h.usize(free.len());

@@ -60,6 +60,7 @@ pub(crate) enum Command {
     /// that gap.
     TraceSince(u64),
     SetEnemies(usize),
+    SetSeekers(usize),
     SetVsync(bool),
     Quit,
 }
@@ -109,6 +110,7 @@ fn parse(line: &str) -> Result<Command, String> {
             _ => return Err("expected: trace since <tick>".into()),
         },
         "enemies" => Command::SetEnemies(number(arg)? as usize),
+        "seekers" => Command::SetSeekers(number(arg)? as usize),
         "vsync" => Command::SetVsync(matches!(arg, Some("on") | Some("1"))),
         "quit" => Command::Quit,
         "" => return Err("empty command".into()),

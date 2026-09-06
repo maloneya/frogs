@@ -10,6 +10,7 @@ use arpg_core::{Instance, InstanceSink, MoveDir, Report, MAX_INSTANCES};
 mod angle;
 mod contact;
 mod hash;
+mod members;
 mod pass;
 mod slots;
 mod time;
@@ -17,6 +18,7 @@ mod trace;
 
 pub use hash::Fnv;
 pub use slots::EntityId;
+use members::Members;
 use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, Ticks, TICK_HZ};
 pub use trace::{Event, Trace};
@@ -385,6 +387,17 @@ pub struct World {
     /// finds a different number of contacts than brute force is wrong, and this
     /// is how that gets caught.
     contacts: usize,
+    /// Which bodies chase the player.
+    ///
+    /// **A behaviour, stored as its own membership set rather than as a field
+    /// on every body.** A body is not "an enemy with `chases: bool`"; it is a
+    /// body, and it is in this set or it is not. Adding the next behaviour adds
+    /// another field here and another line to the schedule, and touches nothing
+    /// that already exists — which is the property the storage was chosen for.
+    ///
+    /// See [`crate::members`] for why the set is sparse, and
+    /// [`crate::pass::seek`] for the pass that walks it.
+    seekers: Members,
     /// Enemy pairs the crowd solver pushed apart in the last [`World::step`].
     ///
     /// Kept apart from `contacts` rather than summed into it, for the reason
@@ -405,6 +418,7 @@ impl Default for World {
                 player: Player::default(),
                 tick: 0,
                 trace: Trace::default(),
+                seekers: Members::default(),
                 contacts: 0,
                 crowd_contacts: 0,
             };
@@ -437,6 +451,14 @@ impl World {
     /// movement is really a prediction about the solver.
     pub fn set_enemy_count(&mut self, n: usize) {
         self.enemies.respawn(n.min(MAX_ENEMIES));
+
+        // **Must come after the respawn, and must happen at all.** `respawn`
+        // goes through `Slots::clear`, which restarts generations — so an id
+        // minted before it can match a body spawned after it. A membership set
+        // surviving that would not merely hold garbage; it would hold names
+        // that come back to life pointing at whichever body inherited them, and
+        // a body nobody asked to chase would start chasing.
+        self.seekers.clear();
 
         // Traced because it happens *outside* the schedule. State that changes
         // between ticks is the hardest kind to account for later — it explains
@@ -495,8 +517,61 @@ impl World {
             return false;
         }
 
+        // Every behaviour the body had is revoked here. That is one line per
+        // behaviour, and it is deliberately a line rather than a registry: a
+        // list of sets to sweep would be a second place recording which
+        // behaviours exist, and the compiler cannot check a list against
+        // reality. If this grows past a handful, that is the signal to build a
+        // real registry rather than to let it drift.
+        //
+        // Revoking eagerly is an optimisation, not a correctness requirement —
+        // a stale id in a set resolves to nothing, which is what generational
+        // ids are for, and `pass::seek` skips what it cannot resolve. This
+        // keeps the sets from accumulating garbage that costs every pass that
+        // walks them.
+        self.seekers.remove(id);
+
         self.trace.sink(self.tick).emit(Event::Removed { id });
         true
+    }
+
+    /// Makes a body chase the player. Returns whether it took effect.
+    ///
+    /// `false` when the id is dead or the body already chases. Composing rather
+    /// than configuring: a body is placed first and granted behaviours after,
+    /// so what an enemy *is* stays a list of the things it does.
+    pub fn add_seek(&mut self, id: EntityId) -> bool {
+        if !self.enemies.slots.contains(id) {
+            return false;
+        }
+        self.seekers.add(id).is_some()
+    }
+
+    /// Whether this body chases the player.
+    #[must_use]
+    pub fn is_seeker(&self, id: EntityId) -> bool {
+        self.seekers.contains(id)
+    }
+
+    /// Makes the first `n` bodies chase, and the rest not.
+    ///
+    /// **A debug dial, and shaped like one.** It exists so the behaviour can be
+    /// turned on in the running game without a rebuild, the way
+    /// [`World::set_enemy_count`] can. It is not how a real spawner should work
+    /// — that will grant behaviours per body as it places them, from something
+    /// describing what *kind* of enemy this is — and the giveaway is "the first
+    /// n", which is a fact about storage order rather than about the game.
+    pub fn set_seeker_count(&mut self, n: usize) {
+        self.seekers.clear();
+        for id in self.enemies.slots.ids().iter().take(n) {
+            self.seekers.add(*id);
+        }
+    }
+
+    /// How many bodies chase the player.
+    #[must_use]
+    pub fn seeker_count(&self) -> usize {
+        self.seekers.len()
     }
 
     /// Where a named body stands, lifted to world space, or `None` if it is
@@ -523,7 +598,7 @@ impl World {
     /// predecessor — a hand-written `format!` listing fourteen fields — was the
     /// standing counterexample to it.
     pub fn report(&self, out: &mut Report) {
-        let Self { enemies, player, tick, contacts, crowd_contacts, trace } = self;
+        let Self { enemies, player, tick, seekers, contacts, crowd_contacts, trace } = self;
         let Player { pos, facing, prev_pos, prev_facing } = player;
 
         out.int("tick", *tick);
@@ -537,6 +612,7 @@ impl World {
         // position and compares equal to nothing.
         out.bool("finite", self.all_positions_finite());
         out.int("enemies", enemies.len() as u64);
+        out.int("seekers", seekers.len() as u64);
         out.int("trace_events", trace.iter().count() as u64);
         out.int("trace_dropped", trace.dropped() as u64);
 
@@ -593,6 +669,17 @@ impl World {
             &mut self.enemies.prev_pos,
         );
         pass::walk::walk(&mut self.player.pos, move_dir, dt);
+        // After `walk`, so chasers steer at where the player is *now* rather
+        // than where it stood at the start of the tick. Before the solvers, so
+        // the pile-up that chasing creates is what they resolve.
+        pass::seek::seek(
+            &self.seekers,
+            &self.enemies.slots,
+            &mut self.enemies.pos,
+            self.player.pos,
+            dt,
+        );
+
         // Crowd before player, so the player's correction is the one that
         // survives the tick. `pass::separate` carries the argument.
         self.crowd_contacts = pass::separate::crowd(&mut self.enemies.pos, trace.reborrow());
@@ -638,7 +725,7 @@ impl World {
     #[must_use]
     pub fn hash(&self) -> u64 {
         // Exhaustive on purpose — see above. Do not replace with `..`.
-        let Self { enemies, player, tick, contacts, crowd_contacts, trace } = self;
+        let Self { enemies, player, tick, seekers, contacts, crowd_contacts, trace } = self;
 
         // **Deliberately not hashed**, and the exhaustive destructuring above is
         // what forced this line to be written rather than forgotten. The trace
@@ -658,6 +745,11 @@ impl World {
         h.f32(*facing);
         h.usize(*contacts);
         h.usize(*crowd_contacts);
+
+        // Membership is state. Two worlds whose bodies stand in identical
+        // places are different worlds if one of them chases and the other does
+        // not, and they diverge visibly on the very next tick.
+        seekers.hash(&mut h);
 
         // The previous tick goes in too. It is derived — it is just last tick's
         // values — so it adds no information to a comparison of two runs, and

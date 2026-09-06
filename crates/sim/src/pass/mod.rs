@@ -44,5 +44,6 @@
 pub(crate) mod contain;
 pub(crate) mod face;
 pub(crate) mod remember;
+pub(crate) mod seek;
 pub(crate) mod separate;
 pub(crate) mod walk;

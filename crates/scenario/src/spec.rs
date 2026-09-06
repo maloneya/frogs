@@ -76,6 +76,17 @@ pub(crate) enum Action {
     /// The slot it frees is reused by the next `Place`, which is precisely the
     /// case worth writing a scenario about.
     Despawn(usize),
+
+    /// Makes a previously placed body chase the player, by its placement
+    /// number.
+    ///
+    /// **Granted separately from placing it, on purpose.** A body is a body;
+    /// what makes it an enemy is the list of behaviours attached to it. Writing
+    /// that as `Place` then `Seek` keeps the scenario language honest about the
+    /// storage underneath, where seeking is a membership set and not a field —
+    /// and it means the next behaviour is a new action rather than a new kind
+    /// of placement.
+    Seek(usize),
 }
 
 /// Hold a direction for a span of ticks.
@@ -187,6 +198,14 @@ pub(crate) struct BodyExpect {
     /// Where the body should be. Omit to say nothing about position.
     #[serde(default)]
     pub(crate) pos: Option<Approx2>,
+
+    /// Whether the body should be chasing the player.
+    ///
+    /// `seeking: false` on a body that was never granted it is the control in
+    /// the pair: a pass that moved everything would satisfy every assertion
+    /// about the chaser and only fail here.
+    #[serde(default)]
+    pub(crate) seeking: Option<bool>,
 
     /// Whether the body should still exist.
     ///

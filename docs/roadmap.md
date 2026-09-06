@@ -116,12 +116,22 @@ enemy has ever moved on its own. Brute force first, on top of chunk 4b's query:
 the uniform grid in chunk 5 is an *optimisation of something already correct*,
 and it can only be tested by agreeing with a correct thing that already exists.
 
-Then the first real behaviour module — a `seek` set whose members walk toward
-the player, and whose non-members demonstrably do not.
+**Both halves are done.** Crowd separation landed with `pass::separate::crowd`,
+and `pass::seek` is the first behaviour only some bodies have.
 
-**Gate:** a scenario spawning a deliberately overlapped cluster asserts it
-resolves without explosion, within a tick budget, with no NaN. A placed seeker
-closes at the rate its constant claims; a placed non-seeker does not move.
+**Gate — met.** `a_coincident_cluster_fans_out` resolves five bodies dropped on
+one point, and `a_seeker_closes_and_a_bystander_does_not` asserts a chaser
+closes 3.5 units in a second while a body without the behaviour never moves —
+the bystander being the half that proves composition rather than motion.
+
+### What is left
+
+Bodies still spawn inert; `seekers <n>` over the harness is a debug dial, not a
+spawner. A real one grants behaviours per body as it places them, from something
+describing what *kind* of enemy this is. Deciding whether the default horde
+chases is a game decision rather than an engine one, and it will churn three
+golden traces when it is made — which is the right amount of ceremony for a
+change that alters what the game *is*.
 
 ## 8. Attack state machine — startup / active / recovery, timed hitboxes
 

@@ -1,0 +1,49 @@
+// A chaser arrives and *stops*, rather than grinding into the player forever.
+//
+// Without the arrival clamp the two passes fight every tick: seek walks the
+// body in, separation pushes it back out, and the pair reports a contact per
+// chaser per tick for as long as the chase lasts. With a thousand of them that
+// is a thousand pointless corrections a tick and a trace full of a crowd that
+// is not going anywhere.
+//
+// **The start distance is 10.1 and that is not a decoration.** It was 10.0, and
+// with 10.0 this scenario could not fail: `STOP_AT` is
+// PLAYER_RADIUS + ENEMY_RADIUS = 0.55, the step is SPEED * Dt::SECS = 3.5/60,
+// and (10.0 - 0.55) / (3.5/60) is exactly 162 — a whole number of whole steps,
+// so the body lands on 0.55 whether or not the last step is clamped. Deleting
+// the clamp broke nothing and every scenario passed.
+//
+// At 10.1 the division does not come out even:
+//
+//   (10.1 - 0.55) / (3.5 / 60) = 9.55 * 60 / 3.5 = 163.71
+//
+// so 163 full steps leave 0.0417 to go, which is less than a step. The clamp
+// has to shorten the 164th, and without it the body overshoots to 0.533,
+// registers a contact it should never have had, and is shoved back out.
+//
+// The budget is 200, comfortably beyond arrival, so what is really asserted is
+// that it stops there and stays.
+//
+// **The golden trace is empty, and that is the assertion.** Not one contact,
+// not one crowd pair, for two hundred ticks. A body that arrived and then
+// jittered against the player would fill that file.
+(
+    description: "A chaser arrives at exactly touching distance and stops, without ever registering a contact.",
+    setup: (
+        actions: [
+            Place((10.1, 0.0)),
+            Seek(0),
+        ],
+    ),
+    inputs: [],
+    budget: (ticks: 200),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
+        contacts: 0,
+        crowd_contacts: 0,
+        bodies: [
+            (nth: 0, seeking: true, pos: (x: 0.55, z: 0.0, tol: 0.001)),
+        ],
+        trace: "a_seeker_stops_where_it_touches.trace",
+    ),
+)

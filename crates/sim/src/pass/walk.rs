@@ -6,7 +6,12 @@ use glam::{Vec2, Vec3Swizzles};
 use crate::Dt;
 
 /// How fast the character walks, in world units per second.
-const PLAYER_SPEED: f32 = 9.0;
+///
+/// `pub(crate)` so that [`crate::pass::seek`] can assert against it: a horde
+/// that is not slower than the player cannot be outrun, and kiting is the whole
+/// of ARPG movement. That comparison has to be a compile error rather than a
+/// note, and it can only be one if both constants are visible to each other.
+pub(crate) const PLAYER_SPEED: f32 = 9.0;
 const _: () = assert!(PLAYER_SPEED > 0.0);
 
 /// Integrates one tick of movement.

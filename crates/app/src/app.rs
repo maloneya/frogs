@@ -171,7 +171,15 @@ impl App {
                 Command::TraceSince(tick) => self.report_trace(tick),
                 Command::SetEnemies(n) => {
                     self.world.set_enemy_count(n);
-                    format!("enemies {}", self.world.enemy_count())
+                    // Respawning retires every name, so it revokes every
+                    // behaviour with them. Said in the reply rather than left
+                    // to be discovered, because "I set the horde and the
+                    // chasing stopped" is otherwise a puzzle.
+                    format!("enemies {} seekers {}", self.world.enemy_count(), self.world.seeker_count())
+                }
+                Command::SetSeekers(n) => {
+                    self.world.set_seeker_count(n);
+                    format!("seekers {}", self.world.seeker_count())
                 }
                 Command::SetVsync(on) => match self.renderer.as_mut() {
                     Some(renderer) => {
