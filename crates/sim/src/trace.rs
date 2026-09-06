@@ -59,6 +59,26 @@ pub enum Event {
         /// resolve to nothing rather than to whichever body took its row.
         id: EntityId,
     },
+    /// A swing began.
+    ///
+    /// The three attack events exist because the *interval* is the thing worth
+    /// checking, and no point sample can see one. A hitbox that opens a tick
+    /// early leaves final state indistinguishable from a correct swing; the
+    /// only place the mistake exists is between two samples.
+    Swung,
+    /// The hitbox came into existence. Startup is over.
+    HitboxOpened,
+    /// The hitbox stopped existing. Anything arriving now is too late.
+    HitboxClosed,
+    /// A body was struck by the hitbox.
+    ///
+    /// Per body rather than summarised, which is the exception the trace's own
+    /// rule allows for: a hit is rare, and *which* body was hit is the whole
+    /// content of the event.
+    Hit {
+        /// The body the swing connected with.
+        id: EntityId,
+    },
     /// Overlapping pairs the solver pushed apart this tick.
     Contacts {
         /// Overlapping pairs resolved.
@@ -91,6 +111,10 @@ impl fmt::Display for Event {
             Self::Spawned { count } => write!(f, "spawned count={count}"),
             Self::Placed { id } => write!(f, "placed id={id}"),
             Self::Removed { id } => write!(f, "removed id={id}"),
+            Self::Swung => write!(f, "swung"),
+            Self::HitboxOpened => write!(f, "hitbox opened"),
+            Self::HitboxClosed => write!(f, "hitbox closed"),
+            Self::Hit { id } => write!(f, "hit id={id}"),
             Self::Contacts { count } => write!(f, "contacts count={count}"),
             Self::Crowded { count } => write!(f, "crowded count={count}"),
             Self::Clamped { count } => write!(f, "clamped count={count}"),

@@ -5,7 +5,7 @@
 
 use glam::{Vec2, Vec3};
 
-use arpg_core::{Instance, InstanceSink, MoveDir, Report, MAX_INSTANCES};
+use arpg_core::{Instance, InstanceSink, Intent, Report, MAX_INSTANCES};
 
 mod angle;
 mod contact;
@@ -353,6 +353,14 @@ struct Player {
     /// `Enemies::prev_pos`.
     prev_pos: Vec2,
     prev_facing: f32,
+    /// Where the swing has got to.
+    ///
+    /// On the player rather than in a membership set, and this is the case the
+    /// sparse-set argument does *not* apply to: there is exactly one of these,
+    /// so a set keyed by entity would be a table with one row and a lookup to
+    /// find it. Behaviours are for what *some* bodies have; this is what the
+    /// one player has.
+    attack: pass::attack::Attack,
 }
 
 /// What exists. This is where the simulation will live as it grows —
@@ -568,6 +576,18 @@ impl World {
         }
     }
 
+    /// Whether the hitbox exists right now.
+    #[must_use]
+    pub fn hitbox_is_live(&self) -> bool {
+        self.player.attack.hitbox_is_live()
+    }
+
+    /// How many bodies the current or most recent swing struck.
+    #[must_use]
+    pub fn struck(&self) -> usize {
+        self.player.attack.struck()
+    }
+
     /// How many bodies chase the player.
     #[must_use]
     pub fn seeker_count(&self) -> usize {
@@ -599,7 +619,7 @@ impl World {
     /// standing counterexample to it.
     pub fn report(&self, out: &mut Report) {
         let Self { enemies, player, tick, seekers, contacts, crowd_contacts, trace } = self;
-        let Player { pos, facing, prev_pos, prev_facing } = player;
+        let Player { pos, facing, prev_pos, prev_facing, attack } = player;
 
         out.int("tick", *tick);
         out.vec3("player_pos", on_ground(*pos, PLAYER_HALF_HEIGHT));
@@ -613,6 +633,14 @@ impl World {
         out.bool("finite", self.all_positions_finite());
         out.int("enemies", enemies.len() as u64);
         out.int("seekers", seekers.len() as u64);
+
+        // The swing, as three derived facts. `state` is a point sample and
+        // cannot show a window, so these say where in the window the sample
+        // fell; `trace` is what shows the window itself.
+        out.bool("swinging", attack.is_swinging());
+        out.int("swing_tick", u64::from(attack.elapsed()));
+        out.bool("hitbox", attack.hitbox_is_live());
+        out.int("struck", attack.struck() as u64);
         out.int("trace_events", trace.iter().count() as u64);
         out.int("trace_dropped", trace.dropped() as u64);
 
@@ -648,9 +676,13 @@ impl World {
     /// value a caller could pass to make this integrate a frame's worth of wall
     /// clock, because the type has no room to hold one.
     ///
-    /// `move_dir` is world-space and already unit-or-zero — the type says so,
-    /// so this does not have to check.
-    pub fn step(&mut self, dt: Dt, move_dir: MoveDir) {
+    /// `intent` is the simulation's own vocabulary: a world-space direction and
+    /// the discrete things asked for this tick. It is deliberately not
+    /// `Actions`, which names its directions in *screen* space — resolving
+    /// those is the camera's job, and letting it into `sim` would put a
+    /// presentation decision inside the simulation.
+    pub fn step(&mut self, dt: Dt, intent: Intent) {
+        let move_dir = intent.move_dir();
         // Bound to the tick being run, so no pass can stamp an event with the
         // wrong one. See `trace::TraceSink`.
         let mut trace = self.trace.sink(self.tick);
@@ -690,6 +722,21 @@ impl World {
         );
         pass::contain::contain(&mut self.player.pos, &mut self.enemies.pos, trace.reborrow());
         pass::face::face(&mut self.player.facing, move_dir, dt);
+
+        // **Last, and after `face`.** The hitbox is oriented by the facing this
+        // tick ended with, and it is tested against where the bodies actually
+        // ended up — after seeking, after both solvers, after the wall. Running
+        // it earlier would swing at positions that no longer exist by the time
+        // the tick is over.
+        pass::attack::attack(
+            &mut self.player.attack,
+            self.player.pos,
+            self.player.facing,
+            intent.attack(),
+            &self.enemies.slots,
+            &self.enemies.pos,
+            trace.reborrow(),
+        );
 
         // Last, so that during the passes above `self.tick` names the tick being
         // run and afterwards it names how many have finished. Trace events are
@@ -734,7 +781,7 @@ impl World {
         // bounded and wraps, which would make two runs of different lengths
         // disagree for a reason that has nothing to do with the simulation.
         let _ = trace;
-        let Player { pos, facing, prev_pos, prev_facing } = player;
+        let Player { pos, facing, prev_pos, prev_facing, attack } = player;
         let Enemies { slots, pos: enemy_pos, prev_pos: enemy_prev } = enemies;
 
         let mut h = Fnv::default();
@@ -750,6 +797,11 @@ impl World {
         // places are different worlds if one of them chases and the other does
         // not, and they diverge visibly on the very next tick.
         seekers.hash(&mut h);
+
+        // The swing is simulation state with a *window*, which is exactly the
+        // kind a point-sample hash is worst at describing — but leaving it out
+        // would let a replay diverge on attack timing and call it agreement.
+        attack.hash(&mut h);
 
         // The previous tick goes in too. It is derived — it is just last tick's
         // values — so it adds no information to a comparison of two runs, and
@@ -966,6 +1018,7 @@ static COUNTING: alloc_counter::Counting = alloc_counter::Counting;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arpg_core::{Intent, MoveDir};
     use arpg_core::InstanceBuffer;
 
     /// One tick's `Dt`.
@@ -993,7 +1046,7 @@ mod tests {
         while seq.len() < ticks {
             for dt in acc.pending(Dt::SECS) {
                 let dir = dir_at(world.tick());
-                world.step(dt, dir);
+                world.step(dt, Intent::new(dir, false));
                 seq.push(world.hash());
             }
         }
@@ -1014,7 +1067,7 @@ mod tests {
         // The lone body spawns on top of the player. Two seconds east at
         // `PLAYER_SPEED` clears it by 18 units.
         for _ in 0..120 {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
         }
         world
     }
@@ -1045,7 +1098,7 @@ mod tests {
 
             for _ in 0..(120 / ticks_per_frame) {
                 for dt in acc.pending(Dt::SECS * ticks_per_frame as f32) {
-                    world.step(dt, MoveDir::new(Vec3::X));
+                    world.step(dt, Intent::new(MoveDir::new(Vec3::X), false));
                     seq.push(world.hash());
                 }
             }
@@ -1083,7 +1136,7 @@ mod tests {
                 // Something that keeps turning, so facing is under test too.
                 let dir = MoveDir::new(if i % 40 < 20 { Vec3::X } else { Vec3::NEG_Z });
                 for dt in acc.pending(frame) {
-                    world.step(dt, dir);
+                    world.step(dt, Intent::new(dir, false));
                     seq.push(world.hash());
                 }
             }
@@ -1138,7 +1191,7 @@ mod tests {
         // measures open ground again. 20 ticks is 3.0 units, which walks
         // straight out of a 64-body crowd (5.6 units across).
         for _ in 0..5 {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
         }
         assert!(world.contacts() > 0, "nothing is in contact, so nothing is being pushed");
         world
@@ -1160,7 +1213,7 @@ mod tests {
         let mut buffer = InstanceBuffer::default();
 
         let before = world.player_pos();
-        world.step(tick_dt(), MoveDir::new(Vec3::X));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
         let after = world.player_pos();
         assert_ne!(before, after, "the tick under test did not move anything");
 
@@ -1177,7 +1230,7 @@ mod tests {
         let mut buffer = InstanceBuffer::default();
 
         let before = world.player_pos();
-        world.step(tick_dt(), MoveDir::new(Vec3::X));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
         let after = world.player_pos();
         let span = (after - before).length();
 
@@ -1224,7 +1277,7 @@ mod tests {
         let mut buffer = InstanceBuffer::default();
 
         let before: Vec<Vec2> = world.enemies.pos.clone();
-        world.step(tick_dt(), MoveDir::new(Vec3::X));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
         let after: Vec<Vec2> = world.enemies.pos.clone();
 
         let moved: Vec<usize> =
@@ -1259,7 +1312,7 @@ mod tests {
         assert_eq!(world.enemy_count(), 0);
 
         for _ in 0..30 {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
         }
         assert_eq!(world.contacts(), 0, "an empty arena reported a contact");
 
@@ -1313,7 +1366,7 @@ mod tests {
         let mut world = World::default();
         world.set_enemy_count(64);
         for _ in 0..10 {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
         }
 
         let untouched = world.hash();
@@ -1370,7 +1423,7 @@ mod tests {
 
         // Out in the open, standing still: nothing moves at all.
         for _ in 0..5 {
-            world.step(tick_dt(), MoveDir::NONE);
+            world.step(tick_dt(), Intent::new(MoveDir::NONE, false));
         }
         assert_eq!(world.contacts(), 0, "something is touching, so this measures the solver");
 
@@ -1401,7 +1454,7 @@ mod tests {
             let expected = world.player.pos;
             let enemies_before = world.enemies.pos.clone();
 
-            world.step(tick_dt(), east);
+            world.step(tick_dt(), Intent::new(east, false));
 
             assert_eq!(world.player.prev_pos, expected, "the player's prev is not last tick");
             assert_eq!(world.enemies.prev_pos, enemies_before, "the horde's prev is not last tick");
@@ -1451,7 +1504,7 @@ mod tests {
         // hash from here is the horde's.
         let settled = {
             for _ in 0..30 {
-                world.step(tick_dt(), MoveDir::NONE);
+                world.step(tick_dt(), Intent::new(MoveDir::NONE, false));
             }
             world.hash()
         };
@@ -1479,12 +1532,12 @@ mod tests {
         world.set_enemy_count(512);
         let mut buffer = InstanceBuffer::default();
 
-        world.step(dt, east);
+        world.step(dt, Intent::new(east, false));
         world.extract(Alpha::ONE, buffer.sink());
 
         let allocations = alloc_counter::allocations(|| {
             for _ in 0..60 {
-                world.step(dt, east);
+                world.step(dt, Intent::new(east, false));
                 world.extract(Alpha::ONE, buffer.sink());
             }
         });
@@ -1497,7 +1550,7 @@ mod tests {
         let mut world = in_open_ground();
         let start = world.player_pos();
         for _ in 0..60 {
-            world.step(tick_dt(), MoveDir::NONE);
+            world.step(tick_dt(), Intent::new(MoveDir::NONE, false));
         }
         assert_eq!(world.player_pos(), start);
     }
@@ -1512,7 +1565,7 @@ mod tests {
             // the far wall from anywhere in a 96-unit half-arena, so this
             // reaches the clamp rather than merely walking toward it.
             for _ in 0..1200 {
-                world.step(tick_dt(), MoveDir::new(dir));
+                world.step(tick_dt(), Intent::new(MoveDir::new(dir), false));
             }
             let pos = world.player_pos();
             assert!(pos.is_finite());
@@ -1539,13 +1592,13 @@ mod tests {
     fn facing_follows_the_direction_of_travel() {
         let mut world = World::default();
         for _ in 0..120 {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
         }
         // atan2(dir.x, dir.z): due east is +X, so a quarter turn from +Z.
         assert!((world.player.facing - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
 
         for _ in 0..120 {
-            world.step(tick_dt(), MoveDir::new(Vec3::Z));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::Z), false));
         }
         assert!(world.player.facing.abs() < 1e-4, "should face +Z");
     }
@@ -1563,14 +1616,14 @@ mod tests {
         let mut coarse = World::default();
         let mut coarse_acc = Accumulator::default();
         for dt in coarse_acc.pending(Dt::SECS * 5.0) {
-            coarse.step(dt, west);
+            coarse.step(dt, Intent::new(west, false));
         }
 
         let mut fine = World::default();
         let mut fine_acc = Accumulator::default();
         for _ in 0..5 {
             for dt in fine_acc.pending(Dt::SECS) {
-                fine.step(dt, west);
+                fine.step(dt, Intent::new(west, false));
             }
         }
 
@@ -1583,7 +1636,7 @@ mod tests {
         let target = std::f32::consts::FRAC_PI_2;
 
         for _ in 0..200 {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
             assert!(world.player.facing >= 0.0);
             assert!(world.player.facing <= target, "overshot to {}", world.player.facing);
         }
@@ -1595,12 +1648,12 @@ mod tests {
     fn standing_still_keeps_the_last_facing() {
         let mut world = World::default();
         for _ in 0..120 {
-            world.step(tick_dt(), MoveDir::new(Vec3::NEG_Z));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::NEG_Z), false));
         }
         let settled = world.player.facing;
 
         for _ in 0..120 {
-            world.step(tick_dt(), MoveDir::NONE);
+            world.step(tick_dt(), Intent::new(MoveDir::NONE, false));
         }
         assert_eq!(world.player.facing, settled);
     }
@@ -1614,7 +1667,7 @@ mod tests {
 
         for lap in 0..50 {
             for _ in 0..30 {
-                world.step(tick_dt(), MoveDir::new(circle[lap % 4]));
+                world.step(tick_dt(), Intent::new(MoveDir::new(circle[lap % 4]), false));
             }
             assert!(
                 world.player.facing.abs() <= std::f32::consts::PI + 1e-6,
@@ -1723,7 +1776,7 @@ mod tests {
 
         // Walk into the middle of the horde and keep going.
         for _ in 0..240 {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
         }
 
         let contact = PLAYER_RADIUS + ENEMY_RADIUS;
@@ -1745,7 +1798,7 @@ mod tests {
 
         let mut ever_touched = 0;
         for _ in 0..240 {
-            world.step(tick_dt(), MoveDir::new(Vec3::X));
+            world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
             ever_touched += world.contacts();
         }
 
@@ -1765,13 +1818,13 @@ mod tests {
     #[test]
     fn the_contact_count_tracks_whether_anything_is_touching() {
         let mut clear = in_open_ground();
-        clear.step(tick_dt(), MoveDir::NONE);
+        clear.step(tick_dt(), Intent::new(MoveDir::NONE, false));
         assert_eq!(clear.contacts(), 0, "nothing is near the player out here");
 
         // The horde is centred on the origin and so is the player, so the
         // spawn itself puts bodies in contact.
         let mut crowded = World::default();
-        crowded.step(tick_dt(), MoveDir::NONE);
+        crowded.step(tick_dt(), Intent::new(MoveDir::NONE, false));
         assert!(crowded.contacts() > 0, "spawned inside the horde and touched nothing");
     }
 
@@ -1784,7 +1837,7 @@ mod tests {
 
         for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
             for _ in 0..600 {
-                world.step(tick_dt(), MoveDir::new(dir));
+                world.step(tick_dt(), Intent::new(MoveDir::new(dir), false));
             }
             for &enemy in &world.enemies.pos {
                 assert!(enemy.is_finite(), "poisoned position {enemy}");

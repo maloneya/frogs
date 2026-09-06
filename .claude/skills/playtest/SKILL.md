@@ -59,7 +59,8 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `quit` | then exits |
 
 Keys come from `BINDINGS` in `crates/app/src/input.rs`, so whatever is bound is
-drivable — currently `w a s d up down left right`. An unknown one replies
+drivable — currently `w a s d up down left right space`. `space` swings, and it
+is an edge, so `tap space` is the right way to ask for exactly one. An unknown one replies
 `error: unknown key "q"; bound keys are w s a d up down left right`, which is
 also how to ask what exists. Malformed input is always reported, never ignored.
 

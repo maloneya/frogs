@@ -104,6 +104,13 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A behaviour costs its membership, not the horde | 0 | `pass::seek` iterates `Members::ids`, and is handed no way to reach a non-member |
 | The horde can always be outrun | 1 | `const _: () = assert!(SPEED < PLAYER_SPEED)` in `pass/seek.rs` |
 | A chaser arrives without grinding | 3 | step clamped to `remaining`; `a_seeker_stops_where_it_touches`, whose golden trace is empty |
+| A hitbox cannot move what it touches | 0 | `pass::attack` takes `&[Vec2]`; there is no `&mut` to write through |
+| The hitbox window is exactly `ACTIVE` ticks | 3 | `is_active` is the single definition of both edges; `the_hitbox_opens_and_shuts_on_schedule`, mutation-checked |
+| A swing connects once per body, not once per tick | 3 | `Attack::struck`; `struck: 1` over a four-tick window |
+| A swing cannot be interrupted or stacked | 3 | `a_press_during_a_swing_is_dropped`, which pins `SWING` from both sides |
+| The swing's phase cannot disagree with its timer | 0 | one `Option<u32>`; every phase is derived from it |
+| A hitbox swings where the character faces | 3 | `pass::attack` runs after `pass::face`; the yaw convention is mutation-checked |
+| Attack state reaches the determinism hash | 1 | `World::hash` destructures `Player`, and `Attack::hash` destructures itself |
 | Behaviour membership reaches the determinism hash | 1 | `World::hash` destructures `seekers`; `Members::hash` destructures itself |
 | A bulk respawn cannot leave behaviours attached to recycled names | 3 | `set_enemy_count` clears every set after `respawn` |
 | Asking whether two bodies touch cannot move them | 0 | `contact::between` takes `Vec2` by value and returns a `Contact` |

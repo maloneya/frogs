@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use arpg_core::MoveDir;
+use arpg_core::{Intent, MoveDir};
 use arpg_sim::{Accumulator, Dt, EntityId, World};
 use glam::Vec3;
 
@@ -112,8 +112,9 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
 
     while hashes.len() < budget {
         for dt in accumulator.pending(Dt::SECS) {
-            let dir = schedule[hashes.len()];
-            world.step(dt, dir);
+            let tick = hashes.len();
+            let swing = scenario.attacks.contains(&(tick as u64));
+            world.step(dt, Intent::new(schedule[tick], swing));
             hashes.push(world.hash());
         }
     }
@@ -153,8 +154,17 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
     let mut failures = Vec::new();
     // Exhaustive, so an assertion added to the spec cannot be quietly left
     // unchecked — the same trick `World::hash` uses, for the same reason.
-    let Expect { player_pos, facing, contacts, crowd_contacts, enemy_count, bodies, trace: _ } =
-        &scenario.expect;
+    let Expect {
+        player_pos,
+        facing,
+        contacts,
+        crowd_contacts,
+        struck,
+        hitbox,
+        enemy_count,
+        bodies,
+        trace: _,
+    } = &scenario.expect;
 
     let ticks = run.world.tick();
     if ticks != scenario.budget.ticks {
@@ -212,6 +222,20 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
         let got = run.world.crowd_contacts();
         if got != *want {
             failures.push(Failure::new("crowd_contacts", want.to_string(), got.to_string()));
+        }
+    }
+
+    if let Some(want) = struck {
+        let got = run.world.struck();
+        if got != *want {
+            failures.push(Failure::new("struck", want.to_string(), got.to_string()));
+        }
+    }
+
+    if let Some(want) = hitbox {
+        let got = run.world.hitbox_is_live();
+        if got != *want {
+            failures.push(Failure::new("hitbox", want.to_string(), got.to_string()));
         }
     }
 

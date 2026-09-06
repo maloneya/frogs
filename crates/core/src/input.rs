@@ -30,12 +30,20 @@ pub enum Action {
     MoveLeft,
     /// Toward the right of the screen.
     MoveRight,
+    /// Swing.
+    ///
+    /// Edge-triggered where the movement four are level-triggered, and that
+    /// difference is the whole reason [`Actions`] carries both: holding the key
+    /// must not swing every tick, and a tap shorter than a frame must still
+    /// swing exactly once. `just_pressed` is the accessor; `held` is the wrong
+    /// question to ask about it.
+    Attack,
 }
 
 impl Action {
     /// Every action, in bit order. Iterating this is how a mask is built.
-    pub const ALL: [Action; 4] =
-        [Action::MoveUp, Action::MoveDown, Action::MoveLeft, Action::MoveRight];
+    pub const ALL: [Action; 5] =
+        [Action::MoveUp, Action::MoveDown, Action::MoveLeft, Action::MoveRight, Action::Attack];
 
     const fn bit(self) -> u32 {
         1 << self as u32
@@ -352,5 +360,51 @@ mod tests {
     fn move_dir_is_flattened_before_normalising() {
         let dir = MoveDir::new(Vec3::new(0.0, 99.0, 2.0));
         assert_eq!(dir.as_vec3(), Vec3::new(0.0, 0.0, 1.0));
+    }
+}
+
+/// One tick's worth of intent, in the **simulation's** vocabulary.
+///
+/// The seam between `app` and `sim`, and it exists because [`Actions`] cannot
+/// be that seam: the movement actions are named in *screen* directions, and
+/// which world direction "up" means is the camera's business. Handing `Actions`
+/// to the simulation would put a presentation decision inside it.
+///
+/// So `app` resolves screen to world, and this is what comes out the other
+/// side: a world-space direction and the discrete things the player asked for
+/// this tick. Adding an intent later — dodge, block — adds a field here rather
+/// than a parameter to `World::step`, which is what stops that signature
+/// growing a tail of booleans nobody can read at the call site.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Intent {
+    move_dir: MoveDir,
+    attack: bool,
+}
+
+impl Intent {
+    /// Nothing at all. What a tick with no input looks like.
+    pub const NONE: Self = Self { move_dir: MoveDir::NONE, attack: false };
+
+    /// Builds one tick's intent.
+    ///
+    /// `attack` is an **edge**: true on the tick the swing was asked for, not
+    /// while a key is held. Passing `held` here would swing every tick the
+    /// button is down, which is the bug the `pressed`/`held` split in
+    /// [`Actions`] exists to make hard.
+    #[must_use]
+    pub fn new(move_dir: MoveDir, attack: bool) -> Self {
+        Self { move_dir, attack }
+    }
+
+    /// Where the player is trying to go, in world space.
+    #[must_use]
+    pub fn move_dir(self) -> MoveDir {
+        self.move_dir
+    }
+
+    /// Whether a swing was asked for on this tick.
+    #[must_use]
+    pub fn attack(self) -> bool {
+        self.attack
     }
 }

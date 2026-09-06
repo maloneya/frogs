@@ -135,12 +135,24 @@ change that alters what the game *is*.
 
 ## 8. Attack state machine — startup / active / recovery, timed hitboxes
 
-The payoff chunk, and the first where the machinery does work no unit test
-could.
+**Done.** `pass::attack` is a shape, a window and a response, and the response
+is where it stops being a shove: it asks `contact::between` exactly as the
+solver does, and takes positions immutably.
 
-**Gate:** scenarios asserting the exact ticks a hitbox activates and
-deactivates, and that a hit landing one tick outside the window does not
-register.
+**Gate — met.** `the_hitbox_opens_and_shuts_on_schedule` pins the window tick by
+tick against a golden trace; `arriving_after_the_hitbox_shuts_is_a_miss` walks a
+chaser into range on the very tick the hitbox stops existing and asserts nothing
+happens; `a_press_during_a_swing_is_dropped` pins `SWING` from both sides.
+Mutation-checked against a wider window, an early open, a longer and a shorter
+swing, hitting every tick, and a flipped yaw convention.
+
+### What is left
+
+A hit does nothing but say so. Health, damage and death are the next chunk, and
+the seam is already the right shape — `strike` records who it touched, and
+subtracting from a `Members`-backed health set is a change to that one function.
+Health is the behaviour that will exercise the payload half of a sparse set,
+which `seek` did not need.
 
 ## 9. Hitstop, knockback, input buffering
 

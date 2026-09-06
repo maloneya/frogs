@@ -1,0 +1,51 @@
+// The window, asserted tick by tick — which is the only way it can be.
+//
+// An attack that opens its hitbox one tick early produces no crash, no compiler
+// error, and a final state indistinguishable from a correct swing. The enemy is
+// hit either way. The mistake exists *only* in the interval between two
+// samples, and a golden trace is the one artefact that can see an interval.
+// This is what `Trace` was built before the first hitbox for.
+//
+// Predicted from the constants in `pass::attack`:
+//
+//   STARTUP  = 6   so the hitbox appears on tick 6
+//   ACTIVE   = 4   so it exists on ticks 6, 7, 8 and 9
+//   RECOVERY = 10  so the swing is 20 ticks and ends after tick 19
+//
+// `opened` is stamped on the first tick the hitbox exists and `closed` on the
+// first tick it does not, so a reader can subtract them and get ACTIVE.
+//
+// The body sits at (0, 1.1) — dead ahead, since facing 0 is +Z and no input
+// means no turning, and exactly at the hitbox centre so nothing about reach is
+// being tested here. It is 1.1 from the player, comfortably outside the 0.55
+// they would touch at, so the contact solver never fires and the trace holds
+// nothing but the swing.
+//
+// **One hit, not four.** The hitbox lives for four ticks and the body stands in
+// it the whole time; `struck: 1` and the single `hit` line are what say a swing
+// connects once. Getting that wrong is not a tuning problem, it is a different
+// game.
+(
+    description: "The hitbox appears on tick 6, is gone by tick 10, and connects exactly once.",
+    setup: (
+        actions: [
+            Place((0.0, 1.1)),
+        ],
+    ),
+    inputs: [],
+    attacks: [0],
+    budget: (ticks: 30),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
+        contacts: 0,
+        crowd_contacts: 0,
+        struck: 1,
+        hitbox: false,
+        bodies: [
+            // Nothing pushed it: a hitbox reads positions and cannot write
+            // them, which is the difference between this pass and the solver.
+            (nth: 0, alive: true, pos: (x: 0.0, z: 1.1, tol: 0.0001)),
+        ],
+        trace: "the_hitbox_opens_and_shuts_on_schedule.trace",
+    ),
+)

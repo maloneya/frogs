@@ -41,6 +41,7 @@
 //! checked by reading it. Both become slices when the player joins SoA storage
 //! and `EntityId` exists (roadmap chunk 4).
 
+pub(crate) mod attack;
 pub(crate) mod contain;
 pub(crate) mod face;
 pub(crate) mod remember;

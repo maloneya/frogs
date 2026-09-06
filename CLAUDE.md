@@ -141,7 +141,10 @@ crates/
   a sparse set saying which entities have a given behaviour. A behaviour is its
   own membership plus a pass that walks it, so adding one touches no existing
   type and costs what it uses rather than what the horde costs;
-  `pass/seek.rs` is the first and the shape to copy. `extract()` is the sim/render seam; `trace()` is the sim/agent
+  `pass/seek.rs` is the first and the shape to copy.
+  `pass/attack.rs` is the swing: a hitbox is the same `contact` question with a
+  different answer, and its signature says so — the solver takes `&mut [Vec2]`
+  because pushing is what it does, and the hitbox takes `&[Vec2]`. `extract()` is the sim/render seam; `trace()` is the sim/agent
   one. Both hand out shared references, which is what makes "perception cannot
   change what it observes" a fact about the types.
 - `app` — the wiring layer, and the only crate that sees both sides. `input.rs`
@@ -157,7 +160,7 @@ crates/
 
 Game actions (rebindable, go through `Action`):
 
-`WASD` / arrows move the player
+`WASD` / arrows move the player · `space` swings
 
 Debug commands (fixed, handled straight from the event callback — they act on
 the program, not the character, so they deliberately do *not* go through

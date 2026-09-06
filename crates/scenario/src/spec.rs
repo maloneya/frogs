@@ -25,6 +25,15 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) inputs: Vec<Span>,
 
+    /// Ticks on which the attack button is pressed.
+    ///
+    /// A list of moments rather than spans, because a swing is an **edge**: it
+    /// is asked for once and then runs on its own schedule. Writing it as a
+    /// span would invite `ticks: 20` and quietly mean something the simulation
+    /// does not do — a press during a swing is dropped, not held.
+    #[serde(default)]
+    pub(crate) attacks: Vec<u64>,
+
     pub(crate) budget: Budget,
 
     #[serde(default)]
@@ -138,6 +147,12 @@ pub(crate) struct Expect {
     /// Enemy pairs the crowd solver pushed apart on the final tick.
     #[serde(default)]
     pub(crate) crowd_contacts: Option<usize>,
+    /// How many bodies the last swing struck.
+    #[serde(default)]
+    pub(crate) struck: Option<usize>,
+    /// Whether the hitbox exists on the final tick.
+    #[serde(default)]
+    pub(crate) hitbox: Option<bool>,
     #[serde(default)]
     pub(crate) enemy_count: Option<usize>,
     /// Predictions about individual placed bodies.

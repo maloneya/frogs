@@ -7,7 +7,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use glam::Vec2;
-use arpg_core::{InstanceBuffer, MoveDir};
+use arpg_core::{Action, InstanceBuffer, Intent, MoveDir};
 use arpg_gfx::{OrthoCamera, Renderer};
 use arpg_core::Report;
 use arpg_sim::{Accumulator, World};
@@ -446,7 +446,17 @@ impl ApplicationHandler for App {
                 // near the frame loop.
                 for dt in self.accumulator.pending(frame) {
                     let intent = self.input.sample();
-                    self.world.step(dt, to_world(intent.move_axis()));
+                    // `just_pressed`, not `held`: a swing is an edge. Holding
+                    // the key must not swing every tick, and a tap shorter
+                    // than a frame must still swing exactly once — which is
+                    // what `InputState` latches edges for.
+                    self.world.step(
+                        dt,
+                        Intent::new(
+                            to_world(intent.move_axis()),
+                            intent.just_pressed(Action::Attack),
+                        ),
+                    );
                 }
 
                 // How far this frame falls between the tick just run and the

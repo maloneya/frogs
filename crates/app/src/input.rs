@@ -32,6 +32,10 @@ const BINDINGS: &[(&str, KeyCode, Action)] = &[
     ("down", KeyCode::ArrowDown, Action::MoveDown),
     ("left", KeyCode::ArrowLeft, Action::MoveLeft),
     ("right", KeyCode::ArrowRight, Action::MoveRight),
+    // Bound here, and therefore drivable from the harness in the same edit —
+    // key names are a column of this table, so `tap space` works the moment
+    // this line exists. That is the property the table was restructured for.
+    ("space", KeyCode::Space, Action::Attack),
 ];
 
 /// The key a harness command names, if it is bound to anything.

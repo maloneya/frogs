@@ -1,0 +1,48 @@
+// The other half of a window: what it does *not* catch.
+//
+// A scenario where the target is in range the whole time cannot tell a correct
+// window from one that is a tick too long — the hit lands either way, and only
+// its timestamp differs. So this one puts the target in range *just too late*,
+// and asserts nothing happens.
+//
+// A chaser walks in at SPEED = 3.5 units/sec, which is 3.5/60 per tick, and
+// `seek` runs before `attack` in the schedule — so on tick t the hitbox tests a
+// body that has already taken t+1 steps:
+//
+//   d(t) = 2.56 - (3.5 / 60) * (t + 1)
+//
+// The hitbox is centred REACH = 1.1 ahead with a radius of 0.6, against a body
+// radius of 0.25, so a body dead ahead is caught while |d - 1.1| < 0.85, less
+// the 0.001 contact slop. Approaching from outside, that means d < 1.949:
+//
+//   tick 9  (the last live tick)   d = 1.9767   still outside, by 0.028
+//   tick 10 (the first dead tick)  d = 1.9183   inside, by 0.031
+//
+// So the chaser crosses into range in the very tick the hitbox stops existing.
+// The expected trace is a complete swing with **no hit in it**, and the margins
+// are a full tick's travel wide on both sides, so this is a statement about the
+// window rather than about float noise.
+//
+// Extend ACTIVE by one and tick 10 becomes live: the body is in range, it is
+// struck, and this file fails with a `hit` line that should not be there.
+(
+    description: "A chaser that comes into range on the tick the hitbox shuts is not hit.",
+    setup: (
+        actions: [
+            Place((0.0, 2.56)),
+            Seek(0),
+        ],
+    ),
+    inputs: [],
+    attacks: [0],
+    budget: (ticks: 20),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
+        struck: 0,
+        contacts: 0,
+        bodies: [
+            (nth: 0, seeking: true),
+        ],
+        trace: "arriving_after_the_hitbox_shuts_is_a_miss.trace",
+    ),
+)

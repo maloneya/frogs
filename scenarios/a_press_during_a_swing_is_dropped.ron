@@ -1,0 +1,39 @@
+// A swing is a commitment, and this is what makes it one.
+//
+// Four presses: ticks 0, 5, 19 and 20. The ones at 5 and 19 land during the
+// swing and must be **dropped** — not queued, not stacked. Without that,
+// holding the button is strictly better than timing it, and recovery stops
+// meaning anything.
+//
+// **The press at 19 is the one that pins the length**, and it is here because
+// the first version of this file was missing it. SWING is
+// STARTUP + ACTIVE + RECOVERY = 6 + 4 + 10 = 20 ticks, running on ticks 0
+// through 19, so 19 is the last tick that must refuse a press and 20 is the
+// first that must accept one. Testing only 20 pins the swing from one side:
+// shortening RECOVERY to 9 ends the swing after tick 18, tick 20 is still free,
+// and the trace comes out identical. That mutation escaped.
+//
+// With both ticks pressed the number is pinned from both sides. A shorter swing
+// accepts 19 and the second `swung` moves; a longer one refuses 20 and the
+// second `swung` disappears.
+//
+// Buffering that dropped press is a real feature and a deliberately separate
+// one: it needs an expiry and a rule about which phase accepts it, and guessing
+// those before there is an animation to feel them against would bake in a
+// decision nobody has tested.
+//
+// No bodies at all — this is about the state machine, and a target would only
+// add contact events to the trace.
+(
+    description: "A press during a swing is dropped; the next one is accepted exactly when recovery ends.",
+    setup: (),
+    inputs: [],
+    attacks: [0, 5, 19, 20],
+    budget: (ticks: 45),
+    expect: (
+        struck: 0,
+        hitbox: false,
+        enemy_count: 0,
+        trace: "a_press_during_a_swing_is_dropped.trace",
+    ),
+)
