@@ -159,10 +159,26 @@ on disk — see `docs/traps.md`, first entry.
 Count frames over a known interval. Do **not** trust `frame_ms` alone — it is an
 EMA and cannot tell a steady 60Hz from a mixture averaging to it.
 
+**Take the best of several short samples, never one long one.** macOS throttles
+a window that is not frontmost, and it does so *intermittently* — twelve
+consecutive one-second samples of an unchanged scene have measured anywhere from
+63 to 331 frames/s, with `skipped` at zero throughout. A single sample is
+therefore not a measurement, and averaging is worse than useless: the noise is
+one-sided, because throttling only ever removes frames. The maximum is the only
+estimator a throttled second cannot drag down.
+
 ```sh
-a=$(sock state | jq .render.frames); sock "wait 1000" >/dev/null
-b=$(sock state | jq .render.frames); echo $((b - a))
+best=0
+for i in $(seq 1 8); do
+  a=$(sock state | jq .render.frames); sock "wait 500" >/dev/null
+  b=$(sock state | jq .render.frames)
+  f=$(( (b - a) * 2 )); [ $f -gt $best ] && best=$f
+done; echo $best
 ```
+
+The tell that you are looking at throttling rather than cost is a result that is
+not merely noisy but *backwards* — a heavier scene measuring faster than a
+lighter one. Check that before believing any conclusion about cost.
 
 Diff `.render.skipped` too, and **measure both present modes**: if uncapped is
 not several times vsync, the app is throttled and the number is not a
@@ -171,8 +187,15 @@ measurement. Both ways this lies are in `docs/traps.md`, keyed by what you see.
 Also diff `.sim.tick`. It should hold ~60/s in *both* modes — that is the fixed
 timestep working, and a tick rate that follows the frame rate is a real bug.
 
-Reference, window frontmost, 17409 instances on an M4: **62/s vsync,
-~300/s uncapped, 0 skipped.**
+Reference, window frontmost, 17409 instances on an M4: **66/s vsync,
+~396/s uncapped, 0 skipped** — best of eight half-second samples. The horde is
+nearly free to draw: 16385 instances (no enemies) measures within 2% of 17409,
+which is instancing working, and the 16384 ground tiles dominating either way.
+
+Both failure modes are in `docs/traps.md`, keyed by what you see. The short
+version: `frames/s=0` with ticks still at 60 means the display is asleep or the
+window is covered, and wild sample-to-sample variance means it is not
+frontmost.
 
 ## This is not the completion gate
 

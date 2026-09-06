@@ -58,6 +58,23 @@ times vsync, the app is throttled and the number is not a measurement. Bring the
 window frontmost and repeat. Never trust `frame_ms` alone — it is an EMA and
 cannot distinguish a steady 60Hz from a mixture averaging to it.
 
+**A third version, and the one that wastes the most time.** *Intermittent*
+throttling, with `skipped` still at zero. Twelve consecutive one-second samples
+of an unchanged scene gave everything from 63 to 331 frames/s, and one pair of
+them said 1024 enemies rendered *faster* than none — which is how it announces
+itself, as a result that is not merely noisy but backwards.
+
+Any single sample is then meaningless, and averaging is worse than useless
+because the noise is one-sided: throttling only ever removes frames. **Take the
+best of several short samples**, which is the only estimator that is not
+poisoned by a second in which the OS decided the window was not important. Doing
+that here gave a stable 66/s vsync and 396/s uncapped, against a single sample's
+127/s taken minutes earlier on the same build.
+
+Two ordinary things trigger it and neither is visible from the shell: the
+display asleep — which reads as `frames/s=0` with ticks still at 60 — and the
+window not being frontmost.
+
 **Promotion candidate.** A frame-time histogram instead of an EMA, and a
 headless `step()` perf assertion that does not depend on a window at all
 (roadmap chunk 5).
