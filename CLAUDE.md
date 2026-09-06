@@ -127,26 +127,24 @@ crates/
   here rather than in `app` or `sim` because where the camera points is a
   presentation decision; it is handed a bare `Vec3`, which is exactly as
   anonymous as an `Instance`.
-- `sim` — `World`: what exists. `step()` is the input/sim seam and is now
-  nothing but an ordered list of calls into `pass/`, one module per named pass,
-  each owning its tuning constants and taking the data it declares rather than
-  `&mut World`. `slots.rs` holds `EntityId` and the sparse map from a stable
-  name to a dense row — the horde's arrays stay contiguous, so a despawn moves
-  rows and only a generational id survives that. It deliberately holds no
-  payload, which is what lets the same machinery sit under a behaviour that
-  only some bodies have. `contact.rs` answers *whether two bodies touch, and
-  along what line*, and stops there: separation, a hitbox and a trigger are
-  three different responses to that one question, so the question does not live
-  inside any of them. `members.rs` is the other half of the storage decision —
-  a sparse set saying which entities have a given behaviour. A behaviour is its
-  own membership plus a pass that walks it, so adding one touches no existing
-  type and costs what it uses rather than what the horde costs;
-  `pass/seek.rs` is the first and the shape to copy.
-  `pass/attack.rs` is the swing: a hitbox is the same `contact` question with a
-  different answer, and its signature says so — the solver takes `&mut [Vec2]`
-  because pushing is what it does, and the hitbox takes `&[Vec2]`. `extract()` is the sim/render seam; `trace()` is the sim/agent
-  one. Both hand out shared references, which is what makes "perception cannot
-  change what it observes" a fact about the types.
+- `sim` — `World`: what exists. `step()` is the input/sim seam and is nothing
+  but an ordered list of calls into `pass/`, one module per named pass, each
+  owning its tuning constants and taking the data it declares rather than
+  `&mut World`. `extract()` is the sim/render seam, `trace()` the sim/agent one;
+  both hand out shared references, which is what makes "perception cannot change
+  what it observes" a fact about the types. Its own modules:
+  - `slots.rs` — `EntityId` and the map from a name to a dense row. The horde's
+    arrays are contiguous, so a despawn moves rows; only a generational id
+    survives that.
+  - `members.rs` — which entities have a given behaviour. A behaviour is its own
+    membership plus a pass that walks it, so adding one touches no existing type
+    and costs what it uses rather than what the horde costs.
+  - `contact.rs` — whether two bodies touch, and along what line. It stops
+    there, because separation, a hitbox and a trigger are three answers to that
+    one question.
+  - `pass/seek.rs`, `pass/attack.rs` — the first behaviour, and the swing. The
+    hitbox is `contact`'s question with a different answer, and the signatures
+    say so: the solver takes `&mut [Vec2]`, the hitbox `&[Vec2]`.
 - `app` — the wiring layer, and the only crate that sees both sides. `input.rs`
   holds `BINDINGS`, the one place a `KeyCode` becomes an `Action`. GPU state
   is built in `resumed`, not `main`, because winit models surface loss as

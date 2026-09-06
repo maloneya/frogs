@@ -38,46 +38,36 @@ an offscreen render target — roadmap chunk 6.
 
 ---
 
-## symptom: absurd frame rate — thousands of frames per second, with vsync on
+## symptom: a frame rate that is absurd, flat, or backwards
 
-*Observed once at 12,467 fps.*
+*Observed at 12,467 fps; at 0; and at 1024 enemies rendering faster than none.*
 
-**Cause.** Skipped frames counted as presented ones. The occluded window hands
-back no texture, the draw is skipped, and the loop spins as fast as it likes
-while reporting every spin.
+**Cause.** Three ways the window stops presenting at its real rate, and only the
+first one shows up in `skipped`:
 
-**Check.** Diff `skipped` across the measurement window. A small constant from
-startup is normal; a rising one is the tell.
+| What you see | What it is |
+|---|---|
+| Thousands of fps, `skipped` rising | Occluded. No texture, no draw, and the loop counts every spin. |
+| `frames/s=0`, ticks still 60 | The display is asleep. |
+| Wild variance, `skipped` at 0 | Not frontmost. macOS throttles *intermittently*. |
 
-A second, quieter version: a *backgrounded* window presents honestly but
-throttled, with `skipped` at zero. Measured 63/s vsync and 65/s uncapped where
-the same build with the window up gave 62/s and 302/s.
+**Check.** Diff `skipped` first — a rising count is occlusion. Otherwise compare
+present modes: if uncapped is not several times vsync, the number is not a
+measurement. A result that is *backwards* rather than merely noisy — a heavier
+scene measuring faster — is the tell for the third case.
 
-**Fix.** Measure both present modes and compare. If uncapped is not several
-times vsync, the app is throttled and the number is not a measurement. Bring the
-window frontmost and repeat. Never trust `frame_ms` alone — it is an EMA and
-cannot distinguish a steady 60Hz from a mixture averaging to it.
+**Fix.** **Take the best of several short samples, never one long one.** Twelve
+consecutive one-second samples of an unchanged scene ranged from 63 to 331
+frames/s. Averaging is worse than useless because the noise is one-sided:
+throttling only removes frames, so the maximum is the only estimator a throttled
+second cannot drag down. Best-of-eight gave a stable 66/s vsync and 396/s
+uncapped, against a single sample's 127/s minutes earlier on the same build.
 
-**A third version, and the one that wastes the most time.** *Intermittent*
-throttling, with `skipped` still at zero. Twelve consecutive one-second samples
-of an unchanged scene gave everything from 63 to 331 frames/s, and one pair of
-them said 1024 enemies rendered *faster* than none — which is how it announces
-itself, as a result that is not merely noisy but backwards.
+Never trust `frame_ms` alone — it is an EMA and cannot tell a steady 60Hz from a
+mixture averaging to it.
 
-Any single sample is then meaningless, and averaging is worse than useless
-because the noise is one-sided: throttling only ever removes frames. **Take the
-best of several short samples**, which is the only estimator that is not
-poisoned by a second in which the OS decided the window was not important. Doing
-that here gave a stable 66/s vsync and 396/s uncapped, against a single sample's
-127/s taken minutes earlier on the same build.
-
-Two ordinary things trigger it and neither is visible from the shell: the
-display asleep — which reads as `frames/s=0` with ticks still at 60 — and the
-window not being frontmost.
-
-**Promotion candidate.** A frame-time histogram instead of an EMA, and a
-headless `step()` perf assertion that does not depend on a window at all
-(roadmap chunk 5).
+**Promotion candidate.** A frame-time histogram instead of the EMA, and a
+headless `step()` perf assertion that needs no window at all (roadmap chunk 5).
 
 ---
 

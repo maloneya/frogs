@@ -50,16 +50,15 @@ impl Failure {
     }
 }
 
-/// One tick of walking, in world units — `PLAYER_SPEED * Dt::SECS`.
+/// One tick of walking, used only to phrase error sizes in a comparable unit —
+/// never as a diagnosis. An earlier version guessed at a cause and was
+/// confidently wrong, which is worse than no hint: it spends the reader's
+/// attention pointing away from it.
 ///
-/// Used only to phrase error messages, and only as a *unit*, never as a
-/// diagnosis. An earlier version said "which is 2 ticks of walking — suspect
-/// the input schedule", and the first mutation that reached it was a wall clamp
-/// off by `PLAYER_RADIUS`, which is 0.3, which is coincidentally exactly two
-/// ticks. The hint was confident and wrong, which is worse than no hint: it
-/// spends the reader's attention pointing away from the cause. So this reports
-/// the size of the error in the unit that makes it comparable, and stops there.
-const TICK_OF_WALKING: f32 = 9.0 / 60.0;
+/// Taken from `sim` rather than copied. `WALK_PER_TICK` is exported for exactly
+/// this consumer, and a hand-written `9.0 / 60.0` beside it goes stale the day
+/// `PLAYER_SPEED` changes — reporting a wrong tick count in every failure.
+use arpg_sim::WALK_PER_TICK as TICK_OF_WALKING;
 
 /// Runs the scenario to its budget.
 ///
@@ -86,13 +85,15 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             // renumbering would instead re-point every later assertion at a
             // different body, silently.
             Action::Place((x, z)) => placed.push(world.spawn_enemy(glam::Vec2::new(*x, *z))),
+            // `spec::Action` is designed to grow, so resolving a placement
+            // number is written once rather than pasted into each new arm.
             Action::Despawn(nth) => {
-                if let Some(Some(id)) = placed.get(*nth).copied() {
+                if let Some(id) = placed.get(*nth).copied().flatten() {
                     world.despawn_enemy(id);
                 }
             }
             Action::Seek(nth) => {
-                if let Some(Some(id)) = placed.get(*nth).copied() {
+                if let Some(id) = placed.get(*nth).copied().flatten() {
                     world.add_seek(id);
                 }
             }
@@ -177,22 +178,14 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
 
     if let Some(want) = player_pos {
         let got = run.world.player_pos();
-        let off = (glam::Vec2::new(got.x, got.z) - glam::Vec2::new(want.x, want.z)).length();
-
-        if off > want.tol {
-            let note = format!(
-                "off by {off:.4}, tolerance {:.4} — that is {:.2} ticks of walking",
-                want.tol,
-                off / TICK_OF_WALKING,
-            );
-
+        if let Some(off) = want.off_by(got) {
             failures.push(
-                Failure::new(
-                    "player_pos",
-                    format!("({:.4}, {:.4}) +/- {:.4}", want.x, want.z, want.tol),
-                    format!("({:.4}, {:.4})", got.x, got.z),
-                )
-                .with_note(note),
+                Failure::new("player_pos", want.expected(), format!("({:.4}, {:.4})", got.x, got.z))
+                    .with_note(format!(
+                        "off by {off:.4}, tolerance {:.4} — that is {:.2} ticks of walking",
+                        want.tol,
+                        off / TICK_OF_WALKING,
+                    )),
             );
         }
     }
@@ -211,46 +204,36 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
         }
     }
 
-    if let Some(want) = contacts {
-        let got = run.world.contacts();
-        if got != *want {
-            failures.push(Failure::new("contacts", want.to_string(), got.to_string()));
-        }
-    }
-
-    if let Some(want) = crowd_contacts {
-        let got = run.world.crowd_contacts();
-        if got != *want {
-            failures.push(Failure::new("crowd_contacts", want.to_string(), got.to_string()));
-        }
-    }
-
-    if let Some(want) = struck {
-        let got = run.world.struck();
-        if got != *want {
-            failures.push(Failure::new("struck", want.to_string(), got.to_string()));
-        }
-    }
-
-    if let Some(want) = hitbox {
-        let got = run.world.hitbox_is_live();
-        if got != *want {
-            failures.push(Failure::new("hitbox", want.to_string(), got.to_string()));
-        }
-    }
-
-    if let Some(want) = enemy_count {
-        let got = run.world.enemy_count();
-        if got != *want {
-            failures.push(Failure::new("enemy_count", want.to_string(), got.to_string()));
-        }
-    }
+    check_eq("contacts", contacts, run.world.contacts(), &mut failures);
+    check_eq("crowd_contacts", crowd_contacts, run.world.crowd_contacts(), &mut failures);
+    check_eq("struck", struck, run.world.struck(), &mut failures);
+    check_eq("hitbox", hitbox, run.world.hitbox_is_live(), &mut failures);
+    check_eq("enemy_count", enemy_count, run.world.enemy_count(), &mut failures);
 
     for body in bodies {
         check_body(run, body, &mut failures);
     }
 
     failures
+}
+
+/// Compares one predicted value, when the scenario predicted one.
+///
+/// The label and the accessor were paired by hand at each of five call sites,
+/// and nothing checked that they matched — so a block pasted from its neighbour
+/// with the accessor updated and the label forgotten would assert the right
+/// value under the wrong name, and point the reader at a field that is fine.
+fn check_eq<T: PartialEq + std::fmt::Display>(
+    what: &str,
+    want: &Option<T>,
+    got: T,
+    failures: &mut Vec<Failure>,
+) {
+    if let Some(want) = want
+        && got != *want
+    {
+        failures.push(Failure::new(what, want.to_string(), got.to_string()));
+    }
 }
 
 /// Checks one prediction about one placed body.
@@ -288,16 +271,12 @@ fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Fail
 
     let alive = run.world.is_alive(id);
 
-    if let Some(want) = body.seeking {
-        let got = run.world.is_seeker(id);
-        if got != want {
-            failures.push(Failure::new(
-                &format!("bodies[{}].seeking", body.nth),
-                want.to_string(),
-                got.to_string(),
-            ));
-        }
-    }
+    check_eq(
+        &format!("bodies[{}].seeking", body.nth),
+        &body.seeking,
+        run.world.is_seeker(id),
+        failures,
+    );
 
     if let Some(want) = body.alive
         && alive != want
@@ -335,12 +314,11 @@ fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Fail
         return;
     };
 
-    let off = (glam::Vec2::new(got.x, got.z) - glam::Vec2::new(want.x, want.z)).length();
-    if off > want.tol {
+    if let Some(off) = want.off_by(got) {
         failures.push(
             Failure::new(
                 &format!("bodies[{}].pos", body.nth),
-                format!("({:.4}, {:.4}) +/- {:.4}", want.x, want.z, want.tol),
+                want.expected(),
                 format!("({:.4}, {:.4})", got.x, got.z),
             )
             .with_note(format!("off by {off:.4}, tolerance {:.4}", want.tol)),

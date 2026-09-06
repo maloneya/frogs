@@ -1,24 +1,14 @@
-// The first behaviour that only some bodies have, and its control.
+// The first behaviour only some bodies have, and its control.
 //
-// Two bodies, placed the same way, ten units out on either side of a player
-// that never moves. One is granted `Seek` and the other is not. That second
-// body is the entire point of the scenario: a pass that walked *every* body
-// would satisfy every assertion about the chaser, and only the bystander would
-// notice. Composition is not demonstrated by the thing that happens — it is
-// demonstrated by the thing that does not.
+// Two bodies placed the same way, ten units out on either side of a player that
+// never moves. One is granted `Seek` and the other is not — and the second is
+// the point: a pass that walked *every* body would satisfy every assertion
+// about the chaser, and only the bystander would notice. Composition is shown
+// by what does not happen.
 //
-// Predicted from the constants rather than read back. `SPEED` is 3.5 world
-// units per second and the budget is exactly one second, so the chaser closes
-// 3.5 units:
-//
-//   10.0 - 3.5 = 6.5
-//
-// It is still far outside the 0.55 stopping distance, so this is a prediction
-// about steering alone, with no arrival clamp and no contact involved.
-//
-// No input, so the player stays at the origin and the target is fixed. Ten
-// units out on opposite sides puts both bodies well clear of each other, so the
-// crowd solver has nothing to say either.
+// SPEED is 3.5 units/sec and the budget is one second, so the chaser closes
+// 3.5 units: 10.0 - 3.5 = 6.5. Still far outside the 0.55 stopping distance, so
+// this is about steering alone, with no arrival clamp and no contact.
 (
     description: "A body granted Seek closes on the player at the speed its constant claims; one without it never moves.",
     setup: (

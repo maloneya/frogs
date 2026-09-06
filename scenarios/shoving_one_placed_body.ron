@@ -1,40 +1,19 @@
-// Placement turns the contact solver into something predictable by hand.
+// One body at a known spot makes the contact solver arithmetic.
 //
-// Until a body could be put at a stated spot, the only scenario available
-// against the solver was "walk into a grid of 64 and see what happens", which
-// can assert that contacts occurred but not where anything ended up. One body
-// at a known place makes the whole interaction arithmetic.
+// Predicted from the constants, not read back. Contact distance is
+// PLAYER_RADIUS + ENEMY_RADIUS = 0.55, a tick of walking is 0.15, and the
+// 0.05:1.0 mass split gives the player 1/21 of each correction.
 //
-// The prediction, from the constants rather than from a previous run:
+// Ticks 1-16 are free travel. Tick 17 makes contact and separation corrects the
+// overlap **in full** — the load-bearing detail, since a solver correcting a
+// fraction per tick would leave a gap that drifts — so the gap is exactly 0.55
+// from then on and both bodies advance 0.15 * 20/21 per tick:
 //
-//   contact distance = PLAYER_RADIUS + ENEMY_RADIUS = 0.3 + 0.25 = 0.55
-//   one tick of walking = PLAYER_SPEED * Dt::SECS  = 9.0 / 60 = 0.15
-//   mass split          = 0.05 : 1.0, so the player takes 1/21 of each
-//                         correction and the body takes 20/21
+//   player  2.5452381 + 13 * 0.1428571 = 4.4023810
+//   body    3.0952381 + 13 * 0.1428571 = 4.9523810
 //
-// Ticks 1-16 are free travel: the player reaches 2.40 and the gap is 0.60,
-// still clear of 0.55.
-//
-// Tick 17 makes contact: the player walks to 2.55, leaving a 0.45 gap and a
-// 0.10 overlap. Separation corrects that overlap *in full* — see
-// `pass::separate` — so afterwards the gap is exactly 0.55, and stays exactly
-// 0.55 every tick after. That is the load-bearing detail: a solver correcting
-// some fraction per tick would leave a gap that drifts, and this file would
-// fail with a number that says by how much.
-//
-//   player  2.55  - 0.10/21   = 2.5452381
-//   body    3.00  + 0.10*20/21 = 3.0952381
-//
-// From tick 18 on, both advance 0.15 * 20/21 = 0.1428571 per tick, because the
-// player is pushed back by exactly the share of its own step it hands over.
-// Thirteen more ticks is 1.8571429:
-//
-//   player  2.5452381 + 1.8571429 = 4.4023810
-//   body    3.0952381 + 1.8571429 = 4.9523810
-//
-// The tolerance is 0.001 — a hundred and fiftieth of one tick of walking — so
-// it absorbs f32 accumulation and nothing else. A tolerance wide enough to hide
-// a one-tick error would be the assertion switched off.
+// The tolerance is a hundred and fiftieth of a tick's walk: wide enough for f32
+// accumulation, far too narrow to hide a one-tick error.
 (
     description: "A body placed in the player's path is shoved exactly as far as the mass split says.",
     setup: (

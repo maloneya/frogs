@@ -1,21 +1,14 @@
-// The crowd solver at the level of one pair, predicted by hand.
+// The crowd solver at one pair. Two bodies 0.3 apart against a 0.5 contact
+// distance are 0.2 overlapped; equal masses split it evenly, so each moves 0.1
+// to 2.9 and 3.4 — exactly touching.
 //
-// Two bodies 0.3 apart. Enemy contact distance is 2 * ENEMY_RADIUS = 0.5, so
-// they start 0.2 overlapped. Equal masses, so the correction splits evenly and
-// each moves 0.1:
-//
-//   3.0 - 0.1 = 2.9
-//   3.3 + 0.1 = 3.4        gap 0.5, exactly touching
-//
-// Then nothing. That second half is the part worth asserting: `crowd_contacts`
-// is 0 on the final tick, which says the pair separated *and stopped*. Exactly
-// touching must not count as overlapping, or a settled crowd would jitter
-// forever — every pair re-contacting every tick, each one emitting a trace
-// event, at a cost that rises with the square of the horde.
+// Then nothing, and that is the half worth asserting: `crowd_contacts: 0` on
+// the final tick says the pair separated *and stopped*. Exactly touching must
+// not count as overlapping, or a settled crowd jitters forever — see `SLOP` in
+// `crate::contact`.
 //
 // Placed at x=3 with the player at the origin and no input, so the player's own
-// contact distance of 0.55 is nowhere near: this is a prediction about the
-// crowd solver alone.
+// 0.55 is nowhere near: this is the crowd solver alone.
 (
     description: "Two overlapping bodies push apart to exactly touching, then stop.",
     setup: (

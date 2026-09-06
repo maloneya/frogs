@@ -97,6 +97,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Coincident bodies separate deterministically, not into NaN | 3 | `escape_direction`; unit tests in `sim/contact.rs` |
 | A contact normal is unit length | 0 | private fields on `Contact`; `contact::between` is the only constructor |
 | A settled crowd stops reporting contacts | 3 | `SLOP` in `contact.rs`; `a_pair_resting_a_whisker_inside_touching_is_not_a_contact` |
+| The contact slop stays above the arena's noise floor | 1 | const assert derived from `ARENA_HALF`, not a copied literal |
 | A clamp cannot launder a NaN into a legal position | 3 | `debug_assert` in `pass::contain` naming the cause; `POISONED` |
 | A scenario cannot end with a poisoned position | 3 | `check_finite` runs unconditionally, like `check_replay` |
 | Every enemy pair is resolved once, not twice | 3 | `crowd` walks `j > i` via `split_at_mut`; `an_overlapped_pair_settles_at_touching` |
@@ -112,7 +113,9 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A hitbox swings where the character faces | 3 | `pass::attack` runs after `pass::face`; the yaw convention is mutation-checked |
 | Attack state reaches the determinism hash | 1 | `World::hash` destructures `Player`, and `Attack::hash` destructures itself |
 | Behaviour membership reaches the determinism hash | 1 | `World::hash` destructures `seekers`; `Members::hash` destructures itself |
-| A bulk respawn cannot leave behaviours attached to recycled names | 3 | `set_enemy_count` clears every set after `respawn` |
+| A retired name can never be reused | 0 | `Slots::clear` retires every slot rather than truncating; there is no path that restarts a generation |
+| A bulk respawn cannot leave a behaviour attached | 3 | `a_respawn_revokes_every_behaviour`, which caught a real resurrection |
+| A new behaviour cannot be forgotten at spawn or despawn | 1 | `set_enemy_count` and `despawn_enemy` destructure `Self` exhaustively — a new field is E0027 |
 | Asking whether two bodies touch cannot move them | 0 | `contact::between` takes `Vec2` by value and returns a `Contact` |
 | The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
 | The harness cannot fall behind the bindings | 0 | key names live *in* `BINDINGS`; there is no second table to forget |

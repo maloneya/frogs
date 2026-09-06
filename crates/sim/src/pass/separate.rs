@@ -83,15 +83,22 @@ pub(crate) fn player(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink
 /// resolved twice, which would double the correction and make the crowd
 /// springy.
 ///
-/// **O(N^2), and knowingly so.** At the default horde of 1024 that is 523,776
-/// pair tests a tick. Measured headless in release: **0.217ms per tick**, which
-/// is about 1.3% of a 60Hz frame. So the uniform grid is not urgent at this
-/// size, and the number is what says so rather than a feeling.
+/// **O(N^2), and knowingly so.** Measured in release, per tick, against a
+/// 16.7ms frame:
 ///
-/// The number is also what says when it *will* be. The cost goes as the square,
-/// so 4096 bodies is sixteen times this — around 3.5ms, a fifth of the frame —
-/// and 8192 would eat most of it. That is the point at which the grid stops
-/// being an optimisation and starts being the only way to raise N.
+/// | bodies | pairs | cost | share of a frame |
+/// |---|---|---|---|
+/// | 1024 | 523k | 0.14ms | 0.8% |
+/// | 4096 | 8.4M | 2.1ms | 12% |
+/// | 16384 | 134M | 32.6ms | 195% |
+///
+/// So the grid is not urgent at the size the game runs, and these numbers are
+/// what say so rather than a feeling. They also say when it stops being
+/// optional: somewhere past 4096 this pass alone is the frame.
+///
+/// Micro-optimising it is not the answer either — from about 4096 the position
+/// array leaves L1 and the loop is memory-bound, so the arithmetic is no longer
+/// what costs. Only a broadphase changes the shape.
 ///
 /// When it comes, it is an *optimisation of something already correct*, and the
 /// way it gets tested is by producing the same contact set as this over a

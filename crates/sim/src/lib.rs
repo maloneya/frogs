@@ -177,17 +177,6 @@ const _: () = assert!(PLAYER_SCALE.x != PLAYER_SCALE.z, "a square footprint make
 /// should be one number.
 const PLAYER_HALF_HEIGHT: f32 = PLAYER_SCALE.y * 0.5;
 
-/// A separation direction for two bodies occupying exactly the same point.
-///
-/// It has to come from somewhere, and it has to be the *same* somewhere every
-/// run: a random direction would make two identical simulations diverge, which
-/// is precisely what the determinism the fixed timestep is for would be
-/// claiming. Deriving it from the pair's index costs nothing and is exactly
-/// reproducible.
-///
-/// Golden-angle steps rather than a fixed direction, so a clump of coincident
-/// bodies fans out instead of every one of them being pushed the same way and
-/// re-stacking on the next tick.
 /// Where the horde is.
 ///
 /// Until now an enemy had no position. `extract_enemies` derived one from the
@@ -267,12 +256,8 @@ impl Enemies {
         }
     }
 
-    /// Empties the horde, retiring every name.
-    ///
-    /// Goes through [`Slots::clear`], which restarts generations — so an id
-    /// from before this call can match a body spawned after it. That is only
-    /// safe because the sole caller is a wholesale rebuild, where by
-    /// construction nothing is holding an id across the boundary.
+    /// Empties the horde, retiring every name. Ids from before it stay dead —
+    /// see [`Slots::clear`].
     fn clear(&mut self) {
         self.slots.clear();
         self.pos.clear();
@@ -292,15 +277,17 @@ impl Enemies {
         let id = self.slots.insert();
         self.pos.push(at);
         self.prev_pos.push(at);
+        self.debug_check_paired();
+        id
+    }
 
-        // The pairing `Slots` documents but cannot check: it holds no payload,
-        // so keeping the arrays the same length is this function's job. Debug
-        // only, because it is a claim about *this code* rather than about the
-        // world, and it is checked on every test run.
+    /// The pairing `Slots` documents but cannot check: it holds no payload, so
+    /// keeping every array the same length is this type's job. Debug only —
+    /// it is a claim about this code rather than about the world, and an array
+    /// added later and forgotten in `despawn` is the bug it catches.
+    fn debug_check_paired(&self) {
         debug_assert_eq!(self.slots.len(), self.pos.len(), "slots and pos disagree");
         debug_assert_eq!(self.slots.len(), self.prev_pos.len(), "slots and prev_pos disagree");
-
-        id
     }
 
     /// Removes one body. Returns whether the id named a live one.
@@ -315,10 +302,7 @@ impl Enemies {
 
         self.pos.swap_remove(dense);
         self.prev_pos.swap_remove(dense);
-
-        debug_assert_eq!(self.slots.len(), self.pos.len(), "slots and pos disagree");
-        debug_assert_eq!(self.slots.len(), self.prev_pos.len(), "slots and prev_pos disagree");
-
+        self.debug_check_paired();
         true
     }
 
@@ -458,22 +442,26 @@ impl World {
     /// the two in contact on tick zero, and every prediction about plain
     /// movement is really a prediction about the solver.
     pub fn set_enemy_count(&mut self, n: usize) {
-        self.enemies.respawn(n.min(MAX_ENEMIES));
+        // **Exhaustive, for the reason `hash` and `report` are.** This is one of
+        // the two doors where a behaviour set must be considered, and it was the
+        // only kind of place in `World` that could forget one silently. Now a
+        // new field stops the crate compiling until someone has decided here
+        // whether a wholesale respawn should revoke it.
+        let Self { enemies, seekers, trace, tick, player: _, contacts: _, crowd_contacts: _ } =
+            self;
 
-        // **Must come after the respawn, and must happen at all.** `respawn`
-        // goes through `Slots::clear`, which restarts generations — so an id
-        // minted before it can match a body spawned after it. A membership set
-        // surviving that would not merely hold garbage; it would hold names
-        // that come back to life pointing at whichever body inherited them, and
-        // a body nobody asked to chase would start chasing.
-        self.seekers.clear();
+        enemies.respawn(n.min(MAX_ENEMIES));
+
+        // Every name the horde had is now retired, so a set that survived would
+        // hold only ids that resolve to nothing. Cleared anyway, because the
+        // alternative is a set that grows by the size of the old horde on every
+        // respawn and costs every pass that walks it.
+        seekers.clear();
 
         // Traced because it happens *outside* the schedule. State that changes
-        // between ticks is the hardest kind to account for later — it explains
-        // a hash sequence that diverges from a replay, and a frame drawn before
-        // any tick has run — so it is exactly the kind of thing the trace is
-        // for. Stamped with the tick it precedes.
-        self.trace.sink(self.tick).emit(Event::Spawned { count: self.enemies.len() });
+        // between ticks is the hardest kind to account for later, so it is
+        // exactly what the trace is for. Stamped with the tick it precedes.
+        trace.sink(*tick).emit(Event::Spawned { count: enemies.len() });
     }
 
     /// Places one body at a chosen spot and returns its name.
@@ -521,25 +509,26 @@ impl World {
     /// mistake, and it is exactly what [`EntityId`]'s generation makes safe to
     /// ask about.
     pub fn despawn_enemy(&mut self, id: EntityId) -> bool {
-        if !self.enemies.despawn(id) {
+        // Exhaustive for the same reason as `set_enemy_count`: this is the other
+        // door a new behaviour has to be considered at. A line per behaviour
+        // rather than a registry is deliberate — a list of sets to sweep is a
+        // second hand-maintained record of which behaviours exist, at the same
+        // layer as the line it replaces — but the *forgetting* is what the
+        // destructure makes impossible.
+        let Self { enemies, seekers, trace, tick, player: _, contacts: _, crowd_contacts: _ } =
+            self;
+
+        if !enemies.despawn(id) {
             return false;
         }
 
-        // Every behaviour the body had is revoked here. That is one line per
-        // behaviour, and it is deliberately a line rather than a registry: a
-        // list of sets to sweep would be a second place recording which
-        // behaviours exist, and the compiler cannot check a list against
-        // reality. If this grows past a handful, that is the signal to build a
-        // real registry rather than to let it drift.
-        //
-        // Revoking eagerly is an optimisation, not a correctness requirement —
-        // a stale id in a set resolves to nothing, which is what generational
-        // ids are for, and `pass::seek` skips what it cannot resolve. This
-        // keeps the sets from accumulating garbage that costs every pass that
-        // walks them.
-        self.seekers.remove(id);
+        // Revoking eagerly is an optimisation, not a correctness requirement: a
+        // stale id resolves to nothing, which is what generational ids are for,
+        // and `pass::seek` skips what it cannot resolve. This keeps the sets
+        // from accumulating garbage that costs every pass that walks them.
+        seekers.remove(id);
 
-        self.trace.sink(self.tick).emit(Event::Removed { id });
+        trace.sink(*tick).emit(Event::Removed { id });
         true
     }
 
@@ -641,7 +630,7 @@ impl World {
         out.int("swing_tick", u64::from(attack.elapsed()));
         out.bool("hitbox", attack.hitbox_is_live());
         out.int("struck", attack.struck() as u64);
-        out.int("trace_events", trace.iter().count() as u64);
+        out.int("trace_events", trace.len() as u64);
         out.int("trace_dropped", trace.dropped() as u64);
 
         // Previous-tick state is what render interpolation blends from. Not
@@ -1121,6 +1110,24 @@ mod tests {
     ///
     /// The frame schedule is deliberately ragged — the shape a real machine
     /// produces, and the shape a variable timestep leaks through.
+    /// A wholesale respawn retires every name, so any behaviour still attached
+    /// to one would be attached to whoever inherits it. Asserted rather than
+    /// left to the ordering comment in `set_enemy_count`, because the failure —
+    /// a body nobody asked to chase, chasing — is silent.
+    #[test]
+    fn a_respawn_revokes_every_behaviour() {
+        let mut world = World::default();
+        world.set_enemy_count(0);
+
+        let id = world.spawn_enemy(Vec2::new(3.0, 0.0)).expect("room for one body");
+        assert!(world.add_seek(id));
+        assert_eq!(world.seeker_count(), 1);
+
+        world.set_enemy_count(4);
+
+        assert_eq!(world.seeker_count(), 0, "a behaviour survived the respawn that retired its name");
+        assert!(!world.is_alive(id), "the old name outlived the horde it belonged to");
+    }
     #[test]
     fn one_input_stream_replays_to_the_same_hash_every_tick() {
         let ragged = [0.004, 0.019, 0.016_1, 0.033, 0.000_9, 0.017_2];
@@ -1423,7 +1430,7 @@ mod tests {
 
         // Out in the open, standing still: nothing moves at all.
         for _ in 0..5 {
-            world.step(tick_dt(), Intent::new(MoveDir::NONE, false));
+            world.step(tick_dt(), Intent::NONE);
         }
         assert_eq!(world.contacts(), 0, "something is touching, so this measures the solver");
 
@@ -1504,7 +1511,7 @@ mod tests {
         // hash from here is the horde's.
         let settled = {
             for _ in 0..30 {
-                world.step(tick_dt(), Intent::new(MoveDir::NONE, false));
+                world.step(tick_dt(), Intent::NONE);
             }
             world.hash()
         };
@@ -1536,8 +1543,16 @@ mod tests {
         world.extract(Alpha::ONE, buffer.sink());
 
         let allocations = alloc_counter::allocations(|| {
-            for _ in 0..60 {
-                world.step(dt, Intent::new(east, false));
+            for tick in 0..60 {
+                // **Swings included.** The guard used to pass `false` on every
+                // tick, so the one allocating line the attack added — pushing a
+                // struck body onto a list reserved for sixteen — was never
+                // reached by the thing whose job is to notice. A wider hitbox
+                // or a bigger body radius would have gone unremarked.
+                //
+                // Every 20 ticks is exactly the swing length, so this runs three
+                // back-to-back swings rather than one and then idling.
+                world.step(dt, Intent::new(east, tick % 20 == 0));
                 world.extract(Alpha::ONE, buffer.sink());
             }
         });
@@ -1550,7 +1565,7 @@ mod tests {
         let mut world = in_open_ground();
         let start = world.player_pos();
         for _ in 0..60 {
-            world.step(tick_dt(), Intent::new(MoveDir::NONE, false));
+            world.step(tick_dt(), Intent::NONE);
         }
         assert_eq!(world.player_pos(), start);
     }
@@ -1653,7 +1668,7 @@ mod tests {
         let settled = world.player.facing;
 
         for _ in 0..120 {
-            world.step(tick_dt(), Intent::new(MoveDir::NONE, false));
+            world.step(tick_dt(), Intent::NONE);
         }
         assert_eq!(world.player.facing, settled);
     }
@@ -1818,13 +1833,13 @@ mod tests {
     #[test]
     fn the_contact_count_tracks_whether_anything_is_touching() {
         let mut clear = in_open_ground();
-        clear.step(tick_dt(), Intent::new(MoveDir::NONE, false));
+        clear.step(tick_dt(), Intent::NONE);
         assert_eq!(clear.contacts(), 0, "nothing is near the player out here");
 
         // The horde is centred on the origin and so is the player, so the
         // spawn itself puts bodies in contact.
         let mut crowded = World::default();
-        crowded.step(tick_dt(), Intent::new(MoveDir::NONE, false));
+        crowded.step(tick_dt(), Intent::NONE);
         assert!(crowded.contacts() > 0, "spawned inside the horde and touched nothing");
     }
 

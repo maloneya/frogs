@@ -195,6 +195,26 @@ pub(crate) struct Approx2 {
     pub(crate) tol: f32,
 }
 
+impl Approx2 {
+    /// How far `got` misses by, or `None` if it is within tolerance.
+    ///
+    /// **One copy of this comparison, deliberately.** `run::check_finite`'s doc
+    /// names `(got - want).length() > tolerance` as *the* shape every positional
+    /// assertion has — and the reason a NaN slips through all of them. That
+    /// argument is about one shape; it stops being true the moment there are two
+    /// that can drift. It is also the only place the "`y` is world Z" convention
+    /// is applied on the way in.
+    pub(crate) fn off_by(&self, got: glam::Vec3) -> Option<f32> {
+        let off = (glam::Vec2::new(got.x, got.z) - glam::Vec2::new(self.x, self.z)).length();
+        (off > self.tol).then_some(off)
+    }
+
+    /// The prediction, as it appears in a failure.
+    pub(crate) fn expected(&self) -> String {
+        format!("({:.4}, {:.4}) +/- {:.4}", self.x, self.z, self.tol)
+    }
+}
+
 /// What must hold for one body that [`Setup::bodies`] placed.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

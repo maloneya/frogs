@@ -164,6 +164,14 @@ impl Trace {
         self.dropped = 0;
     }
 
+    /// How many events are held. O(1) — `iter().count()` walks the whole ring.
+    ///
+    /// Crate-visible: `World::report` is the only caller, and a `pub` `len`
+    /// obliges an `is_empty` nobody would call.
+    pub(crate) fn len(&self) -> usize {
+        self.events.len()
+    }
+
     /// Events in the order they happened, oldest first.
     pub fn iter(&self) -> impl Iterator<Item = (u64, Event)> + '_ {
         let (old, new) = self.events.split_at(self.next.min(self.events.len()));

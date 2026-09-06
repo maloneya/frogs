@@ -31,11 +31,7 @@
 //! rather than just finding a row.
 
 use crate::hash::Fnv;
-use crate::slots::EntityId;
-
-/// Marks a slot belonging to no member. See `slots::VACANT` for why a sentinel
-/// rather than an `Option`.
-const VACANT: u32 = u32::MAX;
+use crate::slots::{EntityId, VACANT};
 
 /// The entities that have one behaviour.
 ///
@@ -112,14 +108,16 @@ impl Members {
 
     /// Which dense row belongs to this entity, or `None` if it is not a member.
     ///
-    /// **Both halves of the check are load-bearing.** Finding a row for the slot
-    /// says only that *somebody* with that slot is a member; comparing the whole
-    /// id says it is this one. Without the second half, an id retired and its
-    /// slot recycled would read as a member — and would read as a member with
-    /// somebody else's data.
+    /// **The whole id is compared, not just the slot.** Finding a row for a slot
+    /// says only that *somebody* with that slot is a member; the row naming the
+    /// asker back says it is this one. Without that, an id whose slot was
+    /// recycled reads as a member, with somebody else's data.
+    ///
+    /// A vacant entry needs no separate test: it holds [`VACANT`], and
+    /// `dense.get(u32::MAX as usize)` is `None` for any reachable horde.
     pub(crate) fn index(&self, id: EntityId) -> Option<usize> {
         let row = *self.sparse.get(id.slot())? as usize;
-        (row != VACANT as usize && self.dense.get(row) == Some(&id)).then_some(row)
+        (self.dense.get(row) == Some(&id)).then_some(row)
     }
 
     /// Whether this entity has the behaviour.
@@ -135,16 +133,20 @@ impl Members {
 
     /// Feeds membership into the world hash.
     ///
-    /// Exhaustively destructured, as every hash in this crate is. `sparse` is
-    /// derivable from `dense` and goes in anyway: the rule is every field, and
-    /// an exception is how that rule stops being checkable.
+    /// Exhaustively destructured, as every hash in this crate is — but `sparse`
+    /// is **deliberately not hashed**, and the destructure is what forced that
+    /// to be a written decision rather than an omission. It is a reverse index:
+    /// `dense` determines it entirely, so feeding it adds no information.
+    ///
+    /// Skipping it is not just thrift. Hashing `sparse` costs the *entity
+    /// count* rather than the membership, so a world of sixteen thousand bodies
+    /// and no seekers paid sixteen thousand rounds a tick — which is precisely
+    /// the wide-table cost this module exists to avoid, reintroduced in the one
+    /// method that is supposed to be describing it. Same reasoning as
+    /// `World::hash` discarding `trace`.
     pub(crate) fn hash(&self, h: &mut Fnv) {
         let Self { sparse, dense } = self;
-
-        h.usize(sparse.len());
-        for entry in sparse {
-            h.u64(u64::from(*entry));
-        }
+        let _ = sparse;
 
         h.usize(dense.len());
         for id in dense {

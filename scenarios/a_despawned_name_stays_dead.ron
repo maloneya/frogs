@@ -1,26 +1,15 @@
-// What `EntityId` is for, stated as a prediction.
+// What `EntityId` is for. See `crate::slots` for the generational-index
+// argument; this is it driven through the simulation.
 //
-// Two separate things are being asserted, and only the second one is hard.
+// Two things are asserted, and only the second is hard. **The swap:** removing
+// a body moves the last one into its row, and body 2's name has to follow.
+// **The reuse:** the trailing `Place` hands the freed slot to somebody else,
+// which is the only way the interesting failure is reachable at all. An earlier
+// version stopped at the despawn and passed with the generation bump deleted —
+// a vacated slot is caught by the vacancy sentinel either way.
 //
-// **The swap.** The horde is stored densely, so removing a body moves the last
-// one into the hole. Body 2's row goes from index 2 to index 1 without anything
-// touching body 2, and its name has to follow.
-//
-// **The reuse.** The freed slot is handed straight back out to the next
-// placement — that is what the trailing `Place` is for, and it is the only way
-// the interesting failure is reachable at all. Once slot 1 has a live occupant
-// again, the retired name for its *previous* occupant either resolves to the
-// newcomer or it does not, and that is precisely what a generation decides.
-//
-// Without the reuse this file is much weaker than it looks: an earlier version
-// stopped at the despawn, and it passed with the generation bump deleted. A
-// vacated slot is caught by the vacancy sentinel whether or not generations
-// work, so despawn alone tests the sentinel and nothing else.
-//
-// The bodies are 2.0 apart, far more than the 0.5 two of them will need once
-// they collide with each other. That is on purpose: this scenario is about
-// names, and spacing it now means enemy-enemy separation cannot quietly turn it
-// into a scenario about the solver.
+// Bodies 2.0 apart, far more than the 0.5 they would need, so enemy-enemy
+// separation cannot quietly turn this into a scenario about the solver.
 (
     description: "A retired name stays dead even after its slot is handed to somebody else.",
     setup: (

@@ -1,30 +1,16 @@
-// The window, asserted tick by tick — which is the only way it can be.
+// The window, tick by tick — the only way it can be checked. See
+// `crate::pass::attack` for why a hitbox that opens a tick early is invisible
+// in final state.
 //
-// An attack that opens its hitbox one tick early produces no crash, no compiler
-// error, and a final state indistinguishable from a correct swing. The enemy is
-// hit either way. The mistake exists *only* in the interval between two
-// samples, and a golden trace is the one artefact that can see an interval.
-// This is what `Trace` was built before the first hitbox for.
+// From the constants: STARTUP 6, ACTIVE 4, RECOVERY 10. So the hitbox appears
+// on tick 6 and is gone by tick 10, and `opened` minus `closed` is ACTIVE.
 //
-// Predicted from the constants in `pass::attack`:
+// The body sits dead ahead at the hitbox centre — facing 0 is +Z and no input
+// means no turning — and 1.1 away, well outside the 0.55 the two would touch
+// at, so the solver never fires and the trace holds nothing but the swing.
 //
-//   STARTUP  = 6   so the hitbox appears on tick 6
-//   ACTIVE   = 4   so it exists on ticks 6, 7, 8 and 9
-//   RECOVERY = 10  so the swing is 20 ticks and ends after tick 19
-//
-// `opened` is stamped on the first tick the hitbox exists and `closed` on the
-// first tick it does not, so a reader can subtract them and get ACTIVE.
-//
-// The body sits at (0, 1.1) — dead ahead, since facing 0 is +Z and no input
-// means no turning, and exactly at the hitbox centre so nothing about reach is
-// being tested here. It is 1.1 from the player, comfortably outside the 0.55
-// they would touch at, so the contact solver never fires and the trace holds
-// nothing but the swing.
-//
-// **One hit, not four.** The hitbox lives for four ticks and the body stands in
-// it the whole time; `struck: 1` and the single `hit` line are what say a swing
-// connects once. Getting that wrong is not a tuning problem, it is a different
-// game.
+// **One hit, not four.** The hitbox lives four ticks and the body stands in it
+// throughout; `struck: 1` is what says a swing connects once per body.
 (
     description: "The hitbox appears on tick 6, is gone by tick 10, and connects exactly once.",
     setup: (

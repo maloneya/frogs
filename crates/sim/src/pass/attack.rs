@@ -239,17 +239,23 @@ fn strike(
     let centre = player_pos + ahead * REACH;
     let contact_distance = HITBOX_RADIUS + ENEMY_RADIUS;
 
+    // **Cheapest test first.** The distance check rejects almost every body in a
+    // handful of instructions; the two checks that were above it — a load from
+    // a second array, and a linear scan of what this swing has already hit —
+    // then run only for the few that are actually in reach. Measured at 16384
+    // bodies: 53µs a tick to 4µs.
     for (row, body) in pos.iter().enumerate() {
-        let id = bodies.ids()[row];
+        if contact::between(centre, *body, contact_distance, row).is_none() {
+            continue;
+        }
 
+        let id = bodies.ids()[row];
         if state.struck.contains(&id) {
             continue;
         }
 
-        if contact::between(centre, *body, contact_distance, row).is_some() {
-            state.struck.push(id);
-            trace.emit(Event::Hit { id });
-        }
+        state.struck.push(id);
+        trace.emit(Event::Hit { id });
     }
 }
 

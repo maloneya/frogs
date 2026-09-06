@@ -30,71 +30,43 @@ what matters here is what it left behind to build on.
 - **Derived `state`.** JSON from `World::report`, which destructures `World`
   exhaustively — a field added to the world will not compile until it is
   observable.
+- **Entity identity.** `EntityId` is a slot plus a generation, so a retired name
+  resolves to nothing rather than to whoever inherited its row. Scenarios place
+  bodies at stated spots and assert about them by name.
+- **Contact as a query.** `contact::between` says whether two discs touch and
+  along what line, and stops there. Separation and the hitbox are two responses
+  to one question.
+- **The horde is a crowd.** Bodies separate from each other as well as from the
+  player, brute force.
+- **Behaviours as sparse sets.** A behaviour is its own membership plus a pass
+  that walks it, so adding one touches no existing type. `pass::seek` is the
+  first; see `crates/sim/src/members.rs` for why the storage is shaped this way.
+- **The swing.** Startup, active and recovery with a timed hitbox, asserted tick
+  by tick against golden traces.
 
 ---
 
-## 4. SoA entity storage — *hooks*
+## 4. The player joins body storage — *hooks*
 
-The pass-decomposition half landed with the trace. Identity landed next:
-`EntityId`, `World::spawn_enemy`/`despawn_enemy`, and the `slots` map that
-gives a body a name its dense row cannot. Scenarios can now place a body at a
-stated spot and assert about it by name — which was the binding constraint on
-everything below, because a horde count puts N bodies in a grid whose positions
-nobody wrote down.
+Identity landed; what is left is the player becoming a row like everything else,
+so passes take slices for it too rather than its individual fields.
 
-**Gate — met.** `a_despawned_name_stays_dead` asserts a retired name stays dead
-*after its slot is handed to somebody else*, and it is mutation-checked against
-both the generation bump and the swap-remove fixup. The reuse half is
-load-bearing: a first version stopped at the despawn and passed with the
-generation bump deleted, because a vacated slot is caught by the vacancy
-sentinel whether or not generations work.
+**Resolve a contradiction first.** The doc comment on `Player` argues it stays a
+separate struct because folding it into the horde would pay for player-only
+fields N times. That was correct against dense arrays and dissolves under sparse
+sets: player-only state lives in its own membership set, so the player can be a
+body without any enemy paying for what only it has. Fix the comment or abandon
+the chunk — do not leave a doc arguing against the change being made.
 
-### What is left in this chunk
-
-The player joining the same storage, so passes take slices for it too rather
-than its individual fields.
-
-**This contradicts the argument written on `Player` itself**, which says it
-stays a separate struct because wedging it into the horde would pay for
-player-only fields — facing, attack phase, i-frames — N times. That argument was
-correct against dense arrays and dissolves under the storage decision below:
-player-only state lives in its own sparse set, so the player can be a body
-without any enemy paying for what only it has. Resolve the two before starting,
-rather than leaving a doc that argues against the change being made.
-
-## Storage decision: sparse sets, not a dense table
-
-A behaviour is **its own storage plus a pass that reads it**, not a field on a
-god struct. An enemy "has" a behaviour when it is a member of that behaviour's
-set; the pass iterates the set, so cost scales with membership rather than with
-horde size, and adding a behaviour touches no existing type.
-
-`slots` is deliberately payload-free for this reason — the same machinery sits
-under the horde's positions and under a behaviour only three bodies have. The
-alternative considered and rejected was one dense table with capability flags:
-simpler and faster to write, but it makes every body pay for every behaviour and
-turns the body table into the god class transposed into arrays.
-
-## 4b. Contact as a query, separate from the response — *sim layer*
-
-`pass::separate::pair` currently decides *that* two discs overlap and *what to
-do about it* in one function. An attack wants the first half with a different
-second half: deal damage, emit an event, do not push. Welded together, an attack
-cannot reuse touching — it can only re-implement it.
-
-Splitting it makes the overlap test a pure query returning a contact, with
-separation as one *consumer* of that query and a hitbox as another.
-
-**Gate:** a pure refactor, so the golden trace in `shoving_through_the_horde`
-must come out byte-identical.
+**Gate:** scenarios stay green across the refactor.
 
 ## 5. Uniform-grid spatial hash for broadphase — *sim layer*
 
-Deferred with a number behind it. Brute-force crowd separation at the default
-1024 bodies measures **0.217ms per tick** headless in release — about 1.3% of a
-60Hz frame — so the grid buys nothing yet. It goes as the square, so 4096 is
-~3.5ms and 8192 eats most of the frame; that is where it stops being an
-optimisation and becomes the only way to raise N.
+Deferred with numbers behind it. Brute-force crowd separation costs 0.14ms per
+tick at 1024 bodies (0.8% of a frame), 2.1ms at 4096 (12%), and 32.6ms at 16384
+— nearly twice the frame. So it buys nothing yet, and somewhere past 4096 it
+becomes the only way to raise N. Micro-optimising will not help: from about 4096
+the loop is memory-bound rather than arithmetic-bound.
 
 **Gate:** brute force and the grid produce identical contact sets over a
 replayed input stream. A headless perf assertion enters the scenario runner
@@ -109,50 +81,31 @@ the remaining gap in the perception stream.
 **Gate:** the yaw pixel test and a `shot` scenario both pass with no window
 present.
 
-## 7. Separation steering — *sim layer*
+## 7. A real spawner — *hooks*
 
-Bodies currently collide only with the player, never with each other, and no
-enemy has ever moved on its own. Brute force first, on top of chunk 4b's query:
-the uniform grid in chunk 5 is an *optimisation of something already correct*,
-and it can only be tested by agreeing with a correct thing that already exists.
+Bodies spawn inert and `seekers <n>` is a debug dial, not a spawner: "the first
+n" is a fact about storage order rather than about the game. A real one grants
+behaviours per body as it places them, from something describing what *kind* of
+enemy this is.
 
-**Both halves are done.** Crowd separation landed with `pass::separate::crowd`,
-and `pass::seek` is the first behaviour only some bodies have.
+Whether the default horde chases is a game decision, not an engine one, and it
+will churn three golden traces when it is made.
 
-**Gate — met.** `a_coincident_cluster_fans_out` resolves five bodies dropped on
-one point, and `a_seeker_closes_and_a_bystander_does_not` asserts a chaser
-closes 3.5 units in a second while a body without the behaviour never moves —
-the bystander being the half that proves composition rather than motion.
+**Gate:** a scenario places two kinds of enemy from one description and asserts
+they behave differently.
 
-### What is left
+## 8. Health, damage and death — *sim layer*
 
-Bodies still spawn inert; `seekers <n>` over the harness is a debug dial, not a
-spawner. A real one grants behaviours per body as it places them, from something
-describing what *kind* of enemy this is. Deciding whether the default horde
-chases is a game decision rather than an engine one, and it will churn three
-golden traces when it is made — which is the right amount of ceremony for a
-change that alters what the game *is*.
+A hit currently does nothing but say so. The seam is already the right shape:
+`pass::attack::strike` records who it touched, so damage is a change to that one
+function.
 
-## 8. Attack state machine — startup / active / recovery, timed hitboxes
+Health is also the behaviour that exercises the *payload* half of a sparse set,
+which `seek` did not need — membership plus a parallel array, kept in step
+through the row `Members::add` hands back.
 
-**Done.** `pass::attack` is a shape, a window and a response, and the response
-is where it stops being a shove: it asks `contact::between` exactly as the
-solver does, and takes positions immutably.
-
-**Gate — met.** `the_hitbox_opens_and_shuts_on_schedule` pins the window tick by
-tick against a golden trace; `arriving_after_the_hitbox_shuts_is_a_miss` walks a
-chaser into range on the very tick the hitbox stops existing and asserts nothing
-happens; `a_press_during_a_swing_is_dropped` pins `SWING` from both sides.
-Mutation-checked against a wider window, an early open, a longer and a shorter
-swing, hitting every tick, and a flipped yaw convention.
-
-### What is left
-
-A hit does nothing but say so. Health, damage and death are the next chunk, and
-the seam is already the right shape — `strike` records who it touched, and
-subtracting from a `Members`-backed health set is a change to that one function.
-Health is the behaviour that will exercise the payload half of a sparse set,
-which `seek` did not need.
+**Gate:** a scenario kills a body with a known number of swings and asserts its
+name goes dead; a golden trace shows the tick it died on.
 
 ## 9. Hitstop, knockback, input buffering
 
@@ -163,10 +116,10 @@ change produces a reviewable diff rather than a claim about feel.
 
 ## Known limitations (real, not yet worth fixing)
 
-- **Nothing chases you.** Enemies have a position and a name and nothing else;
-  they collide with the player but not with each other, and none has ever taken
-  a step.
-  Chunks 5 and 7 are what make the horde a horde.
+- **Nothing dies.** A swing registers hits and that is all it does — no health,
+  no damage, no corpses. Chunk 8.
+- **Every chaser is identical.** One speed, one behaviour, granted in bulk by a
+  debug dial. Chunk 7.
 - `World::extract()` rebuilds the 16384 static ground tiles every frame and
   re-uploads the whole instance buffer. Deferred with a number behind it: 17409
   instances render in ~3ms uncapped on the M4, so a static/dynamic split is not

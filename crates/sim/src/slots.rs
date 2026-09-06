@@ -48,7 +48,7 @@ use crate::hash::Fnv;
 /// [`FIRST_GENERATION`] guarantees is never live — but a `Default` impl invites
 /// `EntityId::default()` as a placeholder for "no target", and an `Option` says
 /// that both more clearly and more checkably.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct EntityId {
     /// Which slot. Recycled after a despawn.
     index: u32,
@@ -70,12 +70,7 @@ impl EntityId {
         self.index as usize
     }
 
-    /// Feeds the whole name into a hash.
-    ///
-    /// Named `hash_into` rather than `hash` so it cannot be mistaken for the
-    /// derived `core::hash::Hash`, which uses a different hasher for a
-    /// different purpose — `Fnv` is the reproducible one the determinism gate
-    /// rests on, and std's is explicitly allowed to change between releases.
+    /// Feeds the whole name into the determinism hash.
     pub(crate) fn hash_into(self, h: &mut Fnv) {
         h.u64(u64::from(self.index));
         h.u64(u64::from(self.generation));
@@ -104,7 +99,7 @@ const _: () =
 /// because this is one word in a table walked on every lookup, and the niche is
 /// free: a dense index that large is unreachable long before it is representable
 /// — the instance budget caps the world at a few thousand bodies.
-const VACANT: u32 = u32::MAX;
+pub(crate) const VACANT: u32 = u32::MAX;
 
 /// One entry in the sparse table, indexed by [`EntityId::index`].
 #[derive(Clone, Copy)]
@@ -201,8 +196,18 @@ impl Slots {
             self.slots[moved.index as usize].dense = dense as u32;
         }
 
-        let slot = &mut self.slots[id.index as usize];
+        self.retire(id.index);
+        Some(dense)
+    }
+
+    /// Marks a slot vacant, bumps past its occupant, and offers it for reuse.
+    ///
+    /// The one place a name is retired, so [`Slots::remove`] and
+    /// [`Slots::clear`] cannot disagree about what retiring means.
+    fn retire(&mut self, index: u32) {
+        let slot = &mut self.slots[index as usize];
         slot.dense = VACANT;
+
         // Wrapping, not saturating. At u32 this needs four billion despawns of
         // one slot before an ancient id could collide with a live one, which at
         // 60Hz is not reachable; saturating would instead freeze the generation
@@ -210,13 +215,12 @@ impl Slots {
         // unreachable bug into a permanent one.
         slot.generation = slot.generation.wrapping_add(1);
         if slot.generation == 0 {
-            // Skip past the dead generation, so the zeroed-id invariant holds
-            // even across a wrap.
+            // Skip the dead generation, so the zeroed-id invariant survives a
+            // wrap.
             slot.generation = FIRST_GENERATION;
         }
 
-        self.free.push(id.index);
-        Some(dense)
+        self.free.push(index);
     }
 
     /// Where this body's row lives, or `None` if the id is stale.
@@ -245,17 +249,25 @@ impl Slots {
         &self.dense
     }
 
-    /// Retires every name and forgets every slot.
+    /// Retires every name at once.
     ///
-    /// **Ids minted before this are not merely dead, they may come back to
-    /// life**: generations restart, so an id from before a clear can match a
-    /// body spawned after one. That is why this is not what despawning uses,
-    /// and why the only caller is a wholesale horde rebuild, where nothing is
-    /// holding an id across the boundary.
+    /// **Retires rather than resets, and the difference is the whole point.**
+    /// Truncating the slot table would restart generations, so an id minted
+    /// before a clear would match a body spawned after one — a dead name coming
+    /// back to life pointing at a stranger, which is exactly what generations
+    /// exist to prevent. It was guarded by three warning comments and an
+    /// ordering rule that every future caller had to remember; a test caught it
+    /// resurrecting a name across `World::set_enemy_count`.
+    ///
+    /// Retiring every slot instead costs one pass and makes the hazard
+    /// unrepresentable. The table is not freed, but it is bounded by the most
+    /// bodies ever alive at once, and `free` hands every slot straight back.
     pub(crate) fn clear(&mut self) {
-        self.slots.clear();
-        self.dense.clear();
-        self.free.clear();
+        // `pop` rather than draining, so the borrow of `dense` ends before
+        // `retire` touches `slots` and `free`.
+        while let Some(id) = self.dense.pop() {
+            self.retire(id.index);
+        }
     }
 
     /// Feeds every field into the world hash.
@@ -448,13 +460,12 @@ mod tests {
         }
     }
 
-    /// Clearing forgets everything, including the generations — so it is the
-    /// one operation after which an old id may be reborn. Asserted rather than
-    /// merely documented, because it is a sharp edge and the assertion is what
-    /// stops someone "fixing" `clear` into a despawn-everything loop without
-    /// noticing the difference.
+    /// Clearing retires every name rather than resetting the table, so an id
+    /// from before it stays dead afterwards. The earlier version of this type
+    /// truncated instead, and this test asserted the resurrection as intended
+    /// behaviour — it was the hazard, written down as a feature.
     #[test]
-    fn clearing_restarts_generations() {
+    fn clearing_retires_names_rather_than_reusing_them() {
         let mut store = Store::default();
         let before = store.spawn("before");
 
@@ -462,8 +473,9 @@ mod tests {
         store.payload.clear();
 
         let after = store.spawn("after");
-        assert_eq!(before, after, "clear is documented to restart, not to retire");
-        assert_eq!(store.get(before), Some("after"));
+        assert_ne!(before, after, "a name from before the clear came back");
+        assert_eq!(store.get(before), None, "a retired name still resolves");
+        assert_eq!(store.get(after), Some("after"));
     }
 
     /// Two stores driven the same way must hash the same, or the determinism

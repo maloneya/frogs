@@ -1,23 +1,15 @@
-// The crowd solver doing its job in the configuration the game actually has,
-// rather than in a cluster built to provoke it.
+// The crowd solver in the configuration the game actually has.
 //
-// It exists because of a surprise. `shoving_through_the_horde` walks due +X
+// It exists because of a surprise: `shoving_through_the_horde` walks due +X
 // through the same 64 bodies and produces **zero** crowd contacts — its golden
-// trace did not change by a single line when enemy-against-enemy separation was
-// added. That looked like the new pass being inert, and it is not: the horde
-// spawns on an axis-aligned grid 0.7 apart, and enemy contact distance is
-// 2 * ENEMY_RADIUS = 0.5, so there is 0.2 of slack along each axis. Pushing
-// *along* an axis slides bodies down the corridors between rows and never
-// closes that slack.
+// trace did not change by a line when enemy-enemy separation landed. The horde
+// spawns on an axis-aligned grid 0.7 apart against a 0.5 contact distance, so
+// pushing along an axis slides bodies down the corridors between rows and never
+// closes the 0.2 of slack. Push across the grid and 20 of 60 ticks report
+// contacts.
 //
-// Push across the grid instead and they compress against their diagonal
-// neighbours, where the slack is smaller relative to the direction of travel.
-// Measured: 20 of the 60 ticks report crowd contacts, against 0 for the same
-// shove along the axis.
-//
-// The lesson is about the *test*, not the solver: a horde laid out on a grid
-// has an axis a scenario can travel along and see nothing. This is the
-// companion that walks across it.
+// The lesson is about the test, not the solver: a horde laid out on a grid has
+// an axis you can travel along and see nothing.
 (
     description: "Shoved across its own grid the horde compresses, where shoved along it, it does not.",
     setup: (enemies: 64),

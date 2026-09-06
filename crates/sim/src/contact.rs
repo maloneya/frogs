@@ -53,13 +53,19 @@ const _: () = assert!(COINCIDENT_SQ > 0.0);
 /// answer: it is a fact about asking, not about pushing. Box2D calls its
 /// version `linearSlop` and reaches for it for the same reason.
 ///
-/// The value has to clear the noise and stay invisible. An `f32` ulp at the
-/// arena's far corner — coordinates near 96 — is about 8e-6, so this is a
-/// hundred times the error it must absorb; and it is a five-hundredth of a
-/// body's diameter, so a pack resting this deep into one another is not
-/// something a pixel can show.
+/// The value has to clear the noise and stay invisible: it is roughly a hundred
+/// times the `f32` error it must absorb at the arena's far corner, and a
+/// five-hundredth of a body's diameter, which no pixel can show.
 const SLOP: f32 = 1e-3;
-const _: () = assert!(SLOP > 1e-5, "below the f32 noise floor at arena scale, so contacts churn");
+
+/// The floor is **derived from the arena**, not written down. An `f32` ulp
+/// grows with magnitude, so the noise this has to clear is a property of how far
+/// from the origin a body can get — and a hand-copied `1e-5` would keep passing
+/// after someone enlarged the world, quietly returning the per-tick churn.
+const _: () = assert!(
+    SLOP > crate::ARENA_HALF * f32::EPSILON * 16.0,
+    "below the f32 noise floor at the arena's far corner, so settled contacts churn"
+);
 const _: () = assert!(SLOP < 0.01, "deep enough to see bodies resting inside one another");
 
 /// Two bodies overlapping, described completely.

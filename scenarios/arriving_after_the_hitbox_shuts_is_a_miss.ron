@@ -1,30 +1,17 @@
-// The other half of a window: what it does *not* catch.
+// The other half of a window: what it does *not* catch. A target in range
+// throughout cannot tell a correct window from one a tick too long — the hit
+// lands either way and only its timestamp moves.
 //
-// A scenario where the target is in range the whole time cannot tell a correct
-// window from one that is a tick too long — the hit lands either way, and only
-// its timestamp differs. So this one puts the target in range *just too late*,
-// and asserts nothing happens.
+// `seek` runs before `attack`, so on tick t the hitbox tests a body that has
+// taken t+1 steps of 3.5/60. The hitbox catches a body dead ahead while
+// |d - 1.1| < 0.85 minus the 0.001 slop, so d < 1.949:
 //
-// A chaser walks in at SPEED = 3.5 units/sec, which is 3.5/60 per tick, and
-// `seek` runs before `attack` in the schedule — so on tick t the hitbox tests a
-// body that has already taken t+1 steps:
+//   tick 9  (last live tick)   d = 1.9767   outside by 0.028
+//   tick 10 (first dead tick)  d = 1.9183   inside by 0.031
 //
-//   d(t) = 2.56 - (3.5 / 60) * (t + 1)
-//
-// The hitbox is centred REACH = 1.1 ahead with a radius of 0.6, against a body
-// radius of 0.25, so a body dead ahead is caught while |d - 1.1| < 0.85, less
-// the 0.001 contact slop. Approaching from outside, that means d < 1.949:
-//
-//   tick 9  (the last live tick)   d = 1.9767   still outside, by 0.028
-//   tick 10 (the first dead tick)  d = 1.9183   inside, by 0.031
-//
-// So the chaser crosses into range in the very tick the hitbox stops existing.
-// The expected trace is a complete swing with **no hit in it**, and the margins
-// are a full tick's travel wide on both sides, so this is a statement about the
-// window rather than about float noise.
-//
-// Extend ACTIVE by one and tick 10 becomes live: the body is in range, it is
-// struck, and this file fails with a `hit` line that should not be there.
+// The chaser crosses into range on the very tick the hitbox stops existing.
+// Margins are a full tick's travel wide on both sides, so this is about the
+// window rather than about float noise. Extend ACTIVE by one and it hits.
 (
     description: "A chaser that comes into range on the tick the hitbox shuts is not hit.",
     setup: (
