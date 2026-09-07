@@ -13,7 +13,7 @@
     description: "A source removed at tick 15 makes nothing after it, and the ticks it would have fired on pass empty.",
     setup: (
         sources: [
-            (pos: (30.0, 0.0), radius: 3.0, every: 10, seeks: true),
+            (pos: (30.0, 0.0), radius: 3.0, every: 10, what: (seeks: true)),
         ],
     ),
     inputs: [],

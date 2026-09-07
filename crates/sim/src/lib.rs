@@ -22,7 +22,7 @@ pub use hash::Fnv;
 pub use pass::spawn::Template;
 /// Who asks for spawns, and when. See [`crate::pass::source`] for why a source
 /// is its own thing rather than a behaviour on a body.
-pub use pass::source::{Condition, Placement, Source, SourceId};
+pub use pass::source::{Condition, Placement, Source, SourceId, SourceSpec};
 pub use slots::EntityId;
 use members::Members;
 use pass::source::Sources;

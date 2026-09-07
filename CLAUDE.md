@@ -52,6 +52,32 @@ suite **and the scenario runner** when a turn ends, and blocks on failure. Both
 halves are live, so rule 4 is enforced by a process exiting nonzero rather than
 by this paragraph.
 
+### Engine and game, and where the line falls
+
+**The test is not reuse.** This engine is not trying to be general — it exists
+to make one game, and "could another game use this?" would push `contact.rs`
+and `pass/separate.rs` toward configurability nothing needs.
+
+The test that matters is blast radius: **the engine is whatever holds an
+invariant that could be violated silently; the game is tunable content no
+invariant guards.** [`docs/invariants.md`](docs/invariants.md) is the manifest
+of the first half.
+
+So the line runs *through* files rather than between them.
+`crates/sim/src/pass/seek.rs` is engine: it carries the assert that a chaser
+must be slower than the player, without which kiting stops existing. The `3.5`
+that assert bounds is game. Same in `pass/attack.rs` — that startup, active and
+recovery are each non-zero is engine; `6`, `4` and `10` are game.
+
+The rule that follows, and the one to apply while editing: **the game
+vocabulary has exactly one definition, and it lives in `sim` beside the thing
+it describes.** `Template`, `Condition`, `Placement`, `Source` and `SourceSpec`
+are that vocabulary; the scenario `.ron` format and the `ARPG_HARNESS` command
+parser *derive* from those types rather than restating them. A second
+hand-written copy of an axis is the failure this rule exists to prevent, and it
+fails in the direction nothing reports — not by breaking a build, but by
+leaving a new capability unreachable from outside.
+
 ## Commands
 
 ```sh
@@ -118,7 +144,7 @@ crates/
          MoveDir, Intent                                    (intent.rs)
          Report, damp
   gfx/   Renderer, camera, cube, capture, shader.wgsl            core, wgpu, winit, png
-  sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace       core, glam  (no wgpu)
+  sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace   core, glam, serde
   app/   App, Input + BINDINGS, Clock, harness, wiring, main     core, gfx, sim, winit
   scenario/  the headless gate: run a .ron, assert, exit 0/1     core, sim, ron  (no gfx)
 ```

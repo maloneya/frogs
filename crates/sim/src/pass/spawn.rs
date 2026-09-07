@@ -46,6 +46,7 @@
 //! reproduce the decision exactly.
 
 use glam::Vec2;
+use serde::Deserialize;
 
 use crate::hash::Fnv;
 use crate::members::Members;
@@ -70,7 +71,15 @@ const _: () = assert!(QUEUE_CAPACITY > 0, "a zero-length queue would refuse ever
 /// enemy is this" stays a list of the things it does rather than a type. Adding
 /// a behaviour adds a field here and a line in [`place`], and touches nothing
 /// else.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// **This is also the written form.** A scenario names a template in RON as
+/// `(seeks: true)`, straight into this type, so a behaviour added here is
+/// describable from outside on the same edit. The alternative — a mirror struct
+/// in whichever crate reads the file — costs an edit per behaviour per copy and
+/// fails in the direction nothing reports: a forgotten copy leaves the new
+/// behaviour unreachable rather than breaking a build.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Template {
     /// Whether the body chases the player. See [`crate::pass::seek`].
     seeks: bool,

@@ -1,0 +1,33 @@
+// A cadence of zero is not "as fast as possible", and not a division by
+// nothing: `Source::every` clamps it to one. This is the only assertion of
+// that rule anywhere.
+//
+// **It is here because the clamp moved.** It used to be applied by the scenario
+// runner's own translation from its own spec type; it is now applied by
+// `From<SourceSpec> for Source`, which is the single door every *written*
+// source comes through — a `.ron` file and the harness socket alike. A door
+// that stopped applying it would not fail quietly: `countdown = every - 1`
+// underflows a `u32` on the first tick the source fires, so this scenario
+// panics rather than drifts.
+//
+// Three ticks, a cadence of one, and a source that starts ready: three bodies.
+// The ring is wide enough that they never touch, so `crowd_contacts: 0` is the
+// control on the count meaning what it says.
+(
+    description: "A source written with a cadence of zero fires on every tick, rather than underflowing.",
+    setup: (
+        sources: [
+            (pos: (30.0, 0.0), radius: 3.0, every: 0),
+        ],
+    ),
+    inputs: [],
+    budget: (ticks: 3),
+    expect: (
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
+        enemy_count: 3,
+        seekers: 0,
+        sources: 1,
+        contacts: 0,
+        crowd_contacts: 0,
+    ),
+)

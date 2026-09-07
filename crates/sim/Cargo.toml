@@ -10,6 +10,10 @@ build = "build.rs"
 [dependencies]
 arpg-core.workspace = true
 glam.workspace = true
+# The game vocabulary's written form. `Template`, `Condition` and `SourceSpec`
+# deserialise here so that a scenario `.ron` and the harness parser derive from
+# one definition instead of each keeping a copy of the axes.
+serde = { version = "1", features = ["derive"] }
 
 [lints]
 workspace = true

@@ -10,7 +10,7 @@ use glam::Vec2;
 
 use arpg_core::{Action, InstanceBuffer, Intent, MoveDir, Report};
 use arpg_gfx::{OrthoCamera, Renderer};
-use arpg_sim::{Accumulator, Condition, Placement, Source, Template, World};
+use arpg_sim::{Accumulator, World};
 
 use crate::harness::{self, Command, Request};
 use crate::input::Input;
@@ -186,33 +186,22 @@ impl App {
                     // chasing stopped" is otherwise a puzzle.
                     format!("enemies {} seekers {}", self.world.enemy_count(), self.world.seeker_count())
                 }
-                Command::Spawn { x, z, seeks } => {
-                    let what =
-                        if seeks { Template::BODY.seeking() } else { Template::BODY };
+                Command::Spawn { x, z, what } => {
                     // The reply says *queued*, not spawned, because that is what
                     // happened: the body appears when the next tick runs. A
                     // reply claiming otherwise would make a `state` taken
                     // immediately afterwards look like a bug.
                     if self.world.request_spawn(Vec2::new(x, z), what) {
-                        format!("queued at ({x}, {z}) seeks={seeks}")
+                        format!("queued at ({x}, {z}) seeks={}", what.seeks())
                     } else {
                         "error: spawn queue full".to_string()
                     }
                 }
-                Command::Source { x, z, every, radius, seeks, near, fewer } => {
-                    let placement = Placement::around(Vec2::new(x, z), radius);
-                    let what = if seeks { Template::BODY.seeking() } else { Template::BODY };
-                    // Last flag wins, rather than silently combining two gates
-                    // into one nobody wrote.
-                    let condition = match (near, fewer) {
-                        (Some(radius), _) => Condition::PlayerWithin(radius),
-                        (None, Some(n)) => Condition::FewerThan(n),
-                        (None, None) => Condition::Always,
-                    };
-
-                    let id = self
-                        .world
-                        .add_source(Source::new(placement, what).every(every).when(condition));
+                Command::Source(spec) => {
+                    // The conversion is where `Placement::around` and the
+                    // cadence clamp are applied, so the socket cannot reach a
+                    // source that skipped either.
+                    let id = self.world.add_source(spec.into());
                     format!("source {id}")
                 }
                 Command::RemoveSource(id) => {

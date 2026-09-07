@@ -4,6 +4,7 @@
 //! written against today; a field that only *describes* an intention is a field
 //! that will drift away from what the runner actually checks.
 
+use arpg_sim::{Source, Template};
 use serde::Deserialize;
 
 /// One scenario: a world, an input stream, a tick budget, and what is expected
@@ -97,56 +98,7 @@ pub(crate) struct Setup {
     /// what [`SourceRemoval::source`] refers to. A source is not a body and
     /// takes no placement number.
     #[serde(default)]
-    pub(crate) sources: Vec<SourceSpec>,
-}
-
-/// One source: a cadence, a gate, a place and a template.
-///
-/// **Four independent axes, written flat.** Each field is one of them, so a new
-/// kind of source is a combination rather than a new variant — which is what
-/// keeps a scenario able to describe one without the runner growing a case for
-/// it.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SourceSpec {
-    /// World-space `(x, z)`: the point bodies appear at, or the centre of the
-    /// ring they appear around.
-    pub(crate) pos: (f32, f32),
-    /// Radius of the ring around `pos`. Zero — the default — means the one
-    /// point, which stacks successive bodies on each other on purpose.
-    #[serde(default)]
-    pub(crate) radius: f32,
-    /// Ticks between emissions. A source starts *ready*, so the first lands on
-    /// the first tick its gate is open, not one cadence later.
-    #[serde(default = "one")]
-    pub(crate) every: u32,
-    /// The gate checked when the cadence comes ready.
-    #[serde(default)]
-    pub(crate) when: Cond,
-    /// Whether what it makes chases the player.
-    #[serde(default)]
-    pub(crate) seeks: bool,
-}
-
-/// A cadence of one is "every tick", which is the useful default: a gated
-/// source then reacts as fast as its gate changes.
-fn one() -> u32 {
-    1
-}
-
-/// The scenario-file spelling of [`arpg_sim::Condition`].
-///
-/// A separate type from the simulation's, deliberately. `Deserialize` on the
-/// sim's own enum would make a `.ron` file a consumer of its internals, so a
-/// rename in `sim` would silently change the scenario language — and the
-/// scenario language is the thing every gate in this repository is written in.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) enum Cond {
-    #[default]
-    Always,
-    FewerThan(usize),
-    PlayerWithin(f32),
+    pub(crate) sources: Vec<Source>,
 }
 
 /// A source removed partway through the run.
@@ -194,10 +146,11 @@ pub(crate) enum Action {
 
 /// One thing asked for at a stated tick.
 ///
-/// The fields after `at` and `pos` are the *template* — what the body will be
-/// granted once it exists. One field per behaviour, which is what keeps "two
-/// kinds of enemy" a difference in a description rather than a difference in
-/// code.
+/// What the body is granted once it exists is a *template*, and it is the
+/// simulation's own [`arpg_sim::Template`] rather than a copy of its fields.
+/// That is what keeps "two kinds of enemy" a difference in a description rather
+/// than a difference in code, and keeps this file from growing a field every
+/// time a behaviour is added.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Spawn {
@@ -206,9 +159,9 @@ pub(crate) struct Spawn {
     pub(crate) at: u64,
     /// World-space `(x, z)`, on the same terms as [`Action::Place`].
     pub(crate) pos: (f32, f32),
-    /// Whether the new body chases the player.
+    /// What the new body is granted. Spelled `what: (seeks: true)`.
     #[serde(default)]
-    pub(crate) seeks: bool,
+    pub(crate) what: Template,
 }
 
 /// Hold a direction for a span of ticks.

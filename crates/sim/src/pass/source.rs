@@ -44,6 +44,7 @@
 use core::fmt;
 
 use glam::Vec2;
+use serde::Deserialize;
 
 use crate::angle::GOLDEN_ANGLE;
 use crate::hash::Fnv;
@@ -100,7 +101,7 @@ impl fmt::Display for SourceId {
 ///
 /// Three kinds of question rather than three phrasings of one: what time it is,
 /// how many bodies exist, and where the player is standing.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
 pub enum Condition {
     /// Fire on the cadence, always. The default.
     #[default]
@@ -176,13 +177,17 @@ pub enum Placement {
 impl Placement {
     /// The placement a centre and a radius describe.
     ///
-    /// **A radius of zero is [`Placement::At`], not a ring of nothing**, and
-    /// that rule lives here rather than at each call site because it had two
-    /// call sites the moment it existed — the scenario runner and the harness,
-    /// in different crates. A `Ring` of radius zero would put every body on the
-    /// centre and step an angle that changes nothing, so the two spellings are
-    /// not interchangeable and a copy of this rule that drifted would be a
-    /// placement that silently stopped spreading.
+    /// **A radius of zero is [`Placement::At`], not a ring of nothing.** A
+    /// `Ring` of radius zero would put every body on the centre and step an
+    /// angle that changes nothing, so the two spellings are not interchangeable
+    /// and a copy of this rule that drifted would be a placement that silently
+    /// stopped spreading.
+    ///
+    /// It had two call sites the moment it existed — the scenario runner and
+    /// the harness, in different crates — and now has one, because both of them
+    /// describe a source as a [`SourceSpec`] and this is what the conversion
+    /// calls. That is the shape worth keeping: a rule reachable only through the
+    /// single door every description passes through cannot be half-applied.
     #[must_use]
     pub fn around(centre: Vec2, radius: f32) -> Self {
         if radius > 0.0 {
@@ -230,7 +235,11 @@ impl Placement {
 }
 
 /// One thing that asks for spawns.
-#[derive(Clone, Copy, Debug)]
+///
+/// Deserialised through [`SourceSpec`], which is the only written form of one
+/// and the only `Deserialize` path to this type.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(from = "SourceSpec")]
 pub struct Source {
     placement: Placement,
     what: Template,
@@ -291,6 +300,72 @@ impl Source {
         h.usize(*every as usize);
         h.usize(*countdown as usize);
         h.usize(*emitted as usize);
+    }
+}
+
+/// The written form of a source: the four axes, flat, as a scenario or a level
+/// file spells them.
+///
+/// **This is the one definition of what a source looks like from outside.** It
+/// replaced a copy in the scenario crate's spec and a third in the harness
+/// parser, each of which had to grow a field per axis, and neither of which
+/// could express an axis it had not been taught about.
+///
+/// The argument for those copies was that deriving `Deserialize` on the
+/// simulation's own types makes a `.ron` file a consumer of its internals, so a
+/// rename in `sim` changes the scenario language underneath the gate. Half of
+/// that is right, and it is the harmless half: a rename here breaks every
+/// scenario naming the old field **loudly**, at parse time, on the next run of
+/// the runner. What the copies hid was the opposite failure — an axis added to
+/// [`Source`] and reachable from no `.ron` file at all, which nothing anywhere
+/// reports. So the field names below *are* the language, and renaming one is a
+/// change to it; that obligation belongs here, where somebody about to rename
+/// one is already looking, rather than in a duplicate in another crate.
+///
+/// **Every axis goes through the validating constructor for it.** Because this
+/// is the only way to deserialise a [`Source`], `radius: 0.0` becomes
+/// [`Placement::At`] and `every: 0` becomes a cadence of one, with no caller
+/// able to reach a `Source` that skipped either rule.
+///
+/// The fields are public so the harness can fill one in field by field. That is
+/// deliberate rather than lax: a new axis then stops the harness compiling until
+/// somebody has decided which flag fills it, which is the check a text protocol
+/// otherwise has no way to get.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceSpec {
+    /// Ground-plane `(x, z)`: the point bodies appear at, or the centre of the
+    /// ring they appear around.
+    pub pos: (f32, f32),
+    /// Radius of the ring around `pos`. Zero — the default — means the one
+    /// point, which stacks successive bodies on each other on purpose.
+    #[serde(default)]
+    pub radius: f32,
+    /// Ticks between emissions. A source starts *ready*, so the first lands on
+    /// the first tick its gate is open, not one cadence later.
+    #[serde(default = "one")]
+    pub every: u32,
+    /// The gate checked when the cadence comes ready.
+    #[serde(default)]
+    pub when: Condition,
+    /// What it makes.
+    #[serde(default)]
+    pub what: Template,
+}
+
+/// A cadence of one is "every tick", which is the useful default: a gated
+/// source then reacts as fast as its gate changes.
+fn one() -> u32 {
+    1
+}
+
+impl From<SourceSpec> for Source {
+    fn from(spec: SourceSpec) -> Self {
+        let SourceSpec { pos, radius, every, when, what } = spec;
+
+        Source::new(Placement::around(Vec2::new(pos.0, pos.1), radius), what)
+            .every(every)
+            .when(when)
     }
 }
 

@@ -16,7 +16,7 @@
     setup: (),
     inputs: [],
     spawns: [
-        (at: 10, pos: (10.0, 0.0), seeks: true),
+        (at: 10, pos: (10.0, 0.0), what: (seeks: true)),
     ],
     budget: (ticks: 70),
     expect: (

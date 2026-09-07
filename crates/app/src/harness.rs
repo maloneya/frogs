@@ -30,7 +30,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 
 use winit::keyboard::KeyCode;
 
-use arpg_sim::SourceId;
+use arpg_sim::{Condition, SourceId, SourceSpec, Template};
 
 use crate::input::{key_named, key_names};
 
@@ -68,21 +68,18 @@ pub(crate) enum Command {
     /// Goes through the spawn queue rather than placing directly — the same
     /// door anything inside the simulation uses — so what a shell drives here
     /// is the real path, latency included. The body exists after the next tick.
-    Spawn { x: f32, z: f32, seeks: bool },
+    Spawn { x: f32, z: f32, what: Template },
     /// Add something that asks for spawns, or remove one by name.
     ///
     /// The flags after the position are **named, not positional**, because a
     /// source is four independent choices and a column nobody can read is how
     /// three of them end up unused.
-    Source {
-        x: f32,
-        z: f32,
-        every: u32,
-        radius: f32,
-        seeks: bool,
-        near: Option<f32>,
-        fewer: Option<usize>,
-    },
+    ///
+    /// Carries the simulation's own [`SourceSpec`] rather than a copy of its
+    /// fields. That copy was the third definition of the same four axes — after
+    /// the type itself and the scenario format — and each one had to be taught
+    /// separately about an axis the others already had.
+    Source(SourceSpec),
     RemoveSource(SourceId),
     SetVsync(bool),
     Quit,
@@ -147,8 +144,11 @@ fn parse(line: &str) -> Result<Command, String> {
             let z = coord(it.next())?;
             // Behaviours are named, not positional, so the next one is another
             // word here rather than another column nobody can read.
-            let seeks = it.next() == Some("seek");
-            Command::Spawn { x, z, seeks }
+            let what = match it.next() {
+                Some("seek") => Template::BODY.seeking(),
+                _ => Template::BODY,
+            };
+            Command::Spawn { x, z, what }
         }
         "source" => {
             if arg == Some("remove") {
@@ -188,7 +188,26 @@ fn parse(line: &str) -> Result<Command, String> {
                 }
             }
 
-            Command::Source { x, z, every, radius, seeks, near, fewer }
+            // One gate, never two combined into something nobody wrote.
+            // `near` beats `fewer` when both are given, and a flag repeated
+            // takes its later value.
+            let when = match (near, fewer) {
+                (Some(radius), _) => Condition::PlayerWithin(radius),
+                (None, Some(n)) => Condition::FewerThan(n),
+                (None, None) => Condition::Always,
+            };
+
+            // Filled in field by field on purpose. `SourceSpec` is the one
+            // definition of a source's axes, so an axis added there stops this
+            // file compiling until somebody has decided which flag fills it —
+            // which is the only check a text protocol can get for free.
+            Command::Source(SourceSpec {
+                pos: (x, z),
+                radius,
+                every,
+                when,
+                what: if seeks { Template::BODY.seeking() } else { Template::BODY },
+            })
         }
         "enemies" => Command::SetEnemies(number(arg)? as usize),
         "seekers" => Command::SetSeekers(number(arg)? as usize),
@@ -274,6 +293,50 @@ mod tests {
         assert!(matches!(parse("  state  "), Ok(Command::State)));
         assert!(matches!(parse("vsync on"), Ok(Command::SetVsync(true))));
         assert!(matches!(parse("vsync off"), Ok(Command::SetVsync(false))));
+    }
+
+    /// The parser fills [`SourceSpec`] — the simulation's own description of a
+    /// source — rather than a copy of its fields, so the mapping from flags to
+    /// axes is the whole of what is left to get wrong here, and this is where
+    /// it is checked.
+    #[test]
+    fn source_flags_fill_the_simulations_own_description() {
+        let Ok(Command::Source(spec)) = parse("source 30 -4 seek every 10 ring 3 fewer 8") else {
+            panic!("should parse");
+        };
+        assert_eq!(spec.pos, (30.0, -4.0));
+        assert_eq!(spec.radius, 3.0);
+        assert_eq!(spec.every, 10);
+        assert_eq!(spec.when, Condition::FewerThan(8));
+        assert!(spec.what.seeks());
+
+        // One gate rather than both: `near` wins whichever order they arrive in.
+        for line in ["source 0 0 fewer 8 near 5", "source 0 0 near 5 fewer 8"] {
+            let Ok(Command::Source(spec)) = parse(line) else { panic!("should parse") };
+            assert_eq!(spec.when, Condition::PlayerWithin(5.0), "{line:?}");
+        }
+
+        // No flags at all is a plain body, every tick, on the point itself.
+        let Ok(Command::Source(spec)) = parse("source 1 2") else { panic!("should parse") };
+        assert_eq!((spec.radius, spec.every), (0.0, 1));
+        assert_eq!(spec.when, Condition::Always);
+        assert!(!spec.what.seeks());
+    }
+
+    /// `spawn` names a [`Template`] for the same reason: a behaviour added to
+    /// the template is drivable from the socket without touching this file.
+    #[test]
+    fn spawn_names_a_template_rather_than_a_bare_flag() {
+        let Ok(Command::Spawn { x, z, what }) = parse("spawn 5 -5 seek") else {
+            panic!("should parse");
+        };
+        assert_eq!((x, z), (5.0, -5.0));
+        assert!(what.seeks());
+
+        let Ok(Command::Spawn { what, .. }) = parse("spawn 5 -5") else {
+            panic!("should parse");
+        };
+        assert!(!what.seeks());
     }
 
     /// A malformed command must come back as an error the caller can read, not

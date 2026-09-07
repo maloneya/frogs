@@ -4,11 +4,11 @@ use std::path::Path;
 
 use arpg_core::{Intent, MoveDir};
 use arpg_sim::{
-    Accumulator, Condition, Dt, EntityId, Event, Placement, Source, SourceId, Template, World,
+    Accumulator, Dt, EntityId, Event, SourceId, Template, World,
 };
 use glam::Vec3;
 
-use crate::spec::{Action, Cond, Expect, Scenario, SourceSpec};
+use crate::spec::{Action, Expect, Scenario};
 
 /// Everything one run produced. Kept separate from the checking so that the
 /// determinism pass can compare two runs without re-deciding what "passed"
@@ -111,7 +111,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     // translation from a scenario's source number, exactly as `placed` is for a
     // body's placement number.
     let sources: Vec<SourceId> =
-        scenario.setup.sources.iter().map(|spec| world.add_source(build(spec))).collect();
+        scenario.setup.sources.iter().map(|source| world.add_source(*source)).collect();
 
     // Setup is not the run. Without this the golden trace would also record
     // `World::default()` building a horde this scenario just replaced, tying
@@ -149,8 +149,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
 
             let mut asked = 0;
             for spawn in scenario.spawns.iter().filter(|s| s.at == tick) {
-                let template = if spawn.seeks { Template::BODY.seeking() } else { Template::BODY };
-                let _ = world.request_spawn(glam::Vec2::new(spawn.pos.0, spawn.pos.1), template);
+                let _ = world.request_spawn(glam::Vec2::new(spawn.pos.0, spawn.pos.1), spawn.what);
                 asked += 1;
             }
 
@@ -165,26 +164,6 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     }
 
     Run { world, hashes, placed }
-}
-
-/// Builds one source from its scenario description.
-///
-/// **The one place the scenario language is translated into the simulation's,**
-/// which is why `spec::Cond` is a separate type from `Condition` rather than
-/// `Deserialize` on the sim's own enum: a rename inside `sim` would otherwise
-/// silently change what a `.ron` file means, and the `.ron` files are where
-/// every gate in this repository is written.
-fn build(spec: &SourceSpec) -> Source {
-    let placement = Placement::around(glam::Vec2::new(spec.pos.0, spec.pos.1), spec.radius);
-
-    let what = if spec.seeks { Template::BODY.seeking() } else { Template::BODY };
-    let condition = match spec.when {
-        Cond::Always => Condition::Always,
-        Cond::FewerThan(n) => Condition::FewerThan(n),
-        Cond::PlayerWithin(r) => Condition::PlayerWithin(r),
-    };
-
-    Source::new(placement, what).every(spec.every).when(condition)
 }
 
 /// Continues the placement numbering with every body the queue granted this

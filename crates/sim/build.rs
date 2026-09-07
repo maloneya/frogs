@@ -17,8 +17,14 @@ const REASON: &str = "sim must stay free of the graphics stack and of the window
                       and the engine layers are hand-written on purpose, so an engine or \
                       an off-the-shelf ECS defeats the exercise.";
 
-/// The complete set. `arpg-core` for shared vocabulary, `glam` for maths.
-const ALLOWED: &[&str] = &["arpg-core", "glam"];
+/// The complete set. `arpg-core` for shared vocabulary, `glam` for maths,
+/// `serde` for the written form of the game vocabulary.
+///
+/// `serde` is plumbing rather than one of the layers being studied, and it is
+/// what lets the scenario format and the harness derive from the simulation's
+/// own types rather than restating them. It links no I/O and no format: `ron`
+/// stays in `scenario`, where the files are.
+const ALLOWED: &[&str] = &["arpg-core", "glam", "serde"];
 
 use std::collections::HashSet;
 

@@ -18,7 +18,7 @@
     description: "A source at every=10 fires on ticks 0, 10, 20 and 30, and what it makes chases.",
     setup: (
         sources: [
-            (pos: (30.0, 0.0), radius: 3.0, every: 10, seeks: true),
+            (pos: (30.0, 0.0), radius: 3.0, every: 10, what: (seeks: true)),
         ],
     ),
     inputs: [],
