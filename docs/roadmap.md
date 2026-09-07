@@ -88,7 +88,7 @@ Two halves, built in that order.
 (`pass::spawn::drain`) that grants them, and a `Template` saying which
 behaviours a new body is given. Spawning is structural — it moves rows other
 passes hold indices into — so the drain is the only pass that changes what
-exists, and it is first.
+exists, and it runs before anything holds a row.
 
 **The thing that asks.** `pass::source::trigger` runs immediately before the
 drain, is handed no storage, and may only push onto the queue: the code that

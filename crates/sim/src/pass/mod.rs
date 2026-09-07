@@ -19,16 +19,16 @@
 //!    have different privileges — this pass is handed no storage at all, so the
 //!    code that decides bodies exist cannot make one.
 //! 2. [`spawn::drain`] — grant everything asked for since the last tick.
-//!    **First**, and structurally so: it is the only pass that changes what
-//!    exists, so running it here makes the horde's length constant for the rest
-//!    of the tick and a row index taken by one pass still that body when the
-//!    next runs. It also means a new body exists for a *whole* tick rather than
-//!    part of one — no first-frame special case, which in a fixed-step loop is
-//!    just a bug with a schedule.
+//!    **Before anything holds a row**, and structurally so: it is the only pass
+//!    that changes what exists, so running it here makes the horde's length
+//!    constant for the rest of the tick and a row index taken by one pass still
+//!    that body when the next runs. It also means a new body exists for a
+//!    *whole* tick rather than part of one — no first-frame special case, which
+//!    in a fixed-step loop is just a bug with a schedule.
 //! 3. [`remember`] — snapshot every body's position *before* anything moves.
-//!    Must be first, and this is the one ordering mistake with a visible
-//!    symptom rather than a wrong number: a stale snapshot streaks every body
-//!    on screen from where it used to be.
+//!    This is the one ordering mistake with a visible symptom rather than a
+//!    wrong number: a stale snapshot streaks every body on screen from where
+//!    it used to be.
 //! 4. [`walk`] — integrate the player's input.
 //! 5. [`seek`] — walk the chasers. **After** `walk`, so they steer at where the
 //!    player is now rather than where it stood at the start of the tick, and

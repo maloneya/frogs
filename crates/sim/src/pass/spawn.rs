@@ -11,8 +11,8 @@
 //! spawn" safe.
 //!
 //! A queue removes the problem rather than defending against it. Anything may
-//! *ask* — a pass, the harness, a scenario, later a trigger — and exactly one
-//! pass grants, first in the schedule and before anything reads a position.
+//! *ask* — a source, the harness, a scenario — and exactly one pass grants,
+//! before anything else holds a row.
 //! What that buys, as facts rather than intentions:
 //!
 //! - the horde's length is **constant within a tick**, so a row index taken by
@@ -227,11 +227,11 @@ pub(crate) fn place(
         seekers.add(id);
     }
 
-    // Per body rather than summarised. The trace's own rule reserves that for
-    // things that happen rarely, which placement is *today*: the only askers
-    // are setup and the harness, and both place a handful. The moment something
-    // in the simulation can ask for a wave, this becomes a per-tick count — and
-    // the golden traces will say so by churning.
+    // Per body rather than summarised. The scenario runner binds placement
+    // numbers from `Placed` events, so a per-tick count would make mid-run
+    // bodies unnameable. `Fired` already says which source asked; this says
+    // which body appeared. The trace's "rare events" rule still holds at the
+    // scale sources exist at — tens of emissions, not a thousand contacts.
     trace.emit(Event::Placed { id });
 
     Some(id)
@@ -239,7 +239,7 @@ pub(crate) fn place(
 
 /// Grants everything asked for since the last tick.
 ///
-/// **First in the schedule**, so a body that comes into existence this tick
+/// **Before anything holds a row**, so a body that comes into existence this tick
 /// exists for the *whole* tick: it is remembered, it is walked past, it is
 /// separated and it is contained, exactly like a body that was already there.
 /// Draining anywhere later would create a body that exists for part of a tick,

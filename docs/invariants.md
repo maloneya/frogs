@@ -17,7 +17,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 |---|---|---|
 | `gfx` cannot name a simulation type | 0 | separate crates — `use arpg_sim::…` is E0432 |
 | `gfx` cannot depend on `sim`; `sim` cannot depend on wgpu/winit | 1 | `crates/{gfx,sim}/build.rs`, run on every build |
-| Enemy count stays within the instance budget | 0 | private field; `World::set_enemy_count` clamps |
+| Enemy count stays within the instance budget | 0 | `enemies` is private; `set_enemy_count` clamps, `place` refuses at `MAX_ENEMIES` |
 | Zoom stays in a sane range | 0 | private field; `OrthoCamera::zoom_by` clamps |
 | Aspect ratio survives a minimised window | 0 | `aspect_of` guards inside the camera |
 | `Renderer.vsync` cannot desync from the surface | 0 | private field; `toggle_vsync` is the only writer |
@@ -103,7 +103,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Every enemy pair is resolved once, not twice | 3 | `crowd` walks `j > i` via `split_at_mut`; `an_overlapped_pair_settles_at_touching` |
 | A recycled slot does not inherit a behaviour | 3 | `Members::index` compares the whole id, not the slot; `a_recycled_slot_does_not_inherit_the_behaviour` |
 | A behaviour costs its membership, not the horde | 0 | `pass::seek` iterates `Members::ids`, and is handed no way to reach a non-member |
-| Nothing inside a tick can change what exists | 0 | no pass is handed `&mut Enemies` except `pass::spawn::drain`, which is first in the schedule; every other pass takes slices |
+| Nothing inside a tick can change what exists | 0 | no pass is handed `&mut Enemies` except `pass::spawn::drain`; `source::trigger` runs first and is handed no storage; every other pass takes slices |
 | A request cannot be granted late | 3 | `a_request_becomes_a_body_on_the_next_tick_and_not_before`, and `a_queued_spawn_lands_on_its_own_tick` pins the tick by position, mutation-checked |
 | A refused spawn cannot be silent | 3 | `request_spawn` is `#[must_use]`; `Event::Refused` is emitted by the drain; `a_full_queue_refuses_out_loud` |
 | A template grants what it names and nothing else | 3 | one line per behaviour in `pass::spawn::place`; `two_kinds_of_enemy_from_one_description`, whose bystander is the control |

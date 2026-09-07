@@ -1037,9 +1037,8 @@ fn a_full_queue_refuses_out_loud() {
 }
 
 /// A wholesale respawn is a reset, and a request decided before it must not
-/// land a body after it. The dial is the one door the horde's size goes
-/// through; a queue that survived it would put that size back out of date one
-/// tick later.
+/// land a body after it. The dial rebuilds the horde's size; a queue that
+/// survived it would put that size back out of date one tick later.
 #[test]
 fn resetting_the_horde_forgets_what_was_pending() {
     let mut world = World::default();

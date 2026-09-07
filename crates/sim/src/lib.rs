@@ -455,18 +455,23 @@ impl Default for World {
 
 impl World {
     /// How many enemies the horde currently holds. Always within
-    /// `1..=MAX_ENEMIES`, because [`World::set_enemy_count`] is the only writer.
+    /// `0..=MAX_ENEMIES`.
     ///
     /// Derived from the storage rather than tracked beside it: a separate
     /// counter is a second copy of the same fact, and the two drift the first
-    /// time something spawns or kills one without going through the dial.
+    /// time something spawns or kills one without going through the same door.
     pub fn enemy_count(&self) -> usize {
         self.enemies.len()
     }
 
-    /// The only door in, so the clamp cannot be bypassed or forgotten. A
-    /// spawner, a save-load path or a debug console added later inherits it
-    /// without having to know `MAX_ENEMIES` exists.
+    /// Rebuilds the horde to `n` bodies, clamped to [`MAX_ENEMIES`].
+    ///
+    /// **A debug dial, not the spawn door.** `[`, `]`, and `enemies <n>` come
+    /// through here; anything that makes a body during play asks, and
+    /// [`World::place`] grants. The clamp lives on both because they are
+    /// different operations — a wholesale resize versus a refusal — and a
+    /// spawner that inherited this one would still have to decide what a full
+    /// horde means for a single request.
     ///
     /// **Zero is allowed.** An empty arena is a state this game reaches by
     /// playing it well, not an error. It is also what makes the simplest
@@ -587,7 +592,7 @@ impl World {
     /// **The door for anything that runs while the simulation does**, and the
     /// only one that is safe there: this touches no storage, so it cannot move
     /// a row under a pass that is mid-iteration. The request is granted by
-    /// `pass::spawn::drain`, first in the next schedule.
+    /// `pass::spawn::drain`, before anything else in the next schedule holds a row.
     ///
     /// Returns `false` when the queue is full, in which case the request is
     /// dropped and counted — a `Refused` trace event follows on the next tick.
