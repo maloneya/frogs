@@ -3,9 +3,7 @@
 use std::path::Path;
 
 use arpg_core::{Intent, MoveDir};
-use arpg_sim::{
-    Accumulator, Dt, EntityId, Event, SourceId, Template, World,
-};
+use arpg_sim::{Accumulator, Dt, EntityId, Event, SourceId, Template, World};
 use glam::Vec3;
 
 use crate::spec::{Action, Expect, Scenario};
@@ -15,6 +13,12 @@ use crate::spec::{Action, Expect, Scenario};
 /// means.
 pub(crate) struct Run {
     pub(crate) world: World,
+    /// Measured outside the simulation; never included in its replay state.
+    mean_step_micros: f64,
+    command_failures: Vec<Failure>,
+    /// Evaluated against the live world at each checkpoint, never reconstructed
+    /// from final state. Retain only failures, not copies of the world.
+    checkpoint_failures: Vec<Failure>,
     /// The world's hash after every tick, in order. This is what makes a
     /// divergence report a tick number instead of a shrug.
     pub(crate) hashes: Vec<u64>,
@@ -32,6 +36,7 @@ pub(crate) struct Run {
 }
 
 /// A single failed expectation, phrased so the message is the whole diagnosis.
+#[derive(Clone)]
 pub(crate) struct Failure {
     pub(crate) what: String,
     pub(crate) expected: String,
@@ -61,6 +66,32 @@ impl Failure {
 /// this consumer, and a hand-written `9.0 / 60.0` beside it goes stale the day
 /// `PLAYER_SPEED` changes — reporting a wrong tick count in every failure.
 use arpg_sim::WALK_PER_TICK as TICK_OF_WALKING;
+
+/// Fail closed on assertions that would otherwise never execute or be ignored.
+/// The shared `Expect` keeps one definition of state assertions. Its trace field
+/// is whole-run only; validating that restriction avoids duplicating the schema
+/// just to remove one field from checkpoints.
+pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
+    let mut failures = Vec::new();
+    for (index, checkpoint) in scenario.checkpoints.iter().enumerate() {
+        let label = format!("checkpoint[{}] after tick {}", index, checkpoint.at);
+        if checkpoint.at >= scenario.budget.ticks {
+            failures.push(Failure::new(
+                &label,
+                format!("a tick below budget {}", scenario.budget.ticks),
+                format!("tick {} will not run", checkpoint.at),
+            ));
+        }
+        if checkpoint.expect.trace.is_some() {
+            failures.push(Failure::new(
+                &label,
+                "state assertions; golden traces belong in the final expect.trace".into(),
+                "a checkpoint contains trace".into(),
+            ));
+        }
+    }
+    failures
+}
 
 /// Runs the scenario to its budget.
 ///
@@ -129,6 +160,14 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
 
     let mut accumulator = Accumulator::default();
     let mut hashes = Vec::with_capacity(budget);
+    let mut step_time = std::time::Duration::ZERO;
+    let mut command_failures = Vec::new();
+    let mut checkpoint_failures = Vec::new();
+    // Sort references once, retaining the file index for diagnostics. Duplicate
+    // ticks remain distinct assertions, and work costs checkpoints + ticks.
+    let mut checkpoints: Vec<_> = scenario.checkpoints.iter().enumerate().collect();
+    checkpoints.sort_by_key(|(_, checkpoint)| checkpoint.at);
+    let mut checkpoints = checkpoints.into_iter().peekable();
 
     while hashes.len() < budget {
         for dt in accumulator.pending(Dt::SECS) {
@@ -153,17 +192,49 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                 asked += 1;
             }
 
+            for command in scenario.impulses.iter().filter(|command| command.at == tick) {
+                let id = match command.target {
+                    crate::spec::Target::Player => Some(world.player_id()),
+                    crate::spec::Target::Placed(nth) => placed.get(nth).copied().flatten(),
+                };
+                if !id.is_some_and(|id| world.apply_impulse(id, command.value)) {
+                    command_failures.push(Failure::new(
+                        "impulse",
+                        format!("a live target at tick {tick}"),
+                        format!("{:?} is absent or dead", command.target),
+                    ));
+                }
+            }
             let swing = scenario.attacks.contains(&tick);
+            let started = std::time::Instant::now();
             world.step(dt, Intent::new(schedule[tick as usize], swing));
+            step_time += started.elapsed();
             hashes.push(world.hash());
 
             if watching {
                 record_placed(&world, tick, asked, &mut placed);
             }
+            // After recording this tick's spawns, so a checkpoint can inspect
+            // a newly granted body by the same name used at the end of the run.
+            while checkpoints.peek().is_some_and(|(_, checkpoint)| checkpoint.at == tick) {
+                let (index, checkpoint) = checkpoints.next().expect("peeked checkpoint");
+                for mut failure in check_state(&checkpoint.expect, &world, &placed) {
+                    failure.what =
+                        format!("checkpoint[{index}] after tick {tick}: {}", failure.what);
+                    checkpoint_failures.push(failure);
+                }
+            }
         }
     }
 
-    Run { world, hashes, placed }
+    Run {
+        world,
+        hashes,
+        placed,
+        mean_step_micros: step_time.as_secs_f64() * 1e6 / budget.max(1) as f64,
+        command_failures,
+        checkpoint_failures,
+    }
 }
 
 /// Continues the placement numbering with every body the queue granted this
@@ -232,10 +303,39 @@ fn input_schedule(scenario: &Scenario) -> Vec<MoveDir> {
 /// should say so once.
 pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
     let mut failures = Vec::new();
+    failures.extend(run.command_failures.iter().cloned());
+    failures.extend(run.checkpoint_failures.iter().cloned());
+    if let Some(limit) = scenario.budget.max_mean_step_micros
+        && (!limit.is_finite() || limit <= 0.0 || run.mean_step_micros > limit)
+    {
+        failures.push(Failure::new(
+            "mean step time (microseconds)",
+            format!("<= {limit}"),
+            format!("{:.2}", run.mean_step_micros),
+        ));
+    }
+    let ticks = run.world.tick();
+    if ticks != scenario.budget.ticks {
+        failures.push(Failure::new(
+            "tick count",
+            scenario.budget.ticks.to_string(),
+            ticks.to_string(),
+        ));
+    }
+
+    failures.extend(check_state(&scenario.expect, &run.world, &run.placed));
+    failures
+}
+
+/// One implementation for every observation point. Borrowing state prevents
+/// checking a checkpoint from affecting the subsequent simulation or replay.
+fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> Vec<Failure> {
+    let mut failures = Vec::new();
     // Exhaustive, so an assertion added to the spec cannot be quietly left
     // unchecked — the same trick `World::hash` uses, for the same reason.
     let Expect {
         player_pos,
+        player_velocity,
         facing,
         contacts,
         crowd_contacts,
@@ -246,33 +346,32 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
         sources,
         bodies,
         trace: _,
-    } = &scenario.expect;
+    } = expect;
 
-    let ticks = run.world.tick();
-    if ticks != scenario.budget.ticks {
-        failures.push(Failure::new(
-            "tick count",
-            scenario.budget.ticks.to_string(),
-            ticks.to_string(),
-        ));
+    failures.extend(check_finite(world));
+    if let Some(want) = player_velocity {
+        check_velocity("player_velocity", want, world.motion(world.player_id()), &mut failures);
     }
-
     if let Some(want) = player_pos {
-        let got = run.world.player_pos();
+        let got = world.player_pos();
         if let Some(off) = want.off_by(got) {
             failures.push(
-                Failure::new("player_pos", want.expected(), format!("({:.4}, {:.4})", got.x, got.z))
-                    .with_note(format!(
-                        "off by {off:.4}, tolerance {:.4} — that is {:.2} ticks of walking",
-                        want.tol,
-                        off / TICK_OF_WALKING,
-                    )),
+                Failure::new(
+                    "player_pos",
+                    want.expected(),
+                    format!("({:.4}, {:.4})", got.x, got.z),
+                )
+                .with_note(format!(
+                    "off by {off:.4}, tolerance {:.4} — that is {:.2} ticks of walking",
+                    want.tol,
+                    off / TICK_OF_WALKING,
+                )),
             );
         }
     }
 
     if let Some(want) = facing {
-        let got = run.world.player_facing();
+        let got = world.player_facing();
         if (got - want.value).abs() > want.tol {
             failures.push(
                 Failure::new(
@@ -285,16 +384,16 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
         }
     }
 
-    check_eq("contacts", contacts, run.world.contacts(), &mut failures);
-    check_eq("crowd_contacts", crowd_contacts, run.world.crowd_contacts(), &mut failures);
-    check_eq("struck", struck, run.world.struck(), &mut failures);
-    check_eq("hitbox", hitbox, run.world.hitbox_is_live(), &mut failures);
-    check_eq("enemy_count", enemy_count, run.world.enemy_count(), &mut failures);
-    check_eq("seekers", seekers, run.world.seeker_count(), &mut failures);
-    check_eq("sources", sources, run.world.source_count(), &mut failures);
+    check_eq("contacts", contacts, world.contacts(), &mut failures);
+    check_eq("crowd_contacts", crowd_contacts, world.crowd_contacts(), &mut failures);
+    check_eq("struck", struck, world.struck(), &mut failures);
+    check_eq("hitbox", hitbox, world.hitbox_is_live(), &mut failures);
+    check_eq("enemy_count", enemy_count, world.enemy_count(), &mut failures);
+    check_eq("seekers", seekers, world.seeker_count(), &mut failures);
+    check_eq("sources", sources, world.source_count(), &mut failures);
 
     for body in bodies {
-        check_body(run, body, &mut failures);
+        check_body(world, placed, body, &mut failures);
     }
 
     failures
@@ -325,8 +424,13 @@ fn check_eq<T: PartialEq + std::fmt::Display>(
 /// index. That is the whole reason `EntityId` exists: the horde is stored
 /// densely, so a despawn swaps the last row into the hole and every index after
 /// it changes without anything touching those bodies.
-fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Failure>) {
-    let id = match run.placed.get(body.nth).copied() {
+fn check_body(
+    world: &World,
+    placed: &[Option<EntityId>],
+    body: &crate::spec::BodyExpect,
+    failures: &mut Vec<Failure>,
+) {
+    let id = match placed.get(body.nth).copied() {
         Some(Some(id)) => id,
         Some(None) => {
             failures.push(
@@ -344,7 +448,7 @@ fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Fail
                 Failure::new(
                     &format!("bodies[{}]", body.nth),
                     format!("a placement numbered {}", body.nth),
-                    format!("only {} placement(s) were made", run.placed.len()),
+                    format!("only {} placement(s) were made", placed.len()),
                 )
                 .with_note("`nth` counts `Place` actions in `setup.actions`, from 0".into()),
             );
@@ -352,12 +456,12 @@ fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Fail
         }
     };
 
-    let alive = run.world.is_alive(id);
+    let alive = world.is_alive(id);
 
     check_eq(
         &format!("bodies[{}].seeking", body.nth),
         &body.seeking,
-        run.world.is_seeker(id),
+        world.is_seeker(id),
         failures,
     );
 
@@ -378,9 +482,12 @@ fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Fail
         );
     }
 
+    if let Some(want) = &body.velocity {
+        check_velocity(&format!("bodies[{}].velocity", body.nth), want, world.motion(id), failures);
+    }
     let Some(want) = &body.pos else { return };
 
-    let Some(got) = run.world.enemy_pos(id) else {
+    let Some(got) = world.enemy_pos(id) else {
         // Only reported when the scenario did not already say it expects this.
         // A file asserting `alive: false` and no position would otherwise fail
         // twice for one fact.
@@ -409,7 +516,7 @@ fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Fail
     }
 }
 
-/// Refuses a run that ended with a position that is not a number.
+/// Refuses a checkpoint or final state with a position that is not a number.
 ///
 /// **Unconditional, like the replay check**, and for the same reason: it is a
 /// property every scenario should have and none would think to ask for. It is
@@ -428,19 +535,23 @@ fn check_body(run: &Run, body: &crate::spec::BodyExpect, failures: &mut Vec<Fail
 /// This still earns its place: it costs one pass over the bodies, and it holds
 /// for the cases `contain` cannot launder — a position written after it, or a
 /// pass order that changes.
-pub(crate) fn check_finite(run: &Run) -> Option<Failure> {
-    if run.world.all_positions_finite() {
+fn check_finite(world: &World) -> Option<Failure> {
+    if world.all_positions_finite() {
         return None;
     }
 
     Some(
-        Failure::new("finite", "every position a real number".into(), "a position is NaN or infinite".into())
-            .with_note(
-                "the solver poisoned a position, and no clamp recovers one. Look for a \
+        Failure::new(
+            "finite",
+            "every position a real number".into(),
+            "a position is NaN or infinite".into(),
+        )
+        .with_note(
+            "the solver poisoned a position, and no clamp recovers one. Look for a \
                  normalise of a zero-length difference — two bodies at exactly the same \
                  point — or a divide by a combined mass of zero"
-                    .into(),
-            ),
+                .into(),
+        ),
     )
 }
 
@@ -463,13 +574,17 @@ pub(crate) fn check_replay(scenario: &Scenario, first: &Run) -> Option<Failure> 
     let at = diverged?;
 
     Some(
-        Failure::new("replay", "two runs identical every tick".into(), format!("diverged at tick {at}"))
-            .with_note(
-                "the simulation is not a pure function of (state, inputs). Look for a wall \
+        Failure::new(
+            "replay",
+            "two runs identical every tick".into(),
+            format!("diverged at tick {at}"),
+        )
+        .with_note(
+            "the simulation is not a pure function of (state, inputs). Look for a wall \
                  clock, a bare f32 where a Dt belongs, iteration over a hash-ordered \
                  container, unseeded randomness, or presentation state feeding back in"
-                    .into(),
-            ),
+                .into(),
+        ),
     )
 }
 
@@ -505,7 +620,9 @@ pub(crate) fn check_trace(
     if bless {
         return match std::fs::write(&path, &actual) {
             Ok(()) => None,
-            Err(e) => Some(Failure::new("trace", format!("write {}", path.display()), e.to_string())),
+            Err(e) => {
+                Some(Failure::new("trace", format!("write {}", path.display()), e.to_string()))
+            }
         };
     }
 
@@ -552,5 +669,21 @@ pub(crate) fn check_trace(
                 );
             }
         }
+    }
+}
+
+fn check_velocity(
+    name: &str,
+    want: &crate::spec::Approx2,
+    motion: Option<arpg_sim::Motion>,
+    failures: &mut Vec<Failure>,
+) {
+    let Some(motion) = motion else {
+        failures.push(Failure::new(name, want.expected(), "no physical body".into()));
+        return;
+    };
+    let v = motion.velocity();
+    if want.off_by(Vec3::new(v.x, 0.0, v.y)).is_some() {
+        failures.push(Failure::new(name, want.expected(), format!("({:.6}, {:.6})", v.x, v.y)));
     }
 }

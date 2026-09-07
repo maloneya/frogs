@@ -149,7 +149,7 @@ impl Slots {
     /// of hand-rolled structure-of-arrays: nothing here can check it, because
     /// this type deliberately cannot see the payload.
     ///
-    /// It is contained rather than enforced — `Enemies::spawn` is the only
+    /// It is contained rather than enforced — `Bodies::spawn` is the only
     /// caller, it is a handful of lines, and a debug assertion there compares
     /// the lengths. If a second kind of body storage appears, the right move is
     /// a wrapper owning both halves rather than a second copy of this comment.
@@ -203,7 +203,7 @@ impl Slots {
     /// Marks a slot vacant, bumps past its occupant, and offers it for reuse.
     ///
     /// The one place a name is retired, so [`Slots::remove`] and
-    /// [`Slots::clear`] cannot disagree about what retiring means.
+    /// [`Slots::truncate`] cannot disagree about what retiring means.
     fn retire(&mut self, index: u32) {
         let slot = &mut self.slots[index as usize];
         slot.dense = VACANT;
@@ -249,7 +249,7 @@ impl Slots {
         &self.dense
     }
 
-    /// Retires every name at once.
+    /// Retires names after the first `keep` dense rows.
     ///
     /// **Retires rather than resets, and the difference is the whole point.**
     /// Truncating the slot table would restart generations, so an id minted
@@ -262,10 +262,11 @@ impl Slots {
     /// Retiring every slot instead costs one pass and makes the hazard
     /// unrepresentable. The table is not freed, but it is bounded by the most
     /// bodies ever alive at once, and `free` hands every slot straight back.
-    pub(crate) fn clear(&mut self) {
+    pub(crate) fn truncate(&mut self, keep: usize) {
         // `pop` rather than draining, so the borrow of `dense` ends before
         // `retire` touches `slots` and `free`.
-        while let Some(id) = self.dense.pop() {
+        while self.dense.len() > keep {
+            let id = self.dense.pop().expect("length checked");
             self.retire(id.index);
         }
     }
@@ -469,7 +470,7 @@ mod tests {
         let mut store = Store::default();
         let before = store.spawn("before");
 
-        store.slots.clear();
+        store.slots.truncate(0);
         store.payload.clear();
 
         let after = store.spawn("after");

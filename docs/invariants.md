@@ -60,7 +60,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Frame rate cannot change the simulation | 3 | `frame_rate_cannot_change_the_simulation` — 1, 2 and 4 ticks per frame compared by hash sequence |
 | A steady-state frame allocates nothing | 3 | thread-local counting allocator; `a_steady_state_frame_allocates_nothing` |
 | A pass cannot stamp an event with the wrong tick | 0 | `TraceSink` is bound to the tick at creation and exposes only `emit` |
-| A pass touches only what it declares | 0 | passes take slices, not `&mut World` — for the horde; the player is not SoA yet |
+| A pass touches only what it declares | 0 | passes take declared slices and restricted sinks, not `&mut World`; the player shares body storage |
 | The trace cannot be written by anything but a pass | 0 | `Trace::sink` is `pub(crate)`; `World::trace()` hands out `&Trace` |
 | Perception cannot change what it observes | 0 | `World::trace()` returns `&Trace`, as `extract` takes `&self` |
 | A world field cannot be unobservable | 1 | `World::report` destructures `Self`; a new field is E0027 until it is reported |
@@ -73,6 +73,8 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Sim behaviour changes are gated on an exit code | 1 | `Stop` hook runs `scenario -- scenarios/`; both halves live since chunk 3 |
 | Every scenario is also a determinism test | 0 | `check_replay` runs unconditionally in the runner; a scenario cannot opt out |
 | A scenario asserting a field the runner ignores is rejected | 1 | `#[serde(deny_unknown_fields)]` — a silently-ignored assertion is worse than a refused one |
+| A checkpoint cannot change the simulation it observes | 0 | `check_state` takes `&World`, shared with final-state checks |
+| A checkpoint cannot silently go unevaluated | 3 | runner validation rejects ticks outside the budget and checkpoint traces; CLI tests cover invalid definitions and transient failures, including under `--bless` |
 | Interpolation cannot reach sim state | 0 | `World::extract` takes `&self`; there is no `&mut` to write a blended value back through |
 | `Alpha` stays in `0..=1` | 0 | private field; `Accumulator::alpha` clamps and is the only mint besides the two endpoint consts |
 | The drawn position is a blend, never the sim's own | 0 | `player_pos` and `player_pos_at` are separate methods answering separate questions |
@@ -99,9 +101,9 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | An `EntityId` cannot be forged | 0 | private fields, no public constructor; `Slots::insert` is the only mint |
 | A retired name cannot resolve to the body that took its row | 3 | generation bumped in `Slots::remove`; `a_despawned_name_stays_dead`, mutation-checked |
 | A zeroed `EntityId` names nothing | 1 | `const _: () = assert!(FIRST_GENERATION > 0)`; `a_zeroed_id_names_nothing` |
-| A despawn cannot desync the parallel arrays | 3 | `Slots::remove` returns the one index to `swap_remove`; `debug_assert` on every length in `Enemies::spawn`/`despawn` |
-| A spawned body never streaks on its first frame | 0 | `Enemies::spawn` seeds `prev_pos` to the spawn point; it is the only door in |
-| Spawn history reaches the determinism hash | 1 | `World::hash` destructures `Enemies`, and `Slots::hash` destructures itself |
+| A despawn cannot desync the parallel arrays | 3 | `Slots::remove` returns the one index to `swap_remove`; `debug_assert` on every length in `Bodies::spawn`/`despawn` |
+| A spawned body never streaks on its first frame | 0 | `Bodies::spawn` seeds `prev_pos` to the spawn point; it is the only door in |
+| Spawn history reaches the determinism hash | 1 | `World::hash` destructures `Bodies`, and `Slots::hash` destructures itself |
 | Nothing spawns already overlapping | 1 | `const _: () = assert!(ENEMY_SPACING > 2.0 * ENEMY_RADIUS)` |
 | Coincident bodies separate deterministically, not into NaN | 3 | `escape_direction`; unit tests in `sim/contact.rs` |
 | A contact normal is unit length | 0 | private fields on `Contact`; `contact::between` is the only constructor |
@@ -112,7 +114,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Every enemy pair is resolved once, not twice | 3 | `crowd` walks `j > i` via `split_at_mut`; `an_overlapped_pair_settles_at_touching` |
 | A recycled slot does not inherit a behaviour | 3 | `Members::index` compares the whole id, not the slot; `a_recycled_slot_does_not_inherit_the_behaviour` |
 | A behaviour costs its membership, not the horde | 0 | `pass::seek` iterates `Members::ids`, and is handed no way to reach a non-member |
-| Nothing inside a tick can change what exists | 0 | no pass is handed `&mut Enemies` except `pass::spawn::drain`; `source::trigger` runs first and is handed no storage; every other pass takes slices |
+| Nothing inside a tick can change what exists | 0 | no pass is handed `&mut Bodies` except `pass::spawn::drain`; `source::trigger` runs first and is handed no storage; every other pass takes slices |
 | A request cannot be granted late | 3 | `a_request_becomes_a_body_on_the_next_tick_and_not_before`, and `a_queued_spawn_lands_on_its_own_tick` pins the tick by position, mutation-checked |
 | A refused spawn cannot be silent | 3 | `request_spawn` is `#[must_use]`; `Event::Refused` is emitted by the drain; `a_full_queue_refuses_out_loud` |
 | A template grants what it names and nothing else | 3 | one line per behaviour in `pass::spawn::place`; `two_kinds_of_enemy_from_one_description`, whose bystander is the control |
@@ -141,7 +143,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | The instance budget reserves room for a live swing | 1 | `PLAYER_INSTANCES` is derived from `pass::attack::HITBOX_SAMPLES`, never written down twice; `a_full_horde_still_fits_alongside_the_ground_and_the_player` |
 | Attack state reaches the determinism hash | 1 | `World::hash` destructures `Player`, and `Attack::hash` destructures itself |
 | Behaviour membership reaches the determinism hash | 1 | `World::hash` destructures `seekers`; `Members::hash` destructures itself |
-| A retired name can never be reused | 0 | `Slots::clear` retires every slot rather than truncating; there is no path that restarts a generation |
+| A retired name can never be reused | 0 | `Slots::truncate` retires removed slots rather than resetting generations; there is no path that restarts a generation |
 | A bulk respawn cannot leave a behaviour attached | 3 | `a_respawn_revokes_every_behaviour`, which caught a real resurrection |
 | A new behaviour cannot be forgotten at spawn or despawn | 1 | `set_enemy_count` and `despawn_enemy` destructure `Self` exhaustively — a new field is E0027 |
 | Asking whether two bodies touch cannot move them | 0 | `contact::between` takes `Vec2` by value and returns a `Contact` |
@@ -149,3 +151,11 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | The harness cannot fall behind the bindings | 0 | key names live *in* `BINDINGS`; there is no second table to forget |
 | A state report stays parseable when a value is not a number | 3 | `Report::number` writes `null`; `a_value_that_is_not_a_number_is_null` |
 | The readable schedule cannot silently disagree with `World::step` | 4 | prose in `pass/mod.rs` — the one ordering claim nothing checks |
+| Physical velocity cannot be overwritten by attack | 0 | `ImpulseSink` exposes only impulse submission; physical payload fields are private |
+| Invalid impulse values are rejected by every reader | 0 | `Impulse` has private data and a validating `TryFrom`; serde uses that same constructor |
+| Collision response receives a unit normal | 0 | `Physics::collide` takes a `Contact`, whose only constructor guarantees its normal |
+| Overlap correction cannot inject momentum | 3 | `overlap_does_not_create_momentum`; projection and velocity response are separate operations |
+| Momentum reaches a body outside the hitbox | 3 | `a_swing_pushes_a_body_it_did_not_hit` asserts the neighbour's position, velocity and trace |
+| A hit changes velocity before it changes position | 3 | checkpoints in `the_hitbox_opens_and_shuts_on_schedule` cover the hit tick and subsequent movement |
+| Physical payload survives row changes and cannot leak to a recycled id | 3 | `despawning_revokes_motion_and_a_swapped_survivor_keeps_its_velocity` |
+| Physics stays within the headless tick budget | 3 | `physics_stays_within_tick_budget` asserts mean time inside `World::step` |

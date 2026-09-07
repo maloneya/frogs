@@ -26,7 +26,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use winit::keyboard::KeyCode;
 
@@ -61,6 +61,11 @@ pub(crate) enum Command {
     /// with a window — an attack, hitstop, a buffered input — lives entirely in
     /// that gap.
     TraceSince(u64),
+    /// Add sim-validated momentum to a live body or the player.
+    Impulse {
+        target: String,
+        value: arpg_sim::Impulse,
+    },
     SetEnemies(usize),
     SetSeekers(usize),
     /// Ask for one body at a world-space `(x, z)`, and what to grant it.
@@ -68,7 +73,11 @@ pub(crate) enum Command {
     /// Goes through the spawn queue rather than placing directly — the same
     /// door anything inside the simulation uses — so what a shell drives here
     /// is the real path, latency included. The body exists after the next tick.
-    Spawn { x: f32, z: f32, what: Template },
+    Spawn {
+        x: f32,
+        z: f32,
+        what: Template,
+    },
     /// Add something that asks for spawns, or remove one by name.
     ///
     /// The flags after the position are **named, not positional**, because a
@@ -98,14 +107,16 @@ pub(crate) enum Command {
 fn key(arg: Option<&str>) -> Result<KeyCode, String> {
     let name = arg.ok_or_else(|| "expected a key name".to_string())?;
     key_named(name).ok_or_else(|| {
-        format!("unknown key {name:?}; bound keys are {}", key_names().collect::<Vec<_>>().join(" "))
+        format!(
+            "unknown key {name:?}; bound keys are {}",
+            key_names().collect::<Vec<_>>().join(" ")
+        )
     })
 }
 
 /// Named once, because it is quoted from four error paths and a usage message
 /// that disagrees with the parser is worse than none.
-const USAGE: &str =
-    "expected: source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>], \
+const USAGE: &str = "expected: source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>], \
      or source remove <id>";
 
 fn parse(line: &str) -> Result<Command, String> {
@@ -124,9 +135,7 @@ fn parse(line: &str) -> Result<Command, String> {
         "tap" => Command::Tap(key(arg)?),
         "hold" => Command::Hold(key(arg)?, number(it.next())?),
         "wait" => Command::Wait(number(arg)?),
-        "shot" => Command::Shot(PathBuf::from(
-            arg.ok_or_else(|| "expected a path".to_string())?,
-        )),
+        "shot" => Command::Shot(PathBuf::from(arg.ok_or_else(|| "expected a path".to_string())?)),
         "state" => Command::State,
         // `trace since <tick>` rather than `trace <tick>`, so the reply cannot
         // be misread as "the trace at tick N".
@@ -208,6 +217,16 @@ fn parse(line: &str) -> Result<Command, String> {
                 when,
                 what: if seeks { Template::BODY.seeking() } else { Template::BODY },
             })
+        }
+        "impulse" => {
+            let usage = "expected: impulse <player|#id> <x> <z>";
+            let target = arg.ok_or(usage)?.to_owned();
+            let mut number = || it.next().ok_or(usage)?.parse::<f32>().map_err(|_| usage);
+            let value = arpg_sim::Impulse::try_from((number()?, number()?))?;
+            if it.next().is_some() {
+                return Err(usage.into());
+            }
+            Command::Impulse { target, value }
         }
         "enemies" => Command::SetEnemies(number(arg)? as usize),
         "seekers" => Command::SetSeekers(number(arg)? as usize),

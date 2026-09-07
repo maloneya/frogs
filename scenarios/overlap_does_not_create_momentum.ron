@@ -1,0 +1,3 @@
+(description: "A stationary overlapped pair separates without manufacturing velocity.",
+ setup: (actions: [Place((10.0, 0.0)), Place((10.2, 0.0))]), budget: (ticks: 10),
+ expect: (bodies: [(nth: 0, velocity: (x: 0.0, z: 0.0, tol: 0.0)), (nth: 1, velocity: (x: 0.0, z: 0.0, tol: 0.0))]))

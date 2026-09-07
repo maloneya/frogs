@@ -4,11 +4,11 @@
 //! written against today; a field that only *describes* an intention is a field
 //! that will drift away from what the runner actually checks.
 
-use arpg_sim::{Source, Template};
+use arpg_sim::{Impulse, Source, Template};
 use serde::Deserialize;
 
 /// One scenario: a world, an input stream, a tick budget, and what is expected
-/// at the end of it.
+/// at checkpoints and at the end of it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Scenario {
@@ -35,6 +35,10 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) attacks: Vec<u64>,
 
+    /// External momentum changes, applied before the named tick.
+    #[serde(default)]
+    pub(crate) impulses: Vec<ImpulseAt>,
+
     /// Things asked for *while the scenario runs*, each at a stated tick.
     ///
     /// **Distinct from [`Setup::actions`], and the distinction is the whole
@@ -57,9 +61,25 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) remove_sources: Vec<SourceRemoval>,
 
+    /// State assertions immediately after the named zero-based tick completes.
+    /// Input order is arbitrary; multiple checkpoints may inspect the same tick.
+    #[serde(default)]
+    pub(crate) checkpoints: Vec<Checkpoint>,
+
     pub(crate) budget: Budget,
 
     #[serde(default)]
+    pub(crate) expect: Expect,
+}
+
+/// A point-in-time assertion using exactly the final state's vocabulary.
+/// Golden traces describe the whole run and stay in the final `expect`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Checkpoint {
+    /// Runs after tick `at`, when `World::tick()` is `at + 1`.
+    /// Must be below the scenario's tick budget; there is no implicit setup tick.
+    pub(crate) at: u64,
     pub(crate) expect: Expect,
 }
 
@@ -192,9 +212,12 @@ pub(crate) struct Budget {
     /// makes the count deterministic, so "ran fewer ticks than expected" is a
     /// bug rather than a timing artefact worth tolerating.
     pub(crate) ticks: u64,
+    /// Mean time in World::step only; excludes setup, hashing and assertions.
+    #[serde(default)]
+    pub(crate) max_mean_step_micros: Option<f64>,
 }
 
-/// What must hold once the budget is spent.
+/// State assertions shared by final expectations and checkpoints.
 ///
 /// Every field is optional; a scenario asserting nothing still checks that it
 /// runs to budget without panicking and that it replays identically, which is
@@ -205,12 +228,14 @@ pub(crate) struct Expect {
     /// Ground-plane position as `(x, z)`.
     #[serde(default)]
     pub(crate) player_pos: Option<Approx2>,
+    #[serde(default)]
+    pub(crate) player_velocity: Option<Approx2>,
     /// Facing in radians. Yaw 0 faces world `+Z`, positive turns toward `+X`.
     #[serde(default)]
     pub(crate) facing: Option<Approx>,
     #[serde(default)]
     pub(crate) contacts: Option<usize>,
-    /// Enemy pairs the crowd solver pushed apart on the final tick.
+    /// Enemy pairs the crowd solver pushed apart on the observed tick.
     #[serde(default)]
     pub(crate) crowd_contacts: Option<usize>,
     /// How many bodies the last swing struck.
@@ -306,6 +331,8 @@ pub(crate) struct BodyExpect {
     /// Where the body should be. Omit to say nothing about position.
     #[serde(default)]
     pub(crate) pos: Option<Approx2>,
+    #[serde(default)]
+    pub(crate) velocity: Option<Approx2>,
 
     /// Whether the body should be chasing the player.
     ///
@@ -323,4 +350,20 @@ pub(crate) struct BodyExpect {
     /// reads as success to every other assertion in the file.
     #[serde(default)]
     pub(crate) alive: Option<bool>,
+}
+
+/// A scenario's reference to a body; identity itself is resolved by the runner.
+#[derive(Debug, Deserialize)]
+pub(crate) enum Target {
+    Player,
+    Placed(usize),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ImpulseAt {
+    pub(crate) at: u64,
+    pub(crate) target: Target,
+    /// Uses sim's validated vocabulary, not a second definition of momentum.
+    pub(crate) value: Impulse,
 }

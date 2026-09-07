@@ -1,0 +1,8 @@
+// A travels .1 into B; equal masses share .1 overlap and velocity 6 equally.
+// End velocities: (6/2)*.9 = 2.7. The second body was never given an impulse.
+(description: "A carried body transfers momentum to its neighbour without an attack.",
+ setup: (actions: [Place((10.0, 0.0)), Place((10.5, 0.0))]),
+ impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))], budget: (ticks: 1),
+ expect: (bodies: [
+ (nth: 0, pos: (x: 10.05, z: 0.0, tol: 0.00001), velocity: (x: 2.7, z: 0.0, tol: 0.00001)),
+ (nth: 1, pos: (x: 10.55, z: 0.0, tol: 0.00001), velocity: (x: 2.7, z: 0.0, tol: 0.00001))], trace: "a_collision_transfers_momentum.trace"))

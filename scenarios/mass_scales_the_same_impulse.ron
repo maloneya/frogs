@@ -1,0 +1,6 @@
+// Same J=6, enemy inv_mass=1, player=.05. v=(6,.3), then *.9.
+(description: "The player and enemy use the same impulse mechanism with different mass.",
+ setup: (actions: [Place((10.0, 0.0))]),
+ impulses: [(at: 0, target: Player, value: (6.0, 0.0)), (at: 0, target: Placed(0), value: (6.0, 0.0))],
+ budget: (ticks: 1), expect: (player_pos: (x: 0.005, z: 0.0, tol: 0.000001), player_velocity: (x: 0.27, z: 0.0, tol: 0.000001),
+ bodies: [(nth: 0, pos: (x: 10.1, z: 0.0, tol: 0.00001), velocity: (x: 5.4, z: 0.0, tol: 0.00001))]))

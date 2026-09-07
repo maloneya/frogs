@@ -1,0 +1,6 @@
+// v=6; first tick travels .1, then retains 5.4. This is independent of attacks.
+(description: "An impulse integrates before damping and is observable on its exact tick.",
+ setup: (actions: [Place((10.0, 0.0))]),
+ impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))],
+ budget: (ticks: 1),
+ expect: (bodies: [(nth: 0, pos: (x: 10.1, z: 0.0, tol: 0.00001), velocity: (x: 5.4, z: 0.0, tol: 0.00001))], trace: "an_impulse_moves_and_damps.trace"))

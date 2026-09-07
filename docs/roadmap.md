@@ -22,7 +22,7 @@ what matters here is what it left behind to build on.
 - **Render interpolation.** `Alpha` blends the last two ticks inside `extract`,
   which takes `&self` — so interpolation cannot reach sim state.
 - **Scenario runner.** RON setup, tick-indexed inputs, a tick budget,
-  assertions, exit 0 or 1. Every scenario is also replayed and hash-compared
+  checkpoint and final-state assertions, exit 0 or 1. Every scenario is also replayed and hash-compared
   whether or not it asks. The `Stop` hook runs it.
 - **Trace, and the pass schedule.** Tick-stamped events in a ring buffer;
   `TraceSink` is bound to its tick, so a pass cannot misdate an event. `step` is
@@ -46,18 +46,15 @@ what matters here is what it left behind to build on.
 
 ---
 
-## 4. The player joins body storage — *hooks*
+## 4. The player joins body storage — *hooks* — **done**
 
-Identity landed; what is left is the player becoming a row like everything else,
-so passes take slices for it too rather than its individual fields.
+The player occupies the persistent first row of `Bodies`, with its own stable
+identity. Facing and attack stay player-only. Physical membership and payload
+use the same sparse store for the player and enemies. Resetting the horde
+preserves the player's position, identity and carried motion.
 
-The old objection — that folding the player into the horde would pay for
-player-only fields N times — was correct against dense arrays and dissolves
-under sparse sets: player-only state lives in its own membership set, so the
-player can be a body without any enemy paying for what only it has. The doc on
-`Player` now says so rather than arguing the other way.
-
-**Gate:** scenarios stay green across the refactor.
+**Gate:** existing positional scenarios stayed green through the refactor;
+golden enemy IDs shifted by one because the player now owns a name.
 
 ## 5. Uniform-grid spatial hash for broadphase — *sim layer*
 
@@ -124,18 +121,35 @@ the tick list), `removing_a_source_stops_the_flow`, `a_source_waits_for_the_play
 
 ## 8. Health, damage and death — *sim layer*
 
-A hit currently does nothing but say so. The seam is already the right shape:
-`pass::attack::strike` records who it touched, so damage is a change to that one
-function.
+A hit currently records contact and requests an impulse. Health, damage and
+death remain separate work; the shared physical response is already in place.
 
-Health is also the behaviour that exercises the *payload* half of a sparse set,
-which `seek` did not need — membership plus a parallel array, kept in step
-through the row `Members::add` hands back.
+Health will use sparse membership plus a payload, following the physical
+state store: one owner keeps membership and its parallel array in step.
 
 **Gate:** a scenario kills a body with a known number of swings and asserts its
 name goes dead; a golden trace shows the tick it died on.
 
-## 9. Hitstop, knockback, input buffering
+## 9. Hitstop, knockback, input buffering — **knockback done**
+
+Knockback is an impulse into shared carried velocity. Solid contacts exchange
+momentum without bounce; position projection does not create energy. Walls
+cancel outward velocity and allow sliding. Walk and seek remain powered,
+kinematic displacement, separate from carried velocity: they neither overwrite
+knockback nor add locomotion speed to the conserved momentum calculation.
+
+The attack applies six units of momentum along its facing, once per struck
+body. A mass-one enemy travels about one unit in open space. Velocity changes
+on the hit tick; displacement starts on the following tick. Sources other than
+attacks use the same impulse interface. The harness exposes `impulse`, and state
+reports each body's velocity and inverse mass by stable name.
+
+**Knockback gate:** analytic impulse, mass, wall, damping and transfer scenarios;
+`a_swing_pushes_a_body_it_did_not_hit` proves the attack/contact composition;
+`physics_stays_within_tick_budget` measures headless simulation cost. Every
+scenario still checks replay hashes, including physical state.
+
+Hitstop and input buffering remain open.
 
 **Gate:** golden traces for impulse magnitude and hitstop duration, so a tuning
 change produces a reviewable diff rather than a claim about feel.
@@ -144,13 +158,19 @@ change produces a reviewable diff rather than a claim about feel.
 
 ## Known limitations (real, not yet worth fixing)
 
-- **Nothing dies.** A swing registers hits and that is all it does — no health,
-  no damage, no corpses. Chunk 8.
+- Physics uses discrete disc contacts and a single ordered solver sweep. The
+  current six-unit knockback moves 0.1 units per tick; sufficiently large external
+  impulses can tunnel through bodies. Swept collision detection is future work
+  before introducing fast projectiles or much stronger launches.
+- Momentum transfer covers carried velocity. Powered locomotion is kinematic;
+  motor forces, steering suppression and frictional contact are separate work.
+- **Nothing dies.** A swing registers hits and applies momentum, but there is
+  no health, damage or corpse lifecycle. Chunk 8.
 - **Every chaser is identical.** One speed, one behaviour. A `Template` grants
   it per body and a source picks the template, so two kinds of enemy are
   describable; what is missing is a second thing for them to differ *in*.
 - **`set_enemy_count` is a second spawn door, and it ignores templates.**
-  `Enemies::respawn` writes the storage directly: it grants no behaviours and
+  `Bodies::respawn` grants default physics but no template behaviours and
   emits no `placed` events, where `place` and the drain do both. That is
   tolerable because it is a debug dial — `[`, `]` and `enemies <n>` — and not
   how the game will ever make a body. Unifying it means `set_enemy_count`
@@ -176,9 +196,9 @@ change produces a reviewable diff rather than a claim about feel.
   eventual fix; enlarging the world was the interim one.
 - No input deadzone. Deliberate: it trades micro-jitter for a sticky region and
   a snap at its boundary, and against a horde the smoothed follow reads better.
-- Translation is instantaneous — full speed on the first tick, dead stop on
-  release. Deliberate: responsiveness beats momentum in an ARPG, and
-  acceleration is a feel knob best tuned once combat exists. *Turning* is
+- Powered translation is instantaneous — full speed on the first tick, dead stop on
+  release. Carried physical velocity is additional and damped. Responsiveness
+  matters for the controls, and acceleration is a feel knob best tuned once combat exists. *Turning* is
   rate-limited; translation is not.
 - Only the keyboard is wired. The action layer is what makes a gamepad or
   click-to-move additive: a second producer of `ActionMask`, nothing downstream

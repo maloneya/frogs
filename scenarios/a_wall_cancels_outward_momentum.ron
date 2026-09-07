@@ -1,0 +1,5 @@
+// Enemy centre stops at 96-.25=95.75; Z still travels 3/60 then decays.
+(description: "A wall removes outward velocity and preserves tangential sliding.",
+ setup: (actions: [Place((95.7, 10.0))]),
+ impulses: [(at: 0, target: Placed(0), value: (6.0, 3.0))], budget: (ticks: 1),
+ expect: (bodies: [(nth: 0, pos: (x: 95.75, z: 10.05, tol: 0.00002), velocity: (x: 0.0, z: 2.7, tol: 0.00001))], trace: "a_wall_cancels_outward_momentum.trace"))

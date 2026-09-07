@@ -20,6 +20,33 @@
     ),
     inputs: [],
     attacks: [0],
+    // Check state immediately after each zero-based tick. One run now checks
+    // startup, impulse timing, displacement, and both active-window edges.
+    checkpoints: [
+        (at: 5, expect: (hitbox: false, struck: 0, bodies: [
+            (nth: 0, pos: (x: 0.0, z: 1.1, tol: 0.00001),
+             velocity: (x: 0.0, z: 0.0, tol: 0.0)),
+        ])),
+        // Hit on 6, after integration: full velocity, no displacement yet.
+        (at: 6, expect: (hitbox: true, struck: 1, bodies: [
+            (nth: 0, pos: (x: 0.0, z: 1.1, tol: 0.00001),
+             velocity: (x: 0.0, z: 6.0, tol: 0.00001)),
+        ])),
+        // First movement is 6/60=.1, followed by damping to 5.4.
+        (at: 7, expect: (hitbox: true, struck: 1, bodies: [
+            (nth: 0, pos: (x: 0.0, z: 1.2, tol: 0.00001),
+             velocity: (x: 0.0, z: 5.4, tol: 0.00001)),
+        ])),
+        // Still overlapping the hitbox, but only one impulse: .1+.09+.081.
+        (at: 9, expect: (hitbox: true, struck: 1, bodies: [
+            (nth: 0, pos: (x: 0.0, z: 1.371, tol: 0.00001),
+             velocity: (x: 0.0, z: 4.374, tol: 0.00001)),
+        ])),
+        (at: 10, expect: (hitbox: false, struck: 1, bodies: [
+            (nth: 0, pos: (x: 0.0, z: 1.4439, tol: 0.00001),
+             velocity: (x: 0.0, z: 3.9366, tol: 0.00001)),
+        ])),
+    ],
     budget: (ticks: 30),
     expect: (
         player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
@@ -28,9 +55,9 @@
         struck: 1,
         hitbox: false,
         bodies: [
-            // Nothing pushed it: a hitbox reads positions and cannot write
-            // them, which is the difference between this pass and the solver.
-            (nth: 0, alive: true, pos: (x: 0.0, z: 1.1, tol: 0.0001)),
+            // Hit at 6; 23 integrations on ticks 7..29.
+            // Travel = (6/60) * (1-.9^23)/(1-.9) = .9113706.
+            (nth: 0, alive: true, pos: (x: 0.0, z: 2.0113706, tol: 0.0001)),
         ],
         trace: "the_hitbox_opens_and_shuts_on_schedule.trace",
     ),

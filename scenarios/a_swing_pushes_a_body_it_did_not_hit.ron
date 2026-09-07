@@ -1,0 +1,7 @@
+// Hit reach ends at 1.1+.6+.25=1.95: only A at 1.7 can be struck.
+// Tick 7: A travels .1; equal masses share the overlap and velocity.
+(description: "A sword-hit body transfers momentum to a neighbour outside the hitbox.",
+ setup: (actions: [Place((0.0, 1.7)), Place((0.0, 2.2))]), attacks: [0], budget: (ticks: 8),
+ expect: (struck: 1, bodies: [
+ (nth: 0, pos: (x: 0.0, z: 1.75, tol: 0.00001), velocity: (x: 0.0, z: 2.7, tol: 0.00001)),
+ (nth: 1, pos: (x: 0.0, z: 2.25, tol: 0.00001), velocity: (x: 0.0, z: 2.7, tol: 0.00001))], trace: "a_swing_pushes_a_body_it_did_not_hit.trace"))

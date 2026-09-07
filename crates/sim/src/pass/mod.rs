@@ -34,31 +34,24 @@
 //!    player is now rather than where it stood at the start of the tick, and
 //!    **before** the solvers, so the pile-up chasing creates is what they
 //!    resolve.
-//! 6. [`separate::crowd`] — push overlapping *enemies* apart.
-//! 7. [`separate::player`] — push the horde off the player. **After** `crowd`,
-//!    and that order is load-bearing: one Gauss-Seidel sweep leaves residual
-//!    overlap, and whichever runs last is the one whose result survives the
-//!    tick. Last here means nothing ends a tick standing inside the character
-//!    the camera is centred on; the residual lands on enemy-against-enemy
-//!    instead, where it is invisible.
-//! 8. [`contain`] — put everything back inside the arena. **After** separating,
-//!    because clamping first would let a contact shove a body through the wall
-//!    and leave it there until something else happened to touch it.
-//! 9. [`face`] — turn the body toward its direction of travel. **Before**
-//!    `attack`, which is what makes the hitbox swing where the character ends
-//!    the tick pointing.
-//! 10. [`attack`] — advance the swing and test the hitbox. **Last**, so it is
-//!     tested against where the bodies actually ended up: after seeking, after
-//!     both solvers, after the wall.
+//! 6. [`motion::integrate`] — add carried motion after powered locomotion,
+//!    before testing contacts. Neither steering nor overlap correction writes
+//!    carried velocity, so neither can erase or manufacture a blow.
+//! 7. [`separate::crowd`] — repair enemy overlaps and exchange momentum.
+//! 8. [`separate::player`] — do the same for the player against the horde.
+//!    After crowd resolution, preserving the existing player-space priority.
+//!    Both responses use the same physics store and mass properties.
+//! 9. [`contain`] — clamp positions and cancel outward wall velocity. After
+//!    separation, so a correction cannot leave a body outside the arena.
+//! 10. [`motion::settle`] — damp carried velocity and snap its small tail to
+//!     rest. After contact response, before a new attack impulse.
+//! 11. [`face`] — turn toward the requested direction before placing a hitbox.
+//! 12. [`attack`] — test final positions and apply an impulse once per target
+//!     per swing. Velocity changes now; displacement begins on the next tick.
 //!
-//! ## What is not yet enforced
-//!
-//! The player is a single struct rather than a row in the horde's storage, so
-//! the passes below take its individual fields — `&mut Vec2`, `&mut f32` —
-//! where the horde gets a real slice. That is the honest limit today: the horde
-//! half of every signature is checked by the compiler, the player half is
-//! checked by reading it. Both become slices when the player joins SoA storage
-//! (roadmap chunk 4).
+//! The player occupies row zero in the shared body store. Its facing and
+//! attack state are player-only; physics membership and payload use the same
+//! identity and mechanisms as every other physical body.
 
 pub(crate) mod attack;
 pub(crate) mod contain;
@@ -69,3 +62,5 @@ pub(crate) mod separate;
 pub(crate) mod source;
 pub(crate) mod spawn;
 pub(crate) mod walk;
+
+pub(crate) mod motion;

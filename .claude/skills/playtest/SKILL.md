@@ -54,6 +54,7 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `state` | one line of numbers (below) |
 | `trace since <tick>` | every event from that tick on, plus a `# n event(s)` count |
 | `enemies <n>` | clamped count, **and the seeker count**, which a respawn resets to 0 |
+| `impulse <player\|#id> <x> <z>` | momentum applied; movement starts on the next tick |
 | `seekers <n>` | how many of the bodies now chase the player |
 | `spawn <x> <z> [seek]` | `queued`, not `spawned` — it lands on the next tick |
 | `source <x> <z> [flags]` | the source's name, e.g. `source s0` |
@@ -301,3 +302,9 @@ at 60Hz and the game feels different on faster hardware.
   different numbers now, and their ratio is what says whether the machine is
   keeping up. Uncapped, `frames` runs far ahead of `tick`; that is the fixed
   timestep working, not a fault.
+
+
+Physical state lives under `sim.bodies`, keyed by stable entity name. Each entry
+reports ground-plane `pos`, carried `velocity`, and `inverse_mass`. Use these
+names as impulse targets, or `player` for the persistent player body. `impulse`
+uses sim's validated input type; it cannot silently accept NaN or infinity.

@@ -222,10 +222,7 @@ fn the_hash_localises_where_two_streams_diverge() {
 /// swing, then the player, so the horde starts right after the floor.
 fn drawn_enemies(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec<Vec3> {
     world.extract(alpha, buffer.sink());
-    buffer.as_slice()[GROUND_INSTANCES..][..world.enemy_count()]
-        .iter()
-        .map(Instance::pos)
-        .collect()
+    buffer.as_slice()[GROUND_INSTANCES..][..world.enemy_count()].iter().map(Instance::pos).collect()
 }
 
 /// Puts the player inside the horde and walks, so the solver is displacing
@@ -268,8 +265,16 @@ fn the_blend_endpoints_are_the_two_ticks_themselves() {
     let after = world.player_pos();
     assert_ne!(before, after, "the tick under test did not move anything");
 
-    assert_eq!(drawn_player(&world, Alpha::ZERO, &mut buffer), before, "alpha 0 is not the previous tick");
-    assert_eq!(drawn_player(&world, Alpha::ONE, &mut buffer), after, "alpha 1 is not the current tick");
+    assert_eq!(
+        drawn_player(&world, Alpha::ZERO, &mut buffer),
+        before,
+        "alpha 0 is not the previous tick"
+    );
+    assert_eq!(
+        drawn_player(&world, Alpha::ONE, &mut buffer),
+        after,
+        "alpha 1 is not the current tick"
+    );
 }
 
 /// Between the endpoints it has to actually be *between*, and monotonic —
@@ -327,12 +332,11 @@ fn the_horde_is_interpolated_too() {
     let mut world = shoving_through_the_crowd(256);
     let mut buffer = InstanceBuffer::default();
 
-    let before: Vec<Vec2> = world.enemies.pos.clone();
+    let before: Vec<Vec2> = world.bodies.pos[1..].to_vec();
     world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-    let after: Vec<Vec2> = world.enemies.pos.clone();
+    let after: Vec<Vec2> = world.bodies.pos[1..].to_vec();
 
-    let moved: Vec<usize> =
-        (0..after.len()).filter(|&i| before[i] != after[i]).collect();
+    let moved: Vec<usize> = (0..after.len()).filter(|&i| before[i] != after[i]).collect();
     assert!(!moved.is_empty(), "no body moved during the tick under test");
 
     let at_zero = drawn_enemies(&world, Alpha::ZERO, &mut buffer);
@@ -396,7 +400,7 @@ fn a_respawned_horde_is_drawn_standing_still() {
     world.set_enemy_count(64);
 
     let standing: Vec<Vec3> =
-        world.enemies.pos.iter().map(|&p| on_ground(p, ENEMY_HALF_HEIGHT)).collect();
+        world.bodies.pos[1..].iter().map(|&p| on_ground(p, ENEMY_HALF_HEIGHT)).collect();
 
     for alpha in [Alpha::ZERO, half(), Alpha::ONE] {
         assert_eq!(
@@ -502,13 +506,13 @@ fn the_previous_tick_is_the_previous_tick() {
     let east = MoveDir::new(Vec3::X);
 
     for _ in 0..4 {
-        let expected = world.player.pos;
-        let enemies_before = world.enemies.pos.clone();
+        let expected = world.bodies.pos[0];
+        let enemies_before = world.bodies.pos[1..].to_vec();
 
         world.step(tick_dt(), Intent::new(east, false));
 
-        assert_eq!(world.player.prev_pos, expected, "the player's prev is not last tick");
-        assert_eq!(world.enemies.prev_pos, enemies_before, "the horde's prev is not last tick");
+        assert_eq!(world.bodies.prev_pos[0], expected, "the player's prev is not last tick");
+        assert_eq!(world.bodies.prev_pos[1..], enemies_before, "the horde's prev is not last tick");
     }
 }
 
@@ -527,11 +531,11 @@ fn every_field_of_the_world_reaches_the_hash() {
     type Poke = (&'static str, fn(&mut World));
 
     let fields: [Poke; 7] = [
-        ("player.pos", |w| w.player.pos.x += 0.001),
+        ("player.pos", |w| w.bodies.pos[0].x += 0.001),
         ("player.facing", |w| w.player.facing += 0.001),
         ("tick", |w| w.tick += 1),
         ("contacts", |w| w.contacts += 1),
-        ("enemies.pos", |w| w.enemies.pos[0].x += 0.001),
+        ("enemies.pos", |w| w.bodies.pos[1].x += 0.001),
         // A pending request is a body that exists in one of two otherwise
         // identical worlds one tick from now.
         ("queue", |w| assert!(w.request_spawn(Vec2::ZERO, Template::BODY))),
@@ -568,7 +572,7 @@ fn the_horde_is_part_of_what_a_replay_compares() {
         world.hash()
     };
 
-    world.enemies.pos[7] += Vec2::new(0.01, -0.01);
+    world.bodies.pos[1..][7] += Vec2::new(0.01, -0.01);
     assert_ne!(world.hash(), settled, "displacing a body left the hash unchanged");
 }
 
@@ -806,7 +810,7 @@ fn the_swing_is_drawn_where_it_strikes() {
         "the active window should draw one disc, plus the player"
     );
     let drawn = buf.as_slice()[GROUND_INSTANCES].pos();
-    let expected = world.player.pos + Vec2::new(pass::attack::REACH, 0.0);
+    let expected = world.bodies.pos[0] + Vec2::new(pass::attack::REACH, 0.0);
 
     assert!(
         (drawn.x - expected.x).abs() < 1e-4 && (drawn.z - expected.y).abs() < 1e-4,
@@ -824,7 +828,7 @@ fn the_horde_holds_exactly_the_requested_count() {
     for n in [1, 17, 512, 1024, 4096] {
         world.set_enemy_count(n);
         assert_eq!(world.enemy_count(), n);
-        assert_eq!(world.enemies.pos.len(), n);
+        assert_eq!(world.bodies.pos[1..].len(), n);
     }
 }
 
@@ -840,7 +844,7 @@ fn the_horde_spawns_with_a_gap_between_every_body() {
     let mut world = World::default();
     world.set_enemy_count(1024);
 
-    let pos = &world.enemies.pos;
+    let pos = &world.bodies.pos[1..];
     let mut closest = f32::MAX;
     for i in 0..pos.len() {
         for j in i + 1..pos.len() {
@@ -867,7 +871,7 @@ fn the_horde_is_centred_on_the_origin() {
     let mut world = World::default();
 
     let centroid_at = |world: &World| {
-        let pos = &world.enemies.pos;
+        let pos = &world.bodies.pos[1..];
         pos.iter().fold(Vec2::ZERO, |acc, &p| acc + p) / pos.len() as f32
     };
 
@@ -904,8 +908,8 @@ fn no_enemy_is_left_overlapping_the_player() {
     }
 
     let contact = PLAYER_RADIUS + ENEMY_RADIUS;
-    let player = world.player.pos;
-    for (i, &enemy) in world.enemies.pos.iter().enumerate() {
+    let player = world.bodies.pos[0];
+    for (i, &enemy) in world.bodies.pos[1..].iter().enumerate() {
         let gap = player.distance(enemy);
         assert!(gap >= contact - 1e-4, "enemy {i} is {gap} from the player, needs {contact}");
     }
@@ -918,7 +922,7 @@ fn no_enemy_is_left_overlapping_the_player() {
 #[test]
 fn walking_through_the_horde_displaces_it() {
     let mut world = World::default();
-    let before = world.enemies.pos.clone();
+    let before = world.bodies.pos[1..].to_vec();
 
     let mut ever_touched = 0;
     for _ in 0..240 {
@@ -926,11 +930,8 @@ fn walking_through_the_horde_displaces_it() {
         ever_touched += world.contacts();
     }
 
-    let moved = before
-        .iter()
-        .zip(&world.enemies.pos)
-        .filter(|(a, b)| a.distance(**b) > 1e-4)
-        .count();
+    let moved =
+        before.iter().zip(&world.bodies.pos[1..]).filter(|(a, b)| a.distance(**b) > 1e-4).count();
 
     assert!(ever_touched > 0, "nothing was ever in contact");
     assert!(moved > 0, "the player walked straight through {} bodies", before.len());
@@ -963,7 +964,7 @@ fn nothing_is_pushed_out_of_the_arena() {
         for _ in 0..600 {
             world.step(tick_dt(), Intent::new(MoveDir::new(dir), false));
         }
-        for &enemy in &world.enemies.pos {
+        for &enemy in &world.bodies.pos[1..] {
             assert!(enemy.is_finite(), "poisoned position {enemy}");
             assert!(
                 enemy.x.abs() <= ARENA_HALF && enemy.y.abs() <= ARENA_HALF,
@@ -1100,7 +1101,7 @@ fn a_held_back_source_fires_the_instant_its_condition_opens() {
     // Teleporting the player is exactly what a scenario cannot do, which is why
     // this half lives here: it isolates the opening of the condition from the
     // ticks spent walking to it.
-    world.player.pos = far;
+    world.bodies.pos[0] = far;
     world.step(tick_dt(), Intent::NONE);
 
     assert_eq!(world.enemy_count(), 1, "a ready source did not fire the tick its gate opened");
@@ -1125,7 +1126,7 @@ fn a_population_condition_fills_to_its_number_and_stops() {
 
     // Kill one, and it is replaced — which is the half a fixed emission count
     // cannot do.
-    let victim = world.enemies.slots.ids()[0];
+    let victim = world.bodies.slots.ids()[1];
     assert!(world.despawn_enemy(victim));
     world.step(tick_dt(), Intent::NONE);
     assert_eq!(world.enemy_count(), 3, "a body was killed and not replaced");
@@ -1181,11 +1182,67 @@ fn a_ring_does_not_stack_what_it_makes() {
         world.step(tick_dt(), Intent::NONE);
     }
 
-    let places = world.enemies.pos.clone();
+    let places = world.bodies.pos[1..].to_vec();
     assert_eq!(places.len(), 4);
     for (i, a) in places.iter().enumerate() {
         for b in &places[i + 1..] {
             assert!(a.distance(*b) > 2.0 * ENEMY_RADIUS, "a ring stacked {a} on {b}");
         }
     }
+}
+
+/// Physical payload follows identity through both independently packed stores.
+#[test]
+fn despawning_revokes_motion_and_a_swapped_survivor_keeps_its_velocity() {
+    let mut world = World::default();
+    world.set_enemy_count(0);
+    let a = world.place(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
+    let b = world.place(Vec2::new(20.0, 0.0), Template::BODY).unwrap();
+    let impulse = Impulse::try_from((6.0, 0.0)).unwrap();
+    assert!(world.apply_impulse(a, impulse));
+    assert!(world.apply_impulse(b, impulse));
+    assert!(world.despawn_enemy(a));
+    let c = world.place(Vec2::new(30.0, 0.0), Template::BODY).unwrap();
+    assert!(!world.apply_impulse(a, impulse));
+    assert!(world.motion(a).is_none());
+    assert_eq!(world.motion(c).unwrap().velocity(), Vec2::ZERO);
+    assert_eq!(world.motion(b).unwrap().velocity(), Vec2::new(6.0, 0.0));
+    world.step(tick_dt(), Intent::NONE);
+    assert!((world.enemy_pos(b).unwrap().x - 20.1).abs() < 1e-5);
+    assert_eq!(world.enemy_pos(c).unwrap().x, 30.0);
+}
+
+#[test]
+fn a_horde_reset_preserves_the_players_body_and_carried_motion() {
+    let mut world = World::default();
+    let player = world.player_id();
+    assert!(world.apply_impulse(player, Impulse::try_from((6.0, 0.0)).unwrap()));
+    for count in [0, 8, 1, 100] {
+        world.set_enemy_count(count);
+        assert_eq!(world.player_id(), player);
+        assert!(!world.despawn_enemy(player));
+        assert!(!world.add_seek(player));
+        assert_eq!(world.motion(player).unwrap().velocity(), Vec2::new(0.3, 0.0));
+        assert_eq!(world.enemy_count(), count);
+    }
+}
+
+#[test]
+fn velocity_is_hashed_observed_and_does_not_change_zero_tick_rendering() {
+    let mut world = World::default();
+    world.set_enemy_count(0);
+    let id = world.place(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
+    let before = world.hash();
+    let position = world.enemy_pos(id);
+    assert!(world.apply_impulse(id, Impulse::try_from((6.0, 0.0)).unwrap()));
+    assert_ne!(world.hash(), before);
+    assert_eq!(world.enemy_pos(id), position);
+    let mut buffer = InstanceBuffer::default();
+    for alpha in [Alpha::ZERO, half(), Alpha::ONE] {
+        assert_eq!(drawn_enemies(&world, alpha, &mut buffer), vec![position.unwrap()]);
+    }
+    let mut report = Report::default();
+    world.report(&mut report);
+    let report = report.finish();
+    assert!(report.contains("\"velocity\":[6.0000,0.0000,0.0000]"), "{report}");
 }

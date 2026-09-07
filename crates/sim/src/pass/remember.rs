@@ -13,15 +13,7 @@ use glam::Vec2;
 /// with a swap, `pos` would start the tick holding the tick-*before*-last's
 /// values, and the Gauss-Seidel solver in [`crate::pass::separate`] reads
 /// exactly that way.
-pub(crate) fn remember(
-    pos: Vec2,
-    facing: f32,
-    prev_pos: &mut Vec2,
-    prev_facing: &mut f32,
-    horde: &[Vec2],
-    horde_prev: &mut [Vec2],
-) {
-    *prev_pos = pos;
+pub(crate) fn remember(facing: f32, prev_facing: &mut f32, pos: &[Vec2], prev_pos: &mut [Vec2]) {
     *prev_facing = facing;
-    horde_prev.copy_from_slice(horde);
+    prev_pos.copy_from_slice(pos);
 }

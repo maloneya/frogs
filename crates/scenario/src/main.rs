@@ -6,8 +6,8 @@
 //! ```
 //!
 //! A scenario is setup, an input stream measured in ticks, a tick budget, and
-//! assertions over the state it ends in. It runs against `sim` with no GPU, no
-//! window and no wall clock, in microseconds — which is what lets it be the
+//! assertions at checkpoints and over the state it ends in. It runs against
+//! `sim` with no GPU, no window and no wall-clock pacing — which lets it be the
 //! gate on *every* change rather than something run occasionally.
 //!
 //! **Why this exists rather than a careful look at the numbers.** Driving the
@@ -102,17 +102,22 @@ fn run_one(path: &Path, bless: bool) -> bool {
     // A parse error is reported as an ordinary failure rather than a panic: one
     // malformed file must not hide the results of every other scenario in the
     // directory. RON's error names the line and column.
-    let options = ron::Options::default()
-        .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
+    let options =
+        ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
 
     let scenario: spec::Scenario = match options.from_str(&source) {
         Ok(s) => s,
         Err(e) => return fail_to_load(&name, "parse", &e.to_string()),
     };
 
+    let invalid = run::validate(&scenario);
+    if !invalid.is_empty() {
+        report::failed(&name, &invalid);
+        return false;
+    }
+
     let outcome = run::run(&scenario);
     let mut failures = run::check(&scenario, &outcome);
-    failures.extend(run::check_finite(&outcome));
     failures.extend(run::check_replay(&scenario, &outcome));
     failures.extend(run::check_trace(&scenario, &outcome, path, bless));
 

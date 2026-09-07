@@ -1,12 +1,12 @@
 ---
 name: scenario
-description: Write, run and update arpg scenarios — the headless, exit-code-gated tests that drive the sim with a scripted input stream and assert over final state and the trace. Use whenever verifying a change to simulation behaviour, adding a regression test for a bug, updating golden traces, or asking whether a change is done. Prefer this over driving the game through the ARPG_HARNESS socket for anything that can be checked without a GPU or a window.
+description: Write, run and update arpg scenarios — the headless, exit-code-gated tests that drive the sim with a scripted input stream and assert at checkpoints, over final state and over the trace. Use whenever verifying a change to simulation behaviour, adding a regression test for a bug, updating golden traces, or asking whether a change is done. Prefer this over driving the game through the ARPG_HARNESS socket for anything that can be checked without a GPU or a window.
 ---
 
 # Scenarios
 
 A scenario is the unit of verification in this repo. Setup, an input stream
-measured in ticks, assertions over final state and over the trace, a tick
+measured in ticks, assertions at checkpoints, over final state and over the trace, a tick
 budget. It runs headless against `sim` — no GPU, no window, microseconds per
 run — and it exits 0 or 1.
 
@@ -88,21 +88,51 @@ the order they were granted, so `bodies: [(nth: 1, ...)]` can name one.
 
 ## What can be asserted today
 
-`player_pos` (as `(x, z)` with a radius tolerance), `facing` (radians,
+`player_pos` and `player_velocity` (as `(x, z)` with a radius tolerance), `facing` (radians,
 `(value, tol)`), `contacts`, `crowd_contacts`, `struck`, `hitbox`,
 `enemy_count`, `seekers`, `sources`, and `bodies` — a list of `(nth:, pos:,
-seeking:, alive:)` predictions about individually placed bodies. Every one is
+velocity:, seeking:, alive:)` predictions about individually placed bodies. Every one is
 optional. The tick budget is always checked — the run must take exactly that
 many ticks.
 
 Plus `trace: "name.trace"`, a checked-in golden file the run's trace must match
-exactly — see below. **For anything with a window — when a hitbox opened, which
-tick a source fired on — the golden trace is the assertion and the final state
-is not.** A point sample cannot see an interval.
+exactly — see below. Checkpoints assert intermediate state; the golden trace
+asserts the event sequence across the run. Final state alone cannot see a
+hitbox opening early or a source firing on the wrong tick.
+
+## Checkpoints
+
+Use the same state assertions as final `expect`, evaluated immediately after a
+named zero-based tick completes:
+
+```ron
+checkpoints: [
+    (at: 5, expect: (hitbox: false, struck: 0)),
+    (at: 6, expect: (hitbox: true, struck: 1)),
+    (at: 10, expect: (hitbox: false, struck: 1)),
+],
+budget: (ticks: 30),
+expect: (hitbox: false, trace: "the_hitbox_opens_and_shuts_on_schedule.trace"),
+```
+
+`at: 0` observes the first completed step, not setup. `at: 6` observes seven
+completed steps, including tick 6's inputs, spawns and all simulation passes.
+Every checkpoint must be below `budget.ticks`; unreachable checkpoints are
+errors. They may be listed in any order, and multiple entries at one tick all
+run. A failure names the checkpoint's file index, tick and field, preserving
+the observed value even if the state later recovers. `--bless` cannot erase it.
+
+Golden traces describe the whole run and belong only in the final
+`expect.trace`; a checkpoint containing `trace` is rejected. Assertions read
+the live world through a shared reference, outside the step timer, without
+retaining world snapshots.
+
+See `scenarios/the_hitbox_opens_and_shuts_on_schedule.ron` for a worked example
+checking impulse, movement and damping at successive ticks in one run.
 
 Not yet: pointwise trace assertions (`(tick: 417, event: "hitbox.active")`;
 golden files cover the same ground for now), anything about the image (chunk 6),
-placing the *player* anywhere but the origin (chunk 4), and killing a body
+placing the *player* anywhere but the origin, and killing a body
 mid-run (chunk 8). If a scenario needs one of those, say so rather than working
 around it with a warm-up that makes the prediction unreadable.
 
@@ -228,3 +258,21 @@ which is a promotion off layer 4.
   test is the existing pattern, and offscreen capture (roadmap chunk 6) is what
   will make image checks available to a scenario at all.
 - **Input latency and OS event delivery.** Scenarios inject at the action layer.
+
+
+## Physical motion
+
+`impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))]` applies momentum
+before tick zero. `target: Player` uses the same physical interface. `value`
+is sim's validated `Impulse`, so nonfinite values are rejected on parsing.
+Missing or dead targets fail the scenario rather than silently dropping it.
+
+Assert `velocity: (x:, z:, tol:)` on a body, or `player_velocity` in `expect`.
+These are carried velocities, excluding powered walk/seek displacement.
+A source attack applies its impulse after integration, so its first displacement
+occurs on the following tick. The hit and impulse events pin this boundary.
+
+A budget may also set `max_mean_step_micros`. Timing surrounds `World::step`
+only, outside simulation, and excludes hashing and verification. `sim` is
+optimized even in the debug scenario runner; validate performance in release
+as well. This is a mean budget, not a worst-tick latency guarantee.

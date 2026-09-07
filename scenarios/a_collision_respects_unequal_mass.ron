@@ -1,0 +1,8 @@
+// Incoming enemy momentum=-6. Total mass=21, so both velocities
+// become -6/21 before damping, -.25714286 after. Projection shares .05
+// penetration in inverse-mass ratio .05:1, never converting it to energy.
+(description: "An enemy transfers momentum to the heavier player using the same contact response.",
+ setup: (actions: [Place((0.6, 0.0))]),
+ impulses: [(at: 0, target: Placed(0), value: (-6.0, 0.0))], budget: (ticks: 1),
+ expect: (player_pos: (x: -0.00238095, z: 0.0, tol: 0.000001), player_velocity: (x: -0.25714286, z: 0.0, tol: 0.000001),
+ bodies: [(nth: 0, pos: (x: 0.54761905, z: 0.0, tol: 0.000001), velocity: (x: -0.25714286, z: 0.0, tol: 0.000001))], trace: "a_collision_respects_unequal_mass.trace"))

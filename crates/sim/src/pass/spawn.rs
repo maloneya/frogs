@@ -52,7 +52,7 @@ use crate::hash::Fnv;
 use crate::members::Members;
 use crate::slots::EntityId;
 use crate::trace::{Event, TraceSink};
-use crate::{Enemies, MAX_ENEMIES};
+use crate::{Bodies, MAX_ENEMIES};
 
 /// How many requests may be pending at once.
 ///
@@ -200,20 +200,20 @@ impl SpawnQueue {
 /// rather than a clamp, because the budget exists to stop the instance buffer
 /// overrunning and an overrun is silent.
 ///
-/// **Takes `&mut Enemies` where the pass contract asks for slices**, and that
+/// **Takes `&mut Bodies` where the pass contract asks for slices**, and that
 /// is the one deliberate exception in the schedule. The pairing between
 /// `slots`, `pos` and `prev_pos` — and the seeding of `prev_pos` that stops a
 /// new body streaking across the arena for a frame — is an invariant the
 /// storage owns. Handed three raw `Vec`s, this function would be reimplementing
 /// that invariant at the one call site most likely to get it wrong.
 pub(crate) fn place(
-    enemies: &mut Enemies,
+    enemies: &mut Bodies,
     seekers: &mut Members,
     at: Vec2,
     what: Template,
     trace: &mut TraceSink<'_>,
 ) -> Option<EntityId> {
-    if enemies.len() >= MAX_ENEMIES {
+    if enemies.len() > MAX_ENEMIES {
         return None;
     }
 
@@ -247,7 +247,7 @@ pub(crate) fn place(
 /// a fixed-step loop is a bug with a schedule.
 pub(crate) fn drain(
     queue: &mut SpawnQueue,
-    enemies: &mut Enemies,
+    enemies: &mut Bodies,
     seekers: &mut Members,
     mut trace: TraceSink<'_>,
 ) {
@@ -272,7 +272,7 @@ pub(crate) fn drain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Enemies;
+    use crate::Bodies;
 
     /// **The refusal the instance budget exists for.** `MAX_ENEMIES` is
     /// whatever the ground and the player leave of the instance buffer, and an
@@ -287,9 +287,9 @@ mod tests {
     /// the solver to prove it would be a test nobody runs.
     #[test]
     fn a_full_horde_refuses_what_it_cannot_hold() {
-        let mut enemies = Enemies::default();
+        let mut enemies = Bodies::default();
         enemies.respawn(MAX_ENEMIES);
-        assert_eq!(enemies.len(), MAX_ENEMIES, "the horde did not actually fill");
+        assert_eq!(enemies.len(), MAX_ENEMIES + 1, "the horde did not actually fill");
 
         let mut seekers = Members::default();
         let mut queue = SpawnQueue::default();
@@ -298,7 +298,7 @@ mod tests {
         assert!(queue.push(Vec2::ZERO, Template::BODY), "the queue refused before the horde could");
         drain(&mut queue, &mut enemies, &mut seekers, trace.sink(0));
 
-        assert_eq!(enemies.len(), MAX_ENEMIES, "the budget was overrun");
+        assert_eq!(enemies.len(), MAX_ENEMIES + 1, "the budget was overrun");
         let events: Vec<_> = trace.iter().map(|(_, e)| e).collect();
         assert_eq!(events, vec![Event::Refused { count: 1 }], "a body was lost without a word");
     }

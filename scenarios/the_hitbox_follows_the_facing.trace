@@ -1,4 +1,5 @@
 30 swung
 36 hitbox opened
-36 hit id=#0v2
+36 hit id=#1v2
+36 impulse id=#1v2 value=(6.0000,-0.0000) source=#0v1
 40 hitbox closed

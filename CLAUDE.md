@@ -10,6 +10,10 @@ combat against a large horde of enemies *feel* right.
 
 This framing changes how to work here:
 
+- **Simulation and systems first.** Build behaviour by composing systems.
+  Shared physical interaction belongs below attacks and other producers.
+- **Agent-first engine.** A system must be drivable, observable and assertable
+  through the engine's own interfaces, independently of the feature using it.
 - **Explain, don't just deliver.** Concise natural-language reasoning about why
   a design is what it is matters more than the code being finished.
 - **Small chunks.** Build one system at a time and get it running before moving
@@ -106,7 +110,7 @@ echo 'hold d 500' | nc -U /tmp/arpg.sock
 `state` · `trace since <tick>` · `enemies <n>` · `seekers <n>` ·
 `spawn <x> <z> [seek]` ·
 `source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>]` ·
-`source remove <id>` · `vsync on|off` · `quit`
+`source remove <id>` · `impulse <player|#id> <x> <z>` · `vsync on|off` · `quit`
 
 Every command replies, and the reply means the effect has **landed** — `hold`
 answers after the key comes back up, `shot` after the file is on disk. So a test
@@ -189,7 +193,8 @@ crates/
     there, because separation, a hitbox and a trigger are three answers to that
     one question.
   - `pass/` — one module per named pass: `source`, `spawn`, `remember`, `walk`,
-    `seek`, `separate`, `contain`, `face`, `attack`, in that order. The first
+    `seek`, `motion::integrate`, `separate`, `contain`, `motion::settle`,
+    `face`, `attack`, in that order. The first
     two are *decide* and *perform*, split on purpose: `source` works out which
     sources fire and may only push onto the spawn queue — it is handed no
     storage, so the code that decides new bodies exist cannot make one — and
@@ -203,7 +208,11 @@ crates/
     than one enum of every useful combination. `pass/mod.rs` is the readable
     copy of the schedule and must agree with the body of `World::step`. The
     hitbox is `contact`'s question with a different answer, and the signatures
-    say so: the solver takes `&mut [Vec2]`, the hitbox `&[Vec2]`.
+    say so: the solver takes `&mut [Vec2]`, the hitbox `&[Vec2]` plus an `ImpulseSink`, which cannot write positions.
+  - `pass/motion.rs` — sparse physical membership, mass, carried velocity and
+    validated impulses. Collision response exchanges momentum; damping settles
+    it. Powered walk/seek displacement remains independent. The player shares
+    body storage with the horde; its row survives enemy resets and despawns.
 - The **overlay** is the second pipeline, and almost the inverse of the first:
   no camera, alpha blended, drawn in submission order rather than depth order.
   It joins the world's render pass instead of opening its own — declaring a

@@ -1,0 +1,5 @@
+// Seek travels -3.5/60 along X, carried velocity adds +6/60.
+(description: "Steering and carried motion compose without overwriting one another.",
+ setup: (actions: [Place((10.0, 0.0)), Seek(0)]),
+ impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))], budget: (ticks: 1),
+ expect: (bodies: [(nth: 0, seeking: true, pos: (x: 10.0416667, z: 0.0, tol: 0.00001), velocity: (x: 5.4, z: 0.0, tol: 0.00001))]))

@@ -1,0 +1,5 @@
+// Headless cost at the normal horde size. sim is compiled at opt-level 3;
+// 4ms leaves most of the 16.7ms tick for other systems, even with room for noise.
+(description: "The physical horde stays within a headless tick budget and replays.",
+ setup: (enemies: 1024), impulses: [(at: 0, target: Player, value: (120.0, 0.0))],
+ budget: (ticks: 120, max_mean_step_micros: 4000.0), expect: (enemy_count: 1024))

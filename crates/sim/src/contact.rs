@@ -6,9 +6,9 @@
 //! thing:
 //!
 //! - separation pushes the pair apart along the normal,
-//! - an attack's hitbox deals damage and pushes nobody,
+//! - an attack's hitbox records a hit and requests a gameplay impulse,
 //! - a trigger volume emits an event and does not even look at the depth,
-//! - knockback wants the normal and throws the body along it.
+//! - solid collision response exchanges momentum along the normal.
 //!
 //! Those are four different passes over the same question. Fuse the question
 //! into any one of its answers and the others cannot *reuse* touching, only

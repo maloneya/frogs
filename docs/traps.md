@@ -107,20 +107,20 @@ invisible. That asymmetry is the tell.
 vsync, look for state written outside a tick rather than at the renderer.
 
 **Fix.** Whatever writes state outside `step` must set `prev` to match, the way
-`Enemies::spawn` does. A test asserts the drawn positions are identical at
+`Bodies::spawn` does. A test asserts the drawn positions are identical at
 alpha 0, 0.5 and 1 with no tick in between — that is the shape to copy.
 
 **Partly promoted, 2026-09.** This entry used to ask for exactly one thing: a
 spawn that maintains `prev` as an invariant of the storage, so the class is
 removed rather than tested for one caller at a time. That now exists. Every
-body enters the world through `Enemies::spawn`, which seeds `prev_pos` to the
+body enters the world through `Bodies::spawn`, which seeds `prev_pos` to the
 spawn point; `World::place` and the bulk `respawn` both go through it,
 and there is no other door in.
 
-**Still live for everything that is not a body.** The player is not in that
-storage, and neither is any state a pass adds outside the schedule later. The
-symptom and the check above are unchanged for those, which is why this entry is
-demoted rather than deleted.
+**Player promoted too, 2026-09.** The player now shares body storage. Impulses
+change velocity without changing either position snapshot, and a zero-tick
+render test checks this. The trap remains relevant to future teleports and
+non-positional state written outside the schedule.
 
 ---
 

@@ -28,10 +28,9 @@ pub(crate) fn contain(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSin
 
 Not `fn contain(world: &mut World)`.
 
-One honest limit: the player is still a single struct rather than a row in the
-horde's storage, so passes take its individual fields where the horde gets a
-real slice. The horde half of each signature is checked by the compiler, the
-player half by reading it.
+The player shares body storage and physical membership with the horde. Its
+facing and attack state remain separate. Producers of motion take an
+`ImpulseSink`; they cannot reach physical storage or write positions.
 
 **Take `Dt`, never `f32`.** `Dt` carries no number at all and can only have come
 from `Accumulator::pending`, so a variable timestep is not something a caller

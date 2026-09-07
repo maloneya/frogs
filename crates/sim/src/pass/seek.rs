@@ -21,7 +21,7 @@ use glam::Vec2;
 
 use crate::members::Members;
 use crate::slots::Slots;
-use crate::{Dt, ENEMY_RADIUS, PLAYER_RADIUS};
+use crate::{Dt, ENEMY_RADIUS, EntityId, PLAYER_RADIUS};
 
 /// How fast a chaser moves, in world units per second.
 ///
@@ -60,7 +60,9 @@ const STOP_AT: f32 = PLAYER_RADIUS + ENEMY_RADIUS;
 /// behaviour set holding a name whose body has died is the ordinary case — it
 /// is what a generational id makes safe to ask about — and `World::despawn_enemy`
 /// revokes eagerly anyway, so this is the belt to that pair of braces.
-pub(crate) fn seek(seekers: &Members, bodies: &Slots, pos: &mut [Vec2], target: Vec2, dt: Dt) {
+pub(crate) fn seek(seekers: &Members, bodies: &Slots, pos: &mut [Vec2], target: EntityId, dt: Dt) {
+    let Some(target_row) = bodies.index(target) else { return };
+    let target = pos[target_row];
     let full_step = SPEED * dt.secs();
 
     for &id in seekers.ids() {

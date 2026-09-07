@@ -39,8 +39,27 @@ const _: () = assert!(CAPACITY > 0, "a zero-length trace silently records nothin
 /// that floods the buffer so thoroughly that the rare events this exists for
 /// scroll away before anyone reads them. Per-occurrence events belong to things
 /// that occur rarely: a hitbox opening, a hit landing, hitstop starting.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
+    /// A physical impulse was applied; source is absent for external commands.
+    Impulsed {
+        /// Recipient's stable identity.
+        id: EntityId,
+        /// Entity that caused this impulse, if any.
+        source: Option<EntityId>,
+        /// Momentum added in world X/Z.
+        impulse: crate::Impulse,
+    },
+    /// Contact responses that exchanged momentum this pass, aggregated.
+    Momentum {
+        /// Number of closing pairs resolved.
+        pairs: usize,
+    },
+    /// Bodies whose carried velocity reached rest this tick.
+    Rested {
+        /// Number of bodies that stopped.
+        count: usize,
+    },
     /// The horde was rebuilt. Not part of a tick — spawning happens outside the
     /// schedule, which is exactly why it is worth recording.
     Spawned {
@@ -147,6 +166,15 @@ impl fmt::Display for Event {
     /// noise that hides the one line that mattered.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Impulsed { id, source, impulse } => {
+                write!(f, "impulse id={id} value={impulse} source=")?;
+                match source {
+                    Some(id) => write!(f, "{id}"),
+                    None => write!(f, "external"),
+                }
+            }
+            Self::Momentum { pairs } => write!(f, "momentum pairs={pairs}"),
+            Self::Rested { count } => write!(f, "rested count={count}"),
             Self::Spawned { count } => write!(f, "spawned count={count}"),
             Self::Placed { id } => write!(f, "placed id={id}"),
             Self::SourceAdded { id } => write!(f, "source added id={id}"),

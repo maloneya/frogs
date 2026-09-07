@@ -7,9 +7,9 @@
 //!
 //! The signature is where that shows up, and it is worth reading twice.
 //! `pass::separate` takes `&mut [Vec2]` because pushing is what it does; this
-//! takes `&[Vec2]`. A hitbox cannot move anything, and that is not a promise in
-//! a comment — it is the absence of a `mut`, checked by the compiler at every
-//! line of the pass.
+//! takes `&[Vec2]` plus an `ImpulseSink`. It can request momentum, but cannot
+//! move a position or reach the rest of the physics store. The motion pass
+//! integrates that momentum on the next tick.
 //!
 //! ## Why the window is the hard part
 //!
@@ -20,13 +20,14 @@
 //! samples. Every timing claim below is therefore asserted against a golden
 //! trace, which is the only artefact that can see an interval.
 
+use super::motion::{Impulse, ImpulseSink};
 use glam::Vec2;
 
 use crate::contact;
-use crate::slots::Slots;
+
 use crate::swing::{Disc, Hitbox, Swing};
 use crate::trace::{Event, TraceSink};
-use crate::{EntityId, ENEMY_RADIUS};
+use crate::{ENEMY_RADIUS, EntityId};
 
 /// Ticks from the button to the hitbox appearing.
 ///
@@ -92,11 +93,8 @@ pub(crate) const HITBOX_SAMPLES: usize = ACTIVE as usize;
 /// that the shape is now a value, so the renderer can draw the thing this pass
 /// tests instead of a second opinion about where it is. Separating the two ends
 /// is what makes a stab, an arc or a slam; see [`crate::swing`].
-const SWING_PATH: Swing = Swing::new(
-    Vec2::new(0.0, REACH),
-    Vec2::new(0.0, REACH),
-    (HITBOX_RADIUS, HITBOX_RADIUS),
-);
+const SWING_PATH: Swing =
+    Swing::new(Vec2::new(0.0, REACH), Vec2::new(0.0, REACH), (HITBOX_RADIUS, HITBOX_RADIUS));
 
 /// How many bodies one swing is expected to strike.
 ///
@@ -251,6 +249,18 @@ fn is_active(elapsed: u32) -> bool {
     (STARTUP..STARTUP + ACTIVE).contains(&elapsed)
 }
 
+/// Ground-plane pose shared by the hit query and the impulse's direction.
+#[derive(Clone, Copy)]
+pub(crate) struct Pose {
+    pub(crate) pos: Vec2,
+    pub(crate) facing: f32,
+}
+
+/// Momentum per struck body. A mass-one target starts at six units/second,
+/// traveling about one world unit before damping brings it to rest.
+const KNOCKBACK: f32 = 6.0;
+const _: () = assert!(KNOCKBACK > 0.0);
+
 /// Advances the swing, and strikes whatever the hitbox is touching.
 ///
 /// **Takes positions immutably**, which is the whole difference between this
@@ -273,11 +283,11 @@ fn is_active(elapsed: u32) -> bool {
 /// feel nobody has tried.
 pub(crate) fn attack(
     state: &mut Attack,
-    player_pos: Vec2,
-    facing: f32,
+    pose: Pose,
     pressed: bool,
-    bodies: &Slots,
+    bodies: &[EntityId],
     pos: &[Vec2],
+    mut impulses: ImpulseSink<'_>,
     mut trace: TraceSink<'_>,
 ) {
     // **Advance first, then accept a press, then act.** The order is the whole
@@ -324,7 +334,7 @@ pub(crate) fn attack(
     }
 
     if let Some(disc) = live {
-        strike(&mut state.struck, disc, player_pos, facing, bodies, pos, &mut trace);
+        strike(&mut state.struck, disc, pose, bodies, pos, &mut impulses, &mut trace);
     }
 
     // Symmetric with the open above: `opened` on the first tick the hitbox
@@ -358,16 +368,16 @@ pub(crate) fn attack(
 fn strike(
     struck: &mut Vec<EntityId>,
     disc: Disc,
-    player_pos: Vec2,
-    facing: f32,
-    bodies: &Slots,
+    pose: Pose,
+    bodies: &[EntityId],
     pos: &[Vec2],
+    impulses: &mut ImpulseSink<'_>,
     trace: &mut TraceSink<'_>,
 ) {
     // The disc is *placed* rather than computed. `World::extract` places the
     // same one, from the same array, which is what makes the swing draw where
     // it hits — see `crate::swing`.
-    let (centre, radius) = disc.place(player_pos, facing);
+    let (centre, radius) = disc.place(pose.pos, pose.facing);
     let contact_distance = radius + ENEMY_RADIUS;
 
     // **Cheapest test first.** The distance check rejects almost every body in a
@@ -380,13 +390,19 @@ fn strike(
             continue;
         }
 
-        let id = bodies.ids()[row];
+        let id = bodies[row];
         if struck.contains(&id) {
             continue;
         }
 
         struck.push(id);
         trace.emit(Event::Hit { id });
+        let direction = Vec2::new(pose.facing.sin(), pose.facing.cos()) * KNOCKBACK;
+        impulses.push(
+            id,
+            Impulse::try_from((direction.x, direction.y)).expect("finite facing and tuning"),
+            trace,
+        );
     }
 }
 
@@ -402,15 +418,17 @@ mod tests {
         let mut state = Attack::default();
         let mut trace = Trace::default();
         let mut seen = Vec::new();
+        let mut physics = super::super::motion::Physics::default();
+        let player = crate::slots::Slots::default().insert();
 
         for tick in 0..ticks {
             attack(
                 &mut state,
-                Vec2::ZERO,
-                0.0,
+                Pose { pos: Vec2::ZERO, facing: 0.0 },
                 press_on.contains(&tick),
-                &Slots::default(),
                 &[],
+                &[],
+                physics.sink(player),
                 trace.sink(u64::from(tick)),
             );
             seen.push((tick, state.is_swinging(), state.hitbox_is_live()));

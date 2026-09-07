@@ -182,6 +182,12 @@ impl App {
                     continue; // replies once the file exists
                 }
                 Command::State => self.report_state(),
+                Command::Impulse { target, value } => match self.world.body_named(&target) {
+                    Some(id) if self.world.apply_impulse(id, value) => {
+                        format!("impulse applied to {id}")
+                    }
+                    _ => format!("error: no physical body {target}"),
+                },
                 Command::TraceSince(tick) => self.report_trace(tick),
                 Command::SetEnemies(n) => {
                     self.world.set_enemy_count(n);
@@ -189,7 +195,11 @@ impl App {
                     // behaviour with them. Said in the reply rather than left
                     // to be discovered, because "I set the horde and the
                     // chasing stopped" is otherwise a puzzle.
-                    format!("enemies {} seekers {}", self.world.enemy_count(), self.world.seeker_count())
+                    format!(
+                        "enemies {} seekers {}",
+                        self.world.enemy_count(),
+                        self.world.seeker_count()
+                    )
                 }
                 Command::Spawn { x, z, what } => {
                     // The reply says *queued*, not spawned, because that is what
@@ -209,12 +219,10 @@ impl App {
                     let id = self.world.add_source(spec.into());
                     format!("source {id}")
                 }
-                Command::RemoveSource(id) => {
-                    match self.world.remove_source(id) {
-                        true => format!("removed {id}"),
-                        false => format!("error: no live source {id}"),
-                    }
-                }
+                Command::RemoveSource(id) => match self.world.remove_source(id) {
+                    true => format!("removed {id}"),
+                    false => format!("error: no live source {id}"),
+                },
                 Command::SetSeekers(n) => {
                     self.world.set_seeker_count(n);
                     format!("seekers {}", self.world.seeker_count())
@@ -347,8 +355,7 @@ impl App {
     /// Everything below the `alpha` line is presentation. Nothing there may
     /// write simulation state, and nothing there may consume an input edge.
     fn redraw(&mut self) {
-        let (Some(renderer), Some(camera)) = (self.renderer.as_mut(), self.camera.as_mut())
-        else {
+        let (Some(renderer), Some(camera)) = (self.renderer.as_mut(), self.camera.as_mut()) else {
             return;
         };
 
@@ -376,10 +383,7 @@ impl App {
             // still swing exactly once.
             self.world.step(
                 dt,
-                Intent::new(
-                    to_world(intent.move_axis()),
-                    intent.just_pressed(Action::Attack),
-                ),
+                Intent::new(to_world(intent.move_axis()), intent.just_pressed(Action::Attack)),
             );
         }
 
@@ -482,10 +486,7 @@ impl ApplicationHandler for App {
         // Native-only, so we can simply block until the GPU is ready. The
         // cross-platform examples route this back through the event loop
         // because the browser forbids blocking the main thread.
-        self.renderer = Some(pollster::block_on(Renderer::new(
-            window.clone(),
-            display_handle,
-        )));
+        self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), display_handle)));
         let size = window.inner_size();
 
         // Start framed on the character rather than easing in from the origin.
@@ -542,8 +543,7 @@ impl ApplicationHandler for App {
                             renderer.toggle_vsync();
                         }
                         KeyCode::KeyP => {
-                            let path = capture_dir()
-                                .join(format!("arpg-{:04}.png", self.captures));
+                            let path = capture_dir().join(format!("arpg-{:04}.png", self.captures));
                             self.captures += 1;
                             renderer.request_capture(path);
                         }

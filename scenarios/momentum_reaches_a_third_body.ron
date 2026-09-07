@@ -1,0 +1,9 @@
+// Fixed pair order: AB share 6 -> (3,3,0), BC share 3 -> (3,1.5,1.5).
+// Damping afterwards yields (2.7,1.35,1.35), conserving momentum before drag.
+(description: "A blow propagates through contacts to a third body.",
+ setup: (actions: [Place((10.0, 0.0)), Place((10.5, 0.0)), Place((11.0, 0.0))]),
+ impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))], budget: (ticks: 1),
+ expect: (bodies: [
+ (nth: 0, velocity: (x: 2.7, z: 0.0, tol: 0.00001)),
+ (nth: 1, velocity: (x: 1.35, z: 0.0, tol: 0.00001)),
+ (nth: 2, velocity: (x: 1.35, z: 0.0, tol: 0.00001))], trace: "momentum_reaches_a_third_body.trace"))

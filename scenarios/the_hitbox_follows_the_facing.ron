@@ -37,8 +37,8 @@
         struck: 1,
         hitbox: false,
         bodies: [
-            // A hitbox reads positions and cannot write them, so neither moved.
-            (nth: 0, alive: true, pos: (x: 5.6, z: 0.0, tol: 0.0001)),
+            // Hit at 36; 18 integrations on ticks 37..54 add 1-.9^18=.8499054.
+            (nth: 0, alive: true, pos: (x: 6.4499054, z: 0.0, tol: 0.0001)),
             (nth: 1, alive: true, pos: (x: 4.5, z: 1.1, tol: 0.0001)),
         ],
         trace: "the_hitbox_follows_the_facing.trace",

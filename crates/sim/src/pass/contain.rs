@@ -2,8 +2,9 @@
 
 use glam::Vec2;
 
+use super::motion::Physics;
 use crate::trace::{Event, TraceSink};
-use crate::{ARENA_HALF, ENEMY_RADIUS, PLAYER_RADIUS};
+use crate::{ARENA_HALF, ENEMY_RADIUS, EntityId, PLAYER_RADIUS};
 
 /// What a clamp does to a NaN, and why this pass has to refuse one.
 ///
@@ -31,7 +32,13 @@ const POISONED: &str = "a position was NaN or infinite before it was clamped. \
 /// Runs after separation rather than before: clamping first would let a contact
 /// shove a body straight through the wall and leave it outside until something
 /// else happened to touch it.
-pub(crate) fn contain(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink<'_>) {
+pub(crate) fn contain(
+    pos: &mut [Vec2],
+    ids: &[EntityId],
+    physics: &mut Physics,
+    mut trace: TraceSink<'_>,
+) {
+    let (player, horde) = pos.split_first_mut().expect("the player always exists");
     let mut stopped = 0;
 
     debug_assert!(player.is_finite(), "{}", POISONED);
@@ -40,16 +47,18 @@ pub(crate) fn contain(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSin
     let clamped = player.clamp(-player_limit, player_limit);
     if clamped != *player {
         stopped += 1;
+        stop_at_wall(physics, ids[0], *player, clamped);
         *player = clamped;
     }
 
     let enemy_limit = Vec2::splat(ARENA_HALF - ENEMY_RADIUS);
-    for pos in horde.iter_mut() {
+    for (i, pos) in horde.iter_mut().enumerate() {
         debug_assert!(pos.is_finite(), "{}", POISONED);
 
         let clamped = pos.clamp(-enemy_limit, enemy_limit);
         if clamped != *pos {
             stopped += 1;
+            stop_at_wall(physics, ids[i + 1], *pos, clamped);
             *pos = clamped;
         }
     }
@@ -59,5 +68,15 @@ pub(crate) fn contain(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSin
     // the rare events it exists to keep.
     if stopped > 0 {
         trace.emit(Event::Clamped { count: stopped });
+    }
+}
+
+/// Each axis is independent, including a corner: cancel both outward components.
+fn stop_at_wall(physics: &mut Physics, id: EntityId, pos: Vec2, clamped: Vec2) {
+    if pos.x != clamped.x {
+        physics.wall(id, Vec2::new(pos.x.signum(), 0.0));
+    }
+    if pos.y != clamped.y {
+        physics.wall(id, Vec2::new(0.0, pos.y.signum()));
     }
 }

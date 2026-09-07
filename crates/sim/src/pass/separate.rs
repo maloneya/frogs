@@ -19,21 +19,12 @@
 
 use glam::Vec2;
 
+use super::motion::Physics;
+#[cfg(test)]
+use super::motion::{ENEMY_INV_MASS, PLAYER_INV_MASS};
 use crate::contact::{self, Contact};
 use crate::trace::{Event, TraceSink};
-use crate::{ENEMY_RADIUS, PLAYER_RADIUS};
-
-/// How hard each body resists being pushed.
-///
-/// The player is twenty times heavier than a single enemy, which is what lets
-/// it wade into a crowd and displace it rather than be carried off by it.
-const PLAYER_INV_MASS: f32 = 0.05;
-const ENEMY_INV_MASS: f32 = 1.0;
-const _: () = assert!(PLAYER_INV_MASS > 0.0 && ENEMY_INV_MASS > 0.0);
-const _: () = assert!(
-    PLAYER_INV_MASS < ENEMY_INV_MASS,
-    "an equal or lighter player is shoved around by fodder"
-);
+use crate::{ENEMY_RADIUS, EntityId, PLAYER_RADIUS};
 
 /// Separates every body overlapping the player, and reports how many.
 ///
@@ -49,15 +40,29 @@ const _: () = assert!(
 /// width inside a mass of identical cubes and nobody can see it. Reverse the
 /// order and the visible artefact is a body clipping into the character the
 /// camera is centred on.
-pub(crate) fn player(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink<'_>) -> usize {
+pub(crate) fn player(
+    pos: &mut [Vec2],
+    ids: &[EntityId],
+    physics: &mut Physics,
+    mut trace: TraceSink<'_>,
+) -> usize {
+    let (player, horde) = pos.split_first_mut().expect("the player always exists");
     let contact_distance = PLAYER_RADIUS + ENEMY_RADIUS;
     let mut contacts = 0;
+    let mut transfers = 0;
 
     for (i, enemy) in horde.iter_mut().enumerate() {
         // Ask, then answer. The index is the coincident-pair tiebreak, which is
         // what keeps a crowd stacked on one point fanning out reproducibly.
         if let Some(found) = contact::between(*player, *enemy, contact_distance, i) {
-            resolve(player, enemy, found, PLAYER_INV_MASS, ENEMY_INV_MASS);
+            resolve(
+                player,
+                enemy,
+                found,
+                physics.get(ids[0]).expect("physical player").inverse_mass(),
+                physics.get(ids[i + 1]).expect("physical body").inverse_mass(),
+            );
+            transfers += usize::from(physics.collide(ids[0], ids[i + 1], found));
             contacts += 1;
         }
     }
@@ -69,6 +74,9 @@ pub(crate) fn player(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink
         trace.emit(Event::Contacts { count: contacts });
     }
 
+    if transfers > 0 {
+        trace.emit(Event::Momentum { pairs: transfers });
+    }
     contacts
 }
 
@@ -115,9 +123,15 @@ pub(crate) fn player(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink
 /// another bite. That reads as a crowd settling, which is what it should look
 /// like; iterating here to a hard constraint would instead make a dense pack
 /// rigid and jolt everything the moment the player entered it.
-pub(crate) fn crowd(horde: &mut [Vec2], mut trace: TraceSink<'_>) -> usize {
+pub(crate) fn crowd(
+    horde: &mut [Vec2],
+    ids: &[EntityId],
+    physics: &mut Physics,
+    mut trace: TraceSink<'_>,
+) -> usize {
     let contact_distance = 2.0 * ENEMY_RADIUS;
     let mut contacts = 0;
+    let mut transfers = 0;
 
     for i in 0..horde.len() {
         // `split_at_mut` is what makes two simultaneous `&mut` into one slice
@@ -134,7 +148,15 @@ pub(crate) fn crowd(horde: &mut [Vec2], mut trace: TraceSink<'_>) -> usize {
             let tiebreak = i + (i + 1 + offset);
 
             if let Some(found) = contact::between(*a, *b, contact_distance, tiebreak) {
-                resolve(a, b, found, ENEMY_INV_MASS, ENEMY_INV_MASS);
+                let (aid, bid) = (ids[i], ids[i + 1 + offset]);
+                resolve(
+                    a,
+                    b,
+                    found,
+                    physics.get(aid).expect("physical body").inverse_mass(),
+                    physics.get(bid).expect("physical body").inverse_mass(),
+                );
+                transfers += usize::from(physics.collide(aid, bid, found));
                 contacts += 1;
             }
         }
@@ -144,28 +166,19 @@ pub(crate) fn crowd(horde: &mut [Vec2], mut trace: TraceSink<'_>) -> usize {
         trace.emit(Event::Crowded { count: contacts });
     }
 
+    if transfers > 0 {
+        trace.emit(Event::Momentum { pairs: transfers });
+    }
     contacts
 }
 
 /// Pushes two overlapping bodies apart along the contact normal, splitting the
 /// correction between them by inverse mass.
 ///
-/// **Position projection, not an impulse.** There is no velocity here and no
-/// momentum to conserve, which is the right model for a game whose movement is
-/// deliberately instantaneous: a solver whose whole job is conserving momentum
-/// would be fighting that. It also cannot inject energy, so there is no
-/// restitution to zero out and no explosive pushback to suppress.
-///
-/// The overlap is corrected in **full**, in one pass. The usual advice is to
-/// resolve a fraction — Box2D uses 0.2 — but that reasoning is about oblong
-/// shapes overshooting as they rotate, and these are discs that do not rotate
-/// and cannot stack. More to the point, a fraction applied once a tick is a
-/// per-tick lerp toward zero overlap, which is frame-rate dependent in exactly
-/// the way [`arpg_core::damp`] exists to prevent: it would converge five times
-/// faster uncapped than under vsync, so pressing `V` would change how the game
-/// feels and corrupt the measurement `V` is for. Full correction is exactly
-/// dt-independent, and it keeps that question shut until the fixed timestep
-/// makes it answerable.
+/// Projection repairs geometry without modifying velocity. `Physics::collide`
+/// separately exchanges momentum along the same contact's normal. Keeping the
+/// two responses separate prevents an initially overlapping pile from acquiring
+/// energy just because its positions needed correction.
 fn resolve(a: &mut Vec2, b: &mut Vec2, contact: Contact, a_inv_mass: f32, b_inv_mass: f32) {
     // Two immovable bodies have no correction to share out. Bailing keeps the
     // division below from being a zero-divide that quietly yields NaN.
@@ -185,7 +198,14 @@ mod tests {
     /// Drives the pair the way `separate` does — ask, then answer — so these
     /// stay tests of the *response* rather than re-testing the query. Returns
     /// whether there was anything to respond to.
-    fn settle(a: &mut Vec2, b: &mut Vec2, distance: f32, ia: f32, ib: f32, tiebreak: usize) -> bool {
+    fn settle(
+        a: &mut Vec2,
+        b: &mut Vec2,
+        distance: f32,
+        ia: f32,
+        ib: f32,
+        tiebreak: usize,
+    ) -> bool {
         let Some(found) = contact::between(*a, *b, distance, tiebreak) else { return false };
         resolve(a, b, found, ia, ib);
         true
