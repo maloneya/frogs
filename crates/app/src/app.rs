@@ -14,7 +14,7 @@ use arpg_sim::{Accumulator, World};
 
 use crate::harness::{self, Command, Request};
 use crate::hud;
-use crate::input::Input;
+use crate::input::Controls;
 use crate::time::Clock;
 
 /// Owns everything and wires it together. Deliberately the only place that
@@ -59,7 +59,7 @@ pub(crate) struct App {
     /// separate from `instances` because the two are drawn by different
     /// pipelines in different spaces. Merging them would mean a sort.
     quads: QuadBuffer,
-    input: Input,
+    input: Controls,
     clock: Clock,
     /// Turns the frame's elapsed seconds into whole simulation ticks.
     ///
@@ -151,20 +151,20 @@ impl App {
             let now = std::time::Instant::now();
             let answer = match command {
                 Command::Press(key) => {
-                    self.input.on_key(key, true, false);
+                    self.input.on_key(key, true, false, self.world.attack_status().recovery);
                     "ok".to_string()
                 }
                 Command::Release(key) => {
-                    self.input.on_key(key, false, false);
+                    self.input.on_key(key, false, false, self.world.attack_status().recovery);
                     "ok".to_string()
                 }
                 Command::Tap(key) => {
-                    self.input.on_key(key, true, false);
+                    self.input.on_key(key, true, false, self.world.attack_status().recovery);
                     self.scheduled.push(Deferred { due: now, release: Some(key), reply: None });
                     "ok".to_string()
                 }
                 Command::Hold(key, ms) => {
-                    self.input.on_key(key, true, false);
+                    self.input.on_key(key, true, false, self.world.attack_status().recovery);
                     let due = now + std::time::Duration::from_millis(ms);
                     self.scheduled.push(Deferred { due, release: Some(key), reply: Some(reply) });
                     continue; // replies once the key comes back up
@@ -261,6 +261,7 @@ impl App {
         let mut out = Report::default();
 
         out.object("sim", |sim| self.world.report(sim));
+        out.object("ui", |ui| self.input.menu().report(ui));
 
         out.object("render", |r| {
             let target = self.camera.as_ref().map(OrthoCamera::target).unwrap_or_default();
@@ -341,7 +342,7 @@ impl App {
                 continue;
             }
             if let Some(key) = deferred.release {
-                self.input.on_key(key, false, false);
+                self.input.on_key(key, false, false, self.world.attack_status().recovery);
             }
             if let Some(reply) = deferred.reply {
                 let _ = reply.send("ok".to_string());
@@ -377,6 +378,11 @@ impl App {
         // to exactly one. The symptom otherwise is "the attack sometimes does
         // not come out", which points nowhere near the frame loop.
         for dt in self.accumulator.pending(frame) {
+            // Requests wait through zero-tick frames and apply before this
+            // tick's attack input. Drawing below cannot consume or apply one.
+            if let Some(recovery) = self.input.take_recovery() {
+                self.world.set_attack_recovery(recovery);
+            }
             let intent = self.input.sample();
             // `just_pressed`, not `held`: a swing is an edge. Holding the key
             // must not swing every tick, and a tap shorter than a frame must
@@ -408,7 +414,7 @@ impl App {
         // handed. Scoped so the sink's borrow ends before the draw.
         {
             let mut sink = self.quads.sink();
-            hud::draw(renderer.glyphs(), &mut sink);
+            hud::draw(renderer.glyphs(), self.input.menu(), self.world.attack_status(), &mut sink);
         }
 
         // Counted only when a frame actually reached the screen. An occluded
@@ -531,12 +537,16 @@ impl ApplicationHandler for App {
                 };
                 let pressed = key_event.state == ElementState::Pressed;
 
-                // Both halves see every event. Game actions need the release to
-                // know a key came up; the debug commands only care about the
-                // leading edge. Unbound keys fall through `on_key` untouched.
-                self.input.on_key(key, pressed, key_event.repeat);
+                // The harness uses this same route. A modal UI event must not
+                // also fire a debug command (especially Escape -> quit).
+                let consumed = self.input.on_key(
+                    key,
+                    pressed,
+                    key_event.repeat,
+                    self.world.attack_status().recovery,
+                );
 
-                if pressed && !key_event.repeat {
+                if !consumed && pressed && !key_event.repeat {
                     match key {
                         KeyCode::Escape => event_loop.exit(),
                         KeyCode::KeyV => {

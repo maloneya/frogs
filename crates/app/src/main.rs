@@ -11,6 +11,7 @@ mod harness;
 mod hud;
 mod input;
 mod time;
+mod ui;
 
 fn main() {
     // RUST_LOG=info to see adapter selection and wgpu diagnostics.

@@ -530,7 +530,10 @@ fn every_field_of_the_world_reaches_the_hash() {
     /// A field of `World` and the smallest change that touches it.
     type Poke = (&'static str, fn(&mut World));
 
-    let fields: [Poke; 7] = [
+    let fields: [Poke; 8] = [
+        ("attack.recovery", |w| {
+            w.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
+        }),
         ("player.pos", |w| w.bodies.pos[0].x += 0.001),
         ("player.facing", |w| w.player.facing += 0.001),
         ("tick", |w| w.tick += 1),
@@ -552,6 +555,22 @@ fn every_field_of_the_world_reaches_the_hash() {
         poke(&mut world);
         assert_ne!(world.hash(), before, "{field} never reaches the hash");
     }
+}
+
+#[test]
+fn committed_attack_recovery_reaches_the_hash() {
+    let mut short = World::default();
+    let mut normal = World::default();
+    short.set_enemy_count(0);
+    normal.set_enemy_count(0);
+    short.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
+    let press = Intent::new(arpg_core::MoveDir::NONE, true);
+    short.step(tick_dt(), press);
+    normal.step(tick_dt(), press);
+    // All inputs and current settings now agree; only the committed duration
+    // differs. Trace is deliberately excluded from the hash.
+    short.set_attack_recovery(RecoveryTicks::default());
+    assert_ne!(short.hash(), normal.hash(), "committed recovery omitted from replay state");
 }
 
 /// The horde is what the player's own state cannot stand in for: walking

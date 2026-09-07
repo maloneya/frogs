@@ -94,8 +94,9 @@ pub(crate) enum Command {
     Quit,
 }
 
-/// Game keys are injected as `KeyCode`s rather than as actions, so a test
-/// exercises the real binding table — only winit's delivery is skipped.
+/// Game and UI keys are injected as `KeyCode`s into `Controls::on_key`, so a
+/// test exercises the real binding table and context routing — only winit's
+/// delivery is skipped.
 ///
 /// The names come from `BINDINGS` itself rather than a table kept here, so a
 /// newly bound key is drivable immediately and this file cannot fall behind the

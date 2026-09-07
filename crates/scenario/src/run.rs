@@ -73,6 +73,15 @@ use arpg_sim::WALK_PER_TICK as TICK_OF_WALKING;
 /// just to remove one field from checkpoints.
 pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     let mut failures = Vec::new();
+    for command in &scenario.attack_recovery {
+        if command.at >= scenario.budget.ticks {
+            failures.push(Failure::new(
+                "attack_recovery",
+                format!("a tick below budget {}", scenario.budget.ticks),
+                format!("tick {} will not run", command.at),
+            ));
+        }
+    }
     for (index, checkpoint) in scenario.checkpoints.iter().enumerate() {
         let label = format!("checkpoint[{}] after tick {}", index, checkpoint.at);
         if checkpoint.at >= scenario.budget.ticks {
@@ -172,6 +181,9 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     while hashes.len() < budget {
         for dt in accumulator.pending(Dt::SECS) {
             let tick = hashes.len() as u64;
+            for command in scenario.attack_recovery.iter().filter(|command| command.at == tick) {
+                world.set_attack_recovery(command.recovery);
+            }
 
             // Asked for *before* the step, through the same queue anything
             // inside the simulation will use. The first pass of this tick
@@ -334,6 +346,10 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
     // Exhaustive, so an assertion added to the spec cannot be quietly left
     // unchecked — the same trick `World::hash` uses, for the same reason.
     let Expect {
+        attack_phase,
+        swing_tick,
+        recovery_ticks,
+        swing_recovery_ticks,
         player_pos,
         player_velocity,
         facing,
@@ -347,6 +363,17 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
         bodies,
         trace: _,
     } = expect;
+
+    let attack = world.attack_status();
+    check_eq("attack_phase", attack_phase, attack.phase, &mut failures);
+    check_eq("swing_tick", swing_tick, attack.elapsed, &mut failures);
+    check_eq("recovery_ticks", recovery_ticks, attack.recovery.get(), &mut failures);
+    check_eq(
+        "swing_recovery_ticks",
+        swing_recovery_ticks,
+        attack.swing_recovery.map_or(0, arpg_sim::RecoveryTicks::get),
+        &mut failures,
+    );
 
     failures.extend(check_finite(world));
     if let Some(want) = player_velocity {

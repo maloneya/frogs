@@ -17,7 +17,10 @@
 //! of quads a test can inspect — see the tests at the bottom, which never
 //! create a device.
 
+use crate::ui::Menu;
 use arpg_gfx::{Glyphs, Quad, QuadSink};
+use arpg_sim::{AttackStatus, TICK_HZ};
+use core::fmt::Write as _;
 use glam::Vec4;
 
 /// Distance from the window edge to the panel, in physical pixels.
@@ -47,17 +50,106 @@ const PANEL: Vec4 = Vec4::new(0.004, 0.005, 0.008, 0.62);
 /// the top-left corner, so the window's size does not enter the arithmetic. The
 /// moment something is centred or right-aligned it will, and taking the
 /// argument before then would mean a parameter nobody could tell was unused.
-pub(crate) fn draw(font: &Glyphs, sink: &mut QuadSink<'_>) {
-    let text = "hello world";
-
-    // The panel is pushed first because the overlay does not depth-test: draw
-    // order *is* depth here, so anything that must appear behind must be
-    // submitted before. This is the one ordering rule the whole layer has.
-    let (width, height) = (font.measure(text), font.line_height());
+pub(crate) fn draw(font: &Glyphs, menu: &Menu, attack: AttackStatus, sink: &mut QuadSink<'_>) {
+    // Stack-backed lines preserve the overlay's no-allocation frame path.
+    let mut lines: [Text; 8] = core::array::from_fn(|_| Text::default());
+    let count = if menu.open() {
+        write!(lines[0], "ATTACK TUNING").expect("line capacity");
+        let ticks = menu.recovery(attack.recovery).get();
+        write!(
+            lines[1],
+            "Recovery  < {} ticks / {:.1} ms >",
+            ticks,
+            ticks as f32 * 1000.0 / TICK_HZ as f32
+        )
+        .expect("line capacity");
+        write!(lines[2], "Phase: {}   Elapsed: {} ticks", attack.phase, attack.elapsed)
+            .expect("line capacity");
+        write!(lines[3], "Bodies struck: {}", attack.struck).expect("line capacity");
+        if let Some(recovery) = attack.swing_recovery {
+            write!(lines[4], "This swing's recovery: {} ticks", recovery.get())
+                .expect("line capacity");
+        } else {
+            write!(lines[4], "This swing's recovery: --").expect("line capacity");
+        }
+        write!(
+            lines[5],
+            "{}",
+            if menu.pending().is_some() {
+                "Edit pending next tick; affects next swing."
+            } else {
+                "Edits affect the next swing."
+            }
+        )
+        .expect("line capacity");
+        write!(lines[6], "Left/Right: adjust   R: reset").expect("line capacity");
+        write!(lines[7], "F1/Esc: close and play   World keeps running").expect("line capacity");
+        8
+    } else {
+        write!(lines[0], "F1: attack tuning").expect("line capacity");
+        write!(
+            lines[1],
+            "{} / tick {} / struck {}",
+            attack.phase,
+            attack.elapsed,
+            attack.struck
+        )
+        .expect("line capacity");
+        2
+    };
+    let lines = &lines[..count];
+    let width = lines.iter().map(|line| font.measure(line.as_str())).fold(0.0, f32::max);
+    let line_step = font.line_height() + 8.0;
+    let height = font.line_height() + (count - 1) as f32 * line_step;
     let panel = Vec4::new(MARGIN, MARGIN, width + PADDING * 2.0, height + PADDING * 2.0);
     sink.push(Quad::solid(panel, PANEL));
+    if menu.open() {
+        let row = Vec4::new(
+            MARGIN + PADDING / 2.0,
+            MARGIN + PADDING + line_step - 3.0,
+            width + PADDING,
+            font.line_height() + 6.0,
+        );
+        sink.push(Quad::solid(row, Vec4::new(0.018, 0.09, 0.13, 0.9)));
+    }
+    for (index, line) in lines.iter().enumerate() {
+        font.layout(
+            line.as_str(),
+            MARGIN + PADDING,
+            MARGIN + PADDING + index as f32 * line_step,
+            INK,
+            sink,
+        );
+    }
+}
 
-    font.layout(text, MARGIN + PADDING, MARGIN + PADDING, INK, sink);
+/// Formatting storage with a loud bound, rather than silent truncation of a
+/// number the designer is tuning. `write_str` accepts only complete UTF-8.
+struct Text {
+    bytes: [u8; 128],
+    len: usize,
+}
+
+impl Default for Text {
+    fn default() -> Self {
+        Self { bytes: [0; 128], len: 0 }
+    }
+}
+
+impl Text {
+    fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..self.len]).expect("only write_str writes text")
+    }
+}
+
+impl core::fmt::Write for Text {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        let end = self.len + text.len();
+        let dest = self.bytes.get_mut(self.len..end).ok_or(core::fmt::Error)?;
+        dest.copy_from_slice(text.as_bytes());
+        self.len = end;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -74,7 +166,10 @@ mod tests {
         let mut buf = QuadBuffer::default();
         {
             let mut sink = buf.sink();
-            draw(&Glyphs::system(), &mut sink);
+            let world = arpg_sim::World::default();
+            let mut menu = Menu::default();
+            menu.on_key(crate::ui::MenuKey::Toggle, world.attack_status().recovery);
+            draw(&Glyphs::system(), &menu, world.attack_status(), &mut sink);
         }
         buf
     }
@@ -90,8 +185,8 @@ mod tests {
         assert!(quads.len() > 1, "the overlay should draw a panel and some glyphs");
         assert!(quads[0].is_solid(), "the first quad must be the panel");
         assert!(
-            quads[1..].iter().all(|q| !q.is_solid()),
-            "everything after the panel must be a glyph"
+            quads[1].is_solid() && quads[2..].iter().all(|q| !q.is_solid()),
+            "the focused row must be behind all glyphs"
         );
     }
 

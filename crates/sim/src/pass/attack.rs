@@ -27,7 +27,7 @@ use crate::contact;
 
 use crate::swing::{Disc, Hitbox, Swing};
 use crate::trace::{Event, TraceSink};
-use crate::{ENEMY_RADIUS, EntityId};
+use crate::{AttackPhase, AttackStatus, ENEMY_RADIUS, EntityId, RecoveryTicks};
 
 /// Ticks from the button to the hitbox appearing.
 ///
@@ -43,18 +43,9 @@ const STARTUP: u32 = 6;
 /// stops being a decision.
 const ACTIVE: u32 = 4;
 
-/// Ticks after the hitbox shuts before another swing may start. 167ms.
-///
-/// The commitment. Without it an attack is free and the correct play is to hold
-/// the button down forever.
-const RECOVERY: u32 = 10;
-
-/// The whole swing, in ticks.
-const SWING: u32 = STARTUP + ACTIVE + RECOVERY;
-
 const _: () = assert!(STARTUP > 0, "a hitbox on the button frame cannot be reacted to");
 const _: () = assert!(ACTIVE > 0, "a swing with no active window can never hit anything");
-const _: () = assert!(RECOVERY > 0, "a swing with no recovery is free, so it is always correct");
+const _: () = assert!(STARTUP + ACTIVE <= u32::MAX - RecoveryTicks::MAX);
 
 /// How far in front of the player the hitbox sits, in world units.
 ///
@@ -113,6 +104,8 @@ pub(crate) struct InFlight {
     /// Ticks since the swing began. Names the tick that just ran — see
     /// [`attack`] for why it is advanced before anything reads it.
     elapsed: u32,
+    /// Captured at the press; tuning cannot retire a swing already in the air.
+    recovery: RecoveryTicks,
     /// Where this swing's hitbox goes, in the player's own frame.
     ///
     /// **Generated when the swing starts, not recomputed per tick.** That is
@@ -161,6 +154,8 @@ impl InFlight {
 pub(crate) struct Attack {
     /// The swing in the air, or `None` when idle.
     swing: Option<InFlight>,
+    /// The next swing's recovery; the current swing owns its own copy.
+    recovery: RecoveryTicks,
     /// Bodies this swing has already struck.
     ///
     /// **Once per swing, not once per tick.** The hitbox is live for four
@@ -175,19 +170,43 @@ pub(crate) struct Attack {
 
 impl Default for Attack {
     fn default() -> Self {
-        Self { swing: None, struck: Vec::with_capacity(EXPECTED_HITS) }
+        Self {
+            swing: None,
+            recovery: RecoveryTicks::default(),
+            struck: Vec::with_capacity(EXPECTED_HITS),
+        }
     }
 }
 
 impl Attack {
     /// Whether a swing is in progress.
+    #[cfg(test)]
     pub(crate) fn is_swinging(&self) -> bool {
         self.swing.is_some()
     }
 
-    /// Ticks since the swing began; 0 when idle.
-    pub(crate) fn elapsed(&self) -> u32 {
-        self.swing.as_ref().map_or(0, |swing| swing.elapsed)
+    /// A fresh observation, never a second maintained copy of attack state.
+    pub(crate) fn status(&self) -> AttackStatus {
+        let Self { swing, recovery, struck } = self;
+        let phase = match swing.as_ref().map(InFlight::phase) {
+            None => AttackPhase::Idle,
+            Some(Phase::Startup(_)) => AttackPhase::Startup,
+            Some(Phase::Active(_)) => AttackPhase::Active,
+            Some(Phase::Recovery) => AttackPhase::Recovery,
+        };
+        AttackStatus {
+            phase,
+            elapsed: swing.as_ref().map_or(0, |s| s.elapsed),
+            recovery: *recovery,
+            swing_recovery: swing.as_ref().map(|s| s.recovery),
+            struck: struck.len(),
+        }
+    }
+
+    pub(crate) fn set_recovery(&mut self, recovery: RecoveryTicks) -> bool {
+        let changed = self.recovery != recovery;
+        self.recovery = recovery;
+        changed
     }
 
     /// Whether the hitbox exists right now.
@@ -209,13 +228,15 @@ impl Attack {
 
     /// Feeds the swing into the world hash. Exhaustive, as every hash here is.
     pub(crate) fn hash(&self, h: &mut crate::hash::Fnv) {
-        let Self { swing, struck } = self;
+        let Self { swing, recovery, struck } = self;
+        h.u64(u64::from(recovery.get()));
 
         // `None` and "tick 0 of a swing" are different states and must hash
         // differently, so the discriminant goes in as well as the value.
         h.usize(usize::from(swing.is_some()));
-        if let Some(InFlight { elapsed, hitbox }) = swing {
+        if let Some(InFlight { elapsed, recovery, hitbox }) = swing {
             h.u64(u64::from(*elapsed));
+            h.u64(u64::from(recovery.get()));
             hitbox.hash(h);
         }
 
@@ -303,17 +324,22 @@ pub(crate) fn attack(
     // assumes and what `tick` itself means.
     //
     // Retiring *before* the press check is also what makes the tick after
-    // RECOVERY the first that can start a new swing, rather than the one after
+    // recovery the first that can start a new swing, rather than the one after
     // that.
     if let Some(swing) = &mut state.swing {
         swing.elapsed += 1;
     }
-    if state.swing.as_ref().is_some_and(|swing| swing.elapsed >= SWING) {
+    if state
+        .swing
+        .as_ref()
+        .is_some_and(|swing| swing.elapsed >= STARTUP + ACTIVE + swing.recovery.get())
+    {
         state.swing = None;
     }
 
     if state.swing.is_none() && pressed {
-        state.swing = Some(InFlight { elapsed: 0, hitbox: SWING_PATH.generate() });
+        state.swing =
+            Some(InFlight { elapsed: 0, recovery: state.recovery, hitbox: SWING_PATH.generate() });
         state.struck.clear();
         trace.emit(Event::Swung);
     }
@@ -341,7 +367,7 @@ pub(crate) fn attack(
     // exists, `closed` on the first tick it does not. Emitting `closed` on the
     // *last* live tick instead would read as a one-tick-shorter window in every
     // trace, which is precisely the confusion these events exist to prevent.
-    // Both land inside the swing because RECOVERY is at least one tick.
+    // Both land inside the swing because recovery is at least one tick.
     if elapsed == STARTUP + ACTIVE {
         trace.emit(Event::HitboxClosed);
     }
@@ -411,6 +437,10 @@ mod tests {
     use super::*;
     use crate::trace::Trace;
 
+    fn duration() -> u32 {
+        STARTUP + ACTIVE + RecoveryTicks::default().get()
+    }
+
     /// Drives a swing with no bodies to hit, so what is left is the state
     /// machine on its own. The scenarios cover it end to end; these localise a
     /// failure to the phases rather than to the geometry or the schedule.
@@ -446,21 +476,21 @@ mod tests {
         assert!(is_active(STARTUP + ACTIVE - 1), "not live on the last active tick");
         assert!(!is_active(STARTUP + ACTIVE), "still live after the window");
 
-        let live: Vec<u32> = (0..SWING).filter(|&t| is_active(t)).collect();
+        let live: Vec<u32> = (0..duration()).filter(|&t| is_active(t)).collect();
         assert_eq!(live.len() as u32, ACTIVE, "the window is not ACTIVE ticks wide");
     }
 
-    /// A swing occupies exactly `SWING` ticks and then the player is idle
+    /// A swing occupies exactly its configured duration and then the player is idle
     /// again — and `elapsed` names the tick that just ran, so this reads the
     /// way the harness reads it.
     #[test]
     fn a_swing_lasts_exactly_its_length() {
-        let seen = swing_for(SWING + 2, &[0]);
+        let seen = swing_for(duration() + 2, &[0]);
 
-        for (tick, swinging, _) in &seen[..SWING as usize] {
+        for (tick, swinging, _) in &seen[..duration() as usize] {
             assert!(swinging, "idle on tick {tick}, inside the swing");
         }
-        assert!(!seen[SWING as usize].1, "still swinging after SWING ticks");
+        assert!(!seen[duration() as usize].1, "still swinging after its configured duration");
     }
 
     /// **Hitbox liveness is derived from one number, so it cannot disagree with
@@ -468,8 +498,8 @@ mod tests {
     /// copy of the schedule.
     #[test]
     fn the_hitbox_is_live_only_inside_the_swing() {
-        for (tick, swinging, hitbox) in swing_for(SWING + 2, &[0]) {
-            let expected = tick < SWING && is_active(tick);
+        for (tick, swinging, hitbox) in swing_for(duration() + 2, &[0]) {
+            let expected = tick < duration() && is_active(tick);
             assert_eq!(hitbox, expected, "hitbox wrong on tick {tick}");
             if hitbox {
                 assert!(swinging, "a live hitbox with no swing behind it, tick {tick}");
@@ -517,7 +547,7 @@ mod tests {
     /// caller's to supply, and this is what says the pass believes it.
     #[test]
     fn no_press_means_no_swing() {
-        for (tick, swinging, hitbox) in swing_for(SWING, &[]) {
+        for (tick, swinging, hitbox) in swing_for(duration(), &[]) {
             assert!(!swinging && !hitbox, "swung with no press, tick {tick}");
         }
     }

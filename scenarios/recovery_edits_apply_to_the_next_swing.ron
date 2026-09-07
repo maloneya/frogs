@@ -1,0 +1,27 @@
+(
+    description: "Lengthening during startup and shortening during recovery preserve the committed swing; the next attack starts on exactly startup + active + recovery.",
+    attack_recovery: [
+        (at: 0, recovery: 2),
+        (at: 1, recovery: 30),
+        (at: 23, recovery: 1),
+    ],
+    // First swing lasts 6+4+2=12 ticks. Second lasts 6+4+30=40.
+    // Presses one tick before each boundary must be dropped, not buffered.
+    attacks: [0, 11, 12, 51, 52, 62, 63],
+    checkpoints: [
+        (at: 1, expect: (attack_phase: Startup, swing_tick: 1, recovery_ticks: 30, swing_recovery_ticks: 2)),
+        (at: 6, expect: (attack_phase: Active, hitbox: true)),
+        (at: 11, expect: (attack_phase: Recovery, swing_tick: 11)),
+        (at: 12, expect: (attack_phase: Startup, swing_tick: 0, swing_recovery_ticks: 30)),
+        (at: 23, expect: (attack_phase: Recovery, swing_tick: 11, recovery_ticks: 1, swing_recovery_ticks: 30)),
+        (at: 51, expect: (attack_phase: Recovery, swing_tick: 39)),
+        (at: 52, expect: (attack_phase: Startup, swing_tick: 0, swing_recovery_ticks: 1)),
+        (at: 62, expect: (attack_phase: Recovery, swing_tick: 10)),
+        (at: 63, expect: (attack_phase: Startup, swing_tick: 0)),
+    ],
+    budget: (ticks: 75),
+    expect: (
+        attack_phase: Idle, swing_tick: 0, recovery_ticks: 1, swing_recovery_ticks: 0,
+        trace: "recovery_edits_apply_to_the_next_swing.trace",
+    ),
+)

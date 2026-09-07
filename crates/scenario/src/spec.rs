@@ -4,7 +4,7 @@
 //! written against today; a field that only *describes* an intention is a field
 //! that will drift away from what the runner actually checks.
 
-use arpg_sim::{Impulse, Source, Template};
+use arpg_sim::{AttackPhase, Impulse, RecoveryTicks, Source, Template};
 use serde::Deserialize;
 
 /// One scenario: a world, an input stream, a tick budget, and what is expected
@@ -34,6 +34,10 @@ pub(crate) struct Scenario {
     /// does not do — a press during a swing is dropped, not held.
     #[serde(default)]
     pub(crate) attacks: Vec<u64>,
+
+    /// Validated recovery edits, applied before the named tick in file order.
+    #[serde(default)]
+    pub(crate) attack_recovery: Vec<RecoveryAt>,
 
     /// External momentum changes, applied before the named tick.
     #[serde(default)]
@@ -70,6 +74,14 @@ pub(crate) struct Scenario {
 
     #[serde(default)]
     pub(crate) expect: Expect,
+}
+
+/// A tuning command uses sim's value type, including its deserialization guard.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecoveryAt {
+    pub(crate) at: u64,
+    pub(crate) recovery: RecoveryTicks,
 }
 
 /// A point-in-time assertion using exactly the final state's vocabulary.
@@ -225,6 +237,15 @@ pub(crate) struct Budget {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Expect {
+    #[serde(default)]
+    pub(crate) attack_phase: Option<AttackPhase>,
+    #[serde(default)]
+    pub(crate) swing_tick: Option<u32>,
+    #[serde(default)]
+    pub(crate) recovery_ticks: Option<u32>,
+    /// Zero when no swing is in flight.
+    #[serde(default)]
+    pub(crate) swing_recovery_ticks: Option<u32>,
     /// Ground-plane position as `(x, z)`.
     #[serde(default)]
     pub(crate) player_pos: Option<Approx2>,

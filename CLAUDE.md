@@ -163,7 +163,7 @@ crates/
   gfx/   Renderer, camera, cube, capture, shader.wgsl      core, wgpu, winit, png,
          Quad/QuadBuffer/QuadSink, Glyphs, overlay.wgsl                  fontdue
   sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace   core, glam, serde
-  app/   App, Input + BINDINGS, Clock, harness, hud, main      core, gfx, sim, winit
+  app/   App, Controls + BINDINGS, Clock, harness, hud, ui      core, gfx, sim, winit
   scenario/  the headless gate: run a .ron, assert, exit 0/1     core, sim, ron  (no gfx)
 ```
 
@@ -240,6 +240,10 @@ crates/
 Game actions (rebindable, go through `Action`):
 
 `WASD` / arrows move the player · `space` swings
+
+`F1` opens the attack tuning panel · Left/Right adjust recovery · `R` resets ·
+`F1` / `Esc` close. The panel captures gameplay input while the world keeps
+running. Changes apply to the next swing and last for the current run.
 
 Debug commands (fixed, handled straight from the event callback — they act on
 the program, not the character, so they deliberately do *not* go through

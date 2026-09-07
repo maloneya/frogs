@@ -8,6 +8,7 @@ use glam::{Vec2, Vec3};
 use arpg_core::{Instance, InstanceSink, Intent, MAX_INSTANCES, Report};
 
 mod angle;
+mod attack;
 mod contact;
 mod hash;
 mod members;
@@ -17,6 +18,7 @@ mod swing;
 mod time;
 mod trace;
 
+pub use attack::{AttackPhase, AttackStatus, RecoveryTicks};
 pub use hash::Fnv;
 use members::Members;
 use pass::motion::Physics;
@@ -691,6 +693,20 @@ impl World {
         self.player.attack.hitbox_is_live()
     }
 
+    /// Derived attack state for UI and tools, with no renderer dependency.
+    pub fn attack_status(&self) -> AttackStatus {
+        self.player.attack.status()
+    }
+
+    /// Sets recovery for subsequent swings. Call before the tick whose inputs
+    /// should see it; an in-flight swing retains its committed duration.
+    /// UI and scenario commands use this same validated door.
+    pub fn set_attack_recovery(&mut self, recovery: RecoveryTicks) {
+        if self.player.attack.set_recovery(recovery) {
+            self.trace.sink(self.tick).emit(Event::AttackRecoveryChanged { recovery });
+        }
+    }
+
     /// How many bodies the current or most recent swing struck.
     #[must_use]
     pub fn struck(&self) -> usize {
@@ -751,13 +767,10 @@ impl World {
         out.int("queued", queue.len() as u64);
         out.int("sources", sources.len() as u64);
 
-        // The swing, as three derived facts. `state` is a point sample and
+        // The swing, as derived facts. `state` is a point sample and
         // cannot show a window, so these say where in the window the sample
         // fell; `trace` is what shows the window itself.
-        out.bool("swinging", attack.is_swinging());
-        out.int("swing_tick", u64::from(attack.elapsed()));
-        out.bool("hitbox", attack.hitbox_is_live());
-        out.int("struck", attack.struck() as u64);
+        attack.status().report(out);
         out.int("trace_events", trace.len() as u64);
         out.int("trace_dropped", trace.dropped() as u64);
 

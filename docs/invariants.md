@@ -48,7 +48,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A movement direction is unit-length or zero | 0 | private field; `MoveDir::new` is the only door, and it normalises |
 | Movement never leaves the ground plane | 0 | `MoveDir::new` drops the Y component |
 | Input edges are consumed exactly once | 0 | the clear lives in `InputState::sample`, the only reader |
-| Two keys on one action cannot desync | 0 | `Input.down` tracks *keys*; the action set is derived, never stored |
+| Two keys on one action cannot desync | 0 | `Controls.accepted` tracks *keys*; the action set is derived, never independently maintained |
 | The binding table fits its bitset | 1 | `const _: () = assert!(BINDINGS.len() <= u32::BITS …)` |
 | A frame's dt cannot teleport the player | 0 | `Accumulator::pending` caps ticks per frame; `Clock` no longer clamps, so the HUD sees the real hitch |
 | The simulation cannot see a variable timestep | 0 | `Dt` is a unit struct with a private field — there is no room in the type for a wrong duration |
@@ -131,8 +131,13 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A hitbox cannot move what it touches | 0 | `pass::attack` takes `&[Vec2]`; there is no `&mut` to write through |
 | The hitbox window is exactly `ACTIVE` ticks | 3 | `is_active` is the single definition of both edges; `the_hitbox_opens_and_shuts_on_schedule`, mutation-checked |
 | A swing connects once per body, not once per tick | 3 | `Attack::struck`; `struck: 1` over a four-tick window |
-| A swing cannot be interrupted or stacked | 3 | `a_press_during_a_swing_is_dropped`, which pins `SWING` from both sides |
-| The swing's phase cannot disagree with its timer | 0 | one `Option<u32>`; every phase is derived from it |
+| A swing cannot be interrupted or stacked | 3 | `a_press_during_a_swing_is_dropped`, which pins the default duration from both sides |
+| The swing's phase cannot disagree with its timer | 0 | one `Option<InFlight>`; every phase is derived from it |
+| Recovery stays within its supported nonzero range | 0 | private `RecoveryTicks`; `TryFrom<u32>`, default construction and serde use the same validator. Runtime tuning cannot be a const assert |
+| Recovery edits preserve the committed swing | 3 | `InFlight` owns a duration separate from next-swing tuning; `recovery_edits_apply_to_the_next_swing` asserts both timing boundaries and the golden trace |
+| Configured and committed recovery both reach replay state | 3 | exhaustive `Attack::hash`, `every_field_of_the_world_reaches_the_hash` and `committed_attack_recovery_reaches_the_hash` |
+| Drawing the panel cannot mutate the world or consume an edit | 0 | `hud::draw` takes an `AttackStatus` snapshot and a shared `Menu`; it receives no mutable control or simulation reference |
+| Menu transitions cannot leak gameplay input | 3 | `modal_transitions_discard_edges_and_require_fresh_gameplay_presses`; native and harness input both enter `Controls::on_key` |
 | A hitbox swings where the character faces | 3 | `pass::attack` runs after `pass::face`; the yaw convention is mutation-checked |
 | A swing is drawn where it is struck | 3 | one stored `Hitbox`; `pass::attack` and `World::extract` both *place* its discs rather than computing a position, so there is no second formula to drift. `the_swing_is_drawn_where_it_strikes` |
 | A hitbox turns with the player | 3 | `Disc` is polar, so placing it is `facing + angle`. `the_hitbox_follows_the_facing`, mutation-checked against dropping the facing |

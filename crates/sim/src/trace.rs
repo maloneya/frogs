@@ -41,6 +41,11 @@ const _: () = assert!(CAPACITY > 0, "a zero-length trace silently records nothin
 /// that occur rarely: a hitbox opening, a hit landing, hitstop starting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
+    /// Recovery tuning changed before this tick. In-flight swings keep theirs.
+    AttackRecoveryChanged {
+        /// Validated duration used by subsequent swings.
+        recovery: crate::RecoveryTicks,
+    },
     /// A physical impulse was applied; source is absent for external commands.
     Impulsed {
         /// Recipient's stable identity.
@@ -166,6 +171,9 @@ impl fmt::Display for Event {
     /// noise that hides the one line that mattered.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AttackRecoveryChanged { recovery } => {
+                write!(f, "attack recovery ticks={}", recovery.get())
+            }
             Self::Impulsed { id, source, impulse } => {
                 write!(f, "impulse id={id} value={impulse} source=")?;
                 match source {

@@ -8,6 +8,23 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn recovery_commands_reject_invalid_values_and_unreachable_ticks() {
+    for command in [
+        "(at: 0, recovery: 0)",
+        "(at: 0, recovery: 4294967295)",
+        "(at: 0, recovery: -1)",
+        "(at: 0, recovery: 1.5)",
+        "(at: 1, recovery: 1)",
+    ] {
+        let fixture = Fixture::new(&format!(
+            "(attack_recovery: [{command}], budget: (ticks: 1), expect: ())"
+        ));
+        let (output, text) = fixture.run(&[]);
+        assert!(!output.status.success(), "invalid command {command} passed: {text}");
+    }
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {

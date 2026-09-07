@@ -63,7 +63,15 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `quit` | then exits |
 
 Keys come from `BINDINGS` in `crates/app/src/input.rs`, so whatever is bound is
-drivable — currently `w a s d up down left right space`. `space` swings, and it
+drivable — currently `w a s d up down left right space f1 escape r`.
+`tap f1` opens the attack tuning panel, `tap left` / `tap right` edits recovery,
+`tap r` resets it, and `tap escape` closes it. These go through the same modal
+input route as native keys. While open, the panel captures gameplay input but
+the world keeps ticking. An edit is accepted immediately and applies before the
+next sim tick; `state.ui.recovery_pending` distinguishes those moments.
+`state.sim.recovery_ticks` is the next swing's applied setting;
+`state.sim.swing_recovery_ticks` is the in-flight setting, or zero when idle.
+Settings last for this run only. `space` swings, and it
 is an edge, so `tap space` is the right way to ask for exactly one. An unknown one replies
 `error: unknown key "q"; bound keys are w s a d up down left right`, which is
 also how to ask what exists. Malformed input is always reported, never ignored.
@@ -282,7 +290,7 @@ at 60Hz and the game feels different on faster hardware.
   It cannot say whether the camera half-life or turn rate *feels* right. That is
   the owner's call and needs a human at the keyboard.
 - **winit's event delivery.** Keys are injected at `KeyCode` into
-  `Input::on_key`, so the real binding table and input state machine are
+  `Controls::on_key`, so the real binding table and input state machine are
   exercised, but the OS→`window_event` path is skipped. Key-repeat filtering and
   focus-loss release are covered by unit tests only.
 - **True input latency.** Injections always land at the same point in the frame,
