@@ -218,8 +218,8 @@ fn the_hash_localises_where_two_streams_diverge() {
     assert_ne!(straight.last(), turning.last(), "the divergence washed out");
 }
 
-/// Where every enemy was drawn. `extract` pushes ground, then the horde,
-/// then the player, so the horde is the middle slice.
+/// Where every enemy was drawn. `extract` pushes ground, the horde, any live
+/// swing, then the player, so the horde starts right after the floor.
 fn drawn_enemies(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec<Vec3> {
     world.extract(alpha, buffer.sink());
     buffer.as_slice()[GROUND_INSTANCES..][..world.enemy_count()]
@@ -744,8 +744,14 @@ fn facing_stays_wrapped_while_spinning() {
     }
 }
 
-/// The whole world — floor, horde and player — has to fit the one buffer
-/// they share, at the largest horde the clamp permits.
+/// The whole world — floor, horde, player and a swing in the air — has to fit
+/// the one buffer they share, at the largest horde the clamp permits.
+///
+/// The swing is counted rather than driven. Stepping a full horde would put
+/// 180-odd thousand bodies through a brute-force solver, which is not a unit
+/// test; and what needs checking is the *reservation*, not the drawing. So
+/// this asserts the gap left by an idle player is exactly one swing wide,
+/// which is the same statement and costs nothing.
 #[test]
 fn a_full_horde_still_fits_alongside_the_ground_and_the_player() {
     let mut world = World::default();
@@ -754,7 +760,58 @@ fn a_full_horde_still_fits_alongside_the_ground_and_the_player() {
     let mut buf = InstanceBuffer::default();
     world.extract(Alpha::ONE, buf.sink());
 
-    assert_eq!(buf.as_slice().len(), MAX_INSTANCES);
+    assert!(!world.player.attack.is_swinging(), "a fresh world is not mid-swing");
+    assert_eq!(buf.as_slice().len() + pass::attack::HITBOX_SAMPLES, MAX_INSTANCES);
+}
+
+/// **The property the whole design is for: the swing is drawn where it is
+/// struck.**
+///
+/// Both halves are pinned, in the two places that can see them. The scenario
+/// `the_hitbox_opens_and_shuts_on_schedule` puts a body at exactly `REACH`
+/// dead ahead and asserts it is hit; this asserts the instance that comes out
+/// of `extract` sits on that same point. A renderer that formed its own
+/// opinion about where the sword is would pass one and fail the other.
+///
+/// Facing is deliberately non-zero. At facing 0 a mirrored placement is
+/// indistinguishable from a correct one, and mirrored is exactly what a hitbox
+/// built from a hand-written basis comes out as.
+#[test]
+fn the_swing_is_drawn_where_it_strikes() {
+    let dt = tick_dt();
+    let east = MoveDir::new(Vec3::X);
+
+    let mut world = World::default();
+    world.set_enemy_count(0);
+
+    // Long enough for the turn to arrive and clamp: PLAYER_TURN_RATE covers
+    // the quarter-turn in under seven ticks. See `walk_east`.
+    for _ in 0..30 {
+        world.step(dt, Intent::new(east, false));
+    }
+
+    world.step(dt, Intent::new(MoveDir::NONE, true));
+    while !world.hitbox_is_live() {
+        world.step(dt, Intent::NONE);
+    }
+
+    let mut buf = InstanceBuffer::default();
+    world.extract(Alpha::ONE, buf.sink());
+
+    // Ground, no horde, then the swing — which during the active window is
+    // the live disc and nothing else, so there is exactly one of it.
+    assert_eq!(
+        buf.as_slice().len(),
+        GROUND_INSTANCES + 2,
+        "the active window should draw one disc, plus the player"
+    );
+    let drawn = buf.as_slice()[GROUND_INSTANCES].pos();
+    let expected = world.player.pos + Vec2::new(pass::attack::REACH, 0.0);
+
+    assert!(
+        (drawn.x - expected.x).abs() < 1e-4 && (drawn.z - expected.y).abs() < 1e-4,
+        "the swing drew at {drawn:?}, but strikes at {expected:?}"
+    );
 }
 
 /// The count is derived from the storage, so asking for N must actually

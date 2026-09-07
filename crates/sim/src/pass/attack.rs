@@ -24,6 +24,7 @@ use glam::Vec2;
 
 use crate::contact;
 use crate::slots::Slots;
+use crate::swing::{Disc, Hitbox, Swing};
 use crate::trace::{Event, TraceSink};
 use crate::{EntityId, ENEMY_RADIUS};
 
@@ -55,7 +56,11 @@ const _: () = assert!(ACTIVE > 0, "a swing with no active window can never hit a
 const _: () = assert!(RECOVERY > 0, "a swing with no recovery is free, so it is always correct");
 
 /// How far in front of the player the hitbox sits, in world units.
-const REACH: f32 = 1.1;
+///
+/// Visible to the crate so a test can state where the swing ought to draw
+/// without copying the number, which is how a test ends up asserting that the
+/// code still does what it used to rather than what it should.
+pub(crate) const REACH: f32 = 1.1;
 
 /// The hitbox's radius.
 ///
@@ -72,6 +77,27 @@ const _: () = assert!(
     "a hitbox that starts beyond arm's length cannot hit a body already touching you"
 );
 
+/// How many discs a hitbox is made of: one per tick of the active window.
+///
+/// Public to the crate because the instance budget depends on it — `World` has
+/// to reserve room to *draw* a swing, and a reservation that had to be kept in
+/// step by hand would overrun the GPU buffer in silence.
+pub(crate) const HITBOX_SAMPLES: usize = ACTIVE as usize;
+
+/// The shape of the swing, as two positions in the player's own frame.
+///
+/// Both ends are the same point, so today's hitbox is a single disc that sits
+/// still for four ticks — exactly what it was when [`REACH`] and
+/// [`HITBOX_RADIUS`] were read straight out of `strike`. What has changed is
+/// that the shape is now a value, so the renderer can draw the thing this pass
+/// tests instead of a second opinion about where it is. Separating the two ends
+/// is what makes a stab, an arc or a slam; see [`crate::swing`].
+const SWING_PATH: Swing = Swing::new(
+    Vec2::new(0.0, REACH),
+    Vec2::new(0.0, REACH),
+    (HITBOX_RADIUS, HITBOX_RADIUS),
+);
+
 /// How many bodies one swing is expected to strike.
 ///
 /// Only a starting capacity: the list grows if a swing lands in a crowd. It is
@@ -79,15 +105,64 @@ const _: () = assert!(
 /// which is a property `a_steady_state_frame_allocates_nothing` checks.
 const EXPECTED_HITS: usize = 16;
 
+/// A swing in the air: how far through it is, and the shape it committed to.
+///
+/// **The two are one value, so a hitbox cannot exist without a timer to say
+/// which part of it is live.** Kept as separate fields on [`Attack`] they were
+/// two things that had to agree, and nothing but convention said a caller had
+/// to check the timer before reading the shape.
+pub(crate) struct InFlight {
+    /// Ticks since the swing began. Names the tick that just ran — see
+    /// [`attack`] for why it is advanced before anything reads it.
+    elapsed: u32,
+    /// Where this swing's hitbox goes, in the player's own frame.
+    ///
+    /// **Generated when the swing starts, not recomputed per tick.** That is
+    /// what makes it a value two readers can share — see [`crate::swing`] — and
+    /// it is also the right moment for the choice: a weapon swapped mid-swing
+    /// must not reshape the swing already in the air. There is one swing today,
+    /// so this looks like a constant; it is the field that holds
+    /// `chosen.generate()` and nothing else has to move.
+    ///
+    /// Local rather than world, because baking world positions at the press
+    /// would bake the facing with them, and the player may still turn
+    /// mid-swing.
+    hitbox: Hitbox<HITBOX_SAMPLES>,
+}
+
+impl InFlight {
+    /// Which part of the swing this tick falls in.
+    ///
+    /// **Each phase carries what that phase has**, rather than a bare tag
+    /// beside three numbers of which two are always dead. It also means the
+    /// live disc's index reaches its readers from the same place that decided
+    /// the window, so `strike` and `extract` cannot disagree about which disc
+    /// is hot — there is no second derivation to drift.
+    pub(crate) fn phase(&self) -> Phase {
+        if self.elapsed < STARTUP {
+            Phase::Startup(self.elapsed as f32 / STARTUP as f32)
+        } else if is_active(self.elapsed) {
+            Phase::Active((self.elapsed - STARTUP) as usize)
+        } else {
+            Phase::Recovery
+        }
+    }
+
+    /// Every disc this swing occupies, in the order it occupies them.
+    pub(crate) fn discs(&self) -> &[Disc] {
+        self.hitbox.discs()
+    }
+}
+
 /// Where the swing has got to.
 ///
-/// **One number, with the phases derived from it**, rather than a stored phase
-/// beside a counter. Two fields that must agree are two fields that can
+/// **One `Option`, with every phase derived from it**, rather than a stored
+/// phase beside a counter. Two fields that must agree are two fields that can
 /// disagree, and the disagreement here would be a hitbox live during recovery —
 /// silent, and visible only as an attack that feels wrong.
 pub(crate) struct Attack {
-    /// Ticks since the swing began, or `None` when idle.
-    elapsed: Option<u32>,
+    /// The swing in the air, or `None` when idle.
+    swing: Option<InFlight>,
     /// Bodies this swing has already struck.
     ///
     /// **Once per swing, not once per tick.** The hitbox is live for four
@@ -102,24 +177,31 @@ pub(crate) struct Attack {
 
 impl Default for Attack {
     fn default() -> Self {
-        Self { elapsed: None, struck: Vec::with_capacity(EXPECTED_HITS) }
+        Self { swing: None, struck: Vec::with_capacity(EXPECTED_HITS) }
     }
 }
 
 impl Attack {
     /// Whether a swing is in progress.
     pub(crate) fn is_swinging(&self) -> bool {
-        self.elapsed.is_some()
+        self.swing.is_some()
     }
 
     /// Ticks since the swing began; 0 when idle.
     pub(crate) fn elapsed(&self) -> u32 {
-        self.elapsed.unwrap_or(0)
+        self.swing.as_ref().map_or(0, |swing| swing.elapsed)
     }
 
     /// Whether the hitbox exists right now.
     pub(crate) fn hitbox_is_live(&self) -> bool {
-        self.elapsed.is_some_and(is_active)
+        matches!(self.swing.as_ref().map(InFlight::phase), Some(Phase::Active(_)))
+    }
+
+    /// The swing in the air, for anything that needs its shape as well as its
+    /// timer. `None` when idle, which is what makes reading one without the
+    /// other impossible rather than merely discouraged.
+    pub(crate) fn in_flight(&self) -> Option<&InFlight> {
+        self.swing.as_ref()
     }
 
     /// How many bodies the current or most recent swing struck.
@@ -129,18 +211,35 @@ impl Attack {
 
     /// Feeds the swing into the world hash. Exhaustive, as every hash here is.
     pub(crate) fn hash(&self, h: &mut crate::hash::Fnv) {
-        let Self { elapsed, struck } = self;
+        let Self { swing, struck } = self;
 
         // `None` and "tick 0 of a swing" are different states and must hash
         // differently, so the discriminant goes in as well as the value.
-        h.usize(usize::from(elapsed.is_some()));
-        h.u64(u64::from(elapsed.unwrap_or(0)));
+        h.usize(usize::from(swing.is_some()));
+        if let Some(InFlight { elapsed, hitbox }) = swing {
+            h.u64(u64::from(*elapsed));
+            hitbox.hash(h);
+        }
 
         h.usize(struck.len());
         for id in struck {
             id.hash_into(h);
         }
     }
+}
+
+/// Which part of the swing a tick falls in, and what that part has.
+///
+/// The three phases the constants above name, as a thing a caller can match on
+/// rather than three comparisons it has to get the boundaries right on.
+pub(crate) enum Phase {
+    /// Committed, and no hitbox yet. The wind-up, and how far through it, in
+    /// `0.0..1.0` — which is what lets a telegraph brighten as it commits.
+    Startup(f32),
+    /// The hitbox exists, and this is which of its discs is live.
+    Active(usize),
+    /// The hitbox is gone, and no new swing may start yet.
+    Recovery,
 }
 
 /// Whether the hitbox is live on this tick of the swing.
@@ -163,6 +262,10 @@ fn is_active(elapsed: u32) -> bool {
 /// player may still turn mid-swing, and that is deliberate for now: locking
 /// facing during an attack is a feel decision worth making against a real
 /// animation rather than in advance.
+///
+/// The hitbox itself is generated at the press and stored — see
+/// [`crate::swing`]. That is what lets `World::extract` draw the shape this
+/// pass tests rather than a second opinion about where the sword is.
 ///
 /// A press arriving while a swing is in progress is **dropped**, not queued.
 /// Buffering it is a real feature and a separate one — it needs an expiry and a
@@ -192,24 +295,36 @@ pub(crate) fn attack(
     // Retiring *before* the press check is also what makes the tick after
     // RECOVERY the first that can start a new swing, rather than the one after
     // that.
-    if let Some(elapsed) = state.elapsed {
-        state.elapsed = (elapsed + 1 < SWING).then_some(elapsed + 1);
+    if let Some(swing) = &mut state.swing {
+        swing.elapsed += 1;
+    }
+    if state.swing.as_ref().is_some_and(|swing| swing.elapsed >= SWING) {
+        state.swing = None;
     }
 
-    if state.elapsed.is_none() && pressed {
-        state.elapsed = Some(0);
+    if state.swing.is_none() && pressed {
+        state.swing = Some(InFlight { elapsed: 0, hitbox: SWING_PATH.generate() });
         state.struck.clear();
         trace.emit(Event::Swung);
     }
 
-    let Some(elapsed) = state.elapsed else { return };
+    let Some(swing) = &state.swing else { return };
+    let elapsed = swing.elapsed;
+
+    // Taken while the swing is only borrowed, so `strike` can have the `struck`
+    // list mutably. `Disc` is `Copy` and twelve bytes, so this is a register
+    // move rather than a compromise.
+    let live = match swing.phase() {
+        Phase::Active(sample) => Some(swing.hitbox.at(sample)),
+        Phase::Startup(_) | Phase::Recovery => None,
+    };
 
     if elapsed == STARTUP {
         trace.emit(Event::HitboxOpened);
     }
 
-    if is_active(elapsed) {
-        strike(state, player_pos, facing, bodies, pos, &mut trace);
+    if let Some(disc) = live {
+        strike(&mut state.struck, disc, player_pos, facing, bodies, pos, &mut trace);
     }
 
     // Symmetric with the open above: `opened` on the first tick the hitbox
@@ -222,21 +337,38 @@ pub(crate) fn attack(
     }
 }
 
-/// Tests the live hitbox against every body and records what it touches.
+/// Tests one disc of the hitbox against every body and records what it touches.
+///
+/// **Handed the disc rather than working out which one is live**, which is what
+/// makes "this cannot run outside the active window" a fact about the signature
+/// instead of an assert: there is no index here to get wrong and no fallback to
+/// silently pick the wrong disc. The caller has already matched on the phase
+/// that produced it.
+///
+/// The disc it is handed is *this tick's*, not every disc the swing will
+/// occupy. The hitbox sweeps: a body on the far side of an arc is struck later
+/// than one on the near side, and that ordering is the whole texture of a
+/// swing. A hitbox that accumulated its past positions would have the entire
+/// arc live by the last active tick, which is the "a generous window reads as
+/// mush" failure `ACTIVE` is already sized against, arriving through a
+/// different door.
+///
+/// Takes `struck` rather than the whole `Attack` for the usual reason: it may
+/// record what it hit and may not touch the timer or the shape.
 fn strike(
-    state: &mut Attack,
+    struck: &mut Vec<EntityId>,
+    disc: Disc,
     player_pos: Vec2,
     facing: f32,
     bodies: &Slots,
     pos: &[Vec2],
     trace: &mut TraceSink<'_>,
 ) {
-    // Yaw 0 faces +Z and positive turns toward +X — the convention
-    // `Instance::with_yaw` and `shader.wgsl` share, and the one thing here a
-    // sign flip would break silently, by swinging out of the character's back.
-    let ahead = Vec2::new(facing.sin(), facing.cos());
-    let centre = player_pos + ahead * REACH;
-    let contact_distance = HITBOX_RADIUS + ENEMY_RADIUS;
+    // The disc is *placed* rather than computed. `World::extract` places the
+    // same one, from the same array, which is what makes the swing draw where
+    // it hits — see `crate::swing`.
+    let (centre, radius) = disc.place(player_pos, facing);
+    let contact_distance = radius + ENEMY_RADIUS;
 
     // **Cheapest test first.** The distance check rejects almost every body in a
     // handful of instructions; the two checks that were above it — a load from
@@ -249,11 +381,11 @@ fn strike(
         }
 
         let id = bodies.ids()[row];
-        if state.struck.contains(&id) {
+        if struck.contains(&id) {
             continue;
         }
 
-        state.struck.push(id);
+        struck.push(id);
         trace.emit(Event::Hit { id });
     }
 }
@@ -324,6 +456,42 @@ mod tests {
             if hitbox {
                 assert!(swinging, "a live hitbox with no swing behind it, tick {tick}");
             }
+        }
+    }
+
+    /// **The tunnelling limit, as a check rather than a paragraph.**
+    ///
+    /// One disc per tick ties the hitbox's spatial resolution to the tick rate,
+    /// so a swing that travels far enough between two ticks leaves a gap and
+    /// passes bodies straight through it. `crate::swing` explains why that is
+    /// deferred; this is what stops the deferral being silent. A const assert
+    /// would be higher up the ladder and is not available — the bound needs
+    /// `atan2` and `sqrt`, neither of which is const on stable.
+    ///
+    /// It costs nothing today, because the swing's ends coincide. It fires on
+    /// the change that makes a swing move, which is the exact moment the
+    /// deferral stops being safe.
+    #[test]
+    fn consecutive_discs_of_the_swing_leave_no_gap() {
+        let hitbox = SWING_PATH.generate::<HITBOX_SAMPLES>();
+        let placed: Vec<(Vec2, f32)> =
+            hitbox.discs().iter().map(|d| d.place(Vec2::ZERO, 0.0)).collect();
+
+        for (i, pair) in placed.windows(2).enumerate() {
+            let ((from, from_radius), (to, to_radius)) = (pair[0], pair[1]);
+
+            // A body's centre between the two discs is caught by one of them
+            // only while their reaches meet, and a body reaches out by its own
+            // radius on each side.
+            let covered = from_radius + to_radius + 2.0 * ENEMY_RADIUS;
+            let gap = from.distance(to);
+
+            assert!(
+                gap <= covered,
+                "discs {i} and {} are {gap} apart but cover {covered}: a body between them \
+                 is passed straight through",
+                i + 1
+            );
         }
     }
 

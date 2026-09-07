@@ -1,0 +1,46 @@
+// The hitbox is in the player's frame, so turning carries it round. At facing 0
+// that claim is untestable — the swing points the one direction a hitbox that
+// ignored facing entirely would also point — so this one swings east.
+//
+// PLAYER_SPEED 9.0 x 30 ticks x 1/60 = 4.5 units along +X, and the turn to
+// atan2(1, 0) = PI/2 arrives after 6.7 ticks and clamps. See `walk_east`.
+// The hitbox is REACH 1.1 ahead of that, so it sits at (5.6, 0.0).
+//
+// Two bodies, and the second is the whole test. One sits at the hitbox centre;
+// the other sits 1.1 *north* of the player, which is where the hitbox would be
+// if `Disc::place` dropped the facing. Exactly one of them can be struck, and
+// which one says whether the swing turned.
+//
+// Neither is on the player's path: both are 1.1 from it at the closest, well
+// clear of the 0.55 the player and a body touch at, so nothing is shoved and
+// the trace holds nothing but the swing.
+//
+// Swinging at tick 30 puts the window at 36..39 and the close at 40.
+(
+    description: "A swing while facing east strikes the body to the east, not the one the hitbox would cover facing north.",
+    setup: (
+        actions: [
+            Place((5.6, 0.0)),
+            Place((4.5, 1.1)),
+        ],
+    ),
+    inputs: [
+        (at: 0, ticks: 30, dir: (1.0, 0.0)),
+    ],
+    attacks: [30],
+    budget: (ticks: 55),
+    expect: (
+        player_pos: (x: 4.5, z: 0.0, tol: 0.001),
+        facing: (value: 1.5708, tol: 0.0001),
+        contacts: 0,
+        crowd_contacts: 0,
+        struck: 1,
+        hitbox: false,
+        bodies: [
+            // A hitbox reads positions and cannot write them, so neither moved.
+            (nth: 0, alive: true, pos: (x: 5.6, z: 0.0, tol: 0.0001)),
+            (nth: 1, alive: true, pos: (x: 4.5, z: 1.1, tol: 0.0001)),
+        ],
+        trace: "the_hitbox_follows_the_facing.trace",
+    ),
+)

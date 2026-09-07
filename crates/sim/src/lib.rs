@@ -13,6 +13,7 @@ mod hash;
 mod members;
 mod pass;
 mod slots;
+mod swing;
 mod time;
 mod trace;
 
@@ -89,6 +90,16 @@ const _: () = assert!(TILE > 0.0);
 const GROUND_INSTANCES: usize = GROUND_TILES * GROUND_TILES;
 const _: () = assert!(GROUND_INSTANCES < MAX_INSTANCES, "the floor alone must fit the buffer");
 
+/// The player's share of the instance budget: its body, plus the hitbox of a
+/// swing while one is in the air.
+///
+/// **Derived from the pass that decides how many discs a hitbox has**, not
+/// written down here. The swing is drawn from the same buffer as everything
+/// else, so a reservation that had to be kept in step by hand is a reservation
+/// that goes stale the first time `ACTIVE` changes — and goes stale silently,
+/// because overrunning the buffer truncates rather than errors.
+const PLAYER_INSTANCES: usize = 1 + pass::attack::HITBOX_SAMPLES;
+
 /// How large the horde may grow. The ground and the player are drawn from the
 /// same instance buffer in the same draw call, so the enemy budget is whatever
 /// they leave behind.
@@ -97,7 +108,7 @@ const _: () = assert!(GROUND_INSTANCES < MAX_INSTANCES, "the floor alone must fi
 /// knows its own limit. A second writer of the horde that had to remember the
 /// subtraction would silently overrun the GPU buffer — a failure with no error
 /// message, since the upload just truncates.
-const MAX_ENEMIES: usize = MAX_INSTANCES - GROUND_INSTANCES - 1;
+const MAX_ENEMIES: usize = MAX_INSTANCES - GROUND_INSTANCES - PLAYER_INSTANCES;
 
 /// How large the horde starts. Big enough to read as a crowd, small enough that
 /// the brute-force passes landing next stay comfortably inside a frame.
@@ -158,6 +169,22 @@ const _: () = assert!(
     ENEMY_SPACING > 2.0 * ENEMY_RADIUS,
     "bodies must spawn clear of each other, not merely with their cubes apart"
 );
+
+/// The swing, in linear space. It looks far too bright written down and is not:
+/// the surface is sRGB and the hardware encodes on write. A warm orange, chosen
+/// to sit clear of both the horde's muted red and the player's blue, because a
+/// hitbox the eye has to hunt for is a hitbox nobody can time against.
+const SWING_COLOR: Vec3 = Vec3::new(0.95, 0.35, 0.06);
+
+/// Where the swing is drawn, and how thick.
+///
+/// At the player's centre height, so it reads as a swing at torso level rather
+/// than a decal on the floor. The simulation has no opinion about either: the
+/// hitbox is a disc on the ground plane, and this is the presentation deciding
+/// how to show one.
+const SWING_HEIGHT: f32 = PLAYER_HALF_HEIGHT;
+const SWING_THICKNESS: f32 = 0.16;
+const _: () = assert!(SWING_THICKNESS > 0.0);
 
 /// Half the ground plane's width, in world units.
 const ARENA_HALF: f32 = GROUND_TILES as f32 * TILE * 0.5;
@@ -952,7 +979,25 @@ impl World {
     /// the camera's.
     #[must_use]
     pub fn player_pos_at(&self, alpha: Alpha) -> Vec3 {
-        on_ground(self.player.prev_pos.lerp(self.player.pos, alpha.get()), PLAYER_HALF_HEIGHT)
+        on_ground(self.drawn_player(alpha).0, PLAYER_HALF_HEIGHT)
+    }
+
+    /// Where the player *appears* this frame, and which way it appears to
+    /// point: both interpolated between the last two ticks.
+    ///
+    /// **One place, because three things now hang off it** — the camera's
+    /// focus, the body, and the swing's hitbox. Two of those drifting apart by
+    /// a fraction of a frame is a sword that detaches from the hand, which is
+    /// the same class of defect the shared `Hitbox` exists to prevent and just
+    /// as invisible in a screenshot.
+    ///
+    /// Through `blend_angle` rather than a plain lerp, or a facing that crosses
+    /// the `±PI` seam spins the long way round for one frame.
+    fn drawn_player(&self, alpha: Alpha) -> (Vec2, f32) {
+        (
+            self.player.prev_pos.lerp(self.player.pos, alpha.get()),
+            blend_angle(self.player.prev_facing, self.player.facing, alpha),
+        )
     }
 
     /// Which way the character is pointing, in radians. The attack state
@@ -1012,7 +1057,62 @@ impl World {
     pub fn extract(&self, alpha: Alpha, mut out: InstanceSink<'_>) {
         self.extract_ground(&mut out);
         self.extract_enemies(alpha, &mut out);
+        self.extract_swing(alpha, &mut out);
         self.extract_player(alpha, &mut out);
+    }
+
+    /// Draws the swing's hitbox — **the same value [`pass::attack`] tests
+    /// against**, not a picture of one.
+    ///
+    /// That is the whole reason the hitbox is a stored array of discs rather
+    /// than a formula each caller evaluates. A swing that draws where it does
+    /// not hit compiles, validates, and looks entirely convincing; its only
+    /// symptom is that the game feels wrong, which is the one thing this
+    /// project exists to tune. Here the renderer cannot form its own opinion —
+    /// it places discs the simulation already decided.
+    ///
+    /// Each phase draws a different thing, because each phase *is* a different
+    /// thing:
+    ///
+    /// - **Startup** draws the whole path, dim and brightening. That is not
+    ///   decoration. `STARTUP` exists so a swing can be read and stepped out
+    ///   of, and six ticks with nothing on screen is six ticks nobody can
+    ///   react to; what makes it readable is seeing where the sword is going.
+    /// - **Active** draws the live disc and nothing else. The rest of the path
+    ///   is the future, and drawing the future in the same pass as the present
+    ///   is how a player learns to time against the wrong thing.
+    /// - **Recovery** draws nothing, because by then the hitbox genuinely is
+    ///   gone and its absence is the honest thing to show.
+    ///
+    /// The active case is also load-bearing rather than tasteful, and this was
+    /// found by looking at it: the swing that exists today has all four of its
+    /// discs on the same point, coincident instances z-fight, and
+    /// `CompareFunction::Less` awards the tie to whichever was drawn *first*.
+    /// A dim trail drawn alongside the live disc therefore wins the depth test
+    /// and hides it — a hitbox that renders at a quarter brightness with no
+    /// error anywhere, which is exactly the class of failure a swing drawn
+    /// from its own formula would produce and nothing would catch.
+    fn extract_swing(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
+        let Some(swing) = self.player.attack.in_flight() else { return };
+        let discs = swing.discs();
+
+        let (drawn, intensity) = match swing.phase() {
+            pass::attack::Phase::Startup(progress) => (discs, 0.06 + 0.22 * progress),
+            pass::attack::Phase::Active(live) => (&discs[live..=live], 1.0),
+            pass::attack::Phase::Recovery => return,
+        };
+
+        let (origin, facing) = self.drawn_player(alpha);
+
+        for disc in drawn {
+            let (centre, radius) = disc.place(origin, facing);
+
+            out.push(Instance::new(
+                on_ground(centre, SWING_HEIGHT),
+                Vec3::new(radius * 2.0, SWING_THICKNESS, radius * 2.0),
+                SWING_COLOR * intensity,
+            ));
+        }
     }
 
     /// The player is not a special case to the renderer either — one more cube
@@ -1022,9 +1122,10 @@ impl World {
         // the hardware encodes on write. This is roughly sRGB (0.35, 0.72, 0.95)
         // — a bright cyan-blue, chosen to sit opposite the horde's muted red on
         // the colour wheel so the eye separates them without effort.
+        let (pos, facing) = self.drawn_player(alpha);
         out.push(
-            Instance::new(self.player_pos_at(alpha), PLAYER_SCALE, Vec3::new(0.10, 0.47, 0.88))
-                .with_yaw(blend_angle(self.player.prev_facing, self.player.facing, alpha)),
+            Instance::new(on_ground(pos, PLAYER_HALF_HEIGHT), PLAYER_SCALE, Vec3::new(0.10, 0.47, 0.88))
+                .with_yaw(facing),
         );
     }
 

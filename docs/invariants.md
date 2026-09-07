@@ -123,6 +123,13 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A swing cannot be interrupted or stacked | 3 | `a_press_during_a_swing_is_dropped`, which pins `SWING` from both sides |
 | The swing's phase cannot disagree with its timer | 0 | one `Option<u32>`; every phase is derived from it |
 | A hitbox swings where the character faces | 3 | `pass::attack` runs after `pass::face`; the yaw convention is mutation-checked |
+| A swing is drawn where it is struck | 3 | one stored `Hitbox`; `pass::attack` and `World::extract` both *place* its discs rather than computing a position, so there is no second formula to drift. `the_swing_is_drawn_where_it_strikes` |
+| A hitbox turns with the player | 3 | `Disc` is polar, so placing it is `facing + angle`. `the_hitbox_follows_the_facing`, mutation-checked against dropping the facing |
+| An arc sweeps rather than cutting its chord | 3 | angle and distance interpolate separately in `Swing::generate`; `an_arc_sweeps_rather_than_cutting_the_chord` |
+| A swing has a direction to point and a radius to hit with | 1 | plain `assert!`s inside the `const fn Swing::new` — a *compile* error for a `const` definition like `SWING_PATH`, which is every swing today. Note the layer drops to a runtime panic for any swing later built from data; a positive-radius newtype is what would hold it at 1 |
+| A swing's hitbox cannot outlive or precede its timer | 0 | `Attack` holds one `Option<InFlight>`; there is no way to read a shape without the tick that says which part of it is live |
+| A swing leaves no gap for a body to pass through | 3 | `consecutive_discs_of_the_swing_leave_no_gap`; a const assert is unavailable because the bound needs `atan2` and `sqrt` |
+| The instance budget reserves room for a live swing | 1 | `PLAYER_INSTANCES` is derived from `pass::attack::HITBOX_SAMPLES`, never written down twice; `a_full_horde_still_fits_alongside_the_ground_and_the_player` |
 | Attack state reaches the determinism hash | 1 | `World::hash` destructures `Player`, and `Attack::hash` destructures itself |
 | Behaviour membership reaches the determinism hash | 1 | `World::hash` destructures `seekers`; `Members::hash` destructures itself |
 | A retired name can never be reused | 0 | `Slots::clear` retires every slot rather than truncating; there is no path that restarts a generation |
