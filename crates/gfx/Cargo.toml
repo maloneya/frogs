@@ -12,6 +12,7 @@ build = "build.rs"
 [dependencies]
 arpg-core.workspace = true
 bytemuck.workspace = true
+fontdue.workspace = true
 glam.workspace = true
 log.workspace = true
 png.workspace = true

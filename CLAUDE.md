@@ -137,15 +137,29 @@ device becomes an `Action`, named in *screen* directions; `app` asks the camera
 to resolve those to world space and hands `sim` an `Intent`. Both dependencies
 run one way, and the simulation sees neither a key nor a screen.
 
+The overlay is that same rule applied one layer up. `Quad` is a rectangle in
+pixels with a patch of atlas and a colour, and `app` describes a screen in it
+via `hud::draw` — so the renderer draws a health bar without learning what
+health is, exactly as it draws an enemy without learning what an enemy is.
+
+`Quad` lives in `gfx` rather than `core`, and the difference from `Instance` is
+the point: `core`'s bar is *needed by both, beholden to neither*, and `Instance`
+meets it because `sim` must mint one without linking wgpu. Nothing that has to
+stay ignorant of the graphics stack ever mints a quad. Keeping it in `gfx` is
+what lets `Quad::textured` be `pub(crate)` and lets the atlas's reserved white
+texel *derive* the UV that names it, instead of two crates agreeing by
+convention across a boundary no compiler spans.
+
 ```
 crates/
   core/  Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES   glam, bytemuck
          Action, ActionMask, InputState, Actions            (input.rs)
          MoveDir, Intent                                    (intent.rs)
          Report, damp
-  gfx/   Renderer, camera, cube, capture, shader.wgsl            core, wgpu, winit, png
+  gfx/   Renderer, camera, cube, capture, shader.wgsl      core, wgpu, winit, png,
+         Quad/QuadBuffer/QuadSink, Glyphs, overlay.wgsl                  fontdue
   sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace   core, glam, serde
-  app/   App, Input + BINDINGS, Clock, harness, wiring, main     core, gfx, sim, winit
+  app/   App, Input + BINDINGS, Clock, harness, hud, main      core, gfx, sim, winit
   scenario/  the headless gate: run a .ron, assert, exit 0/1     core, sim, ron  (no gfx)
 ```
 
@@ -190,6 +204,19 @@ crates/
     copy of the schedule and must agree with the body of `World::step`. The
     hitbox is `contact`'s question with a different answer, and the signatures
     say so: the solver takes `&mut [Vec2]`, the hitbox `&[Vec2]`.
+- The **overlay** is the second pipeline, and almost the inverse of the first:
+  no camera, alpha blended, drawn in submission order rather than depth order.
+  It joins the world's render pass instead of opening its own — declaring a
+  depth state to match, then never writing depth and always passing the test —
+  because a second pass would store and reload the whole frame on a tiled GPU
+  for nothing. `gfx/text.rs` rasterises printable ASCII into one atlas with
+  `fontdue` and keeps the metrics; `gfx/quad.rs` draws it. Texel `(0, 0)` of
+  that atlas is reserved opaque white, which is what lets `Quad::solid` share
+  the pipeline: a bar is a quad whose UVs collapse onto it. One draw call for
+  text and flat colour together, forever.
+  - `Glyphs` is the metrics table **without** the texture, and the split is what
+    makes an overlay's layout assertable with no GPU: `hud::draw` is a pure
+    function, so "what would be on screen" is a list of rectangles a test reads.
 - `app` — the wiring layer, and the only crate that sees both sides. `input.rs`
   holds `BINDINGS`, the one place a `KeyCode` becomes an `Action`. GPU state
   is built in `resumed`, not `main`, because winit models surface loss as

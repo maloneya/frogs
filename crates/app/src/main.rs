@@ -8,6 +8,7 @@
 
 mod app;
 mod harness;
+mod hud;
 mod input;
 mod time;
 

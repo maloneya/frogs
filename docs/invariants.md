@@ -22,6 +22,15 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Aspect ratio survives a minimised window | 0 | `aspect_of` guards inside the camera |
 | `Renderer.vsync` cannot desync from the surface | 0 | private field; `toggle_vsync` is the only writer |
 | `Instance` padding is never written | 0 | private fields; `Instance::new` is the only door |
+| No allocation or overflow at the overlay seam | 0 | `QuadSink` exposes `push` and nothing else |
+| A `Quad`'s UVs and colour cannot be set by hand | 0 | private fields; `Quad::solid` / `Quad::textured` are the doors |
+| `Quad` is exactly 48 bytes | 1 | `const _: () = assert!(…)` beside the type |
+| The atlas row satisfies the copy alignment | 1 | `const _: () = assert!(ATLAS.is_multiple_of(256), …)` in `gfx/text.rs` |
+| The white texel's UV and the texel itself cannot disagree | 1 | `WHITE_UV` is const-derived from `WHITE` in `gfx/text.rs` — one definition, not two |
+| No glyph is packed over the white texel | 3 | `assert!` at the end of `rasterise`, so it fires in the real binary rather than only under test |
+| Only `gfx` can mint a textured quad | 0 | `Quad::textured` is `pub(crate)`; the atlas and the type are in one crate |
+| The overlay projects pixels the right way up | 3 | pixel test in `gfx/src/lib.rs`, mutation-checked against a flipped y |
+| A readout's text stays inside its panel | 3 | `hud` layout tests, which need no GPU |
 | No allocation or overflow at the extract seam | 0 | `InstanceSink` exposes `push` and nothing else |
 | The buffer is reset once per frame | 0 | reset lives in `InstanceBuffer::sink()` |
 | `Instance` is exactly 48 bytes | 1 | `const _: () = assert!(…)` beside the type |

@@ -17,6 +17,13 @@ arpg-scenario = { path = "crates/scenario" }
 
 bytemuck = { version = "1.25", features = ["derive"] }
 env_logger = "0.11"
+# Glyph rasterisation only: it turns a character into a coverage bitmap and does
+# nothing else. Its own dependency list is one crate (`ttf-parser`), which is
+# what makes it the right size of thing to take — the atlas, the pipeline and
+# the layout are the parts worth owning here, and it has opinions about none of
+# them. A full text stack (glyphon, cosmic-text) would have brought its own
+# renderer and its own atlas, leaving the overlay pipeline still to write.
+fontdue = "0.9"
 glam = "0.33"
 log = "0.4"
 png = "0.18.1"

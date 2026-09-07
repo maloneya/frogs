@@ -9,10 +9,11 @@ use winit::window::{Window, WindowId};
 use glam::Vec2;
 
 use arpg_core::{Action, InstanceBuffer, Intent, MoveDir, Report};
-use arpg_gfx::{OrthoCamera, Renderer};
+use arpg_gfx::{OrthoCamera, QuadBuffer, Renderer};
 use arpg_sim::{Accumulator, World};
 
 use crate::harness::{self, Command, Request};
+use crate::hud;
 use crate::input::Input;
 use crate::time::Clock;
 
@@ -54,6 +55,10 @@ pub(crate) struct App {
     capture_stall: u32,
     /// Reused every frame so a steady state allocates nothing.
     instances: InstanceBuffer,
+    /// The overlay's own staging buffer, on exactly the same terms — and
+    /// separate from `instances` because the two are drawn by different
+    /// pipelines in different spaces. Merging them would mean a sort.
+    quads: QuadBuffer,
     input: Input,
     clock: Clock,
     /// Turns the frame's elapsed seconds into whole simulation ticks.
@@ -392,10 +397,20 @@ impl App {
         camera.follow(self.world.player_pos_at(alpha), facing, frame);
 
         self.world.extract(alpha, self.instances.sink());
+
+        // The overlay is built here rather than inside `render` for the same
+        // reason `extract` is: what a readout says is a decision this crate
+        // makes, and the renderer's job stops at drawing the rectangles it is
+        // handed. Scoped so the sink's borrow ends before the draw.
+        {
+            let mut sink = self.quads.sink();
+            hud::draw(renderer.glyphs(), &mut sink);
+        }
+
         // Counted only when a frame actually reached the screen. An occluded
         // window skips the draw entirely, and counting those would report
         // thousands of frames a second for drawing nothing.
-        if renderer.render(camera, self.instances.as_slice()) {
+        if renderer.render(camera, self.instances.as_slice(), self.quads.as_slice()) {
             self.frames += 1;
 
             // The capture is written inside `render`, and only on the path that

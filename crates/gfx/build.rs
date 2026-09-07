@@ -14,7 +14,7 @@ const REASON: &str = "gfx must never know what an enemy is. Its vocabulary is \
 
 /// The complete set, dev-dependencies included.
 const ALLOWED: &[&str] =
-    &["arpg-core", "bytemuck", "glam", "log", "png", "wgpu", "winit", "pollster"];
+    &["arpg-core", "bytemuck", "fontdue", "glam", "log", "png", "wgpu", "winit", "pollster"];
 
 use std::collections::HashSet;
 

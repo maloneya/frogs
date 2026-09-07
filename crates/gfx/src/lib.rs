@@ -12,8 +12,13 @@
 mod camera;
 mod capture;
 mod cube;
+mod overlay;
+mod quad;
+mod text;
 
 pub use camera::OrthoCamera;
+pub use quad::{Quad, QuadBuffer, QuadSink, MAX_QUADS};
+pub use text::Glyphs;
 
 use arpg_core::Instance;
 
@@ -25,6 +30,7 @@ use winit::window::Window;
 use camera::CameraBinding;
 use capture::Readback;
 use cube::CubePipeline;
+use overlay::QuadPipeline;
 
 /// Depth32Float is the safe universal choice. Under an orthographic camera
 /// depth is linear, so we aren't fighting the precision crush that makes
@@ -56,6 +62,13 @@ pub struct Renderer {
     depth: wgpu::TextureView,
     camera: CameraBinding,
     cubes: CubePipeline,
+    /// The rasterised font, and the pipeline that draws what it lays out.
+    ///
+    /// Both live here rather than in `app` because a glyph's place in the atlas
+    /// is a fact about this renderer's texture, and handing that outward would
+    /// make every caller a second authority on where the letters are.
+    font: text::Font,
+    overlay: QuadPipeline,
     /// The best uncapped mode this surface supports, if any.
     uncapped: Option<wgpu::PresentMode>,
     /// Private because it mirrors state that actually lives in `config.present_mode`.
@@ -174,6 +187,8 @@ impl Renderer {
         let depth = create_depth(&device, config.width, config.height);
         let camera = CameraBinding::new(&device);
         let cubes = CubePipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
+        let font = text::Font::new(&device, &queue);
+        let overlay = QuadPipeline::new(&device, &font, config.format, DEPTH_FORMAT);
 
         Self {
             window,
@@ -185,6 +200,8 @@ impl Renderer {
             depth,
             camera,
             cubes,
+            font,
+            overlay,
             uncapped,
             vsync: true,
             pending_capture: None,
@@ -224,6 +241,16 @@ impl Renderer {
         self.pending_capture = None;
     }
 
+    /// Where the letters are, for laying text out into a [`QuadSink`].
+    ///
+    /// **The metrics, never the `Font` that owns them.** `Font` holds a texture
+    /// view and a sampler that nothing outside this crate may touch, and the
+    /// GPU-free half is exactly what a caller needs — which is the statement
+    /// the [`Glyphs`]/`Font` split exists to make.
+    pub fn glyphs(&self) -> &Glyphs {
+        self.font.glyphs()
+    }
+
     /// Whether the surface is currently pinned to the refresh rate.
     pub fn vsync(&self) -> bool {
         self.vsync
@@ -261,7 +288,12 @@ impl Renderer {
     /// this is a note in a doc comment, which is the weakest enforcement there
     /// is — and miscounting frames is precisely the bug it exists to prevent.
     #[must_use = "a skipped frame must not be counted as a rendered one"]
-    pub fn render(&mut self, camera: &OrthoCamera, instances: &[Instance]) -> bool {
+    pub fn render(
+        &mut self,
+        camera: &OrthoCamera,
+        instances: &[Instance],
+        overlay: &[Quad],
+    ) -> bool {
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU
         // dropped the surface. Each wants a slightly different response, and
@@ -313,6 +345,8 @@ impl Renderer {
 
         self.camera.upload(&self.queue, camera);
         let count = self.cubes.upload(&self.queue, instances);
+        let quads =
+            self.overlay.upload(&self.queue, overlay, self.config.width, self.config.height);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -358,6 +392,11 @@ impl Renderer {
             });
 
             self.cubes.draw(&mut pass, &self.camera.bind_group, count);
+
+            // After the world and inside the same pass. The overlay neither
+            // reads nor writes depth, so joining the pass costs nothing and
+            // saves storing and reloading the whole frame between two of them.
+            self.overlay.draw(&mut pass, quads);
         }
 
         // The frame is a copyable texture only between drawing and presenting,
@@ -406,7 +445,7 @@ mod tests {
     /// that actually ships.
     const TEST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 
-    fn headless_device() -> (wgpu::Device, wgpu::Queue) {
+    pub(crate) fn headless_device() -> (wgpu::Device, wgpu::Queue) {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
@@ -685,5 +724,158 @@ mod tests {
         if let Some(err) = pollster::block_on(scope.pop()) {
             panic!("wgpu rejected the frame: {err}");
         }
+    }
+
+    /// Renders one overlay frame offscreen and hands back its pixels.
+    ///
+    /// The two tests below differ only in what they push and what they assert;
+    /// everything between — the target, the depth attachment, the render pass
+    /// and the readback — is the part wgpu validation is most sensitive to, and
+    /// having it once means a change to it is one edit rather than several.
+    /// The validation scope lives here too, so neither test can forget it.
+    fn overlay_frame(
+        width: u32,
+        height: u32,
+        fill: impl FnOnce(&Glyphs, &mut QuadSink<'_>),
+    ) -> Vec<u8> {
+        let (device, queue) = headless_device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+        let font = text::Font::new(&device, &queue);
+        let overlay = QuadPipeline::new(&device, &font, TEST_FORMAT, DEPTH_FORMAT);
+
+        let color = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("overlay target"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEST_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = create_depth(&device, width, height);
+
+        let mut buf = QuadBuffer::default();
+        {
+            let mut sink = buf.sink();
+            fill(font.glyphs(), &mut sink);
+        }
+        let count = overlay.upload(&queue, buf.as_slice(), width, height);
+
+        let mut encoder = device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("overlay") });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("overlay pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            overlay.draw(&mut pass, count);
+        }
+
+        let readback = capture::Readback::new(&device, width, height);
+        readback.record(&mut encoder, &color);
+        queue.submit(Some(encoder.finish()));
+        let rgba = readback.to_rgba(&device).expect("read the frame back");
+
+        if let Some(err) = pollster::block_on(scope.pop()) {
+            panic!("wgpu rejected the overlay: {err}");
+        }
+        rgba
+    }
+
+    /// **Where a screen-space quad actually lands.**
+    ///
+    /// The overlay's whole transform is four lines of WGSL turning pixels into
+    /// clip space, and exactly one of them is easy to get backwards: the y
+    /// term, which must be subtracted because the overlay's origin is top-left
+    /// while clip space is y-up. Flipping it compiles, validates, draws, and
+    /// puts every readout the same distance from the wrong edge — a mirror
+    /// image, which looks entirely deliberate in a screenshot.
+    ///
+    /// So the rectangle is placed **off-centre vertically** and the mirrored
+    /// band is asserted empty. That is the assertion a sign flip fails and a
+    /// bounding box could not make.
+    #[test]
+    fn an_overlay_quad_lands_where_it_was_placed() {
+        const W: u32 = 256;
+        const H: u32 = 128;
+        // Deliberately nearer the top than the bottom.
+        const RECT: (f32, f32, f32, f32) = (10.0, 8.0, 40.0, 16.0);
+
+        let rgba = overlay_frame(W, H, |_, sink| {
+            sink.push(Quad::solid(glam::Vec4::from(RECT), glam::Vec4::ONE));
+        });
+        let at = |x: u32, y: u32| rgba[((y * W + x) * 4) as usize];
+
+        // **Fully opaque, not merely lit.** A `Quad::solid` samples the
+        // reserved white texel, so anything less than saturated means the UV,
+        // the packing or the sampler's filter mode disagree — a partially
+        // covered smear would pass a "brighter than the clear colour" check.
+        let (x0, y0) = (RECT.0 as u32, RECT.1 as u32);
+        let (x1, y1) = (x0 + RECT.2 as u32 - 1, y0 + RECT.3 as u32 - 1);
+        for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1), ((x0 + x1) / 2, (y0 + y1) / 2)] {
+            assert_eq!(at(x, y), u8::MAX, "the quad should cover ({x}, {y}) opaquely");
+        }
+
+        // Just outside, on every side. A half-pixel offset in the projection
+        // would still light the middle and fail here.
+        for (x, y) in [(x0 - 1, y0), (x1 + 1, y0), (x0, y0 - 1), (x0, y1 + 1)] {
+            assert_eq!(at(x, y), 0, "the quad should not reach ({x}, {y})");
+        }
+
+        // The mirror image, which is the whole point: a flipped y projection
+        // draws here instead and passes every check above.
+        let mirrored = H - y1 - 1;
+        assert_eq!(
+            at((x0 + x1) / 2, mirrored),
+            0,
+            "the quad is mirrored about the horizontal: y {mirrored} is lit"
+        );
+    }
+
+    /// The atlas is actually sampled, and coverage actually reaches the frame.
+    ///
+    /// Separate from the placement test because it fails for different reasons:
+    /// a broken UV, an unwritten texture, a sampler binding in the wrong slot,
+    /// or a fragment shader reading the wrong channel all land here and none of
+    /// them move a rectangle.
+    #[test]
+    fn text_puts_ink_on_the_frame() {
+        const W: u32 = 256;
+        const H: u32 = 64;
+
+        let rgba = overlay_frame(W, H, |glyphs, sink| {
+            glyphs.layout("HELLO", 8.0, 8.0, glam::Vec4::ONE, sink);
+        });
+
+        let ink = (0..W * H).filter(|i| rgba[(i * 4) as usize] > 40).count();
+        assert!(ink > 100, "five letters should light more than {ink} pixels");
+
+        // And not *everything*: a fragment shader that ignored coverage would
+        // fill each glyph's whole rectangle, which is the failure that still
+        // looks like text from far enough away.
+        let area = (W * H) as usize;
+        assert!(ink < area / 4, "{ink} of {area} pixels lit — coverage is being ignored");
     }
 }
