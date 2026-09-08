@@ -1,0 +1,44 @@
+(
+    description: "Eviction removes A and its source descendants, preserves B and unowned bodies, and prevents later firing; reloading has an independent lifetime.",
+    setup: (
+        scenes: [
+            File("../scenes/stream.ron"),
+            Inline((name: "B", bodies: [(pos: (-20.0, 0.0))])),
+        ],
+        actions: [Place((-40.0, 0.0))],
+    ),
+    scenes: [
+        (at: 1, action: Evict(0)),
+        (at: 2, action: Load(File("../scenes/stream.ron"))),
+        (at: 3, action: Evict(1)),
+        (at: 4, action: Evict(2)),
+        (at: 5, action: Load(File("../scenes/stream.ron"))),
+        (at: 5, action: Evict(3)),
+    ],
+    checkpoints: [
+        (at: 0, expect: (enemy_count: 4, sources: 1, scene_count: 2)),
+        (at: 1, expect: (
+            enemy_count: 2, sources: 0, scene_count: 1,
+            bodies: [
+                (nth: 0, alive: false),
+                (nth: 1, alive: true, pos: (x: -20.0, z: 0.0, tol: 0.0)),
+                (nth: 3, alive: false),
+            ],
+        )),
+        (at: 2, expect: (enemy_count: 4, sources: 1, scene_count: 2)),
+        (at: 3, expect: (enemy_count: 3, sources: 1, scene_count: 1)),
+        (at: 4, expect: (enemy_count: 1, sources: 0, scene_count: 0)),
+    ],
+    budget: (ticks: 8),
+    expect: (
+        enemy_count: 1, sources: 0, scene_count: 0,
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0),
+        bodies: [
+            (nth: 0, alive: false), (nth: 1, alive: false),
+            (nth: 2, alive: true, pos: (x: -40.0, z: 0.0, tol: 0.0)),
+            (nth: 3, alive: false), (nth: 4, alive: false), (nth: 5, alive: false),
+            (nth: 6, alive: false),
+        ],
+        trace: "scenes_own_their_sources_and_descendants.trace",
+    ),
+)

@@ -13,6 +13,12 @@
 //! This list must match the body of `World::step`. It is the readable copy of
 //! an order that would otherwise live only in control flow.
 //!
+//! Scene load/evict complete between ticks, through World doors unavailable to
+//! passes. Loading therefore exposes all authored content to the next source
+//! evaluation; eviction cancels sources and their queued work before it. Source
+//! requests carry their scene owner and the spawn drain records ownership at
+//! grant time. There is no background or partial scene instantiation yet.
+//!
 //! 1. [`source::trigger`] — decide which sources fire, and ask. **Before the
 //!    drain**, so a source that fires on a tick produces a body that lives the
 //!    whole of it; and separate from the drain, because deciding and performing

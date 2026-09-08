@@ -147,6 +147,7 @@ dependencies = [
  "glam",
  "log",
  "pollster",
+ "scenario",
  "winit",
 ]
 

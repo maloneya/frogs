@@ -73,6 +73,22 @@ use arpg_sim::WALK_PER_TICK as TICK_OF_WALKING;
 /// just to remove one field from checkpoints.
 pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     let mut failures = Vec::new();
+    if !scenario.setup.scenes.is_empty() && scenario.setup.enemies != 0 {
+        failures.push(Failure::new(
+            "setup",
+            "scenes or a legacy enemy grid".into(),
+            "both specified".into(),
+        ));
+    }
+    for command in &scenario.scenes {
+        if command.at >= scenario.budget.ticks {
+            failures.push(Failure::new(
+                "scenes",
+                "a tick inside the budget".into(),
+                command.at.to_string(),
+            ));
+        }
+    }
     for command in &scenario.attack_recovery {
         if command.at >= scenario.budget.ticks {
             failures.push(Failure::new(
@@ -109,8 +125,15 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
 /// scenario makes is about the code path the game runs, and a runner that
 /// stepped the world by some other route would be testing a different program.
 pub(crate) fn run(scenario: &Scenario) -> Run {
-    let mut world = World::default();
-    world.set_enemy_count(scenario.setup.enemies);
+    let mut world = if scenario.setup.scenes.is_empty() {
+        let mut world = World::default();
+        world.set_enemy_count(scenario.setup.enemies);
+        world
+    } else {
+        World::empty()
+    };
+    let mut instances = Vec::new();
+    let mut command_failures = Vec::new();
 
     // Setup actions come after the horde grid, so a scenario can put a body at
     // a known spot inside a crowd as well as in an empty arena.
@@ -119,6 +142,9 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     // slot, which is the only way a retired name can come back — so the order
     // here is what makes that case reachable at all.
     let mut placed: Vec<Option<EntityId>> = Vec::new();
+    for scene in &scenario.setup.scenes {
+        load_scene(&mut world, scene.content(), &mut instances, &mut placed, &mut command_failures);
+    }
     for action in &scenario.setup.actions {
         match action {
             // A refused spawn still takes a placement number, so every later
@@ -165,12 +191,14 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     // below costs a walk of the whole trace ring, and the overwhelming majority
     // of scenarios place everything in setup and nothing after — for those,
     // 16384 events would be filtered on every tick to find nothing.
-    let watching = !scenario.spawns.is_empty() || !sources.is_empty();
+    let mut watching = !scenario.spawns.is_empty()
+        || !sources.is_empty()
+        || !scenario.scenes.is_empty()
+        || !scenario.setup.scenes.is_empty();
 
     let mut accumulator = Accumulator::default();
     let mut hashes = Vec::with_capacity(budget);
     let mut step_time = std::time::Duration::ZERO;
-    let mut command_failures = Vec::new();
     let mut checkpoint_failures = Vec::new();
     // Sort references once, retaining the file index for diagnostics. Duplicate
     // ticks remain distinct assertions, and work costs checkpoints + ticks.
@@ -181,6 +209,38 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     while hashes.len() < budget {
         for dt in accumulator.pending(Dt::SECS) {
             let tick = hashes.len() as u64;
+            // Loads complete before source evaluation; evictions therefore stop
+            // a source from firing on this very tick. No implicit warm-up tick.
+            let mut installed = 0;
+            for command in scenario.scenes.iter().filter(|command| command.at == tick) {
+                match &command.action {
+                    crate::spec::SceneAction::Load(scene) => {
+                        let before = placed.len();
+                        load_scene(
+                            &mut world,
+                            scene.content(),
+                            &mut instances,
+                            &mut placed,
+                            &mut command_failures,
+                        );
+                        installed += placed.len() - before;
+                    }
+                    crate::spec::SceneAction::Evict(nth) => {
+                        if !instances
+                            .get(*nth)
+                            .copied()
+                            .flatten()
+                            .is_some_and(|id| world.evict_scene(id))
+                        {
+                            command_failures.push(Failure::new(
+                                "evict scene",
+                                "a live instance".into(),
+                                format!("instance {nth} absent at tick {tick}"),
+                            ));
+                        }
+                    }
+                }
+            }
             for command in scenario.attack_recovery.iter().filter(|command| command.at == tick) {
                 world.set_attack_recovery(command.recovery);
             }
@@ -224,7 +284,19 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             hashes.push(world.hash());
 
             if watching {
-                record_placed(&world, tick, asked, &mut placed);
+                if world.trace().dropped() > 0 {
+                    // Scene batches can exceed the trace ring in one boundary
+                    // operation. Binding only its surviving tail would silently
+                    // change placement numbering, even without a golden trace.
+                    command_failures.push(Failure::new(
+                        "placement trace",
+                        "an untruncated trace for runtime body identities".into(),
+                        "trace wrapped; shorten or reduce the scenario".into(),
+                    ));
+                    watching = false;
+                } else {
+                    record_placed(&world, tick, asked, installed, &mut placed);
+                }
             }
             // After recording this tick's spawns, so a checkpoint can inspect
             // a newly granted body by the same name used at the end of the run.
@@ -264,7 +336,13 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
 /// padded with `None` — placement numbers must not shift under the assertions
 /// that refer to them. Refusal means the horde hit its budget, which cannot
 /// un-happen, so the shortfall is always the tail of what was asked for.
-fn record_placed(world: &World, tick: u64, asked: usize, placed: &mut Vec<Option<EntityId>>) {
+fn record_placed(
+    world: &World,
+    tick: u64,
+    asked: usize,
+    installed: usize,
+    placed: &mut Vec<Option<EntityId>>,
+) {
     let granted: Vec<EntityId> = world
         .trace()
         .since(tick)
@@ -272,6 +350,7 @@ fn record_placed(world: &World, tick: u64, asked: usize, placed: &mut Vec<Option
             Event::Placed { id } => Some(id),
             _ => None,
         })
+        .skip(installed)
         .collect();
 
     // The runner's own requests were queued *before* the tick began and a
@@ -360,6 +439,7 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
         enemy_count,
         seekers,
         sources,
+        scene_count,
         bodies,
         trace: _,
     } = expect;
@@ -418,6 +498,7 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
     check_eq("enemy_count", enemy_count, world.enemy_count(), &mut failures);
     check_eq("seekers", seekers, world.seeker_count(), &mut failures);
     check_eq("sources", sources, world.source_count(), &mut failures);
+    check_eq("scene_count", scene_count, world.scene_count(), &mut failures);
 
     for body in bodies {
         check_body(world, placed, body, &mut failures);
@@ -712,5 +793,24 @@ fn check_velocity(
     let v = motion.velocity();
     if want.off_by(Vec3::new(v.x, 0.0, v.y)).is_some() {
         failures.push(Failure::new(name, want.expected(), format!("({:.6}, {:.6})", v.x, v.y)));
+    }
+}
+
+fn load_scene(
+    world: &mut World,
+    scene: &arpg_sim::Scene,
+    instances: &mut Vec<Option<arpg_sim::SceneId>>,
+    placed: &mut Vec<Option<EntityId>>,
+    failures: &mut Vec<Failure>,
+) {
+    match world.load_scene(scene) {
+        Ok(id) => {
+            instances.push(Some(id));
+            placed.extend(world.scene_bodies(id).unwrap_or_default().iter().copied().map(Some));
+        }
+        Err(error) => {
+            instances.push(None);
+            failures.push(Failure::new("load scene", "a ready scene".into(), error.to_string()));
+        }
     }
 }

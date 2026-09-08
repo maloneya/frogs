@@ -41,6 +41,16 @@ const _: () = assert!(CAPACITY > 0, "a zero-length trace silently records nothin
 /// that occur rarely: a hitbox opening, a hit landing, hitstop starting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
+    /// An entire scene became ready between ticks.
+    SceneLoaded {
+        /// Runtime instance, distinct from the authored name.
+        id: crate::SceneId,
+    },
+    /// An instance and all of its remaining work were removed.
+    SceneEvicted {
+        /// Retired runtime instance.
+        id: crate::SceneId,
+    },
     /// Recovery tuning changed before this tick. In-flight swings keep theirs.
     AttackRecoveryChanged {
         /// Validated duration used by subsequent swings.
@@ -171,6 +181,8 @@ impl fmt::Display for Event {
     /// noise that hides the one line that mattered.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SceneLoaded { id } => write!(f, "scene loaded id={id}"),
+            Self::SceneEvicted { id } => write!(f, "scene evicted id={id}"),
             Self::AttackRecoveryChanged { recovery } => {
                 write!(f, "attack recovery ticks={}", recovery.get())
             }

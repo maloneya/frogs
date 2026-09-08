@@ -1,0 +1,16 @@
+(
+    description: "The same authored file used by the live game is fully installed before its first tick; no warm-up or implicit movement occurs.",
+    setup: (scenes: [File("../scenes/pair.ron")]),
+    budget: (ticks: 1),
+    expect: (
+        scene_count: 1, enemy_count: 2, sources: 0, seekers: 0,
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0),
+        player_velocity: (x: 0.0, z: 0.0, tol: 0.0),
+        facing: (value: 0.0, tol: 0.0),
+        attack_phase: Idle,
+        bodies: [
+            (nth: 0, pos: (x: 0.0, z: 2.0, tol: 0.0)),
+            (nth: 1, pos: (x: 2.0, z: 2.0, tol: 0.0)),
+        ],
+    ),
+)

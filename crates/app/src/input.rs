@@ -32,12 +32,14 @@ const BINDINGS: &[Binding] = &[
     ("s", KeyCode::KeyS, Some(Action::MoveDown), None),
     ("a", KeyCode::KeyA, Some(Action::MoveLeft), None),
     ("d", KeyCode::KeyD, Some(Action::MoveRight), None),
-    ("up", KeyCode::ArrowUp, Some(Action::MoveUp), None),
-    ("down", KeyCode::ArrowDown, Some(Action::MoveDown), None),
+    ("up", KeyCode::ArrowUp, Some(Action::MoveUp), Some(MenuKey::Previous)),
+    ("down", KeyCode::ArrowDown, Some(Action::MoveDown), Some(MenuKey::Next)),
     ("left", KeyCode::ArrowLeft, Some(Action::MoveLeft), Some(MenuKey::Decrease)),
     ("right", KeyCode::ArrowRight, Some(Action::MoveRight), Some(MenuKey::Increase)),
     ("space", KeyCode::Space, Some(Action::Attack), None),
     ("f1", KeyCode::F1, None, Some(MenuKey::Toggle)),
+    ("f2", KeyCode::F2, None, Some(MenuKey::Scenes)),
+    ("enter", KeyCode::Enter, None, Some(MenuKey::Accept)),
     ("escape", KeyCode::Escape, None, Some(MenuKey::Close)),
     ("r", KeyCode::KeyR, None, Some(MenuKey::Reset)),
 ];
@@ -66,10 +68,11 @@ impl Controls {
         repeat: bool,
         recovery: RecoveryTicks,
     ) -> bool {
+        let previous_mode = self.menu.mode();
         let was_open = self.menu.open();
         let binding = BINDINGS.iter().enumerate().find(|(_, (_, bound, ..))| *bound == key);
         let menu_key = binding.and_then(|(_, (_, _, _, menu))| *menu);
-        let consumed = was_open || matches!(menu_key, Some(MenuKey::Toggle));
+        let consumed = was_open || matches!(menu_key, Some(MenuKey::Toggle | MenuKey::Scenes));
         if repeat {
             return consumed;
         }
@@ -86,7 +89,7 @@ impl Controls {
         if pressed && let Some(menu_key) = menu_key {
             self.menu.on_key(menu_key, recovery);
         }
-        if was_open != self.menu.open() {
+        if previous_mode != self.menu.mode() {
             self.accepted = 0;
             self.state = InputState::default();
         } else if !consumed {
@@ -98,6 +101,14 @@ impl Controls {
             self.sync();
         }
         consumed
+    }
+
+    /// Restart discards gameplay and pending edits, but a physically held key
+    /// must still be released before it can act in the new playtest.
+    pub(crate) fn restart(&mut self) {
+        self.accepted = 0;
+        self.state = InputState::default();
+        self.menu = Menu::default();
     }
 
     /// Focus loss discards held keys and unsampled edges, but preserves the menu.
@@ -135,6 +146,10 @@ impl Controls {
         &self.menu
     }
 
+    pub(crate) fn menu_mut(&mut self) -> &mut Menu {
+        &mut self.menu
+    }
+
     pub(crate) fn take_recovery(&mut self) -> Option<RecoveryTicks> {
         self.menu.take_recovery()
     }
@@ -164,6 +179,39 @@ mod tests {
         let key = key_named(name).expect("every UI key is harness-drivable");
         controls.on_key(key, true, false, RecoveryTicks::default());
         controls.on_key(key, false, false, RecoveryTicks::default());
+    }
+
+    #[test]
+    fn picker_navigation_is_modal_and_panel_switches_do_not_leak_keys() {
+        let mut controls = Controls::default();
+        controls.on_key(KeyCode::ArrowUp, true, false, RecoveryTicks::default());
+        tap(&mut controls, "f2");
+        assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
+        assert!(matches!(
+            controls.menu_mut().take_request(),
+            Some(crate::ui::MenuRequest::RefreshScenes)
+        ));
+        for _ in 0..10 {
+            tap(&mut controls, "down");
+        }
+        assert_eq!(controls.menu().picker().selected(), 1, "selection clamps at the last row");
+        tap(&mut controls, "right");
+        assert!(controls.menu().pending().is_none(), "picker keys cannot edit attack tuning");
+        tap(&mut controls, "f1");
+        tap(&mut controls, "right");
+        assert!(controls.menu().pending().is_some());
+        tap(&mut controls, "f2");
+        tap(&mut controls, "escape");
+        assert!(!controls.menu().open());
+        controls.on_key(KeyCode::ArrowUp, true, true, RecoveryTicks::default());
+        assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
+        controls.on_key(KeyCode::ArrowUp, false, false, RecoveryTicks::default());
+        controls.on_key(KeyCode::ArrowUp, true, false, RecoveryTicks::default());
+        assert!(controls.sample().held(Action::MoveUp));
+        tap(&mut controls, "f2");
+        tap(&mut controls, "f2");
+        assert!(!controls.menu().open());
+        assert!(controls.menu_mut().take_request().is_none());
     }
 
     #[test]

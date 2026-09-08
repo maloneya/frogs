@@ -1,0 +1,5 @@
+(
+    name: "A body and a continuous source",
+    bodies: [(pos: (20.0, 0.0))],
+    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2)],
+)

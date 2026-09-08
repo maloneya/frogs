@@ -164,3 +164,10 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A hit changes velocity before it changes position | 3 | checkpoints in `the_hitbox_opens_and_shuts_on_schedule` cover the hit tick and subsequent movement |
 | Physical payload survives row changes and cannot leak to a recycled id | 3 | `despawning_revokes_motion_and_a_swapped_survivor_keeps_its_velocity` |
 | Physics stays within the headless tick budget | 3 | `physics_stays_within_tick_budget` asserts mean time inside `World::step` |
+| Scene load failure cannot partially replace a playtest | 3 | validation and capacity admission precede mutation; `invalid_and_over_capacity_scenes_leave_everything_untouched` and `rejected_replacement_preserves_the_current_playtest` |
+| A scene's source descendants inherit its lifetime | 3 | owner carried through sources and spawn requests; `scenes_own_their_sources_and_descendants` asserts eviction and subsequent non-emission |
+| A retired scene cannot be recreated by queued work | 3 | eager queue cancellation plus live-owner check at drain; `stale_producer_cannot_resurrect_an_evicted_scene` |
+| A scene instance id is never reused within a world | 0 | private `SceneId`, monotonic checked allocation; records may be removed without rewinding the allocator |
+| A fresh playtest cannot inherit player or pending input state | 3 | `restart_resets_the_complete_playtest_boundary` and `restart_cancels_old_delayed_actions_and_capture_replies` |
+| Scene ownership and pending ownership reach replay state | 3 | exhaustive hashes and `scene_state_and_pending_ownership_reach_the_hash` |
+| Authored names cannot corrupt the state protocol | 0 | `Report::text` and key encoding escape JSON strings at the write door |

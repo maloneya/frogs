@@ -112,6 +112,12 @@ echo 'hold d 500' | nc -U /tmp/arpg.sock
 `source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>]` ·
 `source remove <id>` · `impulse <player|#id> <x> <z>` · `vsync on|off` · `quit`
 
+Scene playtests: `scene start <path>` starts fresh from a file; `scene restart`
+repeats the selected snapshot; `scene add <path>` / `scene evict <id>` exercise
+additive content; `scene list` reports live instances. See
+[`docs/scene-playtests.md`](docs/scene-playtests.md) for completion semantics,
+run-scoped identities and the shared scenario-file path.
+
 Every command replies, and the reply means the effect has **landed** — `hold`
 answers after the key comes back up, `shot` after the file is on disk. So a test
 is a sequence of commands, not a sequence of sleeps and hopes. Key names are a
@@ -244,6 +250,10 @@ Game actions (rebindable, go through `Action`):
 `F1` opens the attack tuning panel · Left/Right adjust recovery · `R` resets ·
 `F1` / `Esc` close. The panel captures gameplay input while the world keeps
 running. Changes apply to the next swing and last for the current run.
+
+`F2` opens the scene picker · Up/Down select · Enter starts fresh · F2/Esc
+close. Restart current reuses its cached snapshot; file choices reread disk.
+See [`docs/scene-playtests.md`](docs/scene-playtests.md).
 
 Debug commands (fixed, handled straight from the event callback — they act on
 the program, not the character, so they deliberately do *not* go through

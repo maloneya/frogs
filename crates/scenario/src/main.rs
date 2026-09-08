@@ -105,10 +105,26 @@ fn run_one(path: &Path, bless: bool) -> bool {
     let options =
         ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
 
-    let scenario: spec::Scenario = match options.from_str(&source) {
+    let mut scenario: spec::Scenario = match options.from_str(&source) {
         Ok(s) => s,
         Err(e) => return fail_to_load(&name, "parse", &e.to_string()),
     };
+
+    // Resolve once, before both runs. Disk latency/content edits cannot change
+    // which scene the replay receives. Paths are relative to this scenario file.
+    let base = path.parent().unwrap_or_else(|| Path::new("."));
+    for scene in &mut scenario.setup.scenes {
+        if let Err(error) = scene.resolve(base) {
+            return fail_to_load(&name, "load scene", &error.to_string());
+        }
+    }
+    for command in &mut scenario.scenes {
+        if let spec::SceneAction::Load(scene) = &mut command.action
+            && let Err(error) = scene.resolve(base)
+        {
+            return fail_to_load(&name, "load scene", &error.to_string());
+        }
+    }
 
     let invalid = run::validate(&scenario);
     if !invalid.is_empty() {

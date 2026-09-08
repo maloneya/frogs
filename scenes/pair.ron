@@ -1,0 +1,7 @@
+(
+    name: "Two stationary bodies",
+    bodies: [
+        (pos: (0.0, 2.0)),
+        (pos: (2.0, 2.0)),
+    ],
+)

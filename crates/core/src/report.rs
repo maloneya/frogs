@@ -71,6 +71,27 @@ impl Report {
         let _ = write!(self.out, "{value}");
     }
 
+    /// A JSON string, including escaped quotes, backslashes and control characters.
+    pub fn text(&mut self, name: &str, value: &str) {
+        self.key(name);
+        self.string(value);
+    }
+
+    fn string(&mut self, value: &str) {
+        self.out.push('"');
+        for ch in value.chars() {
+            match ch {
+                '"' => self.out.push_str("\\\""),
+                '\\' => self.out.push_str("\\\\"),
+                ch if ch <= '\u{1f}' => {
+                    let _ = write!(self.out, "\\u{:04x}", ch as u32);
+                }
+                ch => self.out.push(ch),
+            }
+        }
+        self.out.push('"');
+    }
+
     /// Nests another reporter's fields under one key, so `sim` can describe
     /// itself without knowing what else is in the report.
     pub fn object(&mut self, name: &str, build: impl FnOnce(&mut Report)) {
@@ -108,13 +129,21 @@ impl Report {
             self.out.push(',');
         }
         self.empty = false;
-        let _ = write!(self.out, "\"{name}\":");
+        self.string(name);
+        self.out.push(':');
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_labels_and_keys_cannot_break_json() {
+        let mut report = Report::default();
+        report.text("a\"b", "a\"b\\c\n\t\u{0} café");
+        assert_eq!(report.finish(), r#"{"a\"b":"a\"b\\c\u000a\u0009\u0000 café"}"#);
+    }
 
     #[test]
     fn an_empty_report_is_an_empty_object() {

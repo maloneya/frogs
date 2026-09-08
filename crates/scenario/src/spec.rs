@@ -21,6 +21,10 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) setup: Setup,
 
+    /// Lifecycle operations before their named tick, in file order.
+    #[serde(default)]
+    pub(crate) scenes: Vec<SceneAt>,
+
     /// Applied in order, so a later span overwrites an earlier one where they
     /// overlap. Ticks outside every span get no input at all.
     #[serde(default)]
@@ -99,6 +103,9 @@ pub(crate) struct Checkpoint {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Setup {
+    /// Real authored content, instantiated through the same door as the game.
+    #[serde(default)]
+    pub(crate) scenes: Vec<SceneRef>,
     /// Zero is the useful default, not an edge case: the horde spawns centred
     /// on the origin and so does the player, so any horde at all puts the two
     /// in contact on tick zero — and a prediction about movement then becomes a
@@ -274,6 +281,8 @@ pub(crate) struct Expect {
     /// How many sources are still live at the end.
     #[serde(default)]
     pub(crate) sources: Option<usize>,
+    #[serde(default)]
+    pub(crate) scene_count: Option<usize>,
     /// Predictions about individual bodies placed by [`Setup::actions`].
     #[serde(default)]
     pub(crate) bodies: Vec<BodyExpect>,
@@ -387,4 +396,41 @@ pub(crate) struct ImpulseAt {
     pub(crate) target: Target,
     /// Uses sim's validated vocabulary, not a second definition of momentum.
     pub(crate) value: Impulse,
+}
+
+/// Test orchestration refers to the simulation's content type directly.
+#[derive(Debug, Deserialize)]
+pub(crate) enum SceneRef {
+    Inline(arpg_sim::Scene),
+    File(std::path::PathBuf),
+}
+
+impl SceneRef {
+    pub(crate) fn resolve(&mut self, base: &std::path::Path) -> Result<(), scenario::LoadError> {
+        if let Self::File(path) = self {
+            *self = Self::Inline(scenario::load_scene(&base.join(path))?);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn content(&self) -> &arpg_sim::Scene {
+        match self {
+            Self::Inline(scene) => scene,
+            Self::File(_) => panic!("scene references must resolve before validation and replay"),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SceneAt {
+    pub(crate) at: u64,
+    pub(crate) action: SceneAction,
+}
+
+/// Indices refer to load order, including setup, never to a content name.
+#[derive(Debug, Deserialize)]
+pub(crate) enum SceneAction {
+    Load(SceneRef),
+    Evict(usize),
 }

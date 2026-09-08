@@ -56,6 +56,10 @@ what matters here is what it left behind to build on.
   lengthening against exact attack boundaries. Startup, active duration,
   knockback, and swing geometry remain future controls.
 
+- **Scene playtests.** Authored scenes, exact disposable ownership, synchronous
+  load/evict, and fresh restart through the F2 picker and harness. The game and gate share
+  content decoding and instantiation. See [scene playtests](scene-playtests.md).
+
 ---
 
 ## 4. The player joins body storage — *hooks* — **done**

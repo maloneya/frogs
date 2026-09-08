@@ -17,11 +17,11 @@
 //! of quads a test can inspect — see the tests at the bottom, which never
 //! create a device.
 
-use crate::ui::Menu;
+use crate::ui::{Menu, Mode};
 use arpg_gfx::{Glyphs, Quad, QuadSink};
 use arpg_sim::{AttackStatus, TICK_HZ};
 use core::fmt::Write as _;
-use glam::Vec4;
+use glam::{Vec2, Vec4};
 
 /// Distance from the window edge to the panel, in physical pixels.
 const MARGIN: f32 = 16.0;
@@ -46,11 +46,19 @@ const PANEL: Vec4 = Vec4::new(0.004, 0.005, 0.008, 0.62);
 /// nothing else — and a signature that says so is one a test can satisfy with
 /// no window and no device.
 ///
-/// **No viewport parameter yet, deliberately.** Everything here is anchored to
-/// the top-left corner, so the window's size does not enter the arithmetic. The
-/// moment something is centred or right-aligned it will, and taking the
-/// argument before then would mean a parameter nobody could tell was unused.
-pub(crate) fn draw(font: &Glyphs, menu: &Menu, attack: AttackStatus, sink: &mut QuadSink<'_>) {
+/// Viewport size bounds the scene list and external labels on small windows.
+pub(crate) fn draw(
+    font: &Glyphs,
+    menu: &Menu,
+    attack: AttackStatus,
+    current: &str,
+    viewport: Vec2,
+    sink: &mut QuadSink<'_>,
+) {
+    if menu.mode() == Mode::Scenes {
+        draw_picker(font, menu, current, viewport, sink);
+        return;
+    }
     // Stack-backed lines preserve the overlay's no-allocation frame path.
     let mut lines: [Text; 8] = core::array::from_fn(|_| Text::default());
     let count = if menu.open() {
@@ -86,31 +94,85 @@ pub(crate) fn draw(font: &Glyphs, menu: &Menu, attack: AttackStatus, sink: &mut 
         write!(lines[7], "F1/Esc: close and play   World keeps running").expect("line capacity");
         8
     } else {
-        write!(lines[0], "F1: attack tuning").expect("line capacity");
-        write!(
-            lines[1],
-            "{} / tick {} / struck {}",
-            attack.phase,
-            attack.elapsed,
-            attack.struck
-        )
-        .expect("line capacity");
+        write!(lines[0], "F1: attack tuning   F2: scenes").expect("line capacity");
+        write!(lines[1], "{} / tick {} / struck {}", attack.phase, attack.elapsed, attack.struck)
+            .expect("line capacity");
         2
     };
     let lines = &lines[..count];
     let width = lines.iter().map(|line| font.measure(line.as_str())).fold(0.0, f32::max);
+    draw_panel(font, lines, width, menu.open().then_some(1), sink);
+}
+
+/// A bounded window into the catalog, with no allocation or I/O per frame.
+fn draw_picker(font: &Glyphs, menu: &Menu, current: &str, viewport: Vec2, sink: &mut QuadSink<'_>) {
+    let width = (viewport.x - 2.0 * (MARGIN + PADDING)).min(900.0);
     let line_step = font.line_height() + 8.0;
-    let height = font.line_height() + (count - 1) as f32 * line_step;
-    let panel = Vec4::new(MARGIN, MARGIN, width + PADDING * 2.0, height + PADDING * 2.0);
-    sink.push(Quad::solid(panel, PANEL));
-    if menu.open() {
-        let row = Vec4::new(
-            MARGIN + PADDING / 2.0,
-            MARGIN + PADDING + line_step - 3.0,
-            width + PADDING,
-            font.line_height() + 6.0,
-        );
-        sink.push(Quad::solid(row, Vec4::new(0.018, 0.09, 0.13, 0.9)));
+    let available = ((viewport.y - 2.0 * (MARGIN + PADDING) + 8.0) / line_step).max(0.0) as usize;
+    if available == 0 || width < font.measure("...") {
+        return;
+    }
+    const VISIBLE_ROWS: usize = 6;
+    const FIXED_ROWS: usize = 5; // Title, current scene, count, and two control hints.
+    const ERROR_ROWS: usize = 2;
+    let mut lines: [Text; VISIBLE_ROWS + FIXED_ROWS + ERROR_ROWS] =
+        core::array::from_fn(|_| Text::default());
+    let picker = menu.picker();
+    let overhead = FIXED_ROWS + if picker.error().is_some() { ERROR_ROWS } else { 0 };
+    let (count, highlight) = if available <= overhead {
+        lines[0].label(font, "Enlarge window for scene picker. F2/Esc closes.", width);
+        (1, None)
+    } else {
+        lines[0].label(font, "SCENE PLAYTESTS", width);
+        write!(lines[1], "Current: ").expect("literal fits");
+        lines[1].label(font, current, width);
+        let range = picker.visible((available - overhead).min(VISIBLE_ROWS));
+        let highlight = 2 + picker.selected() - range.start;
+        let mut count = 2;
+        for index in range.clone() {
+            lines[count].label(font, picker.entries()[index].label(), width);
+            count += 1;
+        }
+        write!(lines[count], "{}-{} of {}", range.start + 1, range.end, picker.entries().len())
+            .expect("numbers fit");
+        lines[count].fit(font, width);
+        count += 1;
+        if let Some(error) = picker.error() {
+            lines[count].label(font, "Could not load. Current playtest continues.", width);
+            lines[count + 1].label(font, error, width);
+            count += 2;
+        }
+        lines[count].label(font, "Up/Down: select   Enter: start fresh", width);
+        lines[count + 1].label(font, "F2/Esc: close   World keeps running", width);
+        (count + 2, Some(highlight))
+    };
+    draw_panel(font, &lines[..count], width, highlight, sink);
+}
+
+/// Both menus submit the scrim, selection, and glyphs in the same order.
+fn draw_panel(
+    font: &Glyphs,
+    lines: &[Text],
+    width: f32,
+    highlight: Option<usize>,
+    sink: &mut QuadSink<'_>,
+) {
+    let line_step = font.line_height() + 8.0;
+    let height = font.line_height() + (lines.len() - 1) as f32 * line_step;
+    sink.push(Quad::solid(
+        Vec4::new(MARGIN, MARGIN, width + 2.0 * PADDING, height + 2.0 * PADDING),
+        PANEL,
+    ));
+    if let Some(row) = highlight {
+        sink.push(Quad::solid(
+            Vec4::new(
+                MARGIN + PADDING / 2.0,
+                MARGIN + PADDING + row as f32 * line_step - 3.0,
+                width + PADDING,
+                font.line_height() + 6.0,
+            ),
+            Vec4::new(0.018, 0.09, 0.13, 0.9),
+        ));
     }
     for (index, line) in lines.iter().enumerate() {
         font.layout(
@@ -137,6 +199,31 @@ impl Default for Text {
 }
 
 impl Text {
+    /// External names cannot inject rows, exceed stack capacity, or require a
+    /// glyph outside the atlas. The real path stays untouched in the UI model.
+    fn label(&mut self, font: &Glyphs, label: &str, width: f32) {
+        for ch in label.chars() {
+            if self.len == self.bytes.len() {
+                self.len -= 3;
+                self.write_str("...").expect("reserved suffix");
+                break;
+            }
+            self.bytes[self.len] = if ch.is_ascii_graphic() || ch == ' ' { ch as u8 } else { b'?' };
+            self.len += 1;
+        }
+        self.fit(font, width);
+    }
+
+    fn fit(&mut self, font: &Glyphs, width: f32) {
+        if font.measure(self.as_str()) <= width {
+            return;
+        }
+        while self.len > 0 && font.measure(self.as_str()) + font.measure("...") > width {
+            self.len -= 1; // Picker text is ASCII, including every formatted literal.
+        }
+        self.write_str("...").expect("shortened text has suffix room");
+    }
+
     fn as_str(&self) -> &str {
         core::str::from_utf8(&self.bytes[..self.len]).expect("only write_str writes text")
     }
@@ -157,6 +244,47 @@ mod tests {
     use super::*;
     use arpg_gfx::QuadBuffer;
 
+    #[test]
+    fn picker_scrolls_and_bounds_external_text_to_the_viewport() {
+        let font = Glyphs::system();
+        let mut menu = Menu::default();
+        let recovery = arpg_sim::RecoveryTicks::default();
+        menu.on_key(crate::ui::MenuKey::Scenes, recovery);
+        let long = "long scene\n名".repeat(40);
+        menu.set_catalog(Ok((0..20)
+            .map(|i| std::path::PathBuf::from(format!("{i}-{long}.ron")))
+            .collect()));
+        for _ in 0..100 {
+            menu.on_key(crate::ui::MenuKey::Next, recovery);
+        }
+        assert_eq!(menu.picker().selected(), 21);
+        assert_eq!(menu.picker().visible(4), 18..22);
+        menu.set_error("A file error\nwith a long path: ".repeat(50));
+        for viewport in [Vec2::new(1280.0, 720.0), Vec2::new(500.0, 500.0), Vec2::new(180.0, 180.0)]
+        {
+            let mut buf = QuadBuffer::default();
+            draw_picker(&font, &menu, &long, viewport, &mut buf.sink());
+            let quads = buf.as_slice();
+            let panel = quads[0].rect();
+            assert!(panel.x + panel.z <= viewport.x && panel.y + panel.w <= viewport.y);
+            for quad in &quads[1..] {
+                let r = quad.rect();
+                assert!(r.x >= panel.x && r.y >= panel.y, "{r} vs {panel}");
+                assert!(
+                    r.x + r.z <= panel.x + panel.z && r.y + r.w <= panel.y + panel.w,
+                    "{r} vs {panel}"
+                );
+            }
+        }
+        assert_eq!(menu.picker().selected(), 21, "drawing never changes selection");
+        assert!(menu.take_request().is_some(), "drawing cannot consume a request");
+        let mut text = Text::default();
+        text.label(&font, &long, 300.0);
+        assert!(text.as_str().ends_with("..."));
+        assert!(text.as_str().chars().all(|ch| ch.is_ascii_graphic() || ch == ' '));
+        assert!(font.measure(text.as_str()) <= 300.0);
+    }
+
     /// **No GPU anywhere below.** `Glyphs` is the metrics table without the
     /// texture, and `draw` is a pure function, so the whole question "what
     /// would be on screen" is a list of rectangles a test can read — which is
@@ -169,7 +297,14 @@ mod tests {
             let world = arpg_sim::World::default();
             let mut menu = Menu::default();
             menu.on_key(crate::ui::MenuKey::Toggle, world.attack_status().recovery);
-            draw(&Glyphs::system(), &menu, world.attack_status(), &mut sink);
+            draw(
+                &Glyphs::system(),
+                &menu,
+                world.attack_status(),
+                "default",
+                Vec2::new(1280.0, 720.0),
+                &mut sink,
+            );
         }
         buf
     }

@@ -10,12 +10,13 @@ use glam::Vec2;
 
 use arpg_core::{Action, InstanceBuffer, Intent, MoveDir, Report};
 use arpg_gfx::{OrthoCamera, QuadBuffer, Renderer};
-use arpg_sim::{Accumulator, World};
+use arpg_sim::{Accumulator, Alpha, Scene, World};
 
 use crate::harness::{self, Command, Request};
 use crate::hud;
 use crate::input::Controls;
 use crate::time::Clock;
+use crate::ui::{MenuRequest, SceneChoice};
 
 /// Owns everything and wires it together. Deliberately the only place that
 /// knows about all the subsystems at once — `gfx` and `world` stay ignorant of
@@ -26,6 +27,10 @@ pub(crate) struct App {
     renderer: Option<Renderer>,
     camera: Option<OrthoCamera>,
     world: World,
+    /// Parsed snapshot for repeatable restart. Start reads a file; restart does not.
+    selected_scene: Option<Scene>,
+    /// World ids and ticks are scoped to this playtest generation.
+    run_id: u64,
     /// Numbers the screenshots, so repeated captures do not overwrite.
     captures: u32,
     /// Frames skipped because the surface had none to give — occluded,
@@ -95,7 +100,104 @@ fn capture_dir() -> std::path::PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
+/// Preserve the file identity in diagnostics from either caller.
+fn read_scene(path: &std::path::Path) -> Result<Scene, String> {
+    arpg_scenario::load_scene(path).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Discovery happens only when the picker opens. Do not parse here: a broken
+/// file remains selectable so its load error can be shown without losing a run.
+fn scene_catalog(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
+    let read = || -> std::io::Result<Vec<std::path::PathBuf>> {
+        let mut paths = Vec::new();
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "ron") && entry.file_type()?.is_file() {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    };
+    read().map_err(|error| format!("Cannot list {}: {error}", directory.display()))
+}
+
 impl App {
+    /// Both native keys and harness keys execute menu requests at this same
+    /// between-tick boundary. No file I/O or world replacement happens in draw.
+    fn handle_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
+        let consumed = self.input.on_key(key, pressed, repeat, self.world.attack_status().recovery);
+        match self.input.menu_mut().take_request() {
+            Some(MenuRequest::RefreshScenes) => {
+                self.input.menu_mut().set_catalog(scene_catalog(std::path::Path::new("scenes")));
+            }
+            Some(MenuRequest::Start(choice)) => {
+                let result = match choice {
+                    SceneChoice::Restart => self.restart_playtest(),
+                    SceneChoice::Boot => self.start_playtest(Scene::boot()),
+                    SceneChoice::File { path, .. } => self.start_scene_file(&path),
+                };
+                if let Err(error) = result {
+                    self.input.menu_mut().set_error(error);
+                }
+            }
+            None => {}
+        }
+        consumed
+    }
+
+    fn start_scene_file(&mut self, path: &std::path::Path) -> Result<(), String> {
+        self.start_playtest(read_scene(path)?)
+    }
+
+    fn restart_playtest(&mut self) -> Result<(), String> {
+        let scene = self.selected_scene.clone().ok_or("No current playtest")?;
+        self.start_playtest(scene)
+    }
+
+    /// Prepare before committing: a bad replacement cannot destroy the current
+    /// playtest. Construction is synchronous and runs zero simulation ticks.
+    fn start_playtest(&mut self, scene: Scene) -> Result<(), String> {
+        let world = World::from_scene(&scene).map_err(|error| error.to_string())?;
+        let run_id = self.run_id.checked_add(1).ok_or("playtest identities exhausted")?;
+
+        // Old delayed key releases must not lift a new run's presses. Pending
+        // callers receive a cancellation rather than a success for another run.
+        for deferred in std::mem::take(&mut self.scheduled) {
+            if let Some(key) = deferred.release {
+                self.input.on_key(key, false, false, self.world.attack_status().recovery);
+            }
+            if let Some(reply) = deferred.reply {
+                let _ = reply.send("error: cancelled by playtest restart".into());
+            }
+        }
+        for reply in self.awaiting_frame.drain(..) {
+            let _ = reply.send("error: cancelled by playtest restart".into());
+        }
+        if let Some(renderer) = &mut self.renderer {
+            renderer.cancel_capture();
+        }
+        self.capture_stall = 0;
+        self.input.restart();
+        self.world = world;
+        self.selected_scene = Some(scene);
+        self.run_id = run_id;
+        self.accumulator = Accumulator::default();
+        if let Some(camera) = &mut self.camera {
+            camera.snap_to(self.world.player_pos());
+        }
+        self.world.extract(Alpha::ZERO, self.instances.sink());
+        self.quads.sink();
+        // Exclude file reading, construction, and the old run's frame remainder.
+        self.clock = Clock::default();
+        Ok(())
+    }
+
+    fn ready_reply(&self) -> String {
+        format!("ready run={} tick=0 hash={:016x}", self.run_id, self.world.hash())
+    }
+
     /// Debug and meta commands, kept deliberately apart from the action layer.
     ///
     /// These are not things the *character* does — they are things done to the
@@ -150,21 +252,52 @@ impl App {
         for Request { command, reply } in requests {
             let now = std::time::Instant::now();
             let answer = match command {
+                Command::StartScene(path) => match self.start_scene_file(&path) {
+                    Ok(()) => self.ready_reply(),
+                    Err(error) => format!("error: {error}"),
+                },
+                Command::RestartScene => match self.restart_playtest() {
+                    Ok(()) => self.ready_reply(),
+                    Err(error) => format!("error: {error}"),
+                },
+                Command::AddScene(path) => match read_scene(&path).and_then(|scene| {
+                    self.world.load_scene(&scene).map_err(|error| error.to_string())
+                }) {
+                    Ok(id) => {
+                        format!("ready run={} scene={id} tick={}", self.run_id, self.world.tick())
+                    }
+                    Err(error) => format!("error: {error}"),
+                },
+                Command::EvictScene(id) => {
+                    if self.world.evict_scene(id) {
+                        format!("evicted run={} scene={id}", self.run_id)
+                    } else {
+                        format!("error: no live scene {id} in run {}", self.run_id)
+                    }
+                }
+                Command::ListScenes => {
+                    let mut out = Report::default();
+                    out.int("run_id", self.run_id);
+                    for (id, name) in self.world.scene_instances() {
+                        out.text(&id.to_string(), name);
+                    }
+                    out.finish()
+                }
                 Command::Press(key) => {
-                    self.input.on_key(key, true, false, self.world.attack_status().recovery);
+                    self.handle_key(key, true, false);
                     "ok".to_string()
                 }
                 Command::Release(key) => {
-                    self.input.on_key(key, false, false, self.world.attack_status().recovery);
+                    self.handle_key(key, false, false);
                     "ok".to_string()
                 }
                 Command::Tap(key) => {
-                    self.input.on_key(key, true, false, self.world.attack_status().recovery);
+                    self.handle_key(key, true, false);
                     self.scheduled.push(Deferred { due: now, release: Some(key), reply: None });
                     "ok".to_string()
                 }
                 Command::Hold(key, ms) => {
-                    self.input.on_key(key, true, false, self.world.attack_status().recovery);
+                    self.handle_key(key, true, false);
                     let due = now + std::time::Duration::from_millis(ms);
                     self.scheduled.push(Deferred { due, release: Some(key), reply: Some(reply) });
                     continue; // replies once the key comes back up
@@ -260,6 +393,12 @@ impl App {
     fn report_state(&self) -> String {
         let mut out = Report::default();
 
+        out.int("run_id", self.run_id);
+        out.text(
+            "selected_scene",
+            self.selected_scene.as_ref().map_or("", |scene| scene.name.as_str()),
+        );
+        out.text("sim_hash", &format!("{:016x}", self.world.hash()));
         out.object("sim", |sim| self.world.report(sim));
         out.object("ui", |ui| self.input.menu().report(ui));
 
@@ -284,7 +423,7 @@ impl App {
     /// assert on.
     fn report_trace(&self, tick: u64) -> String {
         let trace = self.world.trace();
-        let mut out = String::new();
+        let mut out = format!("# run {}\n", self.run_id);
 
         // Said out loud rather than left to be inferred from a suspiciously
         // short reply: the buffer is bounded, and a caller asking for a tick
@@ -414,7 +553,15 @@ impl App {
         // handed. Scoped so the sink's borrow ends before the draw.
         {
             let mut sink = self.quads.sink();
-            hud::draw(renderer.glyphs(), self.input.menu(), self.world.attack_status(), &mut sink);
+            let size = self.window.as_ref().expect("rendering has a window").inner_size();
+            hud::draw(
+                renderer.glyphs(),
+                self.input.menu(),
+                self.world.attack_status(),
+                self.selected_scene.as_ref().map_or("--", |scene| scene.name.as_str()),
+                Vec2::new(size.width as f32, size.height as f32),
+                &mut sink,
+            );
         }
 
         // Counted only when a frame actually reached the screen. An occluded
@@ -468,7 +615,9 @@ impl App {
         // Poll rather than Wait: never block waiting for input, just keep
         // looping. Vsync in the surface config is what actually paces us.
         event_loop.set_control_flow(ControlFlow::Poll);
-        event_loop.run_app(&mut App::default()).expect("run app");
+        let mut app = App::default();
+        app.start_playtest(Scene::boot()).expect("valid built-in boot scene");
+        event_loop.run_app(&mut app).expect("run app");
     }
 }
 
@@ -508,9 +657,9 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let (Some(renderer), Some(camera)) = (self.renderer.as_mut(), self.camera.as_mut()) else {
+        if self.renderer.is_none() || self.camera.is_none() {
             return;
-        };
+        }
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -539,23 +688,18 @@ impl ApplicationHandler for App {
 
                 // The harness uses this same route. A modal UI event must not
                 // also fire a debug command (especially Escape -> quit).
-                let consumed = self.input.on_key(
-                    key,
-                    pressed,
-                    key_event.repeat,
-                    self.world.attack_status().recovery,
-                );
+                let consumed = self.handle_key(key, pressed, key_event.repeat);
 
                 if !consumed && pressed && !key_event.repeat {
                     match key {
                         KeyCode::Escape => event_loop.exit(),
                         KeyCode::KeyV => {
-                            renderer.toggle_vsync();
+                            self.renderer.as_mut().expect("initialized").toggle_vsync();
                         }
                         KeyCode::KeyP => {
                             let path = capture_dir().join(format!("arpg-{:04}.png", self.captures));
                             self.captures += 1;
-                            renderer.request_capture(path);
+                            self.renderer.as_mut().expect("initialized").request_capture(path);
                         }
                         _ => self.on_debug_key(key),
                     }
@@ -563,8 +707,8 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::Resized(size) => {
-                renderer.resize(size.width, size.height);
-                camera.set_viewport(size.width, size.height);
+                self.renderer.as_mut().expect("initialized").resize(size.width, size.height);
+                self.camera.as_mut().expect("initialized").set_viewport(size.width, size.height);
             }
 
             WindowEvent::RedrawRequested => self.redraw(),
@@ -599,7 +743,194 @@ impl ApplicationHandler for App {
 
 #[cfg(test)]
 mod tests {
-    use super::App;
+    use super::*;
+
+    fn pair() -> Scene {
+        Scene {
+            name: "pair".into(),
+            bodies: vec![arpg_sim::Placed { pos: (20.0, 0.0), what: arpg_sim::Template::BODY }],
+            sources: vec![],
+        }
+    }
+
+    fn tap(app: &mut App, key: KeyCode) {
+        app.handle_key(key, true, false);
+        app.handle_key(key, false, false);
+    }
+
+    #[test]
+    fn picker_uses_the_fresh_start_boundary_and_survives_bad_files() {
+        let directory = std::env::temp_dir().join(format!("arpg-picker-{}", std::process::id()));
+        std::fs::create_dir_all(directory.join("directory.ron")).unwrap();
+        let path = directory.join("a scene.ron");
+        std::fs::write(&path, "(name: \"first\", bodies: [(pos: (20.0, 0.0))])").unwrap();
+        std::fs::write(directory.join("b.ron"), "broken RON").unwrap();
+        std::fs::write(directory.join("ignored.txt"), "ignored").unwrap();
+        let paths = scene_catalog(&directory).unwrap();
+        assert_eq!(paths, vec![path.clone(), directory.join("b.ron")]);
+        assert!(scene_catalog(&directory.join("missing")).is_err());
+
+        let mut app = App::default();
+        app.start_playtest(pair()).unwrap();
+        tap(&mut app, KeyCode::F2);
+        app.input.menu_mut().set_catalog(Ok(paths.clone()));
+        tap(&mut app, KeyCode::ArrowDown);
+        tap(&mut app, KeyCode::ArrowDown);
+        tap(&mut app, KeyCode::Enter);
+        let initial = app.world.hash();
+        let direct = World::from_scene(&arpg_scenario::load_scene(&path).unwrap()).unwrap();
+        assert_eq!(
+            initial,
+            direct.hash(),
+            "picker and file loader produce identical tick-zero worlds"
+        );
+        assert_eq!(app.run_id, 2);
+        assert!(!app.input.menu().open());
+        assert_eq!(app.input.sample().move_axis(), Vec2::ZERO);
+        std::fs::write(&path, "(name: \"changed\")").unwrap();
+        tap(&mut app, KeyCode::F2);
+        tap(&mut app, KeyCode::Enter); // Cached restart remains independent of disk.
+        assert_eq!(app.world.hash(), initial);
+        assert_eq!(app.run_id, 3);
+
+        tap(&mut app, KeyCode::F2);
+        app.input.menu_mut().set_catalog(Ok(paths.clone()));
+        for _ in 0..3 {
+            tap(&mut app, KeyCode::ArrowDown);
+        }
+        tap(&mut app, KeyCode::Enter);
+        assert!(app.input.menu().picker().error().unwrap().contains("b.ron"));
+        assert!(app.input.menu().open());
+        assert_eq!(app.world.hash(), initial);
+        assert_eq!(app.run_id, 3);
+        std::fs::remove_file(&path).unwrap();
+        tap(&mut app, KeyCode::ArrowUp);
+        tap(&mut app, KeyCode::Enter); // A file disappearing after discovery is safe too.
+        assert!(app.input.menu().picker().error().is_some());
+        assert_eq!(app.world.hash(), initial);
+
+        std::fs::write(&path, "(name: \"changed\")").unwrap();
+        tap(&mut app, KeyCode::Enter); // Retry reads the repaired file.
+        assert_ne!(app.world.hash(), initial);
+        assert_eq!(app.run_id, 4);
+        assert!(!app.input.menu().open());
+        tap(&mut app, KeyCode::F2);
+        tap(&mut app, KeyCode::ArrowDown);
+        tap(&mut app, KeyCode::Enter);
+        assert_eq!(app.world.hash(), World::from_scene(&Scene::boot()).unwrap().hash());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn restart_resets_the_complete_playtest_boundary() {
+        let mut app = App::default();
+        app.start_playtest(pair()).unwrap();
+        let initial = app.world.hash();
+        let recovery = app.world.attack_status().recovery;
+        app.input.on_key(KeyCode::KeyW, true, false, recovery);
+        app.input.on_key(KeyCode::Space, true, false, recovery);
+        for dt in app.accumulator.pending(arpg_sim::Dt::SECS) {
+            app.world.step(dt, Intent::new(MoveDir::new(glam::Vec3::X), true));
+        }
+        app.world.set_attack_recovery(arpg_sim::RecoveryTicks::try_from(1).unwrap());
+        assert!(app.world.apply_impulse(
+            app.world.player_id(),
+            arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()
+        ));
+        assert!(app.world.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
+        app.input.on_key(KeyCode::F1, true, false, recovery);
+        app.input.on_key(KeyCode::ArrowRight, true, false, recovery);
+        assert!(app.input.menu().pending().is_some());
+        let mut camera = OrthoCamera::new(1280, 720);
+        camera.snap_to(glam::Vec3::new(40.0, 0.0, 40.0));
+        app.camera = Some(camera);
+        assert_eq!(app.accumulator.pending(arpg_sim::Dt::SECS * 0.5).count(), 0);
+
+        app.start_playtest(pair()).unwrap();
+        assert_eq!(app.run_id, 2);
+        assert_eq!(app.world.hash(), initial, "all simulation state returns to the baseline");
+        assert_eq!(app.world.tick(), 0);
+        assert_eq!(app.accumulator.alpha().get(), 0.0);
+        assert_eq!(app.camera.as_ref().unwrap().target(), glam::Vec3::ZERO);
+        assert!(!app.input.menu().open());
+        assert!(app.input.take_recovery().is_none());
+        assert_eq!(app.input.sample().move_axis(), Vec2::ZERO);
+        app.input.on_key(KeyCode::KeyW, true, false, recovery);
+        assert_eq!(app.input.sample().move_axis(), Vec2::ZERO, "held native keys require release");
+        app.input.on_key(KeyCode::KeyW, false, false, recovery);
+        app.input.on_key(KeyCode::KeyW, true, false, recovery);
+        assert_ne!(app.input.sample().move_axis(), Vec2::ZERO);
+    }
+
+    #[test]
+    fn restart_cancels_old_delayed_actions_and_capture_replies() {
+        let mut app = App::default();
+        let (reply, response) = std::sync::mpsc::channel();
+        let (shot_reply, shot_response) = std::sync::mpsc::channel();
+        app.input.on_key(KeyCode::KeyD, true, false, app.world.attack_status().recovery);
+        app.scheduled.push(Deferred {
+            due: std::time::Instant::now() + std::time::Duration::from_secs(60),
+            release: Some(KeyCode::KeyD),
+            reply: Some(reply),
+        });
+        app.awaiting_frame.push(shot_reply);
+        app.start_playtest(pair()).unwrap();
+        assert!(response.try_recv().unwrap().contains("cancelled"));
+        assert!(shot_response.try_recv().unwrap().contains("cancelled"));
+        assert!(app.scheduled.is_empty());
+        app.input.on_key(KeyCode::KeyD, true, false, app.world.attack_status().recovery);
+        app.service_schedule();
+        assert_ne!(
+            app.input.sample().move_axis(),
+            Vec2::ZERO,
+            "new presses survive cancelled old releases"
+        );
+    }
+
+    #[test]
+    fn rejected_replacement_preserves_the_current_playtest() {
+        let mut app = App::default();
+        app.start_playtest(pair()).unwrap();
+        app.input.on_key(KeyCode::KeyW, true, false, app.world.attack_status().recovery);
+        let before = app.report_state();
+        let trace = app.world.trace().render();
+        let mut bad = pair();
+        bad.bodies[0].pos.0 = f32::INFINITY;
+        assert!(app.start_playtest(bad).is_err());
+        assert_eq!(app.report_state(), before);
+        assert_eq!(app.world.trace().render(), trace);
+        assert_ne!(app.input.sample().move_axis(), Vec2::ZERO);
+    }
+
+    #[test]
+    fn harness_start_reads_content_but_restart_reuses_the_snapshot() {
+        let mut app = App::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.harness = Some(rx);
+        let mut command = |command| {
+            let (reply, response) = std::sync::mpsc::channel();
+            tx.send(Request { command, reply }).unwrap();
+            assert!(!app.drain_harness());
+            (response.try_recv().unwrap(), app.world.hash(), app.run_id)
+        };
+        let path =
+            std::env::temp_dir().join(format!("arpg-scene-snapshot-{}.ron", std::process::id()));
+        std::fs::write(&path, "(name: \"first\", bodies: [(pos: (20.0, 0.0))])").unwrap();
+        let (reply, first, _) = command(Command::StartScene(path.clone()));
+        assert!(reply.contains("ready run=1 tick=0"), "{reply}");
+        std::fs::write(&path, "(name: \"second\")").unwrap();
+        let (_, restarted, run) = command(Command::RestartScene);
+        assert_eq!(first, restarted);
+        assert_eq!(run, 2);
+        let (_, reloaded, run) = command(Command::StartScene(path.clone()));
+        assert_ne!(first, reloaded);
+        assert_eq!(run, 3);
+        std::fs::remove_file(&path).unwrap();
+        let (reply, unchanged, run) = command(Command::StartScene(path));
+        assert!(reply.starts_with("error:"));
+        assert_eq!(unchanged, reloaded);
+        assert_eq!(run, 3);
+    }
 
     /// A screenshot that cannot be taken has to *say so*. A reply sent whether
     /// or not the frame was drawn turns "your window is covered" into "your

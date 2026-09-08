@@ -41,6 +41,14 @@ pub(crate) struct Request {
 }
 
 pub(crate) enum Command {
+    /// Reconstruct the complete playtest from a scene file.
+    StartScene(PathBuf),
+    /// Reuse the selected content snapshot, even if its file has since changed.
+    RestartScene,
+    /// Add disposable content without resetting the current playtest.
+    AddScene(PathBuf),
+    EvictScene(arpg_sim::SceneId),
+    ListScenes,
     /// Hold a key down until told otherwise.
     Press(KeyCode),
     Release(KeyCode),
@@ -121,6 +129,11 @@ const USAGE: &str = "expected: source <x> <z> [seek] [every <n>] [ring <r>] [nea
      or source remove <id>";
 
 fn parse(line: &str) -> Result<Command, String> {
+    if let Some(rest) = line.trim().strip_prefix("scene")
+        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        return parse_scene(rest.trim());
+    }
     let mut it = line.split_whitespace();
     let verb = it.next().unwrap_or("");
     let arg = it.next();
@@ -238,6 +251,22 @@ fn parse(line: &str) -> Result<Command, String> {
     })
 }
 
+fn parse_scene(text: &str) -> Result<Command, String> {
+    let (verb, value) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    let value = value.trim();
+    let usage = "expected: scene start <path>, scene restart, scene add <path>, scene evict <id>, scene list";
+    match (verb, value) {
+        ("start", path) if !path.is_empty() => Ok(Command::StartScene(path.into())),
+        ("add", path) if !path.is_empty() => Ok(Command::AddScene(path.into())),
+        ("restart", "") => Ok(Command::RestartScene),
+        ("list", "") => Ok(Command::ListScenes),
+        ("evict", id) => {
+            arpg_sim::SceneId::parse(id).map(Command::EvictScene).ok_or_else(|| usage.into())
+        }
+        _ => Err(usage.into()),
+    }
+}
+
 /// Starts the listener if `ARPG_HARNESS` names a socket path.
 pub(crate) fn start() -> Option<Receiver<Request>> {
     let path = std::env::var_os("ARPG_HARNESS")?;
@@ -305,6 +334,28 @@ fn serve(stream: UnixStream, tx: &Sender<Request>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_commands_are_explicit_and_preserve_paths_with_spaces() {
+        assert!(
+            matches!(parse("scene start scenes/my pair.ron"), Ok(Command::StartScene(path)) if path == std::path::Path::new("scenes/my pair.ron"))
+        );
+        assert!(matches!(parse("scene restart"), Ok(Command::RestartScene)));
+        assert!(matches!(parse("scene list"), Ok(Command::ListScenes)));
+        assert!(matches!(parse("scene add scenes/pair.ron"), Ok(Command::AddScene(_))));
+        assert!(matches!(parse("scene evict c0"), Ok(Command::EvictScene(_))));
+        for bad in [
+            "scene",
+            "scene start",
+            "scene restart extra",
+            "scene list extra",
+            "scene evict",
+            "scene evict s0",
+            "scene evict c0 extra",
+        ] {
+            assert!(parse(bad).is_err(), "{bad} should be rejected");
+        }
+    }
 
     #[test]
     fn parses_the_command_vocabulary() {

@@ -13,6 +13,7 @@ mod contact;
 mod hash;
 mod members;
 mod pass;
+mod scene;
 mod slots;
 mod swing;
 mod time;
@@ -31,6 +32,8 @@ use pass::spawn::SpawnQueue;
 /// What to make, and what behaviours it should be granted. See
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
 pub use pass::spawn::Template;
+use scene::Scenes;
+pub use scene::{Placed, Scene, SceneError, SceneId};
 pub use slots::EntityId;
 use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, TICK_HZ, Ticks};
@@ -266,6 +269,18 @@ impl Default for Bodies {
     }
 }
 
+/// The debug grid and the authored boot scene share one placement formula.
+fn grid_positions(n: usize) -> impl Iterator<Item = Vec2> {
+    let side = (n as f32).sqrt().ceil().max(1.0) as usize;
+    let offset = (side as f32 - 1.0) * ENEMY_SPACING * 0.5;
+    (0..n).map(move |i| {
+        Vec2::new(
+            (i % side) as f32 * ENEMY_SPACING - offset,
+            (i / side) as f32 * ENEMY_SPACING - offset,
+        )
+    })
+}
+
 impl Bodies {
     fn len(&self) -> usize {
         self.pos.len()
@@ -285,14 +300,8 @@ impl Bodies {
         self.pos.reserve(n);
         self.prev_pos.reserve(n);
 
-        let side = (n as f32).sqrt().ceil().max(1.0) as usize;
-        let offset = (side as f32 - 1.0) * ENEMY_SPACING * 0.5;
-
-        for i in 0..n {
-            self.spawn(Vec2::new(
-                (i % side) as f32 * ENEMY_SPACING - offset,
-                (i / side) as f32 * ENEMY_SPACING - offset,
-            ));
+        for position in grid_positions(n) {
+            self.spawn(position);
         }
     }
 
@@ -437,6 +446,7 @@ pub struct World {
     /// the layering and breaks as soon as the thing being made is not a body.
     /// See [`crate::pass::source`].
     sources: Sources,
+    scenes: Scenes,
     /// Enemy pairs the crowd solver pushed apart in the last [`World::step`].
     ///
     /// Kept apart from `contacts` rather than summed into it: one number
@@ -448,7 +458,17 @@ pub struct World {
 
 impl Default for World {
     fn default() -> Self {
-        let mut world = Self {
+        let mut world = Self::empty();
+        world.set_enemy_count(DEFAULT_ENEMIES);
+        world
+    }
+}
+
+impl World {
+    /// A fresh player and no content, at tick zero with default tuning.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
             bodies: Bodies::default(),
             player: Player::default(),
             tick: 0,
@@ -456,11 +476,10 @@ impl Default for World {
             seekers: Members::default(),
             queue: SpawnQueue::default(),
             sources: Sources::default(),
+            scenes: Scenes::default(),
             contacts: 0,
             crowd_contacts: 0,
-        };
-        world.set_enemy_count(DEFAULT_ENEMIES);
-        world
+        }
     }
 }
 
@@ -505,6 +524,7 @@ impl World {
             trace,
             tick,
             sources: _,
+            scenes,
             player: _,
             contacts: _,
             crowd_contacts: _,
@@ -522,6 +542,7 @@ impl World {
         // alternative is a set that grows by the size of the old horde on every
         // respawn and costs every pass that walks it.
         seekers.clear();
+        scenes.clear_bodies();
 
         // Traced because it happens *outside* the schedule. State that changes
         // between ticks is the hardest kind to account for later, so it is
@@ -587,6 +608,7 @@ impl World {
         if !self.sources.remove(id) {
             return false;
         }
+        self.scenes.forget_source(id);
         self.trace.sink(self.tick).emit(Event::SourceRemoved { id });
         true
     }
@@ -635,6 +657,7 @@ impl World {
             tick,
             queue: _,
             sources: _,
+            scenes,
             player: _,
             contacts: _,
             crowd_contacts: _,
@@ -649,6 +672,7 @@ impl World {
         // and `pass::seek` skips what it cannot resolve. This keeps the sets
         // from accumulating garbage that costs every pass that walks them.
         seekers.remove(id);
+        scenes.forget_body(id);
 
         trace.sink(*tick).emit(Event::Removed { id });
         true
@@ -743,8 +767,18 @@ impl World {
     /// reported, so "anything an agent must observe is a derived field" is a
     /// rule the compiler applies rather than one someone remembers.
     pub fn report(&self, out: &mut Report) {
-        let Self { bodies, player, tick, seekers, queue, sources, contacts, crowd_contacts, trace } =
-            self;
+        let Self {
+            bodies,
+            player,
+            tick,
+            seekers,
+            queue,
+            sources,
+            scenes,
+            contacts,
+            crowd_contacts,
+            trace,
+        } = self;
         let Player { facing, prev_facing, attack } = player;
 
         bodies.physics.report(&bodies.pos, &bodies.slots, out);
@@ -766,6 +800,8 @@ impl World {
         // one of those is a bug.
         out.int("queued", queue.len() as u64);
         out.int("sources", sources.len() as u64);
+        out.int("scene_count", scenes.len() as u64);
+        out.object("scenes", |out| scenes.report(out));
 
         // The swing, as derived facts. `state` is a point sample and
         // cannot show a window, so these say where in the window the sample
@@ -835,7 +871,13 @@ impl World {
             self.bodies.len() - 1,
             trace.reborrow(),
         );
-        pass::spawn::drain(&mut self.queue, &mut self.bodies, &mut self.seekers, trace.reborrow());
+        pass::spawn::drain(
+            &mut self.queue,
+            &mut self.bodies,
+            &mut self.seekers,
+            &mut self.scenes,
+            trace.reborrow(),
+        );
         pass::remember::remember(
             self.player.facing,
             &mut self.player.prev_facing,
@@ -927,8 +969,18 @@ impl World {
     #[must_use]
     pub fn hash(&self) -> u64 {
         // Exhaustive on purpose — see above. Do not replace with `..`.
-        let Self { bodies, player, tick, seekers, queue, sources, contacts, crowd_contacts, trace } =
-            self;
+        let Self {
+            bodies,
+            player,
+            tick,
+            seekers,
+            queue,
+            sources,
+            scenes,
+            contacts,
+            crowd_contacts,
+            trace,
+        } = self;
 
         // **Deliberately not hashed**, and the exhaustive destructuring above is
         // what forced this line to be written rather than forgotten. The trace
@@ -958,6 +1010,7 @@ impl World {
         // could otherwise agree on for a hundred ticks and then disagree about
         // all at once.
         sources.hash(&mut h);
+        scenes.hash(&mut h);
 
         // Membership is state. Two worlds whose bodies stand in identical
         // places are different worlds if one of them chases and the other does

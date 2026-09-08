@@ -9,6 +9,38 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn scene_batches_cannot_bind_identities_from_a_truncated_trace() {
+    // Evict before the step, so this tests the observation boundary without
+    // asking the quadratic crowd solver to simulate a large coincident crowd.
+    let bodies = "(pos: (20.0, 0.0)),".repeat(17_000);
+    let fixture = Fixture::new(&format!(
+        "(scenes: [(at: 0, action: Load(Inline((name: \"large\", bodies: [{bodies}])))),
+                    (at: 0, action: Evict(0))], budget: (ticks: 1))"
+    ));
+    let (output, text) = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(text.contains("placement trace"), "{text}");
+}
+
+#[test]
+fn scene_commands_and_content_fail_loudly_even_when_blessing() {
+    for source in [
+        r#"(setup: (scenes: [File("missing.ron")]), budget: (ticks: 1))"#,
+        r#"(setup: (scenes: [Inline((name: "bad", bodies: [(pos: (NaN, 0.0))]))]), budget: (ticks: 1))"#,
+        r#"(setup: (enemies: 1, scenes: [Inline((name: "mixed"))]), budget: (ticks: 1))"#,
+        r#"(scenes: [(at: 1, action: Load(Inline((name: "late"))))], budget: (ticks: 1))"#,
+        r#"(scenes: [(at: 0, action: Evict(0))], budget: (ticks: 1))"#,
+        r#"(setup: (scenes: [Inline((name: "typo", bodys: []))]), budget: (ticks: 1))"#,
+    ] {
+        let fixture = Fixture::new(source);
+        for flags in [&[][..], &["--bless"][..]] {
+            let (output, text) = fixture.run(flags);
+            assert_eq!(output.status.code(), Some(1), "invalid scene passed: {source}\n{text}");
+        }
+    }
+}
+
+#[test]
 fn recovery_commands_reject_invalid_values_and_unreachable_ticks() {
     for command in [
         "(at: 0, recovery: 0)",

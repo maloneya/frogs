@@ -63,7 +63,10 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `quit` | then exits |
 
 Keys come from `BINDINGS` in `crates/app/src/input.rs`, so whatever is bound is
-drivable — currently `w a s d up down left right space f1 escape r`.
+drivable — currently `w a s d up down left right space f1 f2 enter escape r`.
+`tap f2` opens the scene picker; Up/Down select and Enter starts fresh.
+Its state and any load error are reported under `state.ui`; see
+[`docs/scene-playtests.md`](../../../../docs/scene-playtests.md).
 `tap f1` opens the attack tuning panel, `tap left` / `tap right` edits recovery,
 `tap r` resets it, and `tap escape` closes it. These go through the same modal
 input route as native keys. While open, the panel captures gameplay input but

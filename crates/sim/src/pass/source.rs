@@ -50,7 +50,7 @@ use crate::angle::GOLDEN_ANGLE;
 use crate::hash::Fnv;
 use crate::pass::spawn::SpawnQueue;
 use crate::trace::{Event, TraceSink};
-use crate::Template;
+use crate::{SceneId, Template};
 
 /// The name of one source.
 ///
@@ -71,6 +71,10 @@ use crate::Template;
 pub struct SourceId(u32);
 
 impl SourceId {
+    pub(crate) fn hash(self, hash: &mut Fnv) {
+        hash.u64(u64::from(self.0));
+    }
+
     /// Reads a name back from the text [`fmt::Display`] wrote.
     ///
     /// **A door that `EntityId` deliberately does not have**, and the reason
@@ -369,6 +373,12 @@ impl From<SourceSpec> for Source {
     }
 }
 
+/// A source carries its lifetime owner into every emission.
+struct OwnedSource {
+    source: Source,
+    owner: Option<SceneId>,
+}
+
 /// Everything that asks for spawns.
 ///
 /// **Never compacted.** A removed source leaves a hole, so an index is a
@@ -376,13 +386,22 @@ impl From<SourceSpec> for Source {
 /// the holes, which is paid at the scale of tens rather than of the horde.
 #[derive(Default)]
 pub(crate) struct Sources {
-    rows: Vec<Option<Source>>,
+    rows: Vec<Option<OwnedSource>>,
 }
 
 impl Sources {
+    pub(crate) fn can_add(&self, count: usize) -> bool {
+        self.rows.len().checked_add(count).is_some_and(|end| end <= u32::MAX as usize)
+    }
+
     pub(crate) fn add(&mut self, source: Source) -> SourceId {
+        self.add_owned(source, None)
+    }
+
+    pub(crate) fn add_owned(&mut self, source: Source, owner: Option<SceneId>) -> SourceId {
+        assert!(self.can_add(1), "source identities exhausted; ids must never wrap");
         let id = SourceId(self.rows.len() as u32);
-        self.rows.push(Some(source));
+        self.rows.push(Some(OwnedSource { source, owner }));
         id
     }
 
@@ -415,7 +434,12 @@ impl Sources {
             match row {
                 Some(source) => {
                     h.usize(1);
+                    let OwnedSource { source, owner } = source;
                     source.hash_into(h);
+                    h.usize(usize::from(owner.is_some()));
+                    if let Some(owner) = owner {
+                        owner.hash(h);
+                    }
                 }
                 None => h.usize(0),
             }
@@ -444,7 +468,9 @@ pub(crate) fn trigger(
     mut trace: TraceSink<'_>,
 ) {
     for (row, source) in sources.rows.iter_mut().enumerate() {
-        let Some(source) = source else { continue };
+        let Some(OwnedSource { source, owner }) = source else {
+            continue;
+        };
 
         // Cadence first, condition second. A ready source held back by its
         // condition stays ready — see the module docs.
@@ -464,7 +490,7 @@ pub(crate) fn trigger(
         // refusal and the drain reports it, so nothing is lost; retrying on the
         // next tick instead would turn a saturated world into a source that
         // asks sixty times a second forever.
-        if queue.push(at, source.what) {
+        if queue.push_owned(at, source.what, *owner) {
             source.emitted += 1;
             // Per emission rather than summarised, and it is the one event here
             // that names *why* a body exists. `placed` says a body appeared;

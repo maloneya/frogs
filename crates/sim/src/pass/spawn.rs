@@ -50,9 +50,10 @@ use serde::Deserialize;
 
 use crate::hash::Fnv;
 use crate::members::Members;
+use crate::scene::Scenes;
 use crate::slots::EntityId;
 use crate::trace::{Event, TraceSink};
-use crate::{Bodies, MAX_ENEMIES};
+use crate::{Bodies, MAX_ENEMIES, SceneId};
 
 /// How many requests may be pending at once.
 ///
@@ -119,6 +120,7 @@ struct Request {
     /// Ground-plane position: `x` is world X and `y` is world **Z**.
     at: Vec2,
     what: Template,
+    owner: Option<SceneId>,
 }
 
 /// What has been asked for and not yet granted.
@@ -153,11 +155,15 @@ impl SpawnQueue {
     /// the *newest* rather than the oldest keeps a flood from starving requests
     /// that were already accepted.
     pub(crate) fn push(&mut self, at: Vec2, what: Template) -> bool {
+        self.push_owned(at, what, None)
+    }
+
+    pub(crate) fn push_owned(&mut self, at: Vec2, what: Template, owner: Option<SceneId>) -> bool {
         if self.pending.len() >= QUEUE_CAPACITY {
             self.refused += 1;
             return false;
         }
-        self.pending.push(Request { at, what });
+        self.pending.push(Request { at, what, owner });
         true
     }
 
@@ -176,15 +182,24 @@ impl SpawnQueue {
         self.refused = 0;
     }
 
+    pub(crate) fn cancel_scene(&mut self, owner: SceneId) {
+        self.pending.retain(|request| request.owner != Some(owner));
+    }
+
     pub(crate) fn hash(&self, h: &mut Fnv) {
         let Self { pending, refused } = self;
 
         h.usize(pending.len());
         h.usize(*refused);
         for request in pending {
-            h.f32(request.at.x);
-            h.f32(request.at.y);
-            request.what.hash_into(h);
+            let Request { at, what, owner } = request;
+            h.f32(at.x);
+            h.f32(at.y);
+            what.hash_into(h);
+            h.usize(usize::from(owner.is_some()));
+            if let Some(owner) = owner {
+                owner.hash(h);
+            }
         }
     }
 }
@@ -249,6 +264,7 @@ pub(crate) fn drain(
     queue: &mut SpawnQueue,
     enemies: &mut Bodies,
     seekers: &mut Members,
+    scenes: &mut Scenes,
     mut trace: TraceSink<'_>,
 ) {
     // Requests refused at the door plus requests refused here are one number to
@@ -259,8 +275,18 @@ pub(crate) fn drain(
     // afterwards even if the horde is full, or a request refused this tick
     // would be retried on every tick forever.
     for request in queue.pending.drain(..) {
-        if place(enemies, seekers, request.at, request.what, &mut trace).is_none() {
+        // Cancellation is eager at eviction; this also guards a stale producer.
+        if request.owner.is_some_and(|id| !scenes.contains(id)) {
             refused += 1;
+            continue;
+        }
+        match place(enemies, seekers, request.at, request.what, &mut trace) {
+            Some(id) => {
+                if let Some(owner) = request.owner {
+                    scenes.record_body(owner, id);
+                }
+            }
+            None => refused += 1,
         }
     }
 
@@ -296,7 +322,7 @@ mod tests {
         let mut trace = crate::Trace::default();
 
         assert!(queue.push(Vec2::ZERO, Template::BODY), "the queue refused before the horde could");
-        drain(&mut queue, &mut enemies, &mut seekers, trace.sink(0));
+        drain(&mut queue, &mut enemies, &mut seekers, &mut Scenes::default(), trace.sink(0));
 
         assert_eq!(enemies.len(), MAX_ENEMIES + 1, "the budget was overrun");
         let events: Vec<_> = trace.iter().map(|(_, e)| e).collect();
