@@ -1,0 +1,48 @@
+0 swung
+6 hitbox opened
+6 hit id=#1v2 remaining=2
+6 impulse id=#1v2 value=(0.0000,6.0000) source=#0v1
+10 hitbox closed
+14 contacts count=1
+15 contacts count=1
+16 contacts count=1
+17 contacts count=1
+18 contacts count=1
+19 contacts count=1
+20 contacts count=1
+20 swung
+21 contacts count=1
+22 contacts count=1
+23 contacts count=1
+24 contacts count=1
+25 contacts count=1
+26 contacts count=1
+26 hitbox opened
+26 hit id=#1v2 remaining=1
+26 impulse id=#1v2 value=(0.0000,6.0000) source=#0v1
+27 contacts count=1
+28 contacts count=1
+29 contacts count=1
+30 contacts count=1
+30 hitbox closed
+31 contacts count=1
+32 contacts count=1
+33 contacts count=1
+34 contacts count=1
+35 contacts count=1
+36 contacts count=1
+37 contacts count=1
+38 contacts count=1
+39 contacts count=1
+40 contacts count=1
+40 swung
+41 contacts count=1
+42 contacts count=1
+43 contacts count=1
+44 contacts count=1
+45 contacts count=1
+46 contacts count=1
+46 hitbox opened
+46 hit id=#1v2 remaining=0
+46 impulse id=#1v2 value=(0.0000,6.0000) source=#0v1
+46 removed id=#1v2

@@ -1,0 +1,29 @@
+// The first hit lands before movement begins, so its full six-unit impulse and
+// two remaining hit points are exact. The player then advances behind the
+// knocked body, keeping it in melee range without bypassing physical contact.
+// Basic lasts 20 ticks, so presses at 0, 20, and 40 are three distinct swings.
+(
+    description: "Two hits preserve a physical enemy and its knockback; the third retires its stable identity.",
+    setup: (
+        actions: [Place((0.0, 1.1))],
+    ),
+    inputs: [
+        (at: 7, ticks: 40, dir: (0.0, 1.0)),
+    ],
+    attacks: [0, 20, 40],
+    checkpoints: [
+        (at: 6, expect: (enemy_count: 1, bodies: [
+            (nth: 0, alive: true, health: 2,
+             velocity: (x: 0.0, z: 6.0, tol: 0.00001)),
+        ])),
+        (at: 26, expect: (enemy_count: 1, bodies: [
+            (nth: 0, alive: true, health: 1),
+        ])),
+    ],
+    budget: (ticks: 47),
+    expect: (
+        enemy_count: 0,
+        bodies: [(nth: 0, alive: false)],
+        trace: "three_hits_defeat_an_enemy.trace",
+    ),
+)

@@ -91,9 +91,9 @@ the order they were granted, so `bodies: [(nth: 1, ...)]` can name one.
 `player_pos` and `player_velocity` (as `(x, z)` with a radius tolerance), `facing` (radians,
 `(value, tol)`), `contacts`, `crowd_contacts`, `struck`, `hitbox`,
 `enemy_count`, `seekers`, `sources`, and `bodies` — a list of `(nth:, pos:,
-velocity:, seeking:, alive:)` predictions about individually placed bodies. Every one is
-optional. The tick budget is always checked — the run must take exactly that
-many ticks.
+velocity:, health:, seeking:, alive:)` predictions about individually placed
+bodies. Every one is optional. The tick budget is always checked — the run must
+take exactly that many ticks.
 
 Attack selection uses sim's authored identity rather than replaying debug-menu
 input. Commands look like `attack_profiles: [(at: 0, profile: Sweep)]`;
@@ -138,9 +138,7 @@ checking impulse, movement and damping at successive ticks in one run.
 
 Not yet: pointwise trace assertions (`(tick: 417, event: "hitbox.active")`;
 golden files cover the same ground for now), anything about the image (chunk 6),
-placing the *player* anywhere but the origin, and killing a body
-mid-run (chunk 8). If a scenario needs one of those, say so rather than working
-around it with a warm-up that makes the prediction unreadable.
+or placing the *player* anywhere but the origin.
 
 ## Every scenario is also a replay test
 

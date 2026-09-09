@@ -617,6 +617,16 @@ fn check_body(
     if let Some(want) = &body.velocity {
         check_velocity(&format!("bodies[{}].velocity", body.nth), want, world.motion(id), failures);
     }
+    if let Some(want) = body.health {
+        let got = world.health(id);
+        if got != Some(want) {
+            failures.push(Failure::new(
+                &format!("bodies[{}].health", body.nth),
+                want.to_string(),
+                got.map_or("no live enemy health".into(), |value| value.to_string()),
+            ));
+        }
+    }
     let Some(want) = &body.pos else { return };
 
     let Some(got) = world.enemy_pos(id) else {

@@ -382,6 +382,10 @@ pub(crate) struct BodyExpect {
     #[serde(default)]
     pub(crate) velocity: Option<Approx2>,
 
+    /// Remaining hits before defeat. Only live enemy bodies have health.
+    #[serde(default)]
+    pub(crate) health: Option<u8>,
+
     /// Whether the body should be chasing the player.
     ///
     /// `seeking: false` on a body that was never granted it is the control in

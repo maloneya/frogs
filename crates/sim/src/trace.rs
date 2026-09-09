@@ -157,6 +157,8 @@ pub enum Event {
     Hit {
         /// The body the swing connected with.
         id: EntityId,
+        /// Hits left after the connection; zero is removed later in this tick.
+        remaining: u8,
     },
     /// Overlapping pairs the solver pushed apart this tick.
     Contacts {
@@ -213,7 +215,7 @@ impl fmt::Display for Event {
             Self::Swung => write!(f, "swung"),
             Self::HitboxOpened => write!(f, "hitbox opened"),
             Self::HitboxClosed => write!(f, "hitbox closed"),
-            Self::Hit { id } => write!(f, "hit id={id}"),
+            Self::Hit { id, remaining } => write!(f, "hit id={id} remaining={remaining}"),
             Self::Contacts { count } => write!(f, "contacts count={count}"),
             Self::Crowded { count } => write!(f, "crowded count={count}"),
             Self::Clamped { count } => write!(f, "clamped count={count}"),

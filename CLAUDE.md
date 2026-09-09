@@ -203,13 +203,14 @@ crates/
     one question.
   - `pass/` — one module per named pass: `source`, `spawn`, `remember`, `walk`,
     `seek`, `motion::integrate`, `separate`, `contain`, `motion::settle`,
-    `face`, `attack`, in that order. The first
+    `face`, `attack`, `health::remove_defeated`, in that order. The first
     two are *decide* and *perform*, split on purpose: `source` works out which
     sources fire and may only push onto the spawn queue — it is handed no
     storage, so the code that decides new bodies exist cannot make one — and
-    `spawn` is the only pass that changes *what exists*. The horde's length is
-    then constant for the rest of the tick, so no other pass has to defend
-    against a row moving underneath it.
+    `spawn` is the only pass that adds to *what exists*. The horde's length is
+    then constant until the final defeat pass, so no ordinary pass has to
+    defend against a row moving underneath it; defeat removes bodies only after
+    every row-reading pass has finished.
   - `source.rs` — who asks for spawns, and when. A source is **not** a kind of
     body: it is what makes bodies, so hanging it off one of its own products
     inverts the layering and breaks as soon as the thing made is not a body. It

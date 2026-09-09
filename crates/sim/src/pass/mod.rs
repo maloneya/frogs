@@ -52,8 +52,12 @@
 //! 10. [`motion::settle`] — damp carried velocity and snap its small tail to
 //!     rest. After contact response, before a new attack impulse.
 //! 11. [`face`] — turn toward the requested direction before placing a hitbox.
-//! 12. [`attack`] — test final positions and apply an impulse once per target
-//!     per swing. Velocity changes now; displacement begins on the next tick.
+//! 12. [`attack`] — test final positions, apply an impulse and subtract one hit
+//!     point once per target per swing. Velocity changes now; displacement
+//!     begins on the next tick.
+//! 13. [`health::remove_defeated`] — remove bodies reduced to zero. **Last**, so
+//!     its dense-row swaps cannot invalidate an index another pass will use.
+//!     Surviving bodies retain their new velocity and remain in every solver.
 //!
 //! The player occupies row zero in the shared body store. Its facing and
 //! attack state are player-only; physics membership and payload use the same
@@ -62,6 +66,7 @@
 pub(crate) mod attack;
 pub(crate) mod contain;
 pub(crate) mod face;
+pub(crate) mod health;
 pub(crate) mod remember;
 pub(crate) mod seek;
 pub(crate) mod separate;

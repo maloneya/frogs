@@ -530,7 +530,7 @@ fn every_field_of_the_world_reaches_the_hash() {
     /// A field of `World` and the smallest change that touches it.
     type Poke = (&'static str, fn(&mut World));
 
-    let fields: [Poke; 8] = [
+    let fields: [Poke; 9] = [
         ("attack.recovery", |w| {
             w.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
         }),
@@ -539,6 +539,9 @@ fn every_field_of_the_world_reaches_the_hash() {
         ("tick", |w| w.tick += 1),
         ("contacts", |w| w.contacts += 1),
         ("enemies.pos", |w| w.bodies.pos[1].x += 0.001),
+        ("enemies.health", |w| {
+            w.bodies.health.sink().hit(0);
+        }),
         // A pending request is a body that exists in one of two otherwise
         // identical worlds one tick from now.
         ("queue", |w| assert!(w.request_spawn(Vec2::ZERO, Template::BODY))),
@@ -1232,9 +1235,9 @@ fn a_ring_does_not_stack_what_it_makes() {
     }
 }
 
-/// Physical payload follows identity through both independently packed stores.
+/// Physical and health payloads follow identity through their row changes.
 #[test]
-fn despawning_revokes_motion_and_a_swapped_survivor_keeps_its_velocity() {
+fn despawning_preserves_a_swapped_survivors_payloads() {
     let mut world = World::default();
     world.set_enemy_count(0);
     let a = world.place(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
@@ -1242,12 +1245,15 @@ fn despawning_revokes_motion_and_a_swapped_survivor_keeps_its_velocity() {
     let impulse = Impulse::try_from((6.0, 0.0)).unwrap();
     assert!(world.apply_impulse(a, impulse));
     assert!(world.apply_impulse(b, impulse));
+    assert_eq!(world.bodies.health.sink().hit(1), 2);
     assert!(world.despawn_enemy(a));
     let c = world.place(Vec2::new(30.0, 0.0), Template::BODY).unwrap();
     assert!(!world.apply_impulse(a, impulse));
     assert!(world.motion(a).is_none());
     assert_eq!(world.motion(c).unwrap().velocity(), Vec2::ZERO);
     assert_eq!(world.motion(b).unwrap().velocity(), Vec2::new(6.0, 0.0));
+    assert_eq!(world.health(b), Some(2));
+    assert_eq!(world.health(c), Some(3));
     world.step(tick_dt(), Intent::NONE);
     assert!((world.enemy_pos(b).unwrap().x - 20.1).abs() < 1e-5);
     assert_eq!(world.enemy_pos(c).unwrap().x, 30.0);

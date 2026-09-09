@@ -25,6 +25,7 @@ pub use attack::{
 };
 pub use hash::Fnv;
 use members::Members;
+use pass::health::Health;
 use pass::motion::Physics;
 pub use pass::motion::{Impulse, Motion};
 use pass::source::Sources;
@@ -230,6 +231,9 @@ const PLAYER_HALF_HEIGHT: f32 = PLAYER_SCALE.y * 0.5;
 /// to a position it does want.
 struct Bodies {
     physics: Physics,
+    /// One row per enemy, parallel to `pos[1..]`; the player has no health in
+    /// this slice.
+    health: Health,
     /// Stable names for these bodies, and the map onto the dense rows below.
     ///
     /// The horde stays dense — the passes want a contiguous stream — so a
@@ -263,6 +267,7 @@ impl Default for Bodies {
     fn default() -> Self {
         let mut bodies = Self {
             physics: Physics::default(),
+            health: Health::default(),
             slots: Slots::default(),
             pos: Vec::new(),
             prev_pos: Vec::new(),
@@ -302,6 +307,7 @@ impl Bodies {
         self.clear();
         self.pos.reserve(n);
         self.prev_pos.reserve(n);
+        self.health.reserve(n);
 
         for position in grid_positions(n) {
             self.spawn(position);
@@ -319,6 +325,7 @@ impl Bodies {
         self.slots.truncate(1);
         self.pos.truncate(1);
         self.prev_pos.truncate(1);
+        self.health.clear();
     }
 
     /// Puts one body at a chosen place and returns its name.
@@ -331,10 +338,11 @@ impl Bodies {
     /// `docs/traps.md` carries that symptom; maintaining the invariant in the
     /// storage is what retires it, rather than testing each caller for it.
     fn spawn(&mut self, at: Vec2) -> EntityId {
+        let is_player = self.pos.is_empty();
         let id = self.slots.insert();
         self.physics.grant(
             id,
-            if self.pos.is_empty() {
+            if is_player {
                 pass::motion::PLAYER_INV_MASS
             } else {
                 pass::motion::ENEMY_INV_MASS
@@ -342,6 +350,9 @@ impl Bodies {
         );
         self.pos.push(at);
         self.prev_pos.push(at);
+        if !is_player {
+            self.health.grant();
+        }
         self.debug_check_paired();
         id
     }
@@ -354,6 +365,7 @@ impl Bodies {
         debug_assert_eq!(self.slots.len(), self.physics.len(), "physics and bodies disagree");
         debug_assert_eq!(self.slots.len(), self.pos.len(), "slots and pos disagree");
         debug_assert_eq!(self.slots.len(), self.prev_pos.len(), "slots and prev_pos disagree");
+        debug_assert_eq!(self.slots.len(), self.health.len() + 1, "slots and health disagree");
     }
 
     /// Removes one body. Returns whether the id named a live one.
@@ -371,6 +383,7 @@ impl Bodies {
         self.physics.revoke(id);
         self.pos.swap_remove(dense);
         self.prev_pos.swap_remove(dense);
+        self.health.revoke(dense - 1);
         self.debug_check_paired();
         true
     }
@@ -484,6 +497,25 @@ impl World {
             crowd_contacts: 0,
         }
     }
+}
+
+/// The one implementation of enemy removal, shared by between-tick callers and
+/// the final scheduled defeat pass.
+fn remove_enemy(
+    bodies: &mut Bodies,
+    seekers: &mut Members,
+    scenes: &mut Scenes,
+    id: EntityId,
+    trace: &mut trace::TraceSink<'_>,
+) -> bool {
+    if !bodies.despawn(id) {
+        return false;
+    }
+
+    seekers.remove(id);
+    scenes.forget_body(id);
+    trace.emit(Event::Removed { id });
+    true
 }
 
 impl World {
@@ -666,19 +698,16 @@ impl World {
             crowd_contacts: _,
         } = self;
 
-        if !bodies.despawn(id) {
-            return false;
-        }
+        let mut trace = trace.sink(*tick);
+        remove_enemy(bodies, seekers, scenes, id, &mut trace)
+    }
 
-        // Revoking eagerly is an optimisation, not a correctness requirement: a
-        // stale id resolves to nothing, which is what generational ids are for,
-        // and `pass::seek` skips what it cannot resolve. This keeps the sets
-        // from accumulating garbage that costs every pass that walks them.
-        seekers.remove(id);
-        scenes.forget_body(id);
-
-        trace.sink(*tick).emit(Event::Removed { id });
-        true
+    /// Remaining hits before this enemy is defeated, or `None` for the player
+    /// and ids that no longer resolve.
+    #[must_use]
+    pub fn health(&self, id: EntityId) -> Option<u8> {
+        let row = self.bodies.slots.index(id)?.checked_sub(1)?;
+        Some(self.bodies.health.get(row))
     }
 
     /// Makes a body chase the player. Returns whether it took effect.
@@ -795,6 +824,7 @@ impl World {
         let Player { facing, prev_facing, attack } = player;
 
         bodies.physics.report(&bodies.pos, &bodies.slots, out);
+        bodies.health.report(&bodies.slots.ids()[1..], out);
         out.int("tick", *tick);
         out.vec3("player_pos", on_ground(bodies.pos[0], PLAYER_HALF_HEIGHT));
         out.num("facing", *facing);
@@ -874,9 +904,9 @@ impl World {
         // **Decide, then perform.** `trigger` reads two facts about the world
         // and may only push onto the queue — it is handed no storage, so the
         // code that decides new bodies exist cannot make one. `drain` is the
-        // only pass that changes what exists, and running it here means nothing
-        // below has to defend against the horde changing length or moving rows
-        // underneath it. See `pass::source` and `pass::spawn`.
+        // only pass that adds bodies, and running it here means their rows stay
+        // fixed until the final defeat boundary. See `pass::source`,
+        // `pass::spawn`, and `pass::health`.
         pass::source::trigger(
             &mut self.sources,
             &mut self.queue,
@@ -945,6 +975,13 @@ impl World {
             &self.bodies.slots.ids()[1..],
             &self.bodies.pos[1..],
             self.bodies.physics.sink(self.bodies.slots.ids()[0]),
+            self.bodies.health.sink(),
+            trace.reborrow(),
+        );
+        pass::health::remove_defeated(
+            &mut self.bodies,
+            &mut self.seekers,
+            &mut self.scenes,
             trace.reborrow(),
         );
 
@@ -1003,7 +1040,7 @@ impl World {
         // disagree for a reason that has nothing to do with the simulation.
         let _ = trace;
         let Player { facing, prev_facing, attack } = player;
-        let Bodies { slots, physics, pos: enemy_pos, prev_pos: enemy_prev } = bodies;
+        let Bodies { slots, physics, health, pos: enemy_pos, prev_pos: enemy_prev } = bodies;
         let mut h = Fnv::default();
         physics.hash(&mut h);
 
@@ -1047,6 +1084,7 @@ impl World {
         // the next thing spawned gets a different id in each, and they diverge
         // for real a tick later. See `Slots::hash`.
         slots.hash(&mut h);
+        health.hash(&mut h);
 
         // Length as well as contents: two hordes agreeing on every body they
         // share are still different worlds if one has more of them.

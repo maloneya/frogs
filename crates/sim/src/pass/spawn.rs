@@ -15,8 +15,8 @@
 //! before anything else holds a row.
 //! What that buys, as facts rather than intentions:
 //!
-//! - the horde's length is **constant within a tick**, so a row index taken by
-//!   one pass is still that body when the next pass runs;
+//! - the horde's length is constant until the final defeat boundary, so a row
+//!   index taken by one ordinary pass is still that body when the next runs;
 //! - a request made *during* a tick becomes a body at the start of the next
 //!   one, and a request made *between* ticks becomes a body during the next
 //!   one — one deterministic latency, the same for every asker;

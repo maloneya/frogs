@@ -20,6 +20,7 @@
 //! samples. Every timing claim below is therefore asserted against a golden
 //! trace, which is the only artefact that can see an interval.
 
+use super::health::DamageSink;
 use super::motion::{Impulse, ImpulseSink};
 use glam::Vec2;
 
@@ -267,6 +268,10 @@ pub(crate) struct Pose {
 /// Buffering it is a real feature and a separate one — it needs an expiry and a
 /// rule about which phase accepts it, and guessing those now would bake in a
 /// feel nobody has tried.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "positions and ids are one immutable body view, while impulse and damage sinks deliberately give the attack two independent effects without exposing either store"
+)]
 pub(crate) fn attack(
     state: &mut Attack,
     pose: Pose,
@@ -274,6 +279,7 @@ pub(crate) fn attack(
     bodies: &[EntityId],
     pos: &[Vec2],
     mut impulses: ImpulseSink<'_>,
+    mut damage: DamageSink<'_>,
     mut trace: TraceSink<'_>,
 ) {
     // **Advance first, then accept a press, then act.** The order is the whole
@@ -349,6 +355,7 @@ pub(crate) fn attack(
             bodies,
             pos,
             &mut impulses,
+            &mut damage,
             &mut trace,
         );
     }
@@ -393,6 +400,7 @@ fn strike(
     bodies: &[EntityId],
     pos: &[Vec2],
     impulses: &mut ImpulseSink<'_>,
+    damage: &mut DamageSink<'_>,
     trace: &mut TraceSink<'_>,
 ) {
     // The disc is *placed* rather than computed. `World::extract` places the
@@ -417,7 +425,8 @@ fn strike(
         }
 
         struck.push(id);
-        trace.emit(Event::Hit { id });
+        let remaining = damage.hit(row);
+        trace.emit(Event::Hit { id, remaining });
         let direction = Vec2::new(pose.facing.sin(), pose.facing.cos()) * knockback;
         impulses.push(
             id,
@@ -451,6 +460,7 @@ mod tests {
         let mut state = Attack::default();
         let mut trace = Trace::default();
         let mut seen = Vec::new();
+        let mut health = super::super::health::Health::default();
         let mut physics = super::super::motion::Physics::default();
         let player = crate::slots::Slots::default().insert();
 
@@ -462,6 +472,7 @@ mod tests {
                 &[],
                 &[],
                 physics.sink(player),
+                health.sink(),
                 trace.sink(u64::from(tick)),
             );
             seen.push((tick, state.is_swinging(), state.hitbox_is_live()));

@@ -114,7 +114,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Every enemy pair is resolved once, not twice | 3 | `crowd` walks `j > i` via `split_at_mut`; `an_overlapped_pair_settles_at_touching` |
 | A recycled slot does not inherit a behaviour | 3 | `Members::index` compares the whole id, not the slot; `a_recycled_slot_does_not_inherit_the_behaviour` |
 | A behaviour costs its membership, not the horde | 0 | `pass::seek` iterates `Members::ids`, and is handed no way to reach a non-member |
-| Nothing inside a tick can change what exists | 0 | no pass is handed `&mut Bodies` except `pass::spawn::drain`; `source::trigger` runs first and is handed no storage; every other pass takes slices |
+| Structural changes cannot move a row underneath an ordinary pass | 0 | `spawn::drain` adds before row readers; attacks receive immutable body slices plus restricted sinks; `health::remove_defeated` removes only after every row-reading pass |
 | A request cannot be granted late | 3 | `a_request_becomes_a_body_on_the_next_tick_and_not_before`, and `a_queued_spawn_lands_on_its_own_tick` pins the tick by position, mutation-checked |
 | A refused spawn cannot be silent | 3 | `request_spawn` is `#[must_use]`; `Event::Refused` is emitted by the drain; `a_full_queue_refuses_out_loud` |
 | A template grants what it names and nothing else | 3 | one line per behaviour in `pass::spawn::place`; `two_kinds_of_enemy_from_one_description`, whose bystander is the control |
@@ -131,6 +131,9 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A hitbox cannot move what it touches | 0 | `pass::attack` takes `&[Vec2]`; there is no `&mut` to write through |
 | The hitbox window is exactly the configured active ticks | 3 | `is_active` is the single definition of both edges; default and tuned windows have golden traces |
 | A swing connects once per body, not once per tick | 3 | `Attack::struck`; scenarios hold bodies inside multi-tick windows and assert one hit each |
+| An attack cannot despawn while iterating bodies | 0 | `DamageSink` exposes only one-hit damage; it cannot reach `Bodies`, and zero-health rows wait for the final health pass |
+| An enemy survives two hits and the third retires its identity | 3 | `three_hits_defeat_an_enemy` asserts health 2, health 1, then `alive: false`; its trace pins damage and removal to the confirmed hit ticks |
+| Removing one health row cannot transfer damage to the swapped survivor | 3 | `despawning_preserves_a_swapped_survivors_payloads` exercises the real body-removal door with unequal remaining health |
 | A swing cannot be interrupted or stacked | 3 | `a_press_during_a_swing_is_dropped`, which pins the default duration from both sides |
 | The swing's phase cannot disagree with its timer | 0 | one `Option<InFlight>`; every phase is derived from it |
 | Resolved attack values stay finite, nonzero where required, and bounded | 0 | `ResolvedAttack` fields are private; `AttackShape::try_new` and `ResolvedAttack::try_new` validate a complete value atomically. `RecoveryTicks` retains its serde validator for runtime recovery changes |
@@ -162,7 +165,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Overlap correction cannot inject momentum | 3 | `overlap_does_not_create_momentum`; projection and velocity response are separate operations |
 | Momentum reaches a body outside the hitbox | 3 | `a_swing_pushes_a_body_it_did_not_hit` asserts the neighbour's position, velocity and trace |
 | A hit changes velocity before it changes position | 3 | checkpoints in `the_hitbox_opens_and_shuts_on_schedule` cover the hit tick and subsequent movement |
-| Physical payload survives row changes and cannot leak to a recycled id | 3 | `despawning_revokes_motion_and_a_swapped_survivor_keeps_its_velocity` |
+| Physical payload survives row changes and cannot leak to a recycled id | 3 | `despawning_preserves_a_swapped_survivors_payloads` |
 | Physics stays within the headless tick budget | 3 | `physics_stays_within_tick_budget` asserts mean time inside `World::step` |
 | Scene load failure cannot partially replace a playtest | 3 | validation and capacity admission precede mutation; `invalid_and_over_capacity_scenes_leave_everything_untouched` and `rejected_replacement_preserves_the_current_playtest` |
 | A scene's source descendants inherit its lifetime | 3 | owner carried through sources and spawn requests; `scenes_own_their_sources_and_descendants` asserts eviction and subsequent non-emission |
