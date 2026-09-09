@@ -118,6 +118,9 @@ additive content; `scene list` reports live instances. See
 [`docs/scene-playtests.md`](docs/scene-playtests.md) for completion semantics,
 run-scoped identities and the shared scenario-file path.
 
+For authoring playtest configurations, use the
+[`create-scene` skill](.claude/skills/create-scene/SKILL.md).
+
 Every command replies, and the reply means the effect has **landed** — `hold`
 answers after the key comes back up, `shot` after the file is on disk. So a test
 is a sequence of commands, not a sequence of sleeps and hopes. Key names are a

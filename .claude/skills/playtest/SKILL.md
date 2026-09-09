@@ -66,7 +66,7 @@ Keys come from `BINDINGS` in `crates/app/src/input.rs`, so whatever is bound is
 drivable — currently `w a s d up down left right space f1 f2 enter escape r`.
 `tap f2` opens the scene picker; Up/Down select and Enter starts fresh.
 Its state and any load error are reported under `state.ui`; see
-[`docs/scene-playtests.md`](../../../../docs/scene-playtests.md).
+[`docs/scene-playtests.md`](../../../docs/scene-playtests.md).
 `tap f1` opens the attack profile panel. Any arrow chooses among Basic,
 Thrust, Sweep, and Heavy sweep; `tap r` returns to Basic and
 `tap escape` closes the panel. These go through the same modal input route as

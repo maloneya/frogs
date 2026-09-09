@@ -1,0 +1,31 @@
+// Playtest question: how does pressure from three approach directions feel as
+// the arena builds from 3 to 12 seekers?
+// Player action: kite around the centre and use swings to manage each lane.
+// Watch for: whether one direction dominates and whether one new enemy per
+// spawner per second makes the escalation readable.
+(
+    name: "Three enemy spawners",
+    sources: [
+        (
+            pos: (0.0, 24.0),
+            radius: 3.0,
+            every: 60,
+            when: FewerThan(12),
+            what: (seeks: true),
+        ),
+        (
+            pos: (-21.0, -12.0),
+            radius: 3.0,
+            every: 60,
+            when: FewerThan(12),
+            what: (seeks: true),
+        ),
+        (
+            pos: (21.0, -12.0),
+            radius: 3.0,
+            every: 60,
+            when: FewerThan(12),
+            what: (seeks: true),
+        ),
+    ],
+)

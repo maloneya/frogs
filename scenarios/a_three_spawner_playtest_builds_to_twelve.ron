@@ -1,0 +1,21 @@
+// All three sources start ready and share a 60-tick cadence. They therefore
+// emit together on ticks 0, 60, 120, and 180. At 12 enemies, the shared
+// FewerThan gate is closed, so tick 240 adds nothing.
+(
+    description: "The three-spawner playtest starts without authored enemies, then adds three seekers per second until its population cap.",
+    setup: (scenes: [File("../scenes/three_enemy_spawners.ron")]),
+    checkpoints: [
+        (at: 0, expect: (scene_count: 1, enemy_count: 3, seekers: 3, sources: 3)),
+        (at: 60, expect: (enemy_count: 6, seekers: 6, sources: 3)),
+        (at: 120, expect: (enemy_count: 9, seekers: 9, sources: 3)),
+        (at: 180, expect: (enemy_count: 12, seekers: 12, sources: 3)),
+        (at: 240, expect: (enemy_count: 12, seekers: 12, sources: 3)),
+    ],
+    budget: (ticks: 241),
+    expect: (
+        scene_count: 1,
+        enemy_count: 12,
+        seekers: 12,
+        sources: 3,
+    ),
+)
