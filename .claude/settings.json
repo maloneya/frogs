@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "in=$(cat); [ \"$(printf '%s' \"$in\" | jq -r '.stop_hook_active // false')\" = \"true\" ] && exit 0; cd \"${CLAUDE_PROJECT_DIR:-$PWD}\" || exit 0; [ -f Cargo.toml ] || exit 0; . \"$HOME/.cargo/env\" 2>/dev/null; if ! out=$(cargo test --workspace 2>&1); then printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; fi; if [ -d crates/scenario ]; then if ! out=$(cargo run --quiet -p scenario -- scenarios/ 2>&1); then printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; fi; fi",
+            "command": "in=$(cat); [ \"$(printf '%s' \"$in\" | jq -r '.stop_hook_active // false')\" = \"true\" ] && exit 0; cd \"${CLAUDE_PROJECT_DIR:-$PWD}\" || exit 0; [ -f Cargo.toml ] || exit 0; . \"$HOME/.cargo/env\" 2>/dev/null; if ! out=$(cargo test --workspace 2>&1); then printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; fi; if ! out=$(cargo doc --workspace --lib --bins --no-deps --document-private-items 2>&1); then printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; fi; if [ -d crates/scenario ]; then if ! out=$(cargo run --quiet -p scenario -- scenarios/ 2>&1); then printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; fi; fi",
             "timeout": 300,
             "statusMessage": "Running tests and scenarios"
           }

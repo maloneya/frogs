@@ -210,9 +210,6 @@ const _: () = assert!(ARENA_HALF > PLAYER_SCALE.x && ARENA_HALF > PLAYER_SCALE.z
 /// and appear not to — the facing would be real but invisible.
 const PLAYER_SCALE: Vec3 = Vec3::new(0.45, 1.2, 0.8);
 const _: () = assert!(PLAYER_SCALE.x > 0.0 && PLAYER_SCALE.y > 0.0 && PLAYER_SCALE.z > 0.0);
-// The reason the body is not square, promoted from a comment to a compile
-// error: a square footprint turns correctly and looks identical at every angle,
-// so the facing would be real and invisible.
 const _: () =
     assert!(PLAYER_SCALE.x != PLAYER_SCALE.z, "a square footprint makes facing invisible");
 

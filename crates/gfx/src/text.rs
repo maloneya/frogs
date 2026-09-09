@@ -46,7 +46,7 @@ const SYSTEM_FONT: &str = "/System/Library/Fonts/Monaco.ttf";
 /// The size glyphs are rasterised at, in **physical** pixels.
 ///
 /// Physical rather than logical, because the overlay projects in physical
-/// pixels — see [`arpg_core::Quad`]. Rasterising at logical size and scaling up
+/// pixels — see [`crate::Quad`]. Rasterising at logical size and scaling up
 /// is how text ends up soft on a retina display, and the softness is easy to
 /// mistake for a sampling bug in the pipeline.
 ///

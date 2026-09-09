@@ -361,7 +361,7 @@ impl Approx2 {
     }
 }
 
-/// What must hold for one body that [`Setup::bodies`] placed.
+/// What must hold for one body placed by an [`Action::Place`] in [`Setup::actions`].
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BodyExpect {

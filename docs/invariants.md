@@ -16,7 +16,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Invariant | Layer | Mechanism |
 |---|---|---|
 | `gfx` cannot name a simulation type | 0 | separate crates — `use arpg_sim::…` is E0432 |
-| `gfx` cannot depend on `sim`; `sim` cannot depend on wgpu/winit | 1 | `crates/{gfx,sim}/build.rs`, run on every build |
+| `gfx` cannot depend on `sim`; `sim` cannot depend on wgpu/winit | 1 | `crates/{gfx,sim,scenario}/build.rs`, run on every build |
 | Enemy count stays within the instance budget | 0 | `enemies` is private; `set_enemy_count` clamps, `place` refuses at `MAX_ENEMIES` |
 | Zoom stays in a sane range | 0 | private field; `OrthoCamera::zoom_by` clamps |
 | Aspect ratio survives a minimised window | 0 | `aspect_of` guards inside the camera |
@@ -36,7 +36,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | `Instance` is exactly 48 bytes | 1 | `const _: () = assert!(…)` beside the type |
 | Rust vertex layout matches `shader.wgsl` | 2 | headless pipeline + draw test in `gfx/src/lib.rs` |
 | Public API stays deliberate | 1 | `unreachable_pub = "deny"` |
-| No dependency outside a crate's allowlist | 1 | `crates/{gfx,sim}/build.rs` — fails closed, so unknown crates are caught too |
+| No dependency outside a crate's allowlist | 1 | `crates/{gfx,sim,scenario}/build.rs` — fails closed, so unknown crates are caught too |
 | Tuning constants stay in their valid range | 1 | a `const _: () = assert!(…)` beside each one |
 | The lead eases slower than the follow | 1 | const assert; swapping them reintroduces the whip |
 | The player footprint is never square | 1 | const assert; a square one makes facing invisible |
@@ -66,6 +66,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A world field cannot be unobservable | 1 | `World::report` destructures `Self`; a new field is E0027 until it is reported |
 | A redraw cannot consume a keypress | 0 | presentation reads `InputState::held`, which cannot clear; only `sample` clears, and only a tick calls it |
 | The docs cannot cite code that no longer exists | 3 | `every_identifier_the_docs_cite_exists_in_the_source`; found three real drifts on its first run |
+| A rustdoc link cannot name an item that does not exist | 3 | `broken_intra_doc_links = "deny"` in `[workspace.lints.rustdoc]`. The deny is layer 1, but `build`, `clippy` and `test` all pass with a broken link — what runs `cargo doc` is one `Stop` hook clause, so the grade is the hook's |
 | The trace is not part of sim state | 1 | `World::hash` destructures it and discards it explicitly; a new field would be E0027 |
 | A truncated golden trace is never blessed | 3 | the runner refuses to compare or write when `Trace::dropped() > 0` |
 | A golden trace is not coupled to world construction | 3 | the runner clears the trace after setup, so it records the run |

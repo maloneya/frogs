@@ -45,7 +45,7 @@ impl MoveDir {
 
 /// One tick's worth of intent, in the **simulation's** vocabulary.
 ///
-/// The seam between `app` and `sim`, and it exists because [`Actions`] cannot
+/// The seam between `app` and `sim`, and it exists because [`crate::Actions`] cannot
 /// be that seam: the movement actions are named in *screen* directions, and
 /// which world direction "up" means is the camera's business. Handing `Actions`
 /// to the simulation would put a presentation decision inside it.
@@ -70,7 +70,7 @@ impl Intent {
     /// `attack` is an **edge**: true on the tick the swing was asked for, not
     /// while a key is held. Passing `held` here would swing every tick the
     /// button is down, which is the bug the `pressed`/`held` split in
-    /// [`Actions`] exists to make hard.
+    /// [`crate::Actions`] exists to make hard.
     #[must_use]
     pub fn new(move_dir: MoveDir, attack: bool) -> Self {
         Self { move_dir, attack }

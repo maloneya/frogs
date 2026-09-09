@@ -4,6 +4,16 @@
 //! may subtract through [`DamageSink`], but the sink cannot touch body storage.
 //! Zero-health rows wait until [`remove_defeated`] runs last, after every pass
 //! that reads dense body rows has finished.
+//!
+//! **Dense, where every other behaviour here is sparse, and that is the choice
+//! worth defending.** [`crate::members::Members`] exists because a behaviour
+//! that belongs to a few bodies should cost what it uses rather than what the
+//! horde costs. Health is the opposite case: *every* enemy has some, so the
+//! membership set would be a copy of the horde's own id list, and the lookup
+//! through it would be paid on every hit to learn something already known. One
+//! `Vec<u8>` indexed by the same row the position uses is both smaller and the
+//! thing the defeat sweep wants to walk. Add a body that is exempt from damage
+//! and this becomes the wrong shape again — that is the signal to revisit it.
 
 use arpg_core::Report;
 

@@ -51,6 +51,33 @@ missing_docs = "warn"
 # something rather than because it belongs in the interface.
 unreachable_pub = "deny"
 
+# A doc link is a citation, and one that no longer resolves describes a program
+# that no longer exists. `every_identifier_the_docs_cite_exists_in_the_source`
+# catches that in the markdown and *cannot* catch it here — it greps for a name
+# existing anywhere in the tree, and every drift this found was a path that does
+# exist somewhere: `Actions` is a real type, `arpg_core::Quad` is a real crate
+# and a real type that do not go together. Only a resolver that knows what is in
+# scope can tell. The two are complements, not one mechanism written twice.
+#
+# **The enforcement is weaker than the deny makes it look, and that is written
+# down rather than glossed.** This makes `cargo doc` exit 101, but no ordinary
+# build path runs `cargo doc`: with a link broken on purpose, `cargo clippy
+# --all-targets -D warnings` and `cargo test --workspace` both still exit 0.
+# What runs it is one clause in the `Stop` hook, so by the ladder in CLAUDE.md
+# this is layer 3 — the bypass is deleting that clause. It is not in the
+# `PostToolUse` hook beside clippy, where the rest of the lint wall lives,
+# because it costs ~1.3s warm and that hook fires after every Bash call as well
+# as every edit. Move it up if that trade stops being worth it.
+#
+# That clause needs `--lib --bins`, which is not belt-and-braces: `cargo doc`
+# skips a bin target sharing its lib's name, so a plain `--workspace` run
+# documents `scenario`'s *library* and silently ignores `spec.rs`, `run.rs` and
+# `report.rs` — the bulk of the crate. A broken link there exited 0 until the
+# flags were added. The `--bins` run prints a harmless output-collision warning
+# for `scenario`, which is the price of checking both targets.
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+
 [workspace.lints.clippy]
 todo = "deny"
 unimplemented = "deny"

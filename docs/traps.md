@@ -66,8 +66,10 @@ uncapped, against a single sample's 127/s minutes earlier on the same build.
 Never trust `frame_ms` alone — it is an EMA and cannot tell a steady 60Hz from a
 mixture averaging to it.
 
-**Promotion candidate.** A frame-time histogram instead of the EMA, and a
-headless `step()` perf assertion that needs no window at all (roadmap chunk 5).
+**Partly promoted, 2026-09.** The headless half exists —
+`budget.max_mean_step_micros` asserts mean time inside `World::step` with no
+window and no GPU. Presentation cost is still an EMA, and the frame-time
+histogram is still what this entry waits on.
 
 ---
 

@@ -53,11 +53,17 @@ what matters here is what it left behind to build on.
   same input route and reports selected and in-flight profiles beside their
   resolved values. `attack_profiles_apply_to_the_next_swing` asserts timing,
   geometry, knockback, and selection isolation against checkpoints and a golden
-  trace. The earlier recovery-only command remains as a runtime modifier path.
+  trace. The earlier recovery-only path survives as `World::set_attack_recovery`,
+  reachable from a scenario's `attack_recovery` field but *not* from the harness
+  socket — it is a runtime modifier, not a command.
 
 - **Scene playtests.** Authored scenes, exact disposable ownership, synchronous
   load/evict, and fresh restart through the F2 picker and harness. The game and gate share
   content decoding and instantiation. See [scene playtests](scene-playtests.md).
+
+- **Health and defeat.** Three hits retire an enemy. Damage arrives through a
+  sink that cannot reach body storage, and removal is the schedule's last pass,
+  so the horde's rows hold still for every pass that reads them.
 
 ---
 
@@ -80,8 +86,9 @@ becomes the only way to raise N. Micro-optimising will not help: from about 4096
 the loop is memory-bound rather than arithmetic-bound.
 
 **Gate:** brute force and the grid produce identical contact sets over a
-replayed input stream. A headless perf assertion enters the scenario runner
-here: `step()` at 4096 enemies stays under budget, with no GPU and no window.
+replayed input stream, plus a headless perf assertion at 4096 enemies. The
+machinery for the second half already exists — `physics_stays_within_tick_budget`
+uses it — so this chunk only has to point it at a bigger horde.
 
 ## 6. Offscreen capture — *perception*
 
@@ -130,20 +137,26 @@ the tick list), `removing_a_source_stops_the_flow`, `a_source_waits_for_the_play
   `count` axis is a field and a loop; it was cut because nothing needs it yet.
 - **No budget.** A source runs until it is removed. `FewerThan` covers
   maintaining a population, which is what most uses of a count are reaching for.
-- **Nothing in the simulation removes a source.** `remove_source` exists and is
-  called by a scenario or the harness; a nest that dies when a body dies waits
-  on chunk 8.
+- **Nothing in the simulation removes a source.** Still true, and no longer
+  waiting on anything: see "A source is never destroyed by the game" under Known
+  limitations for what actually blocks it.
 
-## 8. Health, damage and death — *sim layer*
+## 8. Health, damage and death — *sim layer* — **done**
 
-A hit currently records contact and requests an impulse. Health, damage and
-death remain separate work; the shared physical response is already in place.
+An enemy takes three hits. `pass::attack` subtracts one through a `DamageSink`
+that cannot reach body storage, and `pass::health::remove_defeated` runs **last**
+in the schedule, so the row-swapping a removal does cannot invalidate an index
+an earlier pass is holding.
 
-Health will use sparse membership plus a payload, following the physical
-state store: one owner keeps membership and its parallel array in step.
+**Dense, not sparse — the prediction here was wrong and is worth recording.**
+This chunk was planned as sparse membership plus a payload, following the
+physical store. Health went dense instead; the reasoning is in the `pass/health.rs`
+module doc, next to the storage it defends.
 
-**Gate:** a scenario kills a body with a known number of swings and asserts its
-name goes dead; a golden trace shows the tick it died on.
+**Gate:** met — `three_hits_defeat_an_enemy` asserts health 2, then 1, then
+`alive: false`, and its golden trace pins damage and removal to the hit ticks.
+`despawning_preserves_a_swapped_survivors_payloads` covers the row swap with
+unequal remaining health.
 
 ## 9. Hitstop, knockback, input buffering — **knockback done**
 
@@ -179,8 +192,10 @@ change produces a reviewable diff rather than a claim about feel.
   before introducing fast projectiles or much stronger launches.
 - Momentum transfer covers carried velocity. Powered locomotion is kinematic;
   motor forces, steering suppression and frictional contact are separate work.
-- **Nothing dies.** A swing registers hits and applies momentum, but there is
-  no health, damage or corpse lifecycle. Chunk 8.
+- **Death is removal, and nothing else.** A defeated body vanishes on the tick
+  its third hit lands: no death animation, no corpse, no ragdoll, no drop, and
+  no event anything downstream reacts to beyond `Event::Removed`. That is enough
+  to assert the rule and not enough to read as a kill on screen.
 - **Every chaser is identical.** One speed, one behaviour. A `Template` grants
   it per body and a source picks the template, so two kinds of enemy are
   describable; what is missing is a second thing for them to differ *in*.
@@ -193,8 +208,13 @@ change produces a reviewable diff rather than a claim about feel.
   tests to make a debug key more principled. Left alone deliberately; if the
   bulk path ever becomes gameplay, fix it then.
 - **A source is never destroyed by the game.** Sources fire on a cadence and a
-  condition, and only a scenario, the harness or explicit code removes one —
-  nothing inside the simulation does, because nothing can die yet. Chunk 8.
+  condition, and only a scenario, the harness or a scene eviction removes one.
+  No pass does. Bodies can die now, but `remove_enemy` retires the body, its
+  behaviours and its scene ownership — it does not look for a source to retire
+  with it, because a source is not hung off a body and deliberately so. A nest
+  that dies when its body dies needs a source to *have* a body, which is the
+  layering `pass/source.rs` argues against; the shape it actually wants is a
+  `Condition` a defeat can close.
 - `World::extract()` rebuilds the 16384 static ground tiles every frame and
   re-uploads the whole instance buffer. Deferred with a number behind it: 17409
   instances render in ~3ms uncapped on the M4, so a static/dynamic split is not

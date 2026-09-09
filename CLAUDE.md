@@ -51,10 +51,11 @@ work** — that is the agent grading its own homework, and it is the one failure
 mode none of the machinery above can catch. Predicting a value and then
 asserting it in a scenario is the same act, made durable and checkable.
 
-The `Stop` hook in `.claude/settings.json` enforces this: it runs the test
-suite **and the scenario runner** when a turn ends, and blocks on failure. Both
-halves are live, so rule 4 is enforced by a process exiting nonzero rather than
-by this paragraph.
+The `Stop` hook in `.claude/settings.json` enforces this: when a turn ends it
+runs the test suite, `cargo doc` (which is what makes the rustdoc lint wall
+bite — see `Cargo.toml`), **and the scenario runner**, and blocks on the first
+failure. All three are live, so rule 4 is enforced by a process exiting nonzero
+rather than by this paragraph.
 
 ### Engine and game, and where the line falls
 
@@ -70,8 +71,12 @@ of the first half.
 So the line runs *through* files rather than between them.
 `crates/sim/src/pass/seek.rs` is engine: it carries the assert that a chaser
 must be slower than the player, without which kiting stops existing. The `3.5`
-that assert bounds is game. Same in `pass/attack.rs` — that startup, active and
-recovery are each non-zero is engine; `6`, `4` and `10` are game.
+that assert bounds is game. Same in `attack.rs` — that a swing's timings are
+non-zero and bounded is engine; the `6`, `4` and `10` that `AttackProfile::Basic`
+resolves to are game. The engine half sits in two different mechanisms, which is
+worth knowing before editing either: `ResolvedAttack::try_new` bounds startup and
+active, while recovery is bounded by the `RecoveryTicks` newtype, so the panel,
+the scenario format and serde all cross one validator rather than three.
 
 The rule that follows, and the one to apply while editing: **the game
 vocabulary has exactly one definition, and it lives in `sim` beside the thing
@@ -172,8 +177,9 @@ crates/
   gfx/   Renderer, camera, cube, capture, shader.wgsl      core, wgpu, winit, png,
          Quad/QuadBuffer/QuadSink, Glyphs, overlay.wgsl                  fontdue
   sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace   core, glam, serde
-  app/   App, Controls + BINDINGS, Clock, harness, hud, ui      core, gfx, sim, winit
-  scenario/  the headless gate: run a .ron, assert, exit 0/1     core, sim, ron  (no gfx)
+  app/   App, Controls + BINDINGS, Clock, harness, hud, ui  core, gfx, sim, scenario, winit
+  scenario/  lib: load_scene, the .ron decoder both sides use   core, sim, ron  (no gfx)
+             bin: the headless gate — run a .ron, assert, exit 0/1
 ```
 
 - `core` is the shared vocabulary and belongs to neither side. It deliberately
@@ -200,7 +206,8 @@ crates/
     and costs what it uses rather than what the horde costs.
   - `contact.rs` — whether two bodies touch, and along what line. It stops
     there, because separation, a hitbox and a trigger are three answers to that
-    one question.
+    one question. Which answer a caller is allowed to give is visible in its
+    signature; `pass/attack.rs` argues that at the definition site.
   - `pass/` — one module per named pass: `source`, `spawn`, `remember`, `walk`,
     `seek`, `motion::integrate`, `separate`, `contain`, `motion::settle`,
     `face`, `attack`, `health::remove_defeated`, in that order. The first
@@ -210,15 +217,19 @@ crates/
     `spawn` is the only pass that adds to *what exists*. The horde's length is
     then constant until the final defeat pass, so no ordinary pass has to
     defend against a row moving underneath it; defeat removes bodies only after
-    every row-reading pass has finished.
-  - `source.rs` — who asks for spawns, and when. A source is **not** a kind of
-    body: it is what makes bodies, so hanging it off one of its own products
+    every row-reading pass has finished. `pass/mod.rs` is the readable copy of
+    that order and must agree with the body of `World::step`.
+  - `pass/source.rs` — who asks for spawns, and when. A source is **not** a kind
+    of body: it is what makes bodies, so hanging it off one of its own products
     inverts the layering and breaks as soon as the thing made is not a body. It
     is four independent axes — cadence, condition, placement, template — rather
-    than one enum of every useful combination. `pass/mod.rs` is the readable
-    copy of the schedule and must agree with the body of `World::step`. The
-    hitbox is `contact`'s question with a different answer, and the signatures
-    say so: the solver takes `&mut [Vec2]`, the hitbox `&[Vec2]` plus an `ImpulseSink`, which cannot write positions.
+    than one enum of every useful combination. `SourceSpec` is the only written
+    form of one, and `Source` is reachable from a file only through it — so the
+    axes have one definition rather than a runtime copy and a file copy.
+  - `pass/health.rs` — how much killing a body takes, and the one pass that
+    removes one. Dense rather than sparse, unlike every other behaviour here;
+    the module doc says why, and names the change that would undo it.
+    `DamageSink` can subtract a point and reach nothing else.
   - `pass/motion.rs` — sparse physical membership, mass, carried velocity and
     validated impulses. Collision response exchanges momentum; damping settles
     it. Powered walk/seek displacement remains independent. The player shares
