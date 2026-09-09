@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "arpg"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arpg-core",
  "arpg-gfx",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "arpg-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "glam",
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "arpg-gfx"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arpg-core",
  "bytemuck",
@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "arpg-sim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arpg-core",
  "glam",
@@ -1819,7 +1819,7 @@ dependencies = [
 
 [[package]]
 name = "scenario"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arpg-core",
  "arpg-sim",
