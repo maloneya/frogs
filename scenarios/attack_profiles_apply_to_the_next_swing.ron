@@ -1,0 +1,54 @@
+(
+    description: "A selected profile supplies a resolved attack; changing profiles during startup affects only the next swing.",
+    setup: (
+        actions: [
+            Place((-0.8, 0.8)),
+            Place((0.8, 0.8)),
+            Place((0.0, 2.2)),
+        ],
+    ),
+    attack_profiles: [
+        (at: 0, profile: Sweep),
+        // The sweep is already in flight, so this selection belongs to the
+        // second press rather than reshaping the first attack.
+        (at: 1, profile: Thrust),
+    ],
+    attacks: [0, 21],
+    checkpoints: [
+        (at: 1, expect: (
+            attack_phase: Startup,
+            swing_tick: 1,
+            attack_profile: Thrust,
+            swing_profile: Sweep,
+            recovery_ticks: 8,
+            swing_recovery_ticks: 10,
+        )),
+        (at: 6, expect: (attack_phase: Active, struck: 1, bodies: [
+            (nth: 0, velocity: (x: 0.0, z: 6.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 0.0, z: 0.0, tol: 0.0)),
+        ])),
+        (at: 9, expect: (attack_phase: Active, struck: 2, bodies: [
+            (nth: 1, velocity: (x: 0.0, z: 6.0, tol: 0.00001)),
+            (nth: 2, velocity: (x: 0.0, z: 0.0, tol: 0.0)),
+        ])),
+        (at: 11, expect: (attack_phase: Recovery, hitbox: false)),
+        (at: 21, expect: (
+            attack_phase: Startup,
+            swing_tick: 0,
+            attack_profile: Thrust,
+            swing_profile: Thrust,
+        )),
+        (at: 28, expect: (attack_phase: Active, struck: 1, bodies: [
+            (nth: 2, velocity: (x: 0.0, z: 4.0, tol: 0.00001)),
+        ])),
+    ],
+    budget: (ticks: 31),
+    expect: (
+        attack_phase: Recovery,
+        swing_tick: 9,
+        struck: 1,
+        attack_profile: Thrust,
+        swing_profile: Thrust,
+        trace: "attack_profiles_apply_to_the_next_swing.trace",
+    ),
+)

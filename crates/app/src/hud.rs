@@ -19,7 +19,7 @@
 
 use crate::ui::{Menu, Mode};
 use arpg_gfx::{Glyphs, Quad, QuadSink};
-use arpg_sim::{AttackStatus, TICK_HZ};
+use arpg_sim::{AttackProfile, AttackStatus};
 use core::fmt::Write as _;
 use glam::{Vec2, Vec4};
 
@@ -60,48 +60,72 @@ pub(crate) fn draw(
         return;
     }
     // Stack-backed lines preserve the overlay's no-allocation frame path.
-    let mut lines: [Text; 8] = core::array::from_fn(|_| Text::default());
-    let count = if menu.open() {
-        write!(lines[0], "ATTACK TUNING").expect("line capacity");
-        let ticks = menu.recovery(attack.recovery).get();
-        write!(
-            lines[1],
-            "Recovery  < {} ticks / {:.1} ms >",
-            ticks,
-            ticks as f32 * 1000.0 / TICK_HZ as f32
-        )
-        .expect("line capacity");
-        write!(lines[2], "Phase: {}   Elapsed: {} ticks", attack.phase, attack.elapsed)
-            .expect("line capacity");
-        write!(lines[3], "Bodies struck: {}", attack.struck).expect("line capacity");
-        if let Some(recovery) = attack.swing_recovery {
-            write!(lines[4], "This swing's recovery: {} ticks", recovery.get())
-                .expect("line capacity");
-        } else {
-            write!(lines[4], "This swing's recovery: --").expect("line capacity");
+    let mut lines: [Text; 9] = core::array::from_fn(|_| Text::default());
+    let (count, highlight) = if menu.open() {
+        write!(lines[0], "ATTACK PROFILES").expect("line capacity");
+        let selected = menu.profile(attack.profile);
+        for (index, profile) in AttackProfile::ALL.into_iter().enumerate() {
+            profile_line(&mut lines[index + 1], profile);
         }
         write!(
             lines[5],
-            "{}",
-            if menu.pending().is_some() {
-                "Edit pending next tick; affects next swing."
-            } else {
-                "Edits affect the next swing."
-            }
+            "Phase: {}   Elapsed: {} ticks   Struck: {}",
+            attack.phase,
+            attack.elapsed,
+            attack.struck,
         )
         .expect("line capacity");
-        write!(lines[6], "Left/Right: adjust   R: reset").expect("line capacity");
-        write!(lines[7], "F1/Esc: close and play   World keeps running").expect("line capacity");
-        8
-    } else {
-        write!(lines[0], "F1: attack tuning   F2: scenes").expect("line capacity");
-        write!(lines[1], "{} / tick {} / struck {}", attack.phase, attack.elapsed, attack.struck)
+        write!(
+            lines[6],
+            "Arrows: choose profile   {}",
+            if menu.pending().is_some() { "pending" } else { "applied" }
+        )
+        .expect("line capacity");
+        write!(lines[7], "R: basic   F1/Esc: close   Selection affects next swing")
             .expect("line capacity");
-        2
+        write!(lines[8], "Resolved values are captured when the swing begins")
+            .expect("line capacity");
+        let selected = AttackProfile::ALL
+            .iter()
+            .position(|profile| *profile == selected)
+            .expect("selected profile belongs to the catalog");
+        (9, Some(1 + selected))
+    } else {
+        write!(lines[0], "F1: attack profiles   F2: scenes").expect("line capacity");
+        write!(
+            lines[1],
+            "{} / {} / tick {} / struck {}",
+            attack.profile,
+            attack.phase,
+            attack.elapsed,
+            attack.struck
+        )
+        .expect("line capacity");
+        (2, None)
     };
     let lines = &lines[..count];
     let width = lines.iter().map(|line| font.measure(line.as_str())).fold(0.0, f32::max);
-    draw_panel(font, lines, width, menu.open().then_some(1), sink);
+    draw_panel(font, lines, width, highlight, sink);
+}
+
+fn profile_line(line: &mut Text, profile: AttackProfile) {
+    let resolved = profile.resolve();
+    write!(
+        line,
+        "{:<12} {:>2}/{:>2}/{:>2} ticks  ({:>4.1},{:>3.1}) -> ({:>4.1},{:>3.1})  r {:.2}/{:.2}  kb {:.1}",
+        profile.label(),
+        resolved.startup(),
+        resolved.active(),
+        resolved.recovery().get(),
+        resolved.start().x,
+        resolved.start().y,
+        resolved.end().x,
+        resolved.end().y,
+        resolved.start_radius(),
+        resolved.end_radius(),
+        resolved.knockback(),
+    )
+    .expect("line capacity");
 }
 
 /// A bounded window into the catalog, with no allocation or I/O per frame.
@@ -248,14 +272,14 @@ mod tests {
     fn picker_scrolls_and_bounds_external_text_to_the_viewport() {
         let font = Glyphs::system();
         let mut menu = Menu::default();
-        let recovery = arpg_sim::RecoveryTicks::default();
-        menu.on_key(crate::ui::MenuKey::Scenes, recovery);
+        let profile = arpg_sim::AttackProfile::default();
+        menu.on_key(crate::ui::MenuKey::Scenes, profile);
         let long = "long scene\n名".repeat(40);
         menu.set_catalog(Ok((0..20)
             .map(|i| std::path::PathBuf::from(format!("{i}-{long}.ron")))
             .collect()));
         for _ in 0..100 {
-            menu.on_key(crate::ui::MenuKey::Next, recovery);
+            menu.on_key(crate::ui::MenuKey::Next, profile);
         }
         assert_eq!(menu.picker().selected(), 21);
         assert_eq!(menu.picker().visible(4), 18..22);
@@ -296,7 +320,7 @@ mod tests {
             let mut sink = buf.sink();
             let world = arpg_sim::World::default();
             let mut menu = Menu::default();
-            menu.on_key(crate::ui::MenuKey::Toggle, world.attack_status().recovery);
+            menu.on_key(crate::ui::MenuKey::Toggle, world.attack_status().profile);
             draw(
                 &Glyphs::system(),
                 &menu,

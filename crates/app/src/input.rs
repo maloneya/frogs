@@ -7,7 +7,7 @@ use winit::keyboard::KeyCode;
 
 use crate::ui::{Menu, MenuKey};
 use arpg_core::{Action, ActionMask, Actions, InputState};
-use arpg_sim::RecoveryTicks;
+use arpg_sim::AttackProfile;
 
 /// Which physical keys mean which action, and what each key is called.
 ///
@@ -66,7 +66,7 @@ impl Controls {
         key: KeyCode,
         pressed: bool,
         repeat: bool,
-        recovery: RecoveryTicks,
+        profile: AttackProfile,
     ) -> bool {
         let previous_mode = self.menu.mode();
         let was_open = self.menu.open();
@@ -87,7 +87,7 @@ impl Controls {
             self.down &= !bit;
         }
         if pressed && let Some(menu_key) = menu_key {
-            self.menu.on_key(menu_key, recovery);
+            self.menu.on_key(menu_key, profile);
         }
         if previous_mode != self.menu.mode() {
             self.accepted = 0;
@@ -150,8 +150,8 @@ impl Controls {
         &mut self.menu
     }
 
-    pub(crate) fn take_recovery(&mut self) -> Option<RecoveryTicks> {
-        self.menu.take_recovery()
+    pub(crate) fn take_profile(&mut self) -> Option<AttackProfile> {
+        self.menu.take_profile()
     }
 }
 
@@ -177,14 +177,14 @@ mod tests {
 
     fn tap(controls: &mut Controls, name: &str) {
         let key = key_named(name).expect("every UI key is harness-drivable");
-        controls.on_key(key, true, false, RecoveryTicks::default());
-        controls.on_key(key, false, false, RecoveryTicks::default());
+        controls.on_key(key, true, false, AttackProfile::default());
+        controls.on_key(key, false, false, AttackProfile::default());
     }
 
     #[test]
     fn picker_navigation_is_modal_and_panel_switches_do_not_leak_keys() {
         let mut controls = Controls::default();
-        controls.on_key(KeyCode::ArrowUp, true, false, RecoveryTicks::default());
+        controls.on_key(KeyCode::ArrowUp, true, false, AttackProfile::default());
         tap(&mut controls, "f2");
         assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
         assert!(matches!(
@@ -203,10 +203,10 @@ mod tests {
         tap(&mut controls, "f2");
         tap(&mut controls, "escape");
         assert!(!controls.menu().open());
-        controls.on_key(KeyCode::ArrowUp, true, true, RecoveryTicks::default());
+        controls.on_key(KeyCode::ArrowUp, true, true, AttackProfile::default());
         assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
-        controls.on_key(KeyCode::ArrowUp, false, false, RecoveryTicks::default());
-        controls.on_key(KeyCode::ArrowUp, true, false, RecoveryTicks::default());
+        controls.on_key(KeyCode::ArrowUp, false, false, AttackProfile::default());
+        controls.on_key(KeyCode::ArrowUp, true, false, AttackProfile::default());
         assert!(controls.sample().held(Action::MoveUp));
         tap(&mut controls, "f2");
         tap(&mut controls, "f2");
@@ -217,9 +217,9 @@ mod tests {
     #[test]
     fn modal_transitions_discard_edges_and_require_fresh_gameplay_presses() {
         let mut controls = Controls::default();
-        let recovery = RecoveryTicks::default();
-        controls.on_key(KeyCode::Space, true, false, recovery);
-        controls.on_key(KeyCode::KeyW, true, false, recovery);
+        let profile = AttackProfile::default();
+        controls.on_key(KeyCode::Space, true, false, profile);
+        controls.on_key(KeyCode::KeyW, true, false, profile);
         // Open before any tick has consumed the attack edge.
         tap(&mut controls, "f1");
         assert!(controls.menu().open());
@@ -232,15 +232,15 @@ mod tests {
         assert_eq!(controls.held().move_axis(), glam::Vec2::ZERO);
 
         let esc = key_named("escape").unwrap();
-        assert!(controls.on_key(esc, true, false, recovery), "closing must consume Escape");
+        assert!(controls.on_key(esc, true, false, profile), "closing must consume Escape");
         assert!(!controls.menu().open());
-        assert!(controls.on_key(esc, true, false, recovery), "a duplicate must not reach quit");
+        assert!(controls.on_key(esc, true, false, profile), "a duplicate must not reach quit");
         // A held W cannot start moving through repeat OR duplicate injection.
-        controls.on_key(KeyCode::KeyW, true, true, recovery);
-        controls.on_key(KeyCode::KeyW, true, false, recovery);
+        controls.on_key(KeyCode::KeyW, true, true, profile);
+        controls.on_key(KeyCode::KeyW, true, false, profile);
         assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
-        controls.on_key(KeyCode::KeyW, false, false, recovery);
-        controls.on_key(KeyCode::KeyW, true, false, recovery);
+        controls.on_key(KeyCode::KeyW, false, false, profile);
+        controls.on_key(KeyCode::KeyW, true, false, profile);
         assert!(controls.sample().held(Action::MoveUp));
         tap(&mut controls, "space");
         assert!(controls.sample().just_pressed(Action::Attack));
@@ -248,45 +248,58 @@ mod tests {
     }
 
     #[test]
-    fn edits_coalesce_until_consumed_and_survive_closing_the_menu() {
+    fn profile_selection_coalesces_until_consumed_and_survives_closing_the_menu() {
         let mut controls = Controls::default();
         tap(&mut controls, "f1");
+        tap(&mut controls, "down");
+        tap(&mut controls, "down");
         tap(&mut controls, "right");
         tap(&mut controls, "right");
-        assert_eq!(controls.menu().pending().unwrap().get(), 12);
-        // Readout / gameplay sampling on zero-tick frames must not eat an edit.
-        let _ = controls.menu().recovery(RecoveryTicks::default());
+        assert_eq!(controls.menu().pending(), Some(AttackProfile::HeavySweep));
+        // Readout / gameplay sampling on zero-tick frames must not eat a selection.
+        let _ = controls.menu().profile(AttackProfile::default());
         let _ = controls.sample();
         tap(&mut controls, "escape");
-        assert_eq!(controls.take_recovery().unwrap().get(), 12);
-        assert!(controls.take_recovery().is_none());
+        assert_eq!(controls.take_profile(), Some(AttackProfile::HeavySweep));
+        assert!(controls.take_profile().is_none());
         tap(&mut controls, "f1");
-        tap(&mut controls, "left");
+        tap(&mut controls, "right");
         tap(&mut controls, "r");
-        assert_eq!(controls.take_recovery(), Some(RecoveryTicks::default()));
+        assert_eq!(controls.take_profile(), Some(AttackProfile::default()));
     }
 
     #[test]
-    fn stepper_respects_sim_bounds_and_ignores_os_repeat() {
+    fn profile_picker_clamps_and_ignores_os_repeat() {
         let mut controls = Controls::default();
         tap(&mut controls, "f1");
-        controls.on_key(KeyCode::ArrowRight, true, true, RecoveryTicks::default());
+        controls.on_key(KeyCode::ArrowRight, true, true, AttackProfile::default());
         assert!(controls.menu().pending().is_none());
-        for _ in 0..RecoveryTicks::MAX + 5 {
+        for _ in 0..AttackProfile::ALL.len() + 2 {
             tap(&mut controls, "left");
         }
-        assert_eq!(controls.menu().pending().unwrap().get(), RecoveryTicks::MIN);
-        for _ in 0..RecoveryTicks::MAX + 5 {
+        assert_eq!(controls.menu().pending(), Some(AttackProfile::Basic));
+        for _ in 0..AttackProfile::ALL.len() + 2 {
             tap(&mut controls, "right");
         }
-        assert_eq!(controls.menu().pending().unwrap().get(), RecoveryTicks::MAX);
+        assert_eq!(controls.menu().pending(), Some(AttackProfile::HeavySweep));
+    }
+
+    #[test]
+    fn every_authored_attack_profile_is_reachable() {
+        let mut controls = Controls::default();
+        tap(&mut controls, "f1");
+        assert_eq!(controls.menu().profile(AttackProfile::Basic), AttackProfile::Basic);
+        for profile in AttackProfile::ALL.into_iter().skip(1) {
+            tap(&mut controls, "down");
+            assert_eq!(controls.menu().pending(), Some(profile));
+        }
     }
 
     #[test]
     fn focus_loss_discards_an_unsampled_attack_and_held_movement() {
         let mut controls = Controls::default();
         tap(&mut controls, "space");
-        controls.on_key(KeyCode::KeyD, true, false, RecoveryTicks::default());
+        controls.on_key(KeyCode::KeyD, true, false, AttackProfile::default());
         controls.release_all();
         let actions = controls.sample();
         assert!(!actions.just_pressed(Action::Attack));
@@ -297,13 +310,13 @@ mod tests {
     #[test]
     fn releasing_one_of_two_keys_bound_to_the_same_action_keeps_it_held() {
         let mut input = Controls::default();
-        input.on_key(KeyCode::KeyW, true, false, RecoveryTicks::default());
-        input.on_key(KeyCode::ArrowUp, true, false, RecoveryTicks::default());
-        input.on_key(KeyCode::KeyW, false, false, RecoveryTicks::default());
+        input.on_key(KeyCode::KeyW, true, false, AttackProfile::default());
+        input.on_key(KeyCode::ArrowUp, true, false, AttackProfile::default());
+        input.on_key(KeyCode::KeyW, false, false, AttackProfile::default());
 
         assert!(input.sample().held(Action::MoveUp), "Up is still down");
 
-        input.on_key(KeyCode::ArrowUp, false, false, RecoveryTicks::default());
+        input.on_key(KeyCode::ArrowUp, false, false, AttackProfile::default());
         assert!(!input.sample().held(Action::MoveUp));
     }
 
@@ -311,11 +324,11 @@ mod tests {
     #[test]
     fn key_repeat_does_not_produce_extra_presses() {
         let mut input = Controls::default();
-        input.on_key(KeyCode::KeyD, true, false, RecoveryTicks::default());
+        input.on_key(KeyCode::KeyD, true, false, AttackProfile::default());
         assert!(input.sample().just_pressed(Action::MoveRight));
 
         for _ in 0..10 {
-            input.on_key(KeyCode::KeyD, true, true, RecoveryTicks::default());
+            input.on_key(KeyCode::KeyD, true, true, AttackProfile::default());
         }
         let actions = input.sample();
         assert!(!actions.just_pressed(Action::MoveRight));
@@ -326,8 +339,8 @@ mod tests {
     #[test]
     fn losing_focus_releases_everything() {
         let mut input = Controls::default();
-        input.on_key(KeyCode::KeyW, true, false, RecoveryTicks::default());
-        input.on_key(KeyCode::KeyD, true, false, RecoveryTicks::default());
+        input.on_key(KeyCode::KeyW, true, false, AttackProfile::default());
+        input.on_key(KeyCode::KeyD, true, false, AttackProfile::default());
         input.release_all();
 
         assert_eq!(input.sample().move_axis(), glam::Vec2::ZERO);
@@ -357,7 +370,7 @@ mod tests {
     #[test]
     fn an_unbound_key_changes_nothing() {
         let mut input = Controls::default();
-        input.on_key(KeyCode::KeyV, true, false, RecoveryTicks::default());
+        input.on_key(KeyCode::KeyV, true, false, AttackProfile::default());
         assert_eq!(input.down, 0);
     }
 }

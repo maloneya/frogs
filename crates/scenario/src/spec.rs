@@ -4,7 +4,7 @@
 //! written against today; a field that only *describes* an intention is a field
 //! that will drift away from what the runner actually checks.
 
-use arpg_sim::{AttackPhase, Impulse, RecoveryTicks, Source, Template};
+use arpg_sim::{AttackPhase, AttackProfile, Impulse, RecoveryTicks, Source, Template};
 use serde::Deserialize;
 
 /// One scenario: a world, an input stream, a tick budget, and what is expected
@@ -42,6 +42,10 @@ pub(crate) struct Scenario {
     /// Validated recovery edits, applied before the named tick in file order.
     #[serde(default)]
     pub(crate) attack_recovery: Vec<RecoveryAt>,
+
+    /// Authored attack selections, applied before the named tick.
+    #[serde(default)]
+    pub(crate) attack_profiles: Vec<AttackProfileAt>,
 
     /// External momentum changes, applied before the named tick.
     #[serde(default)]
@@ -86,6 +90,14 @@ pub(crate) struct Scenario {
 pub(crate) struct RecoveryAt {
     pub(crate) at: u64,
     pub(crate) recovery: RecoveryTicks,
+}
+
+/// The same authored attack identity selected by the in-game panel.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AttackProfileAt {
+    pub(crate) at: u64,
+    pub(crate) profile: AttackProfile,
 }
 
 /// A point-in-time assertion using exactly the final state's vocabulary.
@@ -253,6 +265,12 @@ pub(crate) struct Expect {
     /// Zero when no swing is in flight.
     #[serde(default)]
     pub(crate) swing_recovery_ticks: Option<u32>,
+    /// Authored attack selected for the next swing.
+    #[serde(default)]
+    pub(crate) attack_profile: Option<AttackProfile>,
+    /// Authored attack captured by the swing in flight.
+    #[serde(default)]
+    pub(crate) swing_profile: Option<AttackProfile>,
     /// Ground-plane position as `(x, z)`.
     #[serde(default)]
     pub(crate) player_pos: Option<Approx2>,

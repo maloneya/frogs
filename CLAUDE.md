@@ -247,9 +247,10 @@ Game actions (rebindable, go through `Action`):
 
 `WASD` / arrows move the player · `space` swings
 
-`F1` opens the attack tuning panel · Left/Right adjust recovery · `R` resets ·
+`F1` opens the attack profile panel · arrows choose Basic, Thrust, Sweep, or
+Heavy sweep · `R` returns to Basic ·
 `F1` / `Esc` close. The panel captures gameplay input while the world keeps
-running. Changes apply to the next swing and last for the current run.
+running. Selections apply to the next swing and last for the current run.
 
 `F2` opens the scene picker · Up/Down select · Enter starts fresh · F2/Esc
 close. Restart current reuses its cached snapshot; file choices reread disk.

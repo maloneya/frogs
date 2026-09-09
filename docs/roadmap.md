@@ -43,18 +43,17 @@ what matters here is what it left behind to build on.
   first; see `crates/sim/src/members.rs` for why the storage is shaped this way.
 - **The swing.** Startup, active and recovery with a timed hitbox, asserted tick
   by tick against golden traces.
-- **Attack tuning UI.** F1 opens a modal keyboard panel; Left/Right edits
-  recovery, R resets, F1/Escape closes. The world keeps running. Settings are
-  session-only and affect the next swing. UI requests apply before the next
-  tick through `World::set_attack_recovery`; `RecoveryTicks` owns validation.
-  The harness drives the same input route (`tap f1`, `tap right`, `tap r`,
-  `tap escape`) and reports interaction state under `ui`. Sim state includes
-  `recovery_ticks`, `swing_recovery_ticks`, and derived phase flags.
-  Scenarios accept `attack_recovery: [(at: 0, recovery: 2)]` and assert
-  `attack_phase`, `swing_tick`, and the two recovery fields at checkpoints.
-  `recovery_edits_apply_to_the_next_swing` checks both shortening and
-  lengthening against exact attack boundaries. Startup, active duration,
-  knockback, and swing geometry remain future controls.
+- **Attack profile UI.** F1 opens a modal keyboard panel; arrows choose Basic,
+  Thrust, Sweep, or Heavy sweep and R returns to Basic. The world keeps running.
+  `AttackProfile` is authored game content; it resolves to a private-field
+  `ResolvedAttack`, the same validated runtime value a future skill, weapon,
+  stats, and buffs can produce through the atomic `try_new` boundary. The menu
+  selects content rather than defining attacks as sequences of key increments.
+  Settings are session-only and affect the next swing. The harness drives the
+  same input route and reports selected and in-flight profiles beside their
+  resolved values. `attack_profiles_apply_to_the_next_swing` asserts timing,
+  geometry, knockback, and selection isolation against checkpoints and a golden
+  trace. The earlier recovery-only command remains as a runtime modifier path.
 
 - **Scene playtests.** Authored scenes, exact disposable ownership, synchronous
   load/evict, and fresh restart through the F2 picker and harness. The game and gate share

@@ -127,7 +127,7 @@ impl App {
     /// Both native keys and harness keys execute menu requests at this same
     /// between-tick boundary. No file I/O or world replacement happens in draw.
     fn handle_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
-        let consumed = self.input.on_key(key, pressed, repeat, self.world.attack_status().recovery);
+        let consumed = self.input.on_key(key, pressed, repeat, self.world.attack_status().profile);
         match self.input.menu_mut().take_request() {
             Some(MenuRequest::RefreshScenes) => {
                 self.input.menu_mut().set_catalog(scene_catalog(std::path::Path::new("scenes")));
@@ -166,7 +166,7 @@ impl App {
         // callers receive a cancellation rather than a success for another run.
         for deferred in std::mem::take(&mut self.scheduled) {
             if let Some(key) = deferred.release {
-                self.input.on_key(key, false, false, self.world.attack_status().recovery);
+                self.input.on_key(key, false, false, self.world.attack_status().profile);
             }
             if let Some(reply) = deferred.reply {
                 let _ = reply.send("error: cancelled by playtest restart".into());
@@ -481,7 +481,7 @@ impl App {
                 continue;
             }
             if let Some(key) = deferred.release {
-                self.input.on_key(key, false, false, self.world.attack_status().recovery);
+                self.input.on_key(key, false, false, self.world.attack_status().profile);
             }
             if let Some(reply) = deferred.reply {
                 let _ = reply.send("ok".to_string());
@@ -519,8 +519,8 @@ impl App {
         for dt in self.accumulator.pending(frame) {
             // Requests wait through zero-tick frames and apply before this
             // tick's attack input. Drawing below cannot consume or apply one.
-            if let Some(recovery) = self.input.take_recovery() {
-                self.world.set_attack_recovery(recovery);
+            if let Some(profile) = self.input.take_profile() {
+                self.world.set_attack_profile(profile);
             }
             let intent = self.input.sample();
             // `just_pressed`, not `held`: a swing is an edge. Holding the key
@@ -826,9 +826,9 @@ mod tests {
         let mut app = App::default();
         app.start_playtest(pair()).unwrap();
         let initial = app.world.hash();
-        let recovery = app.world.attack_status().recovery;
-        app.input.on_key(KeyCode::KeyW, true, false, recovery);
-        app.input.on_key(KeyCode::Space, true, false, recovery);
+        let profile = app.world.attack_status().profile;
+        app.input.on_key(KeyCode::KeyW, true, false, profile);
+        app.input.on_key(KeyCode::Space, true, false, profile);
         for dt in app.accumulator.pending(arpg_sim::Dt::SECS) {
             app.world.step(dt, Intent::new(MoveDir::new(glam::Vec3::X), true));
         }
@@ -838,8 +838,8 @@ mod tests {
             arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()
         ));
         assert!(app.world.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
-        app.input.on_key(KeyCode::F1, true, false, recovery);
-        app.input.on_key(KeyCode::ArrowRight, true, false, recovery);
+        app.input.on_key(KeyCode::F1, true, false, profile);
+        app.input.on_key(KeyCode::ArrowRight, true, false, profile);
         assert!(app.input.menu().pending().is_some());
         let mut camera = OrthoCamera::new(1280, 720);
         camera.snap_to(glam::Vec3::new(40.0, 0.0, 40.0));
@@ -853,12 +853,12 @@ mod tests {
         assert_eq!(app.accumulator.alpha().get(), 0.0);
         assert_eq!(app.camera.as_ref().unwrap().target(), glam::Vec3::ZERO);
         assert!(!app.input.menu().open());
-        assert!(app.input.take_recovery().is_none());
+        assert!(app.input.take_profile().is_none());
         assert_eq!(app.input.sample().move_axis(), Vec2::ZERO);
-        app.input.on_key(KeyCode::KeyW, true, false, recovery);
+        app.input.on_key(KeyCode::KeyW, true, false, profile);
         assert_eq!(app.input.sample().move_axis(), Vec2::ZERO, "held native keys require release");
-        app.input.on_key(KeyCode::KeyW, false, false, recovery);
-        app.input.on_key(KeyCode::KeyW, true, false, recovery);
+        app.input.on_key(KeyCode::KeyW, false, false, profile);
+        app.input.on_key(KeyCode::KeyW, true, false, profile);
         assert_ne!(app.input.sample().move_axis(), Vec2::ZERO);
     }
 
@@ -867,7 +867,7 @@ mod tests {
         let mut app = App::default();
         let (reply, response) = std::sync::mpsc::channel();
         let (shot_reply, shot_response) = std::sync::mpsc::channel();
-        app.input.on_key(KeyCode::KeyD, true, false, app.world.attack_status().recovery);
+        app.input.on_key(KeyCode::KeyD, true, false, app.world.attack_status().profile);
         app.scheduled.push(Deferred {
             due: std::time::Instant::now() + std::time::Duration::from_secs(60),
             release: Some(KeyCode::KeyD),
@@ -878,7 +878,7 @@ mod tests {
         assert!(response.try_recv().unwrap().contains("cancelled"));
         assert!(shot_response.try_recv().unwrap().contains("cancelled"));
         assert!(app.scheduled.is_empty());
-        app.input.on_key(KeyCode::KeyD, true, false, app.world.attack_status().recovery);
+        app.input.on_key(KeyCode::KeyD, true, false, app.world.attack_status().profile);
         app.service_schedule();
         assert_ne!(
             app.input.sample().move_axis(),
@@ -891,7 +891,7 @@ mod tests {
     fn rejected_replacement_preserves_the_current_playtest() {
         let mut app = App::default();
         app.start_playtest(pair()).unwrap();
-        app.input.on_key(KeyCode::KeyW, true, false, app.world.attack_status().recovery);
+        app.input.on_key(KeyCode::KeyW, true, false, app.world.attack_status().profile);
         let before = app.report_state();
         let trace = app.world.trace().render();
         let mut bad = pair();

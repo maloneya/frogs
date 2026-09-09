@@ -27,65 +27,16 @@ use crate::contact;
 
 use crate::swing::{Disc, Hitbox, Swing};
 use crate::trace::{Event, TraceSink};
-use crate::{AttackPhase, AttackStatus, ENEMY_RADIUS, EntityId, RecoveryTicks};
-
-/// Ticks from the button to the hitbox appearing.
-///
-/// The cost of committing, and the thing that makes a swing readable to a
-/// player rather than instantaneous. At 60Hz this is 100ms — long enough to see
-/// the wind-up and step out of it, short enough not to feel like lag.
-const STARTUP: u32 = 6;
-
-/// Ticks the hitbox exists for. 67ms.
-///
-/// Short on purpose. A generous window forgives bad timing, which sounds kind
-/// and reads as mush: if almost any moment connects, then *when* you swing
-/// stops being a decision.
-const ACTIVE: u32 = 4;
-
-const _: () = assert!(STARTUP > 0, "a hitbox on the button frame cannot be reacted to");
-const _: () = assert!(ACTIVE > 0, "a swing with no active window can never hit anything");
-const _: () = assert!(STARTUP + ACTIVE <= u32::MAX - RecoveryTicks::MAX);
-
-/// How far in front of the player the hitbox sits, in world units.
-///
-/// Visible to the crate so a test can state where the swing ought to draw
-/// without copying the number, which is how a test ends up asserting that the
-/// code still does what it used to rather than what it should.
-pub(crate) const REACH: f32 = 1.1;
-
-/// The hitbox's radius.
-///
-/// A disc, like every other shape in the simulation, and for the same reasons
-/// [`crate::ENEMY_RADIUS`] gives — one unambiguous normal, no rebuild as the
-/// player turns, and a test that is a squared-distance compare. A cone would
-/// read better for a sword and is a change to this one function when the
-/// silhouette starts mattering.
-const HITBOX_RADIUS: f32 = 0.6;
-
-const _: () = assert!(REACH > 0.0 && HITBOX_RADIUS > 0.0);
-const _: () = assert!(
-    REACH - HITBOX_RADIUS < crate::PLAYER_RADIUS + ENEMY_RADIUS,
-    "a hitbox that starts beyond arm's length cannot hit a body already touching you"
-);
+use crate::{
+    AttackPhase, AttackProfile, AttackStatus, ENEMY_RADIUS, EntityId, RecoveryTicks, ResolvedAttack,
+};
 
 /// How many discs a hitbox is made of: one per tick of the active window.
 ///
 /// Public to the crate because the instance budget depends on it — `World` has
 /// to reserve room to *draw* a swing, and a reservation that had to be kept in
 /// step by hand would overrun the GPU buffer in silence.
-pub(crate) const HITBOX_SAMPLES: usize = ACTIVE as usize;
-
-/// The shape of the swing, as two positions in the player's own frame.
-///
-/// Both ends are the same point, so today's hitbox is a single disc that sits
-/// still for four ticks — exactly what it was when [`REACH`] and
-/// [`HITBOX_RADIUS`] were read straight out of `strike`. What has changed is
-/// that the shape is now a value, so the renderer can draw the thing this pass
-/// tests instead of a second opinion about where it is. Separating the two ends
-/// is what makes a stab, an arc or a slam; see [`crate::swing`].
-const SWING_PATH: Swing =
-    Swing::new(Vec2::new(0.0, REACH), Vec2::new(0.0, REACH), (HITBOX_RADIUS, HITBOX_RADIUS));
+pub(crate) const HITBOX_SAMPLES: usize = ResolvedAttack::MAX_ACTIVE_TICKS as usize;
 
 /// How many bodies one swing is expected to strike.
 ///
@@ -104,16 +55,17 @@ pub(crate) struct InFlight {
     /// Ticks since the swing began. Names the tick that just ran — see
     /// [`attack`] for why it is advanced before anything reads it.
     elapsed: u32,
-    /// Captured at the press; tuning cannot retire a swing already in the air.
-    recovery: RecoveryTicks,
+    /// Authored move identity captured at the same boundary as its resolved values.
+    profile: AttackProfile,
+    /// Captured at the press; later resolution cannot reshape this swing.
+    resolved: ResolvedAttack,
     /// Where this swing's hitbox goes, in the player's own frame.
     ///
     /// **Generated when the swing starts, not recomputed per tick.** That is
     /// what makes it a value two readers can share — see [`crate::swing`] — and
     /// it is also the right moment for the choice: a weapon swapped mid-swing
-    /// must not reshape the swing already in the air. There is one swing today,
-    /// so this looks like a constant; it is the field that holds
-    /// `chosen.generate()` and nothing else has to move.
+    /// must not reshape the swing already in the air. This is the generated
+    /// value chosen from the configuration captured beside it.
     ///
     /// Local rather than world, because baking world positions at the press
     /// would bake the facing with them, and the player may still turn
@@ -130,10 +82,11 @@ impl InFlight {
     /// the window, so `strike` and `extract` cannot disagree about which disc
     /// is hot — there is no second derivation to drift.
     pub(crate) fn phase(&self) -> Phase {
-        if self.elapsed < STARTUP {
-            Phase::Startup(self.elapsed as f32 / STARTUP as f32)
-        } else if is_active(self.elapsed) {
-            Phase::Active((self.elapsed - STARTUP) as usize)
+        let startup = self.resolved.startup();
+        if self.elapsed < startup {
+            Phase::Startup(self.elapsed as f32 / startup as f32)
+        } else if is_active(self.elapsed, self.resolved) {
+            Phase::Active((self.elapsed - startup) as usize)
         } else {
             Phase::Recovery
         }
@@ -154,13 +107,15 @@ impl InFlight {
 pub(crate) struct Attack {
     /// The swing in the air, or `None` when idle.
     swing: Option<InFlight>,
-    /// The next swing's recovery; the current swing owns its own copy.
-    recovery: RecoveryTicks,
+    /// Authored move selected for the next swing.
+    profile: AttackProfile,
+    /// The next swing's complete configuration; the current swing owns a copy.
+    resolved: ResolvedAttack,
     /// Bodies this swing has already struck.
     ///
-    /// **Once per swing, not once per tick.** The hitbox is live for four
-    /// ticks, so without this a body standing in it takes four hits from one
-    /// button press — which is not a tuning problem, it is a different game.
+    /// **Once per swing, not once per tick.** Without this, a body standing in
+    /// the hitbox takes one hit for every configured active tick — which is not
+    /// a tuning problem, it is a different game.
     ///
     /// A linear scan, deliberately: it holds what one swing hit, which is a
     /// handful, and a set would cost more to build each swing than the scan
@@ -172,7 +127,8 @@ impl Default for Attack {
     fn default() -> Self {
         Self {
             swing: None,
-            recovery: RecoveryTicks::default(),
+            profile: AttackProfile::default(),
+            resolved: AttackProfile::default().resolve(),
             struck: Vec::with_capacity(EXPECTED_HITS),
         }
     }
@@ -187,7 +143,7 @@ impl Attack {
 
     /// A fresh observation, never a second maintained copy of attack state.
     pub(crate) fn status(&self) -> AttackStatus {
-        let Self { swing, recovery, struck } = self;
+        let Self { swing, profile, resolved, struck } = self;
         let phase = match swing.as_ref().map(InFlight::phase) {
             None => AttackPhase::Idle,
             Some(Phase::Startup(_)) => AttackPhase::Startup,
@@ -197,15 +153,27 @@ impl Attack {
         AttackStatus {
             phase,
             elapsed: swing.as_ref().map_or(0, |s| s.elapsed),
-            recovery: *recovery,
-            swing_recovery: swing.as_ref().map(|s| s.recovery),
+            profile: *profile,
+            swing_profile: swing.as_ref().map(|s| s.profile),
+            resolved: *resolved,
+            swing_resolved: swing.as_ref().map(|s| s.resolved),
+            recovery: resolved.recovery(),
+            swing_recovery: swing.as_ref().map(|s| s.resolved.recovery()),
             struck: struck.len(),
         }
     }
 
+    pub(crate) fn set_profile(&mut self, profile: AttackProfile) -> bool {
+        let resolved = profile.resolve();
+        let changed = self.profile != profile || self.resolved != resolved;
+        self.profile = profile;
+        self.resolved = resolved;
+        changed
+    }
+
     pub(crate) fn set_recovery(&mut self, recovery: RecoveryTicks) -> bool {
-        let changed = self.recovery != recovery;
-        self.recovery = recovery;
+        let changed = self.resolved.recovery() != recovery;
+        self.resolved = self.resolved.with_recovery(recovery);
         changed
     }
 
@@ -228,15 +196,17 @@ impl Attack {
 
     /// Feeds the swing into the world hash. Exhaustive, as every hash here is.
     pub(crate) fn hash(&self, h: &mut crate::hash::Fnv) {
-        let Self { swing, recovery, struck } = self;
-        h.u64(u64::from(recovery.get()));
+        let Self { swing, profile, resolved, struck } = self;
+        h.usize(*profile as usize);
+        resolved.hash(h);
 
         // `None` and "tick 0 of a swing" are different states and must hash
         // differently, so the discriminant goes in as well as the value.
         h.usize(usize::from(swing.is_some()));
-        if let Some(InFlight { elapsed, recovery, hitbox }) = swing {
+        if let Some(InFlight { elapsed, profile, resolved, hitbox }) = swing {
             h.u64(u64::from(*elapsed));
-            h.u64(u64::from(recovery.get()));
+            h.usize(*profile as usize);
+            resolved.hash(h);
             hitbox.hash(h);
         }
 
@@ -249,7 +219,7 @@ impl Attack {
 
 /// Which part of the swing a tick falls in, and what that part has.
 ///
-/// The three phases the constants above name, as a thing a caller can match on
+/// The three configured phases, as a thing a caller can match on
 /// rather than three comparisons it has to get the boundaries right on.
 pub(crate) enum Phase {
     /// Committed, and no hitbox yet. The wind-up, and how far through it, in
@@ -263,11 +233,11 @@ pub(crate) enum Phase {
 
 /// Whether the hitbox is live on this tick of the swing.
 ///
-/// Half-open: live on `STARTUP`, dead on `STARTUP + ACTIVE`. Written once, here,
+/// Half-open: live on `startup`, dead on `startup + active`. Written once, here,
 /// so the open and close edges cannot drift apart — which is the classic way a
-/// window ends up one tick wider than the constant says.
-fn is_active(elapsed: u32) -> bool {
-    (STARTUP..STARTUP + ACTIVE).contains(&elapsed)
+/// window ends up one tick wider than its configuration says.
+fn is_active(elapsed: u32, resolved: ResolvedAttack) -> bool {
+    (resolved.startup()..resolved.startup() + resolved.active()).contains(&elapsed)
 }
 
 /// Ground-plane pose shared by the hit query and the impulse's direction.
@@ -276,11 +246,6 @@ pub(crate) struct Pose {
     pub(crate) pos: Vec2,
     pub(crate) facing: f32,
 }
-
-/// Momentum per struck body. A mass-one target starts at six units/second,
-/// traveling about one world unit before damping brings it to rest.
-const KNOCKBACK: f32 = 6.0;
-const _: () = assert!(KNOCKBACK > 0.0);
 
 /// Advances the swing, and strikes whatever the hitbox is touching.
 ///
@@ -332,14 +297,29 @@ pub(crate) fn attack(
     if state
         .swing
         .as_ref()
-        .is_some_and(|swing| swing.elapsed >= STARTUP + ACTIVE + swing.recovery.get())
+        .is_some_and(|swing| {
+            let resolved = swing.resolved;
+            swing.elapsed >=
+                resolved.startup() + resolved.active() + resolved.recovery().get()
+        })
     {
         state.swing = None;
     }
 
     if state.swing.is_none() && pressed {
-        state.swing =
-            Some(InFlight { elapsed: 0, recovery: state.recovery, hitbox: SWING_PATH.generate() });
+        let profile = state.profile;
+        let resolved = state.resolved;
+        let path = Swing::new(
+            resolved.start(),
+            resolved.end(),
+            (resolved.start_radius(), resolved.end_radius()),
+        );
+        state.swing = Some(InFlight {
+            elapsed: 0,
+            profile,
+            resolved,
+            hitbox: path.generate(resolved.active() as usize),
+        });
         state.struck.clear();
         trace.emit(Event::Swung);
     }
@@ -355,12 +335,22 @@ pub(crate) fn attack(
         Phase::Startup(_) | Phase::Recovery => None,
     };
 
-    if elapsed == STARTUP {
+    let resolved = swing.resolved;
+    if elapsed == resolved.startup() {
         trace.emit(Event::HitboxOpened);
     }
 
     if let Some(disc) = live {
-        strike(&mut state.struck, disc, pose, bodies, pos, &mut impulses, &mut trace);
+        strike(
+            &mut state.struck,
+            disc,
+            pose,
+            resolved.knockback(),
+            bodies,
+            pos,
+            &mut impulses,
+            &mut trace,
+        );
     }
 
     // Symmetric with the open above: `opened` on the first tick the hitbox
@@ -368,7 +358,7 @@ pub(crate) fn attack(
     // *last* live tick instead would read as a one-tick-shorter window in every
     // trace, which is precisely the confusion these events exist to prevent.
     // Both land inside the swing because recovery is at least one tick.
-    if elapsed == STARTUP + ACTIVE {
+    if elapsed == resolved.startup() + resolved.active() {
         trace.emit(Event::HitboxClosed);
     }
 }
@@ -386,15 +376,20 @@ pub(crate) fn attack(
 /// than one on the near side, and that ordering is the whole texture of a
 /// swing. A hitbox that accumulated its past positions would have the entire
 /// arc live by the last active tick, which is the "a generous window reads as
-/// mush" failure `ACTIVE` is already sized against, arriving through a
+/// mush" failure a short active window avoids, arriving through a
 /// different door.
 ///
 /// Takes `struck` rather than the whole `Attack` for the usual reason: it may
 /// record what it hit and may not touch the timer or the shape.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "`bodies` and `pos` are one parallel pair and `knockback` is the one tuning value this may see; bundling them would hand `strike` more authority than taking positions immutably is meant to allow"
+)]
 fn strike(
     struck: &mut Vec<EntityId>,
     disc: Disc,
     pose: Pose,
+    knockback: f32,
     bodies: &[EntityId],
     pos: &[Vec2],
     impulses: &mut ImpulseSink<'_>,
@@ -423,7 +418,7 @@ fn strike(
 
         struck.push(id);
         trace.emit(Event::Hit { id });
-        let direction = Vec2::new(pose.facing.sin(), pose.facing.cos()) * KNOCKBACK;
+        let direction = Vec2::new(pose.facing.sin(), pose.facing.cos()) * knockback;
         impulses.push(
             id,
             Impulse::try_from((direction.x, direction.y)).expect("finite facing and tuning"),
@@ -437,8 +432,16 @@ mod tests {
     use super::*;
     use crate::trace::Trace;
 
+    /// The default resolved attack, which is what these tests pin: they check the state
+    /// machine's shape against whatever it is configured with, not against a
+    /// second copy of the numbers.
+    fn resolved() -> ResolvedAttack {
+        ResolvedAttack::default()
+    }
+
     fn duration() -> u32 {
-        STARTUP + ACTIVE + RecoveryTicks::default().get()
+        let t = resolved();
+        t.startup() + t.active() + t.recovery().get()
     }
 
     /// Drives a swing with no bodies to hit, so what is left is the state
@@ -467,17 +470,20 @@ mod tests {
         seen
     }
 
-    /// The window's edges, stated as the constants state them. Half-open: live
-    /// on `STARTUP`, dead on `STARTUP + ACTIVE`.
+    /// The window's edges, stated as the resolved attack does. Half-open: live on
+    /// `startup`, dead on `startup + active`.
     #[test]
     fn the_hitbox_is_live_for_exactly_the_active_ticks() {
-        assert!(!is_active(STARTUP - 1), "live during startup");
-        assert!(is_active(STARTUP), "not live on the first active tick");
-        assert!(is_active(STARTUP + ACTIVE - 1), "not live on the last active tick");
-        assert!(!is_active(STARTUP + ACTIVE), "still live after the window");
+        let t = resolved();
+        let (startup, active) = (t.startup(), t.active());
 
-        let live: Vec<u32> = (0..duration()).filter(|&t| is_active(t)).collect();
-        assert_eq!(live.len() as u32, ACTIVE, "the window is not ACTIVE ticks wide");
+        assert!(!is_active(startup - 1, t), "live during startup");
+        assert!(is_active(startup, t), "not live on the first active tick");
+        assert!(is_active(startup + active - 1, t), "not live on the last active tick");
+        assert!(!is_active(startup + active, t), "still live after the window");
+
+        let live: Vec<u32> = (0..duration()).filter(|&tick| is_active(tick, t)).collect();
+        assert_eq!(live.len() as u32, active, "the window is not `active` ticks wide");
     }
 
     /// A swing occupies exactly its configured duration and then the player is idle
@@ -494,12 +500,12 @@ mod tests {
     }
 
     /// **Hitbox liveness is derived from one number, so it cannot disagree with
-    /// the phase.** Checked against the constants rather than against a second
+    /// the phase.** Checked against the resolved attack rather than a second
     /// copy of the schedule.
     #[test]
     fn the_hitbox_is_live_only_inside_the_swing() {
         for (tick, swinging, hitbox) in swing_for(duration() + 2, &[0]) {
-            let expected = tick < duration() && is_active(tick);
+            let expected = tick < duration() && is_active(tick, resolved());
             assert_eq!(hitbox, expected, "hitbox wrong on tick {tick}");
             if hitbox {
                 assert!(swinging, "a live hitbox with no swing behind it, tick {tick}");
@@ -516,12 +522,13 @@ mod tests {
     /// would be higher up the ladder and is not available — the bound needs
     /// `atan2` and `sqrt`, neither of which is const on stable.
     ///
-    /// It costs nothing today, because the swing's ends coincide. It fires on
-    /// the change that makes a swing move, which is the exact moment the
-    /// deferral stops being safe.
+    /// Runtime configurations enforce this at their edit door; this local test
+    /// keeps the default configuration honest as well.
     #[test]
     fn consecutive_discs_of_the_swing_leave_no_gap() {
-        let hitbox = SWING_PATH.generate::<HITBOX_SAMPLES>();
+        let t = resolved();
+        let path = Swing::new(t.start(), t.end(), (t.start_radius(), t.end_radius()));
+        let hitbox = path.generate::<HITBOX_SAMPLES>(t.active() as usize);
         let placed: Vec<(Vec2, f32)> =
             hitbox.discs().iter().map(|d| d.place(Vec2::ZERO, 0.0)).collect();
 

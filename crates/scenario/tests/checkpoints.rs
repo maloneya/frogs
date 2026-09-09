@@ -57,6 +57,21 @@ fn recovery_commands_reject_invalid_values_and_unreachable_ticks() {
     }
 }
 
+#[test]
+fn attack_profile_commands_reject_unknown_profiles_and_unreachable_ticks() {
+    for command in [
+        "(at: 0, profile: Typo)",
+        "(at: 0, profile: 1)",
+        "(at: 1, profile: Sweep)",
+    ] {
+        let fixture = Fixture::new(&format!(
+            "(attack_profiles: [{command}], budget: (ticks: 1), expect: ())"
+        ));
+        let (output, text) = fixture.run(&[]);
+        assert!(!output.status.success(), "invalid command {command} passed: {text}");
+    }
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {

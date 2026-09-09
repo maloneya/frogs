@@ -67,13 +67,16 @@ drivable — currently `w a s d up down left right space f1 f2 enter escape r`.
 `tap f2` opens the scene picker; Up/Down select and Enter starts fresh.
 Its state and any load error are reported under `state.ui`; see
 [`docs/scene-playtests.md`](../../../../docs/scene-playtests.md).
-`tap f1` opens the attack tuning panel, `tap left` / `tap right` edits recovery,
-`tap r` resets it, and `tap escape` closes it. These go through the same modal
-input route as native keys. While open, the panel captures gameplay input but
-the world keeps ticking. An edit is accepted immediately and applies before the
-next sim tick; `state.ui.recovery_pending` distinguishes those moments.
-`state.sim.recovery_ticks` is the next swing's applied setting;
-`state.sim.swing_recovery_ticks` is the in-flight setting, or zero when idle.
+`tap f1` opens the attack profile panel. Any arrow chooses among Basic,
+Thrust, Sweep, and Heavy sweep; `tap r` returns to Basic and
+`tap escape` closes the panel. These go through the same modal input route as
+native keys. While open, the panel captures gameplay input but the world keeps
+ticking. A selection applies before the next sim tick;
+`state.ui.attack_profile_pending` and `pending_attack_profile` expose that moment.
+`state.sim.attack_profile` is the authored move selected for the next swing and
+`swing_profile` is the in-flight copy. `resolved_attack` and
+`swing_resolved_attack` are their runtime values, which may later also reflect
+equipment and stats.
 Settings last for this run only. `space` swings, and it
 is an edge, so `tap space` is the right way to ask for exactly one. An unknown one replies
 `error: unknown key "q"; bound keys are w s a d up down left right`, which is

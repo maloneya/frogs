@@ -27,7 +27,7 @@
 //! It cuts the chord: the disc travels in a straight line between the ends and
 //! passes closer to the player in the middle than at either end. That is the
 //! swing shape you would most want and the one that would come out wrong —
-//! wrong by a fraction of a unit, in the middle of a four-tick window, which is
+//! wrong by a fraction of a unit, in the middle of a short active window, which is
 //! not something any screenshot shows.
 //!
 //! So a disc holds an angle off the facing and a distance from the player, and
@@ -115,7 +115,8 @@ impl Swing {
     /// and a body standing in the gap between two of them is passed straight
     /// through. It is a real limit, it cannot bite until a swing actually
     /// moves, and it belongs to the change that makes one move.
-    pub(crate) fn generate<const N: usize>(&self) -> Hitbox<N> {
+    pub(crate) fn generate<const N: usize>(&self, samples: usize) -> Hitbox<N> {
+        assert!(samples > 0 && samples <= N, "active window must fit the hitbox storage");
         let (from_angle, from_distance) = polar(self.start);
         let (to_angle, to_distance) = polar(self.end);
 
@@ -129,7 +130,11 @@ impl Swing {
                 // Inclusive of both ends, so the last tick lands *on* `end` and
                 // the configuration means what it says. A one-tick window is
                 // its own start, since there is nowhere to travel to.
-                let t = if N > 1 { i as f32 / (N - 1) as f32 } else { 0.0 };
+                let t = if samples > 1 {
+                    i.min(samples - 1) as f32 / (samples - 1) as f32
+                } else {
+                    0.0
+                };
 
                 Disc {
                     angle: angle::wrap(from_angle + turn * t),
@@ -137,6 +142,7 @@ impl Swing {
                     radius: self.radius.0.lerp(self.radius.1, t),
                 }
             }),
+            len: samples,
         }
     }
 }
@@ -147,6 +153,7 @@ impl Swing {
 /// rather than recomputed.
 pub(crate) struct Hitbox<const N: usize> {
     discs: [Disc; N],
+    len: usize,
 }
 
 impl<const N: usize> Hitbox<N> {
@@ -157,16 +164,19 @@ impl<const N: usize> Hitbox<N> {
 
     /// Every disc the swing occupies, in the order it occupies them.
     pub(crate) fn discs(&self) -> &[Disc] {
-        &self.discs
+        &self.discs[..self.len]
     }
 
     /// Feeds the hitbox into the world hash.
     ///
-    /// Derived from a constant today, so this changes nothing — and it will not
-    /// stay that way. The moment a swing is chosen rather than fixed, the
-    /// hitbox is the difference between two weapons, and a hash that skipped it
-    /// would let a replay swing a different sword and call that agreement.
+    /// The hitbox is the difference between two configurations, and a hash that
+    /// skipped it would let a replay swing a different shape and call that
+    /// agreement.
     pub(crate) fn hash(&self, h: &mut Fnv) {
+        h.usize(self.len);
+        // Hash the reserved tail as well as the live prefix. It is derived and
+        // cannot affect behavior, but the replay rule is deliberately every
+        // stored field, including derived state.
         for &Disc { angle, distance, radius } in &self.discs {
             h.f32(angle);
             h.f32(distance);
@@ -199,7 +209,7 @@ mod tests {
     #[test]
     fn the_ends_land_on_the_configured_positions() {
         let swing = Swing::new(Vec2::new(-0.9, 0.7), Vec2::new(0.9, 0.7), (0.3, 0.5));
-        let discs = placed(&swing.generate::<SAMPLES>());
+        let discs = placed(&swing.generate::<SAMPLES>(SAMPLES));
 
         let (first, first_radius) = discs[0];
         let (last, last_radius) = discs[SAMPLES - 1];
@@ -223,7 +233,9 @@ mod tests {
         let reach = end.length();
         let swing = Swing::new(Vec2::new(-0.9, 0.7), end, (0.6, 0.6));
 
-        for (i, (centre, _)) in placed(&swing.generate::<SAMPLES>()).into_iter().enumerate() {
+        for (i, (centre, _)) in
+            placed(&swing.generate::<SAMPLES>(SAMPLES)).into_iter().enumerate()
+        {
             let d = centre.length();
             assert!((d - reach).abs() < 1e-5, "disc {i} sits at {d}, off the arc at {reach}");
         }
@@ -236,22 +248,25 @@ mod tests {
         let swing = Swing::new(Vec2::new(0.0, 0.5), Vec2::new(0.0, 1.9), (0.3, 0.3));
         let mut last = 0.0;
 
-        for (i, (centre, _)) in placed(&swing.generate::<SAMPLES>()).into_iter().enumerate() {
+        for (i, (centre, _)) in
+            placed(&swing.generate::<SAMPLES>(SAMPLES)).into_iter().enumerate()
+        {
             assert!(centre.x.abs() < 1e-6, "disc {i} drifted off the facing axis");
             assert!(centre.y > last, "disc {i} did not advance");
             last = centre.y;
         }
     }
 
-    /// A swing whose ends coincide is the swing that exists today: every tick
-    /// tests the same disc. It has to survive generation unchanged, since that
-    /// is what keeps the golden traces meaning what they meant.
+    /// A swing whose ends coincide tests the same disc every tick. It has to
+    /// survive generation unchanged, since it is also the default configuration.
     #[test]
     fn a_swing_that_does_not_move_generates_one_position() {
         let at = Vec2::new(0.0, 1.1);
         let swing = Swing::new(at, at, (0.6, 0.6));
 
-        for (i, (centre, radius)) in placed(&swing.generate::<SAMPLES>()).into_iter().enumerate() {
+        for (i, (centre, radius)) in
+            placed(&swing.generate::<SAMPLES>(SAMPLES)).into_iter().enumerate()
+        {
             assert!(centre.distance(at) < 1e-6, "disc {i} moved");
             assert!((radius - 0.6).abs() < 1e-6, "disc {i} resized");
         }
@@ -263,7 +278,7 @@ mod tests {
     #[test]
     fn the_hitbox_turns_with_the_player() {
         let swing = Swing::new(Vec2::new(0.9, 0.7), Vec2::new(0.9, 0.7), (0.6, 0.6));
-        let disc = swing.generate::<1>().at(0);
+        let disc = swing.generate::<1>(1).at(0);
 
         // Facing +X: the local offset (right 0.9, ahead 0.7) must come out
         // ahead in +X and to the *right* of that, which is -Z.

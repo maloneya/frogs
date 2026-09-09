@@ -98,6 +98,15 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
             ));
         }
     }
+    for command in &scenario.attack_profiles {
+        if command.at >= scenario.budget.ticks {
+            failures.push(Failure::new(
+                "attack_profiles",
+                format!("a tick below budget {}", scenario.budget.ticks),
+                format!("tick {} will not run", command.at),
+            ));
+        }
+    }
     for (index, checkpoint) in scenario.checkpoints.iter().enumerate() {
         let label = format!("checkpoint[{}] after tick {}", index, checkpoint.at);
         if checkpoint.at >= scenario.budget.ticks {
@@ -243,6 +252,9 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             }
             for command in scenario.attack_recovery.iter().filter(|command| command.at == tick) {
                 world.set_attack_recovery(command.recovery);
+            }
+            for command in scenario.attack_profiles.iter().filter(|command| command.at == tick) {
+                world.set_attack_profile(command.profile);
             }
 
             // Asked for *before* the step, through the same queue anything
@@ -429,6 +441,8 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
         swing_tick,
         recovery_ticks,
         swing_recovery_ticks,
+        attack_profile,
+        swing_profile,
         player_pos,
         player_velocity,
         facing,
@@ -454,6 +468,16 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
         attack.swing_recovery.map_or(0, arpg_sim::RecoveryTicks::get),
         &mut failures,
     );
+    check_eq("attack_profile", attack_profile, attack.profile, &mut failures);
+    if let Some(want) = swing_profile
+        && attack.swing_profile != Some(*want)
+    {
+        failures.push(Failure::new(
+            "swing_profile",
+            want.to_string(),
+            attack.swing_profile.map_or("no swing in flight".into(), |got| got.to_string()),
+        ));
+    }
 
     failures.extend(check_finite(world));
     if let Some(want) = player_velocity {

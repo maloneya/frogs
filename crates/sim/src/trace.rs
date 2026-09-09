@@ -56,6 +56,11 @@ pub enum Event {
         /// Validated duration used by subsequent swings.
         recovery: crate::RecoveryTicks,
     },
+    /// Authored attack content changed between ticks.
+    AttackProfileChanged {
+        /// Profile used by subsequent swings.
+        profile: crate::AttackProfile,
+    },
     /// A physical impulse was applied; source is absent for external commands.
     Impulsed {
         /// Recipient's stable identity.
@@ -185,6 +190,9 @@ impl fmt::Display for Event {
             Self::SceneEvicted { id } => write!(f, "scene evicted id={id}"),
             Self::AttackRecoveryChanged { recovery } => {
                 write!(f, "attack recovery ticks={}", recovery.get())
+            }
+            Self::AttackProfileChanged { profile } => {
+                write!(f, "attack profile={}", profile.label())
             }
             Self::Impulsed { id, source, impulse } => {
                 write!(f, "impulse id={id} value={impulse} source=")?;

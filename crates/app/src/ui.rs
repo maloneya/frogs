@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use arpg_core::Report;
-use arpg_sim::RecoveryTicks;
+use arpg_sim::AttackProfile;
 
 #[derive(Clone, Copy)]
 pub(crate) enum MenuKey {
@@ -84,8 +84,8 @@ impl Picker {
 #[derive(Default)]
 pub(crate) struct Menu {
     mode: Mode,
-    /// Coalesced until a tick: two increments before that tick still mean +2.
-    pending: Option<RecoveryTicks>,
+    /// A content selection waiting for the next simulation tick.
+    pending: Option<AttackProfile>,
     picker: Picker,
     request: Option<MenuRequest>,
 }
@@ -103,15 +103,15 @@ impl Menu {
         &self.picker
     }
 
-    pub(crate) fn pending(&self) -> Option<RecoveryTicks> {
+    pub(crate) fn pending(&self) -> Option<AttackProfile> {
         self.pending
     }
 
-    pub(crate) fn recovery(&self, applied: RecoveryTicks) -> RecoveryTicks {
+    pub(crate) fn profile(&self, applied: AttackProfile) -> AttackProfile {
         self.pending.unwrap_or(applied)
     }
 
-    pub(crate) fn on_key(&mut self, key: MenuKey, applied: RecoveryTicks) {
+    pub(crate) fn on_key(&mut self, key: MenuKey, applied: AttackProfile) {
         match key {
             MenuKey::Toggle | MenuKey::Scenes => {
                 let target =
@@ -130,20 +130,21 @@ impl Menu {
                 self.picker.selected =
                     (self.picker.selected + 1).min(self.picker.entries.len() - 1);
             }
+            MenuKey::Previous | MenuKey::Decrease if self.mode == Mode::Attack => {
+                let current = profile_index(self.profile(applied));
+                self.pending = Some(AttackProfile::ALL[current.saturating_sub(1)]);
+            }
+            MenuKey::Next | MenuKey::Increase if self.mode == Mode::Attack => {
+                let current = profile_index(self.profile(applied));
+                self.pending =
+                    Some(AttackProfile::ALL[(current + 1).min(AttackProfile::ALL.len() - 1)]);
+            }
             MenuKey::Accept if self.mode == Mode::Scenes => {
                 self.request =
                     Some(MenuRequest::Start(self.picker.entries[self.picker.selected].clone()));
             }
             MenuKey::Reset if self.mode == Mode::Attack => {
-                self.pending = Some(RecoveryTicks::default());
-            }
-            MenuKey::Decrease | MenuKey::Increase if self.mode == Mode::Attack => {
-                let current = self.recovery(applied).get();
-                let next = match key {
-                    MenuKey::Decrease => current.saturating_sub(1).max(RecoveryTicks::MIN),
-                    _ => current.saturating_add(1).min(RecoveryTicks::MAX),
-                };
-                self.pending = Some(RecoveryTicks::try_from(next).expect("bounded stepper"));
+                self.pending = Some(AttackProfile::default());
             }
             _ => {}
         }
@@ -169,7 +170,7 @@ impl Menu {
     }
 
     /// Called only at the input/sim boundary. A zero-tick frame leaves it alone.
-    pub(crate) fn take_recovery(&mut self) -> Option<RecoveryTicks> {
+    pub(crate) fn take_profile(&mut self) -> Option<AttackProfile> {
         self.pending.take()
     }
 
@@ -178,8 +179,8 @@ impl Menu {
         out.bool("attack_menu_open", *mode == Mode::Attack);
         out.bool("scene_picker_open", *mode == Mode::Scenes);
         out.bool("captures_gameplay", self.open());
-        out.bool("recovery_pending", pending.is_some());
-        out.int("pending_recovery_ticks", u64::from(pending.map_or(0, RecoveryTicks::get)));
+        out.bool("attack_profile_pending", pending.is_some());
+        out.text("pending_attack_profile", pending.map_or("", |profile| profile.label()));
         out.bool("scene_request_pending", request.is_some());
         out.int("scene_picker_selected", picker.selected as u64);
         out.text("scene_picker_error", picker.error().unwrap_or(""));
@@ -189,4 +190,11 @@ impl Menu {
             }
         });
     }
+}
+
+fn profile_index(profile: AttackProfile) -> usize {
+    AttackProfile::ALL
+        .iter()
+        .position(|candidate| *candidate == profile)
+        .expect("every attack profile is in its catalog")
 }

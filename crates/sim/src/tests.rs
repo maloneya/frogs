@@ -558,19 +558,33 @@ fn every_field_of_the_world_reaches_the_hash() {
 }
 
 #[test]
-fn committed_attack_recovery_reaches_the_hash() {
-    let mut short = World::default();
-    let mut normal = World::default();
-    short.set_enemy_count(0);
-    normal.set_enemy_count(0);
-    short.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
-    let press = Intent::new(arpg_core::MoveDir::NONE, true);
-    short.step(tick_dt(), press);
-    normal.step(tick_dt(), press);
-    // All inputs and current settings now agree; only the committed duration
-    // differs. Trace is deliberately excluded from the hash.
-    short.set_attack_recovery(RecoveryTicks::default());
-    assert_ne!(short.hash(), normal.hash(), "committed recovery omitted from replay state");
+fn every_configured_and_committed_attack_profile_reaches_the_hash() {
+    for profile in AttackProfile::ALL.into_iter().skip(1) {
+        let mut configured = World::default();
+        configured.set_attack_profile(profile);
+        assert_ne!(
+            configured.hash(),
+            World::default().hash(),
+            "configured {profile} omitted from replay state"
+        );
+
+        let mut changed = World::default();
+        let mut normal = World::default();
+        changed.set_enemy_count(0);
+        normal.set_enemy_count(0);
+        changed.set_attack_profile(profile);
+        let press = Intent::new(arpg_core::MoveDir::NONE, true);
+        changed.step(tick_dt(), press);
+        normal.step(tick_dt(), press);
+        // Configured profiles agree again; only the in-flight copy differs.
+        // Trace is deliberately excluded from the hash.
+        changed.set_attack_profile(AttackProfile::default());
+        assert_ne!(
+            changed.hash(),
+            normal.hash(),
+            "committed {profile} omitted from replay state"
+        );
+    }
 }
 
 /// The horde is what the player's own state cannot stand in for: walking
@@ -829,7 +843,15 @@ fn the_swing_is_drawn_where_it_strikes() {
         "the active window should draw one disc, plus the player"
     );
     let drawn = buf.as_slice()[GROUND_INSTANCES].pos();
-    let expected = world.bodies.pos[0] + Vec2::new(pass::attack::REACH, 0.0);
+
+    // Reach comes from the tuning the swing in flight committed to, not from a
+    // constant this test keeps its own copy of. The player is facing east, so
+    // the swing's local "ahead" is world +X — which only reproduces the strike
+    // point while the start sits dead ahead, so that is asserted rather than
+    // assumed.
+    let resolved = world.attack_status().swing_resolved.expect("a swing is in flight");
+    assert_eq!(resolved.start().x, 0.0, "a start offset to the side needs the full rotation here");
+    let expected = world.bodies.pos[0] + Vec2::new(resolved.start().y, 0.0);
 
     assert!(
         (drawn.x - expected.x).abs() < 1e-4 && (drawn.z - expected.y).abs() < 1e-4,

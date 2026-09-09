@@ -19,7 +19,10 @@ mod swing;
 mod time;
 mod trace;
 
-pub use attack::{AttackPhase, AttackStatus, RecoveryTicks};
+pub use attack::{
+    AttackPhase, AttackProfile, AttackResolveError, AttackShape, AttackStatus, RecoveryTicks,
+    ResolvedAttack,
+};
 pub use hash::Fnv;
 use members::Members;
 use pass::motion::Physics;
@@ -103,7 +106,7 @@ const _: () = assert!(GROUND_INSTANCES < MAX_INSTANCES, "the floor alone must fi
 /// **Derived from the pass that decides how many discs a hitbox has**, not
 /// written down here. The swing is drawn from the same buffer as everything
 /// else, so a reservation that had to be kept in step by hand is a reservation
-/// that goes stale the first time `ACTIVE` changes — and goes stale silently,
+/// that goes stale the first time the maximum active duration changes — silently,
 /// because overrunning the buffer truncates rather than errors.
 const PLAYER_INSTANCES: usize = 1 + pass::attack::HITBOX_SAMPLES;
 
@@ -722,9 +725,19 @@ impl World {
         self.player.attack.status()
     }
 
+    /// Selects authored attack content for subsequent swings. The profile is
+    /// resolved before entering the attack state; an in-flight swing keeps the
+    /// profile and complete runtime value it captured when it began.
+    pub fn set_attack_profile(&mut self, profile: AttackProfile) {
+        if self.player.attack.set_profile(profile) {
+            self.trace.sink(self.tick).emit(Event::AttackProfileChanged { profile });
+        }
+    }
+
     /// Sets recovery for subsequent swings. Call before the tick whose inputs
     /// should see it; an in-flight swing retains its committed duration.
-    /// UI and scenario commands use this same validated door.
+    /// The scenario command uses this same validated door, demonstrating a
+    /// runtime modifier without turning the profile picker into an editor.
     pub fn set_attack_recovery(&mut self, recovery: RecoveryTicks) {
         if self.player.attack.set_recovery(recovery) {
             self.trace.sink(self.tick).emit(Event::AttackRecoveryChanged { recovery });
@@ -1190,9 +1203,9 @@ impl World {
     /// thing:
     ///
     /// - **Startup** draws the whole path, dim and brightening. That is not
-    ///   decoration. `STARTUP` exists so a swing can be read and stepped out
-    ///   of, and six ticks with nothing on screen is six ticks nobody can
-    ///   react to; what makes it readable is seeing where the sword is going.
+    ///   decoration. Startup exists so a swing can be read and stepped out of,
+    ///   and ticks with nothing on screen are ticks nobody can react to; what
+    ///   makes them readable is seeing where the sword is going.
     /// - **Active** draws the live disc and nothing else. The rest of the path
     ///   is the future, and drawing the future in the same pass as the present
     ///   is how a player learns to time against the wrong thing.

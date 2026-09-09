@@ -95,6 +95,12 @@ velocity:, seeking:, alive:)` predictions about individually placed bodies. Ever
 optional. The tick budget is always checked — the run must take exactly that
 many ticks.
 
+Attack selection uses sim's authored identity rather than replaying debug-menu
+input. Commands look like `attack_profiles: [(at: 0, profile: Sweep)]`;
+`attack_profile` asserts the next swing and `swing_profile` the in-flight copy.
+Assert resolved geometry and force through the bodies hit, their hit ticks, and
+their resulting velocities rather than copying attack fields into this schema.
+
 Plus `trace: "name.trace"`, a checked-in golden file the run's trace must match
 exactly — see below. Checkpoints assert intermediate state; the golden trace
 asserts the event sequence across the run. Final state alone cannot see a

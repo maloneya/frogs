@@ -129,23 +129,23 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | The horde can always be outrun | 1 | `const _: () = assert!(SPEED < PLAYER_SPEED)` in `pass/seek.rs` |
 | A chaser arrives without grinding | 3 | step clamped to `remaining`; `a_seeker_stops_where_it_touches`, whose golden trace is empty |
 | A hitbox cannot move what it touches | 0 | `pass::attack` takes `&[Vec2]`; there is no `&mut` to write through |
-| The hitbox window is exactly `ACTIVE` ticks | 3 | `is_active` is the single definition of both edges; `the_hitbox_opens_and_shuts_on_schedule`, mutation-checked |
-| A swing connects once per body, not once per tick | 3 | `Attack::struck`; `struck: 1` over a four-tick window |
+| The hitbox window is exactly the configured active ticks | 3 | `is_active` is the single definition of both edges; default and tuned windows have golden traces |
+| A swing connects once per body, not once per tick | 3 | `Attack::struck`; scenarios hold bodies inside multi-tick windows and assert one hit each |
 | A swing cannot be interrupted or stacked | 3 | `a_press_during_a_swing_is_dropped`, which pins the default duration from both sides |
 | The swing's phase cannot disagree with its timer | 0 | one `Option<InFlight>`; every phase is derived from it |
-| Recovery stays within its supported nonzero range | 0 | private `RecoveryTicks`; `TryFrom<u32>`, default construction and serde use the same validator. Runtime tuning cannot be a const assert |
-| Recovery edits preserve the committed swing | 3 | `InFlight` owns a duration separate from next-swing tuning; `recovery_edits_apply_to_the_next_swing` asserts both timing boundaries and the golden trace |
-| Configured and committed recovery both reach replay state | 3 | exhaustive `Attack::hash`, `every_field_of_the_world_reaches_the_hash` and `committed_attack_recovery_reaches_the_hash` |
+| Resolved attack values stay finite, nonzero where required, and bounded | 0 | `ResolvedAttack` fields are private; `AttackShape::try_new` and `ResolvedAttack::try_new` validate a complete value atomically. `RecoveryTicks` retains its serde validator for runtime recovery changes |
+| Profile changes preserve the committed swing | 3 | `InFlight` owns the authored profile and complete resolved configuration; `attack_profiles_apply_to_the_next_swing` changes profiles during startup and asserts both swings and the golden trace |
+| Every configured and committed attack profile reaches replay state | 3 | exhaustive `ResolvedAttack::hash` plus `every_configured_and_committed_attack_profile_reaches_the_hash` |
 | Drawing the panel cannot mutate the world or consume an edit | 0 | `hud::draw` takes an `AttackStatus` snapshot and a shared `Menu`; it receives no mutable control or simulation reference |
 | Menu transitions cannot leak gameplay input | 3 | `modal_transitions_discard_edges_and_require_fresh_gameplay_presses`; native and harness input both enter `Controls::on_key` |
 | A hitbox swings where the character faces | 3 | `pass::attack` runs after `pass::face`; the yaw convention is mutation-checked |
 | A swing is drawn where it is struck | 3 | one stored `Hitbox`; `pass::attack` and `World::extract` both *place* its discs rather than computing a position, so there is no second formula to drift. `the_swing_is_drawn_where_it_strikes` |
 | A hitbox turns with the player | 3 | `Disc` is polar, so placing it is `facing + angle`. `the_hitbox_follows_the_facing`, mutation-checked against dropping the facing |
 | An arc sweeps rather than cutting its chord | 3 | angle and distance interpolate separately in `Swing::generate`; `an_arc_sweeps_rather_than_cutting_the_chord` |
-| A swing has a direction to point and a radius to hit with | 1 | plain `assert!`s inside the `const fn Swing::new` — a *compile* error for a `const` definition like `SWING_PATH`, which is every swing today. Note the layer drops to a runtime panic for any swing later built from data; a positive-radius newtype is what would hold it at 1 |
+| A swing has a direction to point and a radius to hit with | 0 | private `AttackShape` fields and its atomic constructor prevent zero endpoints and non-positive radii before `Swing::new` is called |
 | A swing's hitbox cannot outlive or precede its timer | 0 | `Attack` holds one `Option<InFlight>`; there is no way to read a shape without the tick that says which part of it is live |
-| A swing leaves no gap for a body to pass through | 3 | `consecutive_discs_of_the_swing_leave_no_gap`; a const assert is unavailable because the bound needs `atan2` and `sqrt` |
-| The instance budget reserves room for a live swing | 1 | `PLAYER_INSTANCES` is derived from `pass::attack::HITBOX_SAMPLES`, never written down twice; `a_full_horde_still_fits_alongside_the_ground_and_the_player` |
+| A swing leaves no gap for a body to pass through | 0 | `ResolvedAttack::try_new` rejects a complete path whose consecutive discs do not cover an enemy centre; the runtime calculation is necessary because the bound needs `atan2` and `sqrt` |
+| The instance budget reserves room for a live swing | 1 | `PLAYER_INSTANCES` derives from the maximum active duration through `pass::attack::HITBOX_SAMPLES`; `a_full_horde_still_fits_alongside_the_ground_and_the_player` |
 | Attack state reaches the determinism hash | 1 | `World::hash` destructures `Player`, and `Attack::hash` destructures itself |
 | Behaviour membership reaches the determinism hash | 1 | `World::hash` destructures `seekers`; `Members::hash` destructures itself |
 | A retired name can never be reused | 0 | `Slots::truncate` retires removed slots rather than resetting generations; there is no path that restarts a generation |
