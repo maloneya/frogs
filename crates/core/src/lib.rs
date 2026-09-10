@@ -17,6 +17,28 @@
 //! is what stops the next person writing the frame-rate-dependent lerp instead.
 //! That pair — *needed by both, beholden to neither* — is the bar for anything
 //! else that wants to live here.
+//!
+//! # World units
+//!
+//! **One world unit is one metre.** World positions, distances, body dimensions,
+//! collision radii and attack offsets use this same scale. Linear speeds are
+//! metres per second; linear accelerations are metres per second squared.
+//! Durations expressed in seconds use seconds; tick counts remain tick counts.
+//! Angles are radians. X and Z span the ground plane; Y is height.
+//!
+//! Mesh scale is a dimensionless multiplier: a unit cube scaled by 0.5 has
+//! sides of 0.5 metres. A mesh's visible dimensions, its collision shape and
+//! its attack shape are separate choices, all measured with the same ruler.
+//! Camera projection converts world space to screen space; overlay coordinates
+//! are pixels. Zoom never changes simulation distances.
+//!
+//! Scene files, harness commands and state reports use these units for spatial
+//! values too. Convert external measurements at import, rather than introducing
+//! a second scale inside the engine. This is a fixed convention, not a runtime
+//! setting, and choosing metres does not require realistic proportions or speed.
+//!
+//! This contract is documented, not enforced by dimensional types: ordinary
+//! floats and vectors do not distinguish metres from pixels or seconds.
 
 mod input;
 mod instance;

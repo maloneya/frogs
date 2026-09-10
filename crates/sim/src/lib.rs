@@ -2,6 +2,10 @@
 //!
 //! Depends on `arpg-core` for vocabulary and on nothing else. In particular it
 //! does not link wgpu, so simulation tests run without a GPU.
+//!
+//! Spatial values follow the world-unit convention in [`arpg_core`]: one world
+//! unit is one metre, including scene inputs and reported positions. Linear
+//! speeds are metres per second. Tick counts remain counts, not seconds.
 
 use glam::{Vec2, Vec3};
 

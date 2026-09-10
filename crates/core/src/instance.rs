@@ -56,6 +56,8 @@ const _: () = assert!(MAX_INSTANCES * size_of::<Instance>() < 64 << 20);
 impl Instance {
     /// The only constructor, so the reserved padding is always zeroed.
     /// Unrotated; most things in the world have no meaningful facing.
+    /// `pos` is in metres; `scale` is a dimensionless mesh multiplier. For the
+    /// renderer's unit cube, its components therefore give side lengths in metres.
     pub fn new(pos: Vec3, scale: Vec3, color: Vec3) -> Self {
         Self {
             pos: pos.into(),

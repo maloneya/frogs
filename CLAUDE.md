@@ -144,6 +144,12 @@ our crates in debug. Graphics crates are unusably slow otherwise.
 
 ## Architecture
 
+**One world unit is one metre.** The shared unit contract lives in the
+crate documentation of `crates/core/src/lib.rs`; see
+[`docs/world-units.md`](docs/world-units.md) for how it applies to sizes,
+collisions, attacks and authoring. Spatial values in scenes, harness commands
+and state reports follow the same convention.
+
 Native macOS only (Apple M4 / Metal). Cross-platform and wasm support are
 explicit non-goals — a lot of wgpu example code exists to satisfy the browser's
 ban on blocking the main thread, and none of that complexity is warranted here.
