@@ -1,0 +1,42 @@
+// The slam is centred 1.6m ahead, growing radii 1.4,1.7,2.0,2.3,2.6.
+// Enemy radius .25 means targets 2.8m sideways / 2.7m ahead of its centre
+// enter only on the final sample. Rear and distant-side controls stay clear.
+(
+    description: "Crowd breaker hits close immediately, expands to distant targets, and gives each one 40 impulse exactly once.",
+    setup: (actions: [
+        Place((0.0, 0.8)), Place((-2.8, 1.6)), Place((2.8, 1.6)),
+        Place((0.0, 4.3)), Place((0.0, -1.5)), Place((4.0, 1.6)),
+    ]),
+    attack_profiles: [(at: 0, profile: CrowdBreaker)],
+    attacks: [0],
+    checkpoints: [
+        (at: 8, expect: (attack_phase: Startup, struck: 0)),
+        (at: 9, expect: (hitbox: true, struck: 1, bodies: [
+            (nth: 0, pos: (x: 0.0, z: 0.8, tol: 0.00001),
+             velocity: (x: 0.0, z: 40.0, tol: 0.00001)),
+        ])),
+        (at: 10, expect: (struck: 1, bodies: [
+            (nth: 0, pos: (x: 0.0, z: 1.4666667, tol: 0.00001),
+             velocity: (x: 0.0, z: 36.0, tol: 0.00001)),
+        ])),
+        (at: 12, expect: (struck: 1)),
+        (at: 13, expect: (hitbox: true, struck: 4, bodies: [
+            // Four integrations: (40/60) * (1-.9^4)/.1 = 2.2926667m.
+            (nth: 0, health: 2, pos: (x: 0.0, z: 3.0926667, tol: 0.00001),
+             velocity: (x: 0.0, z: 26.244, tol: 0.00001)),
+            (nth: 1, health: 2, velocity: (x: 0.0, z: 40.0, tol: 0.00001)),
+            (nth: 2, health: 2, velocity: (x: 0.0, z: 40.0, tol: 0.00001)),
+            (nth: 3, health: 2, velocity: (x: 0.0, z: 40.0, tol: 0.00001)),
+        ])),
+    ],
+    budget: (ticks: 15),
+    expect: (
+        attack_profile: CrowdBreaker, attack_phase: Recovery, hitbox: false,
+        struck: 4, contacts: 0, crowd_contacts: 0, enemy_count: 6,
+        bodies: [
+            (nth: 4, health: 3, pos: (x: 0.0, z: -1.5, tol: 0.0)),
+            (nth: 5, health: 3, pos: (x: 4.0, z: 1.6, tol: 0.0)),
+        ],
+        trace: "crowd_breaker_expands_and_launches.trace",
+    ),
+)

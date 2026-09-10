@@ -1,0 +1,51 @@
+// A grid is shorthand for placements, so the only thing it can get wrong that
+// nothing else would notice is *which body is which*. Scenario assertions,
+// scene eviction and the determinism hash all address bodies by the order they
+// were placed in, so that order is the contract:
+//
+//   authored `bodies` first, then each grid in list order, and within a grid
+//   +X columns vary fastest, then +Z rows.
+//
+// Nine bodies with distinct coordinates make a transposed, reversed or
+// interleaved expansion fail here rather than silently renumber a fixture.
+//
+// Origin 0.0/-6.0 and spacings 1.5 and 2.0 are exact in binary, so `tol: 0.0`
+// is a claim about the expansion arithmetic, not about rounding. Every gap is
+// at least 1.5m against a .5m contact distance, so nothing touches.
+//
+// The second grid carries `seeks: true`, which is how a grid's shared template
+// is checked: `seekers: 2` counts it, and those two bodies are the only ones
+// that move during the single tick. SPEED is 3.5m/s, so each closes 3.5/60 =
+// .058333m along the unit vector to the player at the origin:
+//   nth 7  (-6, 8), distance 10      -> (-6, 8) + .058333 * (.6, -.8)
+//   nth 8  (-4, 8), distance 8.94427 -> (-4, 8) + .058333 * (.44721, -.89443)
+(
+    description: "One scene's authored body, then its two grids in order, expand row by row into nine bodies numbered the way assertions address them.",
+    setup: (scenes: [Inline((
+        name: "grid ordering",
+        bodies: [
+            (pos: (-6.0, 4.0)),
+        ],
+        grids: [
+            (origin: (0.0, 4.0), columns: 3, rows: 2, spacing: 1.5),
+            (origin: (-6.0, 8.0), columns: 2, rows: 1, spacing: 2.0, what: (seeks: true)),
+        ],
+    ))]),
+    budget: (ticks: 1),
+    expect: (
+        scene_count: 1, enemy_count: 9, sources: 0, seekers: 2,
+        contacts: 0, crowd_contacts: 0,
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0),
+        bodies: [
+            (nth: 0, seeking: false, pos: (x: -6.0, z: 4.0, tol: 0.0)),
+            (nth: 1, seeking: false, pos: (x:  0.0, z: 4.0, tol: 0.0)),
+            (nth: 2, seeking: false, pos: (x:  1.5, z: 4.0, tol: 0.0)),
+            (nth: 3, seeking: false, pos: (x:  3.0, z: 4.0, tol: 0.0)),
+            (nth: 4, seeking: false, pos: (x:  0.0, z: 5.5, tol: 0.0)),
+            (nth: 5, seeking: false, pos: (x:  1.5, z: 5.5, tol: 0.0)),
+            (nth: 6, seeking: false, pos: (x:  3.0, z: 5.5, tol: 0.0)),
+            (nth: 7, seeking: true,  pos: (x: -5.965,    z: 7.953333, tol: 0.00001)),
+            (nth: 8, seeking: true,  pos: (x: -3.9739092, z: 7.9478183, tol: 0.00001)),
+        ],
+    ),
+)

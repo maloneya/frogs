@@ -749,6 +749,7 @@ mod tests {
         Scene {
             name: "pair".into(),
             bodies: vec![arpg_sim::Placed { pos: (20.0, 0.0), what: arpg_sim::Template::BODY }],
+            grids: vec![],
             sources: vec![],
         }
     }

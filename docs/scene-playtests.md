@@ -78,12 +78,96 @@ and text bounds without a GPU.
 
 ## Content and execution
 
+### Comparing punchier attacks
+
+Select `punchy_attacks.ron` in F2, then choose **Cleave** or **Crowd breaker**
+in F1. Close the panel and press Space without moving. Fifteen stationary
+bodies in three ranks make coverage and momentum transfer easy to compare.
+Cleave is a quick, broad arc; Crowd breaker is a larger expanding frontal slam
+with a stronger shove. The attack panel displays their resolved timing, size,
+and impulse from sim's authored catalog.
+
+For each comparison, restart through F2, then reselect the attack in F1:
+fresh starts reset attack tuning to Basic. Try Basic on the same arrangement
+as a baseline. The shared-file scenario checks that Crowd breaker's first
+active tick hits six bodies across two ranks; separate scenarios pin both
+new attacks' reach, hit order, impulse, and subsequent movement.
+
+### Horde stress trials
+
+Select either file in F2:
+
+| File | Starting load | What it stresses |
+|---|---|---|
+| `stress_static_16384.ron` | 16,384 stationary bodies in 128 ranks, from one grid | All-pairs collision cost with a fixed population; walk into the front or use Crowd breaker. |
+| `stress_spawn_flood.ron` | Empty, with 64 seeking sources | Spawn throughput and growing contact pressure; one body per source per tick, up to a 32,768 population gate. |
+
+Select the attack in F1 after loading; fresh starts reset it to Basic. The
+static scene has no seeking or replenishment, but its bodies still respond to
+contacts and attacks. Minus zooms out. V switches presentation mode; use vsync
+for feel and uncapped drawing for throughput comparisons.
+
+The flood requests 64 bodies per tick: 3,840 per simulation second at 60 Hz.
+Without kills it reaches exactly 32,768 after 512 ticks, or 8.53 simulation
+seconds. Wall time stretches when the simulation falls behind. Sources stay
+alive at the gate and refill after kills. Because all sources evaluate the
+population before the spawn pass, a refill can exceed the threshold by up to
+63 bodies. This is a source condition, not the engine's storage capacity.
+
+The ordinary scenario gate loads these same files. It checks the static layout
+and a twelve-body Crowd breaker hit; the flood's 64/1,024/2,048/4,096 growth
+checkpoints; and the population gate with a seeded 32,704-body world. The gate
+test seeds the load to avoid a long warm-up and overflowing the runner's
+placement-event history. It does not claim to replay the complete 512-tick flood.
+These deliberately overloaded trials assert correctness and determinism without
+requiring an impossible 60 Hz performance budget.
+
+#### Measured simulation limit, 2026-09-10
+
+Release build on the development machine, no game window running. Each entry
+is the best of three twelve-tick means measured **inside `World::step`** by the
+scenario runner, using stationary grid populations. Loading, hashing, replay
+comparison, and rendering are outside that timer.
+
+| Enemies | Best mean tick | Share of 16.67 ms |
+|---:|---:|---:|
+| 1,024 | 0.15 ms | 1% |
+| 4,096 | 2.21 ms | 13% |
+| 8,192 | 8.84 ms | 53% |
+| 10,240 | 13.84 ms | 83% |
+| 11,264 | 16.84 ms | 101% |
+| 12,288 | 19.87 ms | 119% |
+| 16,384 | 35.50 ms | 213% |
+| 32,768 | 142.56 ms | 855% |
+
+The measured 60 Hz simulation boundary is between 10,240 and 11,264 bodies
+for this workload. Rendering and a concentrated seeking crowd need additional
+time, so this is an upper bound on a comfortable playable population, not an
+FPS guarantee or a worst-tick measurement. Doubling population from 8,192 to
+16,384 costs almost four times as much: the existing pair loop tests
+`N * (N - 1) / 2` pairs even when there are no overlaps. A spatial broadphase
+is the next system needed to change that growth rate.
+
+To repeat the measurement with the existing runner, create a temporary
+scenario outside `scenarios/` with `setup: (enemies: N)`, twelve budget ticks,
+and `max_mean_step_micros: 0.001`. The deliberately impossible budget reports
+the measured mean as a failure. Run three times with
+`cargo run --release -p scenario -- /path/to/probe.ron` and take the lowest
+reported mean. Confirm the only failure is the timing probe. Keep these probes
+outside the correctness gate; change the budget to 16,666.67 to test 60 Hz.
+
+### Scene format
+
 ```ron
 (
     name: "Small encounter",
     bodies: [
         (pos: (0.0, 4.0)),
         (pos: (4.0, 4.0), what: (seeks: true)),
+    ],
+    grids: [
+        (origin: (-6.0, 8.0), columns: 8, rows: 4, spacing: 0.7,
+         what: (seeks: true)),
     ],
     sources: [
         (pos: (12.0, 0.0), radius: 3.0, every: 60,
@@ -92,9 +176,25 @@ and text bounds without a GPU.
 )
 ```
 
-Coordinates are world `(x, z)`. `Scene`, `Placed`, `Template`, and `SourceSpec`
-live in sim; the scenario library reads those types directly. Source population
-conditions still count the whole world's enemies, not just their scene.
+Coordinates are world `(x, z)`. `Scene`, `Placed`, `BodyGrid`, `Template`, and
+`SourceSpec` live in sim; the scenario library reads those types directly.
+Source population conditions still count the whole world's enemies, not just
+their scene.
+
+A `BodyGrid` is shorthand for placements rather than a new kind of content. It
+expands once at load, through the same door `bodies` uses, so no later pass can
+tell the two apart. Authored `bodies` are placed first, then each grid in list
+order; inside a grid, `columns` along +X vary fastest and `rows` step along +Z.
+That order is the contract, because scenario `nth` assertions, eviction and the
+determinism hash all address bodies by placement order.
+
+Admission validates nonzero `rows` and `columns`, a positive finite `spacing`,
+and runs the placement arithmetic on the far corner before a single body
+exists — a bad field in a grid is thousands of bad bodies otherwise. Capacity is
+charged from the dimensions, so an oversized grid is refused without being
+expanded. `stress_static_16384.ron` is why this exists: written out one
+placement per line it was a 16,524-line fixture, and the same 128x128 horde is
+now a single grid entry in a 13-line file.
 
 ```text
 scene file -> scenario library -> Scene description

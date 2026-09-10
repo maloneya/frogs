@@ -254,7 +254,6 @@ mod tests {
         tap(&mut controls, "down");
         tap(&mut controls, "down");
         tap(&mut controls, "right");
-        tap(&mut controls, "right");
         assert_eq!(controls.menu().pending(), Some(AttackProfile::HeavySweep));
         // Readout / gameplay sampling on zero-tick frames must not eat a selection.
         let _ = controls.menu().profile(AttackProfile::default());
@@ -281,7 +280,7 @@ mod tests {
         for _ in 0..AttackProfile::ALL.len() + 2 {
             tap(&mut controls, "right");
         }
-        assert_eq!(controls.menu().pending(), Some(AttackProfile::HeavySweep));
+        assert_eq!(controls.menu().pending().as_ref(), AttackProfile::ALL.last());
     }
 
     #[test]

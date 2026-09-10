@@ -169,6 +169,8 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Physical payload survives row changes and cannot leak to a recycled id | 3 | `despawning_preserves_a_swapped_survivors_payloads` |
 | Physics stays within the headless tick budget | 3 | `physics_stays_within_tick_budget` asserts mean time inside `World::step` |
 | Scene load failure cannot partially replace a playtest | 3 | validation and capacity admission precede mutation; `invalid_and_over_capacity_scenes_leave_everything_untouched` and `rejected_replacement_preserves_the_current_playtest` |
+| A grid installs nothing its dimensions were not checked for | 3 | `BodyGrid::validate` checks rows, columns, spacing and the far corner's arithmetic, and charges capacity from the counts, before `load_scene` mutates; `invalid_and_oversized_grids_leave_everything_untouched` |
+| A grid stands for exactly the placements it replaces | 3 | `a_grid_stands_for_exactly_the_bodies_it_replaces` compares determinism hashes of the shorthand and longhand scenes; `a_grid_expands_after_the_bodies_it_follows` pins the same order through the file decoder |
 | A scene's source descendants inherit its lifetime | 3 | owner carried through sources and spawn requests; `scenes_own_their_sources_and_descendants` asserts eviction and subsequent non-emission |
 | A retired scene cannot be recreated by queued work | 3 | eager queue cancellation plus live-owner check at drain; `stale_producer_cannot_resurrect_an_evicted_scene` |
 | A scene instance id is never reused within a world | 0 | private `SceneId`, monotonic checked allocation; records may be removed without rewinding the allocator |

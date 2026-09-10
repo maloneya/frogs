@@ -44,7 +44,7 @@ what matters here is what it left behind to build on.
 - **The swing.** Startup, active and recovery with a timed hitbox, asserted tick
   by tick against golden traces.
 - **Attack profile UI.** F1 opens a modal keyboard panel; arrows choose Basic,
-  Thrust, Sweep, or Heavy sweep and R returns to Basic. The world keeps running.
+  Thrust, Sweep, Heavy sweep, Cleave, or Crowd breaker and R returns to Basic. The world keeps running.
   `AttackProfile` is authored game content; it resolves to a private-field
   `ResolvedAttack`, the same validated runtime value a future skill, weapon,
   stats, and buffs can produce through the atomic `try_new` boundary. The menu

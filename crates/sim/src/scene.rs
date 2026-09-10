@@ -24,6 +24,57 @@ pub struct Placed {
     pub what: Template,
 }
 
+/// A one-time rectangular spawn layout. Expansion happens at scene load, not
+/// over simulation ticks; every generated body uses the ordinary placement door.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BodyGrid {
+    /// First body's world-space ground position `(x, z)`.
+    pub origin: (f32, f32),
+    /// Bodies per row, extending along +X. Must be nonzero.
+    pub columns: usize,
+    /// Rows extending along +Z. Must be nonzero.
+    pub rows: usize,
+    /// Positive, finite distance in metres between adjacent centres on both axes.
+    /// May be smaller than a body diameter to deliberately author overlaps.
+    pub spacing: f32,
+    /// Shared behaviours, using the same template as individual placements.
+    #[serde(default)]
+    pub what: Template,
+}
+
+impl BodyGrid {
+    fn validate(&self) -> Result<usize, SceneError> {
+        let Self { origin, columns, rows, spacing, what: _ } = *self;
+        if columns == 0 || rows == 0 {
+            return Err(SceneError::Invalid("grid rows and columns must be nonzero"));
+        }
+        let count = columns.checked_mul(rows).ok_or(SceneError::Capacity)?;
+        if count > crate::MAX_ENEMIES {
+            return Err(SceneError::Capacity);
+        }
+        if !Vec2::from(origin).is_finite() || !spacing.is_finite() || spacing <= 0.0 {
+            return Err(SceneError::Invalid("grid origin must be finite and spacing positive and finite"));
+        }
+        // Positive spacing makes the opposite corner the largest coordinate.
+        // Check with the same arithmetic used for placement, before mutation.
+        if !Vec2::from(self.at(count - 1).pos).is_finite() {
+            return Err(SceneError::Invalid("grid extent must be finite"));
+        }
+        Ok(count)
+    }
+
+    fn at(&self, index: usize) -> Placed {
+        let offset = Vec2::new((index % self.columns) as f32, (index / self.columns) as f32);
+        Placed { pos: (Vec2::from(self.origin) + offset * self.spacing).into(), what: self.what }
+    }
+
+    /// Called only after admission checked multiplication and total capacity.
+    fn placements(&self) -> impl Iterator<Item = Placed> + '_ {
+        (0..self.columns * self.rows).map(|index| self.at(index))
+    }
+}
+
 /// A reusable description. Loading it twice creates two independent instances.
 /// The player belongs to the world, not to this disposable content.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -34,6 +85,10 @@ pub struct Scene {
     /// Authored order is spawn order, and therefore deterministic id order.
     #[serde(default)]
     pub bodies: Vec<Placed>,
+    /// Expanded after individual bodies, in list order; within each grid, +X
+    /// columns vary first, then +Z rows. This also defines placement identities.
+    #[serde(default)]
+    pub grids: Vec<BodyGrid>,
     /// Descriptions, not running sources: every load starts their cadence anew.
     #[serde(default)]
     pub sources: Vec<SourceSpec>,
@@ -50,13 +105,18 @@ impl Scene {
                 .map(|pos| Placed { pos: pos.into(), what: Template::BODY })
                 .collect(),
             sources: Vec::new(),
+            grids: Vec::new(),
         }
     }
 
-    pub(crate) fn validate(&self) -> Result<(), SceneError> {
-        let Self { name: _, bodies, sources } = self;
+    fn validate(&self) -> Result<usize, SceneError> {
+        let Self { name: _, bodies, grids, sources } = self;
         if bodies.iter().any(|body| !Vec2::from(body.pos).is_finite()) {
             return Err(SceneError::Invalid("body position must be finite"));
+        }
+        let mut count = bodies.len();
+        for grid in grids {
+            count = count.checked_add(grid.validate()?).ok_or(SceneError::Capacity)?;
         }
         for source in sources {
             let SourceSpec { pos, radius, every: _, when, what: _ } = source;
@@ -75,7 +135,7 @@ impl Scene {
                 return Err(SceneError::Invalid("source proximity must be finite and nonnegative"));
             }
         }
-        Ok(())
+        Ok(count)
     }
 }
 
@@ -271,10 +331,10 @@ impl crate::World {
     /// Future streaming decisions must request a structural boundary operation,
     /// rather than obtaining this authority inside the schedule.
     pub fn load_scene(&mut self, scene: &Scene) -> Result<SceneId, SceneError> {
-        scene.validate()?;
+        let count = scene.validate()?;
         let available =
             crate::MAX_ENEMIES.saturating_sub(self.enemy_count()).saturating_sub(self.queue.len());
-        if scene.bodies.len() > available {
+        if count > available {
             return Err(SceneError::Capacity);
         }
         self.scenes.can_add()?;
@@ -283,7 +343,7 @@ impl crate::World {
         }
 
         let owner = self.scenes.add(&scene.name);
-        for body in &scene.bodies {
+        for body in scene.bodies.iter().copied().chain(scene.grids.iter().flat_map(BodyGrid::placements)) {
             let id = self
                 .place(Vec2::from(body.pos), body.what)
                 .expect("scene admission reserved every authored body");
@@ -345,6 +405,7 @@ mod tests {
         Scene {
             name: "pair".into(),
             bodies: vec![Placed { pos: (20.0, 0.0), what: Template::BODY }],
+            grids: Vec::new(),
             sources: vec![SourceSpec {
                 pos: (30.0, 0.0),
                 radius: 4.0,
@@ -428,6 +489,7 @@ mod tests {
             name: "full".into(),
             bodies: vec![Placed { pos: (1.0, 0.0), what: Template::BODY }; crate::MAX_ENEMIES],
             sources: vec![],
+            grids: Vec::new(),
         };
         assert!(world.request_spawn(Vec2::ZERO, Template::BODY));
         let before = world.hash();
@@ -511,5 +573,90 @@ mod tests {
         assert_eq!(world.bodies.pos, world.bodies.prev_pos);
         let legacy = World::default();
         assert_eq!(world.bodies.pos, legacy.bodies.pos, "boot keeps the established layout");
+    }
+
+    /// The 128-rank stress scene is why this exists: written out one `Placed`
+    /// per line it was a 16,524-line fixture. A grid is shorthand, so what is
+    /// worth asserting is not that it arranges bodies similarly but that it
+    /// stands for *exactly* the placements it replaces — same count, same
+    /// order, therefore the same identities. Two worlds hashing equal says all
+    /// of that in one comparison, and says it through the door scenes use.
+    #[test]
+    fn a_grid_stands_for_exactly_the_bodies_it_replaces() {
+        let lead = Placed { pos: (-6.0, 4.0), what: Template::BODY };
+        // Origin and spacing are exact in binary, so shorthand and longhand
+        // agree bit for bit rather than within a tolerance.
+        let shorthand = Scene {
+            name: "grid".into(),
+            bodies: vec![lead],
+            grids: vec![BodyGrid {
+                origin: (0.0, 4.0),
+                columns: 3,
+                rows: 2,
+                spacing: 1.5,
+                what: Template::BODY,
+            }],
+            sources: Vec::new(),
+        };
+        let longhand = Scene {
+            name: "grid".into(),
+            bodies: [lead.pos, (0.0, 4.0), (1.5, 4.0), (3.0, 4.0), (0.0, 5.5), (1.5, 5.5), (3.0, 5.5)]
+                .map(|pos| Placed { pos, what: Template::BODY })
+                .to_vec(),
+            grids: Vec::new(),
+            sources: Vec::new(),
+        };
+        let written = World::from_scene(&longhand).unwrap();
+        assert_eq!(written.enemy_count(), 7, "comparing two empty worlds would prove nothing");
+        assert_eq!(World::from_scene(&shorthand).unwrap().hash(), written.hash());
+    }
+
+    /// A grid multiplies its own mistakes: one bad field is thousands of bad
+    /// bodies. So admission runs the placement arithmetic on the far corner
+    /// before any of it is installed, and a refusal must leave the world as
+    /// untouched as an invalid `Placed` does.
+    #[test]
+    fn invalid_and_oversized_grids_leave_everything_untouched() {
+        let valid =
+            BodyGrid { origin: (0.0, 4.0), columns: 2, rows: 2, spacing: 1.5, what: Template::BODY };
+        let refuse = |grid: BodyGrid, expected: fn(&SceneError) -> bool| {
+            let mut world = World::from_scene(&scene()).unwrap();
+            let before = world.hash();
+            let trace = world.trace().render();
+            let mut invalid = scene();
+            invalid.grids.push(grid);
+            let error = world.load_scene(&invalid).expect_err("the grid must be refused");
+            assert!(expected(&error), "refused for the wrong reason: {error}");
+            assert_eq!(world.hash(), before, "the valid preceding body/source must stay uninstalled");
+            assert_eq!(world.trace().render(), trace);
+        };
+
+        for grid in [
+            BodyGrid { columns: 0, ..valid },
+            BodyGrid { rows: 0, ..valid },
+            BodyGrid { origin: (f32::NAN, 4.0), ..valid },
+            BodyGrid { origin: (0.0, f32::INFINITY), ..valid },
+            BodyGrid { spacing: 0.0, ..valid },
+            BodyGrid { spacing: -1.5, ..valid },
+            BodyGrid { spacing: f32::NAN, ..valid },
+            // Finite origin, finite spacing, and a far corner that is neither.
+            BodyGrid { origin: (f32::MAX, 4.0), spacing: f32::MAX, ..valid },
+        ] {
+            refuse(grid, |error| matches!(error, SceneError::Invalid(_)));
+        }
+
+        for grid in [
+            BodyGrid { columns: usize::MAX, rows: 2, ..valid },
+            BodyGrid { columns: crate::MAX_ENEMIES + 1, rows: 1, ..valid },
+        ] {
+            refuse(grid, |error| *error == SceneError::Capacity);
+        }
+
+        // Each of these fits alone. Only the running total refuses them, and it
+        // must do so from the counts rather than by expanding 131,072 bodies.
+        let mut greedy = scene();
+        greedy.grids =
+            vec![BodyGrid { columns: crate::MAX_ENEMIES, rows: 1, ..valid }; 2];
+        assert_eq!(World::empty().load_scene(&greedy), Err(SceneError::Capacity));
     }
 }

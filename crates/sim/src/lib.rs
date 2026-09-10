@@ -41,7 +41,7 @@ use pass::spawn::SpawnQueue;
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
 pub use pass::spawn::Template;
 use scene::Scenes;
-pub use scene::{Placed, Scene, SceneError, SceneId};
+pub use scene::{BodyGrid, Placed, Scene, SceneError, SceneId};
 pub use slots::EntityId;
 use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, TICK_HZ, Ticks};

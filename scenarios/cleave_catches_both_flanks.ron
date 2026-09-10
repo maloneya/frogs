@@ -1,0 +1,47 @@
+// A 1.1m disc sweeps from (-1.8,1.2) to (1.8,1.2) over six samples.
+// The flanks are 1m beyond the endpoints; the centre at z=3.1 enters on
+// sample 2. All three are outside Basic's reach. Impulse 24 / mass 1
+// yields 24m/s, then a .4m first step and 21.6m/s after damping.
+(
+    description: "Cleave reaches both flanks and the distant centre in order, with a single strong impulse per body.",
+    setup: (actions: [
+        Place((-2.8, 1.2)), Place((0.0, 3.1)), Place((2.8, 1.2)),
+        Place((0.0, -1.5)), Place((4.0, 1.2)),
+    ]),
+    attack_profiles: [(at: 0, profile: Cleave)],
+    attacks: [0],
+    checkpoints: [
+        (at: 5, expect: (attack_phase: Startup, struck: 0)),
+        (at: 6, expect: (hitbox: true, struck: 1, bodies: [
+            (nth: 0, pos: (x: -2.8, z: 1.2, tol: 0.00001),
+             velocity: (x: 0.0, z: 24.0, tol: 0.00001)),
+        ])),
+        (at: 7, expect: (struck: 1, bodies: [
+            (nth: 0, pos: (x: -2.8, z: 1.6, tol: 0.00001),
+             velocity: (x: 0.0, z: 21.6, tol: 0.00001)),
+        ])),
+        (at: 8, expect: (struck: 2, bodies: [
+            (nth: 1, velocity: (x: 0.0, z: 24.0, tol: 0.00001)),
+        ])),
+        (at: 10, expect: (struck: 2)),
+        (at: 11, expect: (hitbox: true, struck: 3, bodies: [
+            (nth: 2, velocity: (x: 0.0, z: 24.0, tol: 0.00001)),
+        ])),
+        (at: 12, expect: (attack_phase: Recovery, bodies: [
+            // Six, four and one integrations since the respective hits.
+            (nth: 0, health: 2, pos: (x: -2.8, z: 3.074236, tol: 0.00001)),
+            (nth: 1, health: 2, pos: (x: 0.0, z: 4.4756, tol: 0.00001)),
+            (nth: 2, health: 2, pos: (x: 2.8, z: 1.6, tol: 0.00001)),
+        ])),
+    ],
+    budget: (ticks: 23),
+    expect: (
+        attack_profile: Cleave, attack_phase: Idle, struck: 3,
+        contacts: 0, crowd_contacts: 0, enemy_count: 5,
+        bodies: [
+            (nth: 3, health: 3, pos: (x: 0.0, z: -1.5, tol: 0.0)),
+            (nth: 4, health: 3, pos: (x: 4.0, z: 1.2, tol: 0.0)),
+        ],
+        trace: "cleave_catches_both_flanks.trace",
+    ),
+)

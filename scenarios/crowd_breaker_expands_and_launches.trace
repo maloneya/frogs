@@ -1,0 +1,12 @@
+0 attack profile=Crowd breaker
+0 swung
+9 hitbox opened
+9 hit id=#1v2 remaining=2
+9 impulse id=#1v2 value=(0.0000,40.0000) source=#0v1
+13 hit id=#2v2 remaining=2
+13 impulse id=#2v2 value=(0.0000,40.0000) source=#0v1
+13 hit id=#3v2 remaining=2
+13 impulse id=#3v2 value=(0.0000,40.0000) source=#0v1
+13 hit id=#4v2 remaining=2
+13 impulse id=#4v2 value=(0.0000,40.0000) source=#0v1
+14 hitbox closed

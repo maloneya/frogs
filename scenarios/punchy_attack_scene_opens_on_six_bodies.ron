@@ -1,0 +1,25 @@
+// First slam radius 1.4 + enemy radius .25 catches x=-1.2,0,1.2
+// in rows z=1.2 and 2.4. The outer columns and third rank start outside.
+(
+    description: "The shared crowd trial starts stationary and Crowd breaker immediately strikes six bodies across two ranks.",
+    setup: (scenes: [File("../scenes/punchy_attacks.ron")]),
+    attack_profiles: [(at: 0, profile: CrowdBreaker)],
+    attacks: [0],
+    checkpoints: [(at: 0, expect: (
+        scene_count: 1, enemy_count: 15, seekers: 0, sources: 0,
+        contacts: 0, crowd_contacts: 0, struck: 0,
+        player_pos: (x: 0.0, z: 0.0, tol: 0.0),
+    ))],
+    budget: (ticks: 10),
+    expect: (
+        struck: 6, hitbox: true, enemy_count: 15,
+        bodies: [
+            (nth: 0, health: 3), (nth: 1, health: 2), (nth: 2, health: 2),
+            (nth: 3, health: 2), (nth: 4, health: 3),
+            (nth: 5, health: 3), (nth: 6, health: 2), (nth: 7, health: 2),
+            (nth: 8, health: 2), (nth: 9, health: 3),
+            (nth: 10, health: 3), (nth: 11, health: 3), (nth: 12, health: 3),
+            (nth: 13, health: 3), (nth: 14, health: 3),
+        ],
+    ),
+)

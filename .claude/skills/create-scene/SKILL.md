@@ -24,11 +24,17 @@ person playing.
 ## Author against the current engine
 
 Read [scene playtests](../../../docs/scene-playtests.md) and the relevant sim
-definitions: [Scene and Placed](../../../crates/sim/src/scene.rs),
+definitions: [Scene, Placed and BodyGrid](../../../crates/sim/src/scene.rs),
 [Template](../../../crates/sim/src/pass/spawn.rs), and
 [SourceSpec](../../../crates/sim/src/pass/source.rs). These types own the
 schema; use them over remembered fields or older examples. Read tuning constants
 at their definition when calculating a prediction.
+
+Author a regular arrangement as a `grids` entry rather than as generated
+`bodies`. A rank-and-file crowd is `origin`, `columns`, `rows` and `spacing`,
+and it expands at load through the same placement path, so the file stays
+readable and reviewable at any population. Deliberate individual placements
+still belong in `bodies`; never emit thousands of them from a script.
 
 Write a descriptively named `.ron` regular file directly inside `scenes/` so the
 F2 picker discovers it. Give it a useful display name. Existing files in that

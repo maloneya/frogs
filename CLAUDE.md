@@ -268,8 +268,8 @@ Game actions (rebindable, go through `Action`):
 
 `WASD` / arrows move the player · `space` swings
 
-`F1` opens the attack profile panel · arrows choose Basic, Thrust, Sweep, or
-Heavy sweep · `R` returns to Basic ·
+`F1` opens the attack profile panel · arrows choose Basic, Thrust, Sweep,
+Heavy sweep, Cleave, or Crowd breaker · `R` returns to Basic ·
 `F1` / `Esc` close. The panel captures gameplay input while the world keeps
 running. Selections apply to the next swing and last for the current run.
 

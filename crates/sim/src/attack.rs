@@ -21,11 +21,17 @@ pub enum AttackProfile {
     Sweep,
     /// A slower, broader arc with more knockback.
     HeavySweep,
+    /// A broad, fast arc that drives a front rank back.
+    Cleave,
+    /// An expanding frontal slam with enough impulse to clear a crowd.
+    CrowdBreaker,
 }
 
 impl AttackProfile {
     /// The complete authored catalog. Presentation may choose how to lay it out.
-    pub const ALL: [Self; 4] = [Self::Basic, Self::Thrust, Self::Sweep, Self::HeavySweep];
+    pub const ALL: [Self; 6] = [
+        Self::Basic, Self::Thrust, Self::Sweep, Self::HeavySweep, Self::Cleave, Self::CrowdBreaker,
+    ];
 
     /// The authored name, shared by state, traces, and selection surfaces.
     #[must_use]
@@ -35,6 +41,8 @@ impl AttackProfile {
             Self::Thrust => "Thrust",
             Self::Sweep => "Sweep",
             Self::HeavySweep => "Heavy sweep",
+            Self::Cleave => "Cleave",
+            Self::CrowdBreaker => "Crowd breaker",
         }
     }
 
@@ -47,6 +55,11 @@ impl AttackProfile {
             Self::Thrust => (4, 4, 8, shape((0.0, 0.8, 0.3), (0.0, 1.8, 0.3)), 4.0),
             Self::Sweep => (6, 5, 10, shape((-0.8, 0.8, 0.35), (0.8, 0.8, 0.35)), 6.0),
             Self::HeavySweep => (12, 7, 18, shape((-1.0, 0.8, 0.5), (1.0, 0.8, 0.6)), 10.0),
+            // Crowd-control content uses the same impulse and swept-disc doors
+            // as Basic. At unit enemy mass and 0.9 retention, free travel is
+            // roughly impulse / 6 metres; contacts distribute it through the rank.
+            Self::Cleave => (6, 6, 10, shape((-1.8, 1.2, 1.1), (1.8, 1.2, 1.1)), 24.0),
+            Self::CrowdBreaker => (9, 5, 16, shape((0.0, 1.6, 1.4), (0.0, 1.6, 2.6)), 40.0),
         };
         ResolvedAttack::try_new(
             startup,

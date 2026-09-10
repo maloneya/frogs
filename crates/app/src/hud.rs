@@ -60,7 +60,8 @@ pub(crate) fn draw(
         return;
     }
     // Stack-backed lines preserve the overlay's no-allocation frame path.
-    let mut lines: [Text; 9] = core::array::from_fn(|_| Text::default());
+    const FOOTER: usize = 1 + AttackProfile::ALL.len();
+    let mut lines: [Text; FOOTER + 4] = core::array::from_fn(|_| Text::default());
     let (count, highlight) = if menu.open() {
         write!(lines[0], "ATTACK PROFILES").expect("line capacity");
         let selected = menu.profile(attack.profile);
@@ -68,7 +69,7 @@ pub(crate) fn draw(
             profile_line(&mut lines[index + 1], profile);
         }
         write!(
-            lines[5],
+            lines[FOOTER],
             "Phase: {}   Elapsed: {} ticks   Struck: {}",
             attack.phase,
             attack.elapsed,
@@ -76,20 +77,20 @@ pub(crate) fn draw(
         )
         .expect("line capacity");
         write!(
-            lines[6],
+            lines[FOOTER + 1],
             "Arrows: choose profile   {}",
             if menu.pending().is_some() { "pending" } else { "applied" }
         )
         .expect("line capacity");
-        write!(lines[7], "R: basic   F1/Esc: close   Selection affects next swing")
+        write!(lines[FOOTER + 2], "R: basic   F1/Esc: close   Selection affects next swing")
             .expect("line capacity");
-        write!(lines[8], "Resolved values are captured when the swing begins")
+        write!(lines[FOOTER + 3], "Resolved values are captured when the swing begins")
             .expect("line capacity");
         let selected = AttackProfile::ALL
             .iter()
             .position(|profile| *profile == selected)
             .expect("selected profile belongs to the catalog");
-        (9, Some(1 + selected))
+        (lines.len(), Some(1 + selected))
     } else {
         write!(lines[0], "F1: attack profiles   F2: scenes").expect("line capacity");
         write!(
@@ -112,7 +113,7 @@ fn profile_line(line: &mut Text, profile: AttackProfile) {
     let resolved = profile.resolve();
     write!(
         line,
-        "{:<12} {:>2}/{:>2}/{:>2} ticks  ({:>4.1},{:>3.1}) -> ({:>4.1},{:>3.1})  r {:.2}/{:.2}  kb {:.1}",
+        "{:<13} {:>2}/{:>2}/{:>2}t ({:.1},{:.1})->({:.1},{:.1}) r{:.2}/{:.2} kb{:.1}",
         profile.label(),
         resolved.startup(),
         resolved.active(),
@@ -377,5 +378,9 @@ mod tests {
 
         assert!(panel.x >= MARGIN && panel.y >= MARGIN, "the panel clears the corner: {panel}");
         assert!(panel.z > 0.0 && panel.w > 0.0, "the panel has area: {panel}");
+        assert!(
+            panel.x + panel.z <= 1280.0 && panel.y + panel.w <= 720.0,
+            "the complete attack catalog fits the default viewport: {panel}"
+        );
     }
 }
