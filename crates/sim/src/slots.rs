@@ -202,8 +202,8 @@ impl Slots {
 
     /// Marks a slot vacant, bumps past its occupant, and offers it for reuse.
     ///
-    /// The one place a name is retired, so [`Slots::remove`] and
-    /// [`Slots::truncate`] cannot disagree about what retiring means.
+    /// The only removal path calls this, including during a whole-horde reset.
+    /// The slot table survives: resetting generations would resurrect stale ids.
     fn retire(&mut self, index: u32) {
         let slot = &mut self.slots[index as usize];
         slot.dense = VACANT;
@@ -247,28 +247,6 @@ impl Slots {
     /// resolved through the same door as any other.
     pub(crate) fn ids(&self) -> &[EntityId] {
         &self.dense
-    }
-
-    /// Retires names after the first `keep` dense rows.
-    ///
-    /// **Retires rather than resets, and the difference is the whole point.**
-    /// Truncating the slot table would restart generations, so an id minted
-    /// before a clear would match a body spawned after one — a dead name coming
-    /// back to life pointing at a stranger, which is exactly what generations
-    /// exist to prevent. It was guarded by three warning comments and an
-    /// ordering rule that every future caller had to remember; a test caught it
-    /// resurrecting a name across `World::set_enemy_count`.
-    ///
-    /// Retiring every slot instead costs one pass and makes the hazard
-    /// unrepresentable. The table is not freed, but it is bounded by the most
-    /// bodies ever alive at once, and `free` hands every slot straight back.
-    pub(crate) fn truncate(&mut self, keep: usize) {
-        // `pop` rather than draining, so the borrow of `dense` ends before
-        // `retire` touches `slots` and `free`.
-        while self.dense.len() > keep {
-            let id = self.dense.pop().expect("length checked");
-            self.retire(id.index);
-        }
     }
 
     /// Feeds every field into the world hash.
@@ -459,24 +437,6 @@ mod tests {
             }
             assert_eq!(store.slots.len(), live.len());
         }
-    }
-
-    /// Clearing retires every name rather than resetting the table, so an id
-    /// from before it stays dead afterwards. The earlier version of this type
-    /// truncated instead, and this test asserted the resurrection as intended
-    /// behaviour — it was the hazard, written down as a feature.
-    #[test]
-    fn clearing_retires_names_rather_than_reusing_them() {
-        let mut store = Store::default();
-        let before = store.spawn("before");
-
-        store.slots.truncate(0);
-        store.payload.clear();
-
-        let after = store.spawn("after");
-        assert_ne!(before, after, "a name from before the clear came back");
-        assert_eq!(store.get(before), None, "a retired name still resolves");
-        assert_eq!(store.get(after), Some("after"));
     }
 
     /// Two stores driven the same way must hash the same, or the determinism

@@ -59,11 +59,12 @@ impl MoveDir {
 pub struct Intent {
     move_dir: MoveDir,
     attack: bool,
+    interact: bool,
 }
 
 impl Intent {
     /// Nothing at all. What a tick with no input looks like.
-    pub const NONE: Self = Self { move_dir: MoveDir::NONE, attack: false };
+    pub const NONE: Self = Self { move_dir: MoveDir::NONE, attack: false, interact: false };
 
     /// Builds one tick's intent.
     ///
@@ -73,7 +74,19 @@ impl Intent {
     /// [`crate::Actions`] exists to make hard.
     #[must_use]
     pub fn new(move_dir: MoveDir, attack: bool) -> Self {
-        Self { move_dir, attack }
+        Self { move_dir, attack, interact: false }
+    }
+
+    /// Adds this tick's interaction edge. Holding a key does not repeat it.
+    #[must_use]
+    pub fn with_interact(self, pressed: bool) -> Self {
+        Self { interact: pressed, ..self }
+    }
+
+    /// Whether the player asked to use a nearby object this tick.
+    #[must_use]
+    pub fn interact(self) -> bool {
+        self.interact
     }
 
     /// Where the player is trying to go, in world space.

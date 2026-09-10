@@ -254,7 +254,7 @@ mod tests {
     /// failed — the expectation was wrong, not the code.
     ///
     /// Two things cover that gap, and both are tested where they live rather
-    /// than wished for here: `World::despawn_enemy` revokes eagerly, and
+    /// than wished for here: `World::despawn_body` revokes eagerly, and
     /// `pass::seek` resolves every member against the body storage and skips
     /// what is gone. The second is what makes the first an optimisation rather
     /// than a correctness requirement.

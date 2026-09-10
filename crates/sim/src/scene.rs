@@ -58,8 +58,10 @@ impl BodyGrid {
         }
         // Positive spacing makes the opposite corner the largest coordinate.
         // Check with the same arithmetic used for placement, before mutation.
-        if !Vec2::from(self.at(count - 1).pos).is_finite() {
-            return Err(SceneError::Invalid("grid extent must be finite"));
+        if !self.what.valid_at(Vec2::from(origin))
+            || !self.what.valid_at(Vec2::from(self.at(count - 1).pos))
+        {
+            return Err(SceneError::Invalid("invalid grid extent or template"));
         }
         Ok(count)
     }
@@ -111,15 +113,15 @@ impl Scene {
 
     fn validate(&self) -> Result<usize, SceneError> {
         let Self { name: _, bodies, grids, sources } = self;
-        if bodies.iter().any(|body| !Vec2::from(body.pos).is_finite()) {
-            return Err(SceneError::Invalid("body position must be finite"));
+        if bodies.iter().any(|body| !body.what.valid_at(Vec2::from(body.pos))) {
+            return Err(SceneError::Invalid("invalid body position or template"));
         }
         let mut count = bodies.len();
         for grid in grids {
             count = count.checked_add(grid.validate()?).ok_or(SceneError::Capacity)?;
         }
         for source in sources {
-            let SourceSpec { pos, radius, every: _, when, what: _ } = source;
+            let SourceSpec { pos, radius, every: _, when, what } = source;
             if !Vec2::from(*pos).is_finite()
                 || !radius.is_finite()
                 || *radius < 0.0
@@ -128,6 +130,10 @@ impl Scene {
                 return Err(SceneError::Invalid(
                     "source position/radius must be finite; radius must be nonnegative",
                 ));
+            }
+            let extent = Vec2::from(*pos).abs() + Vec2::splat(*radius);
+            if !what.valid_at(extent) {
+                return Err(SceneError::Invalid("invalid source template or static placement extent"));
             }
             if let Condition::PlayerWithin(r) = when
                 && (!r.is_finite() || *r < 0.0)
@@ -253,9 +259,11 @@ impl Scenes {
         }
     }
 
-    pub(crate) fn clear_bodies(&mut self) {
+    /// Prunes retired enemy identities once after a bulk reset. Surviving
+    /// props retain ownership; new debug enemies are deliberately unowned.
+    pub(crate) fn retain_live_bodies(&mut self, slots: &crate::Slots) {
         for scene in &mut self.live {
-            scene.bodies.clear();
+            scene.bodies.retain(|id| slots.contains(*id));
         }
     }
 
@@ -333,7 +341,7 @@ impl crate::World {
     pub fn load_scene(&mut self, scene: &Scene) -> Result<SceneId, SceneError> {
         let count = scene.validate()?;
         let available =
-            crate::MAX_ENEMIES.saturating_sub(self.enemy_count()).saturating_sub(self.queue.len());
+            crate::MAX_ENEMIES.saturating_sub(self.body_count()).saturating_sub(self.queue.len());
         if count > available {
             return Err(SceneError::Capacity);
         }
@@ -370,7 +378,7 @@ impl crate::World {
             self.remove_source(source);
         }
         for body in resident.bodies {
-            self.despawn_enemy(body);
+            self.despawn_body(body);
         }
         self.trace.sink(self.tick).emit(crate::Event::SceneEvicted { id });
         true
@@ -463,7 +471,7 @@ mod tests {
         let mut world = World::empty();
         let a = world.load_scene(&scene()).unwrap();
         let old = world.scene_bodies(a).unwrap()[0];
-        world.despawn_enemy(old);
+        world.despawn_body(old);
         let survivor = world.place(Vec2::new(60.0, 0.0), Template::BODY).unwrap();
         assert_eq!(world.scene_bodies(a).unwrap().len(), 0);
         world.evict_scene(a);

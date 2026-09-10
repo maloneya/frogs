@@ -1,0 +1,19 @@
+(
+    description: "A press selects one nearest Ready member; exact-reach ties use stable identity, and activation makes the next member eligible.",
+    setup: (scenes: [Inline((name: "Selection", bodies: [
+        (pos: (0.0, -1.5), what: (fixed: true, interactable: true)),
+        (pos: (0.0, 1.5), what: (fixed: true, interactable: true)),
+        (pos: (1.0, 0.0), what: (fixed: true, interactable: true)),
+        (pos: (-1.5001, 0.0), what: (fixed: true, interactable: true)),
+    ]))]),
+    interactions: [0, 1, 2, 3],
+    checkpoints: [
+        (at: 0, expect: (bodies: [(nth: 0, interaction: Ready), (nth: 1, interaction: Ready), (nth: 2, interaction: Activated)])),
+        (at: 1, expect: (bodies: [(nth: 0, interaction: Activated), (nth: 1, interaction: Ready)])),
+    ],
+    budget: (ticks: 4),
+    expect: (enemy_count: 0, bodies: [
+        (nth: 0, interaction: Activated), (nth: 1, interaction: Activated),
+        (nth: 2, interaction: Activated), (nth: 3, interaction: Ready),
+    ], trace: "interaction_chooses_nearest_then_stable_identity.trace"),
+)

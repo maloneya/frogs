@@ -424,8 +424,8 @@ fn strike(
             continue;
         }
 
+        let Some(remaining) = damage.hit(id) else { continue };
         struck.push(id);
-        let remaining = damage.hit(row);
         trace.emit(Event::Hit { id, remaining });
         let direction = Vec2::new(pose.facing.sin(), pose.facing.cos()) * knockback;
         impulses.push(

@@ -530,7 +530,7 @@ fn every_field_of_the_world_reaches_the_hash() {
     /// A field of `World` and the smallest change that touches it.
     type Poke = (&'static str, fn(&mut World));
 
-    let fields: [Poke; 9] = [
+    let fields: [Poke; 10] = [
         ("attack.recovery", |w| {
             w.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
         }),
@@ -539,8 +539,9 @@ fn every_field_of_the_world_reaches_the_hash() {
         ("tick", |w| w.tick += 1),
         ("contacts", |w| w.contacts += 1),
         ("enemies.pos", |w| w.bodies.pos[1].x += 0.001),
+        ("interactions", |w| w.bodies.interactions.grant(w.bodies.slots.ids()[1])),
         ("enemies.health", |w| {
-            w.bodies.health.sink().hit(0);
+            w.bodies.health.sink().hit(w.bodies.slots.ids()[1]);
         }),
         // A pending request is a body that exists in one of two otherwise
         // identical worlds one tick from now.
@@ -1171,7 +1172,7 @@ fn a_population_condition_fills_to_its_number_and_stops() {
     // Kill one, and it is replaced — which is the half a fixed emission count
     // cannot do.
     let victim = world.bodies.slots.ids()[1];
-    assert!(world.despawn_enemy(victim));
+    assert!(world.despawn_body(victim));
     world.step(tick_dt(), Intent::NONE);
     assert_eq!(world.enemy_count(), 3, "a body was killed and not replaced");
 }
@@ -1245,8 +1246,8 @@ fn despawning_preserves_a_swapped_survivors_payloads() {
     let impulse = Impulse::try_from((6.0, 0.0)).unwrap();
     assert!(world.apply_impulse(a, impulse));
     assert!(world.apply_impulse(b, impulse));
-    assert_eq!(world.bodies.health.sink().hit(1), 2);
-    assert!(world.despawn_enemy(a));
+    assert_eq!(world.bodies.health.sink().hit(b), Some(2));
+    assert!(world.despawn_body(a));
     let c = world.place(Vec2::new(30.0, 0.0), Template::BODY).unwrap();
     assert!(!world.apply_impulse(a, impulse));
     assert!(world.motion(a).is_none());
@@ -1255,8 +1256,8 @@ fn despawning_preserves_a_swapped_survivors_payloads() {
     assert_eq!(world.health(b), Some(2));
     assert_eq!(world.health(c), Some(3));
     world.step(tick_dt(), Intent::NONE);
-    assert!((world.enemy_pos(b).unwrap().x - 20.1).abs() < 1e-5);
-    assert_eq!(world.enemy_pos(c).unwrap().x, 30.0);
+    assert!((world.body_pos(b).unwrap().x - 20.1).abs() < 1e-5);
+    assert_eq!(world.body_pos(c).unwrap().x, 30.0);
 }
 
 #[test]
@@ -1267,7 +1268,7 @@ fn a_horde_reset_preserves_the_players_body_and_carried_motion() {
     for count in [0, 8, 1, 100] {
         world.set_enemy_count(count);
         assert_eq!(world.player_id(), player);
-        assert!(!world.despawn_enemy(player));
+        assert!(!world.despawn_body(player));
         assert!(!world.add_seek(player));
         assert_eq!(world.motion(player).unwrap().velocity(), Vec2::new(0.3, 0.0));
         assert_eq!(world.enemy_count(), count);
@@ -1280,10 +1281,10 @@ fn velocity_is_hashed_observed_and_does_not_change_zero_tick_rendering() {
     world.set_enemy_count(0);
     let id = world.place(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
     let before = world.hash();
-    let position = world.enemy_pos(id);
+    let position = world.body_pos(id);
     assert!(world.apply_impulse(id, Impulse::try_from((6.0, 0.0)).unwrap()));
     assert_ne!(world.hash(), before);
-    assert_eq!(world.enemy_pos(id), position);
+    assert_eq!(world.body_pos(id), position);
     let mut buffer = InstanceBuffer::default();
     for alpha in [Alpha::ZERO, half(), Alpha::ONE] {
         assert_eq!(drawn_enemies(&world, alpha, &mut buffer), vec![position.unwrap()]);
@@ -1292,4 +1293,80 @@ fn velocity_is_hashed_observed_and_does_not_change_zero_tick_rendering() {
     world.report(&mut report);
     let report = report.finish();
     assert!(report.contains("\"velocity\":[6.0000,0.0000,0.0000]"), "{report}");
+}
+
+/// Props retain both identity and activation through the enemy debug dial;
+/// eviction revokes membership, including before the slot is recycled.
+#[test]
+fn props_survive_enemy_resets_but_not_scene_eviction() {
+    let scene = Scene { name: "prop".into(), bodies: vec![Placed {
+        pos: (0.0, 1.0), what: Template::BLOCK.interactive(),
+    }], ..Scene::default() };
+    let mut world = World::empty();
+    let owner = world.load_scene(&scene).unwrap();
+    let id = world.bodies.slots.ids()[1];
+    assert!(!world.add_seek(id));
+    world.step(tick_dt(), Intent::NONE.with_interact(true));
+    world.set_enemy_count(2);
+    world.set_seeker_count(3);
+    assert_eq!(world.seeker_count(), 2);
+    world.set_enemy_count(0);
+    assert_eq!(world.interaction_state(id), Some(InteractionState::Activated));
+    assert_eq!(world.body_count(), 1);
+    assert!(world.evict_scene(owner));
+    assert!(!world.is_alive(id));
+    assert_eq!(world.interaction_state(id), None);
+    let replacement = world.place(Vec2::Y, Template::BLOCK.interactive()).unwrap();
+    assert_eq!(id.slot(), replacement.slot());
+    assert_eq!(world.interaction_state(replacement), Some(InteractionState::Ready));
+    assert_eq!(world.interaction_state(id), None);
+    let fresh = World::from_scene(&scene).unwrap();
+    assert_eq!(fresh.interaction_state(fresh.bodies.slots.ids()[1]), Some(InteractionState::Ready));
+}
+
+/// A spawned prop consumes the same instance budget as an enemy, even though
+/// it does not contribute to enemy counts or source conditions.
+#[test]
+fn props_share_capacity_and_scene_admission_is_atomic() {
+    let mut world = World::empty();
+    let prop = world.place(Vec2::Y, Template::BLOCK).unwrap();
+    world.set_enemy_count(MAX_ENEMIES);
+    assert_eq!(world.body_count(), MAX_ENEMIES);
+    assert_eq!(world.enemy_count(), MAX_ENEMIES - 1);
+    assert!(world.is_alive(prop));
+    let before = world.hash();
+    let scene = Scene { name: "overflow".into(), bodies: vec![Placed {
+        pos: (0.0, 2.0), what: Template::BLOCK,
+    }], ..Scene::default() };
+    assert_eq!(world.load_scene(&scene), Err(SceneError::Capacity));
+    assert_eq!(world.hash(), before);
+    assert!(world.place(Vec2::Y, Template::BLOCK).is_none());
+}
+
+/// Selection does not depend on the member's dense row after a removal swap.
+#[test]
+fn an_interaction_tie_survives_dense_row_swaps() {
+    let mut world = World::empty();
+    let removed = world.place(Vec2::new(5.0, 0.0), Template::BLOCK.interactive()).unwrap();
+    let first = world.place(Vec2::Y, Template::BLOCK.interactive()).unwrap();
+    let last = world.place(-Vec2::Y, Template::BLOCK.interactive()).unwrap();
+    world.despawn_body(removed);
+    world.step(tick_dt(), Intent::NONE.with_interact(true));
+    assert_eq!(world.interaction_state(first), Some(InteractionState::Activated));
+    assert_eq!(world.interaction_state(last), Some(InteractionState::Ready));
+}
+
+/// Replay agreement alone cannot detect a missing field in the hash. These
+/// worlds differ only in activation after their otherwise identical tick.
+#[test]
+fn activation_state_reaches_the_world_hash() {
+    let make = || {
+        let mut world = World::empty();
+        world.place(Vec2::Y, Template::BLOCK.interactive()).unwrap();
+        world
+    };
+    let (mut ready, mut activated) = (make(), make());
+    ready.step(tick_dt(), Intent::NONE);
+    activated.step(tick_dt(), Intent::NONE.with_interact(true));
+    assert_ne!(ready.hash(), activated.hash());
 }

@@ -1,19 +1,9 @@
-//! Three-hit enemy durability and the structural boundary for defeat.
+//! Damageable membership and the final structural boundary for defeat.
 //!
-//! Health rows are parallel to the horde rows in [`crate::Bodies`]. An attack
-//! may subtract through [`DamageSink`], but the sink cannot touch body storage.
-//! Zero-health rows wait until [`remove_defeated`] runs last, after every pass
-//! that reads dense body rows has finished.
-//!
-//! **Dense, where every other behaviour here is sparse, and that is the choice
-//! worth defending.** [`crate::members::Members`] exists because a behaviour
-//! that belongs to a few bodies should cost what it uses rather than what the
-//! horde costs. Health is the opposite case: *every* enemy has some, so the
-//! membership set would be a copy of the horde's own id list, and the lookup
-//! through it would be paid on every hit to learn something already known. One
-//! `Vec<u8>` indexed by the same row the position uses is both smaller and the
-//! thing the defeat sweep wants to walk. Add a body that is exempt from damage
-//! and this becomes the wrong shape again — that is the signal to revisit it.
+//! Health is sparse now that static props share body storage with enemies.
+//! A stable id, rather than a body row, is the only door into damage. Props
+//! have no health membership, so a hit cannot accidentally damage one after
+//! a dense-row swap. Only the final pass may remove defeated bodies.
 
 use arpg_core::Report;
 
@@ -28,6 +18,7 @@ const _: () = assert!(ENEMY_HIT_POINTS > 0, "an enemy must survive at least one 
 
 #[derive(Default)]
 pub(crate) struct Health {
+    who: Members,
     remaining: Vec<u8>,
 }
 
@@ -38,11 +29,12 @@ pub(crate) struct DamageSink<'a> {
 }
 
 impl DamageSink<'_> {
-    /// Damages the enemy at this horde row and returns its new health.
-    pub(crate) fn hit(&mut self, row: usize) -> u8 {
+    /// Subtracts one hit from a damageable entity; absent membership is immune.
+    pub(crate) fn hit(&mut self, id: EntityId) -> Option<u8> {
+        let row = self.health.who.index(id)?;
         let remaining = &mut self.health.remaining[row];
         *remaining = remaining.checked_sub(1).expect("a defeated body cannot take another hit");
-        *remaining
+        Some(*remaining)
     }
 }
 
@@ -51,41 +43,42 @@ impl Health {
         DamageSink { health: self }
     }
 
-    pub(crate) fn grant(&mut self) {
-        self.remaining.push(ENEMY_HIT_POINTS);
+    pub(crate) fn grant(&mut self, id: EntityId) {
+        if let Some(row) = self.who.add(id) {
+            assert_eq!(row, self.remaining.len());
+            self.remaining.push(ENEMY_HIT_POINTS);
+        }
     }
 
-    pub(crate) fn reserve(&mut self, additional: usize) {
-        self.remaining.reserve(additional);
+    pub(crate) fn ids(&self) -> &[EntityId] {
+        self.who.ids()
     }
 
-    pub(crate) fn revoke(&mut self, row: usize) {
-        self.remaining.swap_remove(row);
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.remaining.clear();
+    pub(crate) fn revoke(&mut self, id: EntityId) {
+        if let Some(row) = self.who.remove(id) {
+            self.remaining.swap_remove(row);
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
         self.remaining.len()
     }
 
-    pub(crate) fn get(&self, row: usize) -> u8 {
-        self.remaining[row]
+    pub(crate) fn get(&self, id: EntityId) -> Option<u8> {
+        self.who.index(id).map(|row| self.remaining[row])
     }
 
     pub(crate) fn hash(&self, hash: &mut Fnv) {
-        hash.usize(self.remaining.len());
-        for value in &self.remaining {
+        let Self { who, remaining } = self;
+        who.hash(hash);
+        for value in remaining {
             hash.usize(usize::from(*value));
         }
     }
 
-    pub(crate) fn report(&self, ids: &[EntityId], out: &mut Report) {
-        debug_assert_eq!(ids.len(), self.remaining.len());
+    pub(crate) fn report(&self, out: &mut Report) {
         out.object("health", |out| {
-            for (&id, &value) in ids.iter().zip(&self.remaining) {
+            for (&id, &value) in self.who.ids().iter().zip(&self.remaining) {
                 out.int(&id.to_string(), u64::from(value));
             }
         });
@@ -103,11 +96,11 @@ pub(crate) fn remove_defeated(
     // Reverse order makes every `swap_remove` pull from a row already visited.
     // A survivor therefore needs no second visit, and no defeat queue exists.
     for row in (0..bodies.health.len()).rev() {
-        if bodies.health.get(row) != 0 {
+        let id = bodies.health.ids()[row];
+        if bodies.health.get(id) != Some(0) {
             continue;
         }
-        let id = bodies.slots.ids()[row + 1];
-        let removed = crate::remove_enemy(bodies, seekers, scenes, id, &mut trace);
+        let removed = crate::remove_body(bodies, seekers, scenes, id, &mut trace);
         debug_assert!(removed, "a defeated body must still be alive in the final pass");
     }
 }
@@ -119,10 +112,11 @@ mod tests {
     #[test]
     fn three_hits_reach_zero() {
         let mut health = Health::default();
-        health.grant();
+        let id = crate::slots::Slots::default().insert();
+        health.grant(id);
 
-        assert_eq!(health.sink().hit(0), 2);
-        assert_eq!(health.sink().hit(0), 1);
-        assert_eq!(health.sink().hit(0), 0);
+        assert_eq!(health.sink().hit(id), Some(2));
+        assert_eq!(health.sink().hit(id), Some(1));
+        assert_eq!(health.sink().hit(id), Some(0));
     }
 }

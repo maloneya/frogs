@@ -133,6 +133,11 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | The hitbox window is exactly the configured active ticks | 3 | `is_active` is the single definition of both edges; default and tuned windows have golden traces |
 | A swing connects once per body, not once per tick | 3 | `Attack::struck`; scenarios hold bodies inside multi-tick windows and assert one hit each |
 | An attack cannot despawn while iterating bodies | 0 | `DamageSink` exposes only one-hit damage; it cannot reach `Bodies`, and zero-health rows wait for the final health pass |
+| Props cannot acquire health accidentally through a body-row lookup | 0 | `Health` owns sparse identity membership; `DamageSink::hit` returns None for non-members |
+| Static props cannot be moved by chase, impulses or collisions | 0/3 | Spawn validates fixed/seek grants and installs zero inverse mass; `add_seek` requires movable physics. `a_static_block_cannot_be_pushed_or_damaged` checks the physical result |
+| Interaction can mutate only its own state | 0 | `pass::interact` receives shared positions/slots and mutable `Interactions`, with no world or spawn authority |
+| One press activates one nearest ready object at final tick positions | 3 | `a_nearby_block_activates_once` and `interaction_chooses_nearest_then_stable_identity` assert checkpoints and exact transition traces; geometry and ordering require runtime checks |
+| Activation survives enemy resets and cannot leak into recycled identities | 3 | `props_survive_enemy_resets_but_not_scene_eviction`, `scene_eviction_retires_interactions`; cleanup must be verified across structural operations |
 | An enemy survives two hits and the third retires its identity | 3 | `three_hits_defeat_an_enemy` asserts health 2, health 1, then `alive: false`; its trace pins damage and removal to the confirmed hit ticks |
 | Removing one health row cannot transfer damage to the swapped survivor | 3 | `despawning_preserves_a_swapped_survivors_payloads` exercises the real body-removal door with unequal remaining health |
 | A swing cannot be interrupted or stacked | 3 | `a_press_during_a_swing_is_dropped`, which pins the default duration from both sides |
@@ -152,9 +157,9 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | The instance budget reserves room for a live swing | 1 | `PLAYER_INSTANCES` derives from the maximum active duration through `pass::attack::HITBOX_SAMPLES`; `a_full_horde_still_fits_alongside_the_ground_and_the_player` |
 | Attack state reaches the determinism hash | 1 | `World::hash` destructures `Player`, and `Attack::hash` destructures itself |
 | Behaviour membership reaches the determinism hash | 1 | `World::hash` destructures `seekers`; `Members::hash` destructures itself |
-| A retired name can never be reused | 0 | `Slots::truncate` retires removed slots rather than resetting generations; there is no path that restarts a generation |
+| A retired name can never be reused | 0 | `Slots::remove` retires removed slots rather than resetting generations; there is no path that restarts a generation |
 | A bulk respawn cannot leave a behaviour attached | 3 | `a_respawn_revokes_every_behaviour`, which caught a real resurrection |
-| A new behaviour cannot be forgotten at spawn or despawn | 1 | `set_enemy_count` and `despawn_enemy` destructure `Self` exhaustively — a new field is E0027 |
+| A new behaviour cannot be forgotten at spawn or despawn | 1 | `Bodies::spawn` and `Bodies::despawn` destructure every storage field; world-level cleanup also destructures `World` — a new capability requires a lifetime decision |
 | Asking whether two bodies touch cannot move them | 0 | `contact::between` takes `Vec2` by value and returns a `Contact` |
 | The harness cannot exist unless asked for | 0 | `harness::start` returns `None` without `ARPG_HARNESS` |
 | The harness cannot fall behind the bindings | 0 | key names live *in* `BINDINGS`; there is no second table to forget |

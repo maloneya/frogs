@@ -1,0 +1,19 @@
+(
+    description: "Interaction checks final positions: tick 0 is too far, tick 3 is within reach; later presses do not reactivate.",
+    setup: (scenes: [File("../scenes/activation_block.ron")]),
+    inputs: [(at: 0, ticks: 4, dir: (0.0, 1.0))],
+    interactions: [0, 3, 4, 10],
+    checkpoints: [
+        (at: 0, expect: (bodies: [(nth: 0, interaction: Ready)])),
+        (at: 2, expect: (bodies: [(nth: 0, interaction: Ready)])),
+        (at: 3, expect: (bodies: [(nth: 0, interaction: Activated)])),
+    ],
+    budget: (ticks: 12),
+    expect: (
+        enemy_count: 0,
+        player_pos: (x: 0.0, z: 0.6, tol: 0.000001),
+        bodies: [(nth: 0, interaction: Activated, damageable: false,
+            pos: (x: 0.0, z: 2.0, tol: 0.0))],
+        trace: "a_nearby_block_activates_once.trace",
+    ),
+)

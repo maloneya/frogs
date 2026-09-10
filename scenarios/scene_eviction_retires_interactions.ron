@@ -1,0 +1,22 @@
+(
+    description: "A source grants interaction through the spawn queue; eviction removes it, and a new occupant starts Ready.",
+    setup: (scenes: [Inline((name: "Source block", sources: [
+        (pos: (0.0, 1.0), every: 60, what: (fixed: true, interactable: true)),
+    ]))]),
+    interactions: [0, 3],
+    scenes: [
+        (at: 1, action: Evict(0)),
+        (at: 2, action: Load(Inline((name: "Replacement", bodies: [
+            (pos: (0.0, 1.0), what: (fixed: true, interactable: true)),
+        ])))),
+    ],
+    checkpoints: [
+        (at: 0, expect: (bodies: [(nth: 0, interaction: Activated)])),
+        (at: 1, expect: (scene_count: 0, sources: 0, bodies: [(nth: 0, alive: false)])),
+        (at: 2, expect: (bodies: [(nth: 1, interaction: Ready)])),
+    ],
+    budget: (ticks: 4),
+    expect: (enemy_count: 0, sources: 0, scene_count: 1, bodies: [
+        (nth: 0, alive: false), (nth: 1, alive: true, interaction: Activated),
+    ]),
+)

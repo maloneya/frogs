@@ -53,7 +53,9 @@ use crate::members::Members;
 use crate::scene::Scenes;
 use crate::slots::EntityId;
 use crate::trace::{Event, TraceSink};
-use crate::{Bodies, MAX_ENEMIES, SceneId};
+use crate::{Bodies, SceneId};
+#[cfg(test)]
+use crate::MAX_ENEMIES;
 
 /// How many requests may be pending at once.
 ///
@@ -84,17 +86,23 @@ const _: () = assert!(QUEUE_CAPACITY > 0, "a zero-length queue would refuse ever
 pub struct Template {
     /// Whether the body chases the player. See [`crate::pass::seek`].
     seeks: bool,
+    /// Immovable and immune to damage; uses the shared body footprint.
+    fixed: bool,
+    /// Grants a one-shot Ready to Activated interaction.
+    interactable: bool,
 }
 
 impl Template {
     /// A body and nothing else: it stands where it is put, and the solvers
     /// shove it around. What the horde has always been.
-    pub const BODY: Self = Self { seeks: false };
+    pub const BODY: Self = Self { seeks: false, fixed: false, interactable: false };
 
-    /// The same body, granted the chase behaviour.
+    /// The same movable body, granted the chase behaviour.
+    /// Panics for static props, which cannot acquire powered movement.
     #[must_use]
     pub const fn seeking(self) -> Self {
-        Self { seeks: true }
+        assert!(!self.fixed, "a static body cannot chase");
+        Self { seeks: true, ..self }
     }
 
     /// Whether this template chases. Read by [`place`], and by a scenario
@@ -104,12 +112,44 @@ impl Template {
         self.seeks
     }
 
+    /// A static prop, with no chase or damage capability.
+    pub const BLOCK: Self = Self { seeks: false, fixed: true, interactable: false };
+
+    /// Grants interaction independently of physical movement or health.
+    #[must_use]
+    pub const fn interactive(self) -> Self {
+        Self { interactable: true, ..self }
+    }
+
+    /// Whether the body supports interaction.
+    #[must_use]
+    pub const fn interactable(self) -> bool {
+        self.interactable
+    }
+
+    /// Whether the body is immovable.
+    #[must_use]
+    pub const fn fixed(self) -> bool {
+        self.fixed
+    }
+
+    /// Refuses contradictory grants and static placements outside the arena.
+    /// Shared by scene admission and the only spawn door.
+    pub(crate) fn valid_at(self, at: Vec2) -> bool {
+        at.is_finite()
+            && (!self.fixed
+                || (!self.seeks
+                    && at.abs().max_element() <= crate::ARENA_HALF - crate::ENEMY_RADIUS))
+    }
+
     pub(crate) fn hash_into(self, h: &mut Fnv) {
         // Exhaustive, as every hash in this crate is: a behaviour added to the
         // template stops this compiling until it is fed in, and two pending
         // requests that differ only in what they will grant are different
         // simulation state.
-        let Self { seeks } = self;
+        let Self { seeks, fixed, interactable } = self;
+        h.usize(usize::from(interactable));
+        h.usize(usize::from(fixed));
         h.usize(usize::from(seeks));
     }
 }
@@ -211,7 +251,7 @@ impl SpawnQueue {
 /// function rather than a rule two call sites are trusted to apply the same
 /// way.
 ///
-/// Returns `None` when the horde is already at [`MAX_ENEMIES`] — a refusal
+/// Returns `None` when the horde is already at [`crate::MAX_ENEMIES`] — a refusal
 /// rather than a clamp, because the budget exists to stop the instance buffer
 /// overrunning and an overrun is silent.
 ///
@@ -228,11 +268,7 @@ pub(crate) fn place(
     what: Template,
     trace: &mut TraceSink<'_>,
 ) -> Option<EntityId> {
-    if enemies.len() > MAX_ENEMIES {
-        return None;
-    }
-
-    let id = enemies.spawn(at);
+    let id = enemies.spawn(at, what)?;
 
     // The grants. One line per behaviour, and the reason it is a line here
     // rather than a loop over some registry is the same reason `World::hash`
@@ -328,4 +364,28 @@ mod tests {
         let events: Vec<_> = trace.iter().map(|(_, e)| e).collect();
         assert_eq!(events, vec![Event::Refused { count: 1 }], "a body was lost without a word");
     }
+    /// Every placement door rejects immovable/chasing contradictions and an
+    /// out-of-arena static body before identity or capability storage changes.
+    #[test]
+    fn invalid_static_grants_are_refused_without_mutation() {
+        let invalid = Template { seeks: true, ..Template::BLOCK };
+        for (position, what) in [
+            (Vec2::Y, invalid),
+            (Vec2::splat(crate::ARENA_HALF), Template::BLOCK),
+            (Vec2::splat(f32::NAN), Template::BLOCK),
+        ] {
+            let mut world = crate::World::empty();
+            let before = world.hash();
+            assert!(world.bodies.spawn(position, what).is_none());
+            assert_eq!(world.hash(), before, "storage itself must enforce admission");
+            assert!(world.place(position, what).is_none());
+            assert_eq!(world.hash(), before);
+            let scene = crate::Scene { name: "invalid".into(), bodies: vec![crate::Placed {
+                pos: position.into(), what,
+            }], ..crate::Scene::default() };
+            assert!(world.load_scene(&scene).is_err());
+            assert_eq!(world.hash(), before);
+        }
+    }
+
 }

@@ -32,3 +32,9 @@ impl std::fmt::Display for LoadError {
 }
 
 impl std::error::Error for LoadError {}
+
+/// Decodes the sim-owned template vocabulary for harness commands.
+/// New capabilities become reachable without a second hand-written field list.
+pub fn parse_template(source: &str) -> Result<arpg_sim::Template, ron::error::SpannedError> {
+    ron::from_str(source)
+}

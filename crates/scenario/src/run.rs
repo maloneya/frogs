@@ -168,7 +168,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             // number is written once rather than pasted into each new arm.
             Action::Despawn(nth) => {
                 if let Some(id) = placed.get(*nth).copied().flatten() {
-                    world.despawn_enemy(id);
+                    world.despawn_body(id);
                 }
             }
             Action::Seek(nth) => {
@@ -289,9 +289,10 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                     ));
                 }
             }
-            let swing = scenario.attacks.contains(&tick);
+            let intent = Intent::new(schedule[tick as usize], scenario.attacks.contains(&tick))
+                .with_interact(scenario.interactions.contains(&tick));
             let started = std::time::Instant::now();
-            world.step(dt, Intent::new(schedule[tick as usize], swing));
+            world.step(dt, intent);
             step_time += started.elapsed();
             hashes.push(world.hash());
 
@@ -571,7 +572,7 @@ fn check_body(
                     "a body".into(),
                     "the spawn was refused".into(),
                 )
-                .with_note("the horde was already at the instance budget".into()),
+                .with_note("capacity was exhausted or the position/template was invalid".into()),
             );
             return;
         }
@@ -588,7 +589,16 @@ fn check_body(
         }
     };
 
+    if let Some(want) = body.interaction {
+        let got = world.interaction_state(id);
+        if got != Some(want) {
+            failures.push(Failure::new(&format!("bodies[{}].interaction", body.nth),
+                want.to_string(), got.map_or("no interaction".into(), |state| state.to_string())));
+        }
+    }
     let alive = world.is_alive(id);
+    check_eq(&format!("bodies[{}].damageable", body.nth), &body.damageable,
+        world.health(id).is_some(), failures);
 
     check_eq(
         &format!("bodies[{}].seeking", body.nth),
@@ -629,7 +639,7 @@ fn check_body(
     }
     let Some(want) = &body.pos else { return };
 
-    let Some(got) = world.enemy_pos(id) else {
+    let Some(got) = world.body_pos(id) else {
         // Only reported when the scenario did not already say it expects this.
         // A file asserting `alive: false` and no position would otherwise fail
         // twice for one fact.

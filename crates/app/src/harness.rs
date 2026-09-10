@@ -160,7 +160,7 @@ fn parse(line: &str) -> Result<Command, String> {
         },
         "spawn" => {
             let coord = |arg: Option<&str>| {
-                arg.ok_or_else(|| "expected: spawn <x> <z> [seek]".to_string())
+                arg.ok_or_else(|| "expected: spawn <x> <z> [seek | template (<fields>)]".to_string())
                     .and_then(|v| v.parse::<f32>().map_err(|e| e.to_string()))
             };
             let x = coord(arg)?;
@@ -168,8 +168,11 @@ fn parse(line: &str) -> Result<Command, String> {
             // Behaviours are named, not positional, so the next one is another
             // word here rather than another column nobody can read.
             let what = match it.next() {
-                Some("seek") => Template::BODY.seeking(),
-                _ => Template::BODY,
+                Some("seek") if it.next().is_none() => Template::BODY.seeking(),
+                Some("template") => arpg_scenario::parse_template(&it.collect::<Vec<_>>().join(" "))
+                    .map_err(|error| error.to_string())?,
+                None => Template::BODY,
+                Some(other) => return Err(format!("unknown spawn option {other:?}; use template (<fields>)")),
             };
             Command::Spawn { x, z, what }
         }
@@ -193,7 +196,7 @@ fn parse(line: &str) -> Result<Command, String> {
             let x = coord(arg)?;
             let z = coord(it.next())?;
 
-            let (mut every, mut radius, mut seeks) = (1, 0.0, false);
+            let (mut every, mut radius, mut what) = (1, 0.0, Template::BODY);
             let (mut near, mut fewer) = (None, None);
 
             // Flags in any order, each either a word or a word and a number.
@@ -202,7 +205,11 @@ fn parse(line: &str) -> Result<Command, String> {
             // the gate not working.
             while let Some(flag) = it.next() {
                 match flag {
-                    "seek" => seeks = true,
+                    "seek" => what = what.seeking(),
+                    "template" => {
+                        what = arpg_scenario::parse_template(&it.by_ref().collect::<Vec<_>>().join(" "))
+                            .map_err(|error| error.to_string())?;
+                    },
                     "every" => every = number(it.next())? as u32,
                     "ring" => radius = coord(it.next())?,
                     "near" => near = Some(coord(it.next())?),
@@ -229,7 +236,7 @@ fn parse(line: &str) -> Result<Command, String> {
                 radius,
                 every,
                 when,
-                what: if seeks { Template::BODY.seeking() } else { Template::BODY },
+                what,
             })
         }
         "impulse" => {
@@ -419,4 +426,17 @@ mod tests {
             assert!(parse(bad).is_err(), "{bad:?} should not parse");
         }
     }
+    #[test]
+    fn harness_templates_use_the_sim_schema() {
+        let Ok(Command::Spawn { what, .. }) = parse("spawn 0 2 template (fixed: true, interactable: true)") else {
+            panic!("sim template must parse");
+        };
+        assert_eq!(what, Template::BLOCK.interactive());
+        let Ok(Command::Source(spec)) = parse("source 0 2 every 60 template (fixed: true, interactable: true)") else {
+            panic!("source template must parse");
+        };
+        assert_eq!(spec.what, what);
+        assert!(parse("spawn 0 2 template (interactble: true)").is_err());
+    }
+
 }

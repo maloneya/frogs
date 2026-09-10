@@ -55,7 +55,9 @@
 //! 12. [`attack`] — test final positions, apply an impulse and subtract one hit
 //!     point once per target per swing. Velocity changes now; displacement
 //!     begins on the next tick.
-//! 13. [`health::remove_defeated`] — remove bodies reduced to zero. **Last**, so
+//! 13. [`interact`] — activate one ready object using final positions. A press
+//!     changes only interaction state; it cannot spawn or move bodies.
+//! 14. [`health::remove_defeated`] — remove bodies reduced to zero. **Last**, so
 //!     its dense-row swaps cannot invalidate an index another pass will use.
 //!     Surviving bodies retain their new velocity and remain in every solver.
 //!
@@ -67,6 +69,7 @@ pub(crate) mod attack;
 pub(crate) mod contain;
 pub(crate) mod face;
 pub(crate) mod health;
+pub(crate) mod interact;
 pub(crate) mod remember;
 pub(crate) mod seek;
 pub(crate) mod separate;

@@ -58,7 +58,7 @@ const STOP_AT: f32 = PLAYER_RADIUS + ENEMY_RADIUS;
 ///
 /// Ids that no longer resolve are skipped rather than treated as a bug. A
 /// behaviour set holding a name whose body has died is the ordinary case — it
-/// is what a generational id makes safe to ask about — and `World::despawn_enemy`
+/// is what a generational id makes safe to ask about — and `World::despawn_body`
 /// revokes eagerly anyway, so this is the belt to that pair of braces.
 pub(crate) fn seek(seekers: &Members, bodies: &Slots, pos: &mut [Vec2], target: EntityId, dt: Dt) {
     let Some(target_row) = bodies.index(target) else { return };

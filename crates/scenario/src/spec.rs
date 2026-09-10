@@ -39,6 +39,10 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) attacks: Vec<u64>,
 
+    /// Ticks on which the interaction button is pressed.
+    #[serde(default)]
+    pub(crate) interactions: Vec<u64>,
+
     /// Validated recovery edits, applied before the named tick in file order.
     #[serde(default)]
     pub(crate) attack_recovery: Vec<RecoveryAt>,
@@ -385,6 +389,14 @@ pub(crate) struct BodyExpect {
     /// Remaining hits before defeat. Only live enemy bodies have health.
     #[serde(default)]
     pub(crate) health: Option<u8>,
+
+    /// Whether the body has health membership at all.
+    #[serde(default)]
+    pub(crate) damageable: Option<bool>,
+
+    /// Sim-owned one-shot interaction state.
+    #[serde(default)]
+    pub(crate) interaction: Option<arpg_sim::InteractionState>,
 
     /// Whether the body should be chasing the player.
     ///

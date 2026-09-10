@@ -30,6 +30,8 @@ pub use attack::{
 pub use hash::Fnv;
 use members::Members;
 use pass::health::Health;
+use pass::interact::Interactions;
+pub use pass::interact::{InteractionState, INTERACTION_REACH};
 use pass::motion::Physics;
 pub use pass::motion::{Impulse, Motion};
 use pass::source::Sources;
@@ -232,7 +234,8 @@ const _: () =
 const PLAYER_NOSE_FORWARD: f32 = PLAYER_SCALE.z * 0.5 + PLAYER_NOSE_SCALE.z * 0.25;
 
 /// Shared body storage. Row zero is the persistent player; the remaining
-/// rows are the horde. `despawn` and `clear` preserve that boundary.
+/// rows are enemies and props. `despawn` preserves the player; `clear` removes
+/// only enemies, leaving scene props in place.
 ///
 /// Structure-of-arrays rather than `Vec<Enemy>`. The solvers walk positions and
 /// nothing else, and a contiguous stream is what they want; fields an enemy
@@ -241,8 +244,8 @@ const PLAYER_NOSE_FORWARD: f32 = PLAYER_SCALE.z * 0.5 + PLAYER_NOSE_SCALE.z * 0.
 /// to a position it does want.
 struct Bodies {
     physics: Physics,
-    /// One row per enemy, parallel to `pos[1..]`; the player has no health in
-    /// this slice.
+    interactions: Interactions,
+    /// Damageable membership; the player and static props have no health.
     health: Health,
     /// Stable names for these bodies, and the map onto the dense rows below.
     ///
@@ -277,12 +280,13 @@ impl Default for Bodies {
     fn default() -> Self {
         let mut bodies = Self {
             physics: Physics::default(),
+            interactions: Interactions::default(),
             health: Health::default(),
             slots: Slots::default(),
             pos: Vec::new(),
             prev_pos: Vec::new(),
         };
-        bodies.spawn(Vec2::ZERO);
+        bodies.spawn(Vec2::ZERO, Template::BODY).expect("the initial player fits");
         bodies
     }
 }
@@ -317,25 +321,17 @@ impl Bodies {
         self.clear();
         self.pos.reserve(n);
         self.prev_pos.reserve(n);
-        self.health.reserve(n);
 
         for position in grid_positions(n) {
-            self.spawn(position);
+            self.spawn(position, Template::BODY).expect("the debug count was clamped to capacity");
         }
     }
 
-    /// Empties the horde, retiring every name. Ids from before it stay dead —
-    /// see [`Slots::truncate`].
+    /// Removes enemies through ordinary despawn; props retain their identities.
     fn clear(&mut self) {
-        // Row zero is the player. Retire only the horde, from the back so
-        // rebuilding it cannot move the player or reverse the spawn order.
-        for &id in &self.slots.ids()[1..] {
-            self.physics.revoke(id);
+        while let Some(&id) = self.health.ids().last() {
+            self.despawn(id);
         }
-        self.slots.truncate(1);
-        self.pos.truncate(1);
-        self.prev_pos.truncate(1);
-        self.health.clear();
     }
 
     /// Puts one body at a chosen place and returns its name.
@@ -347,24 +343,33 @@ impl Bodies {
     /// frame runs a tick, and obvious uncapped, where most frames run none.
     /// `docs/traps.md` carries that symptom; maintaining the invariant in the
     /// storage is what retires it, rather than testing each caller for it.
-    fn spawn(&mut self, at: Vec2) -> EntityId {
-        let is_player = self.pos.is_empty();
-        let id = self.slots.insert();
-        self.physics.grant(
+    fn spawn(&mut self, at: Vec2, what: Template) -> Option<EntityId> {
+        if self.len() > MAX_ENEMIES || !what.valid_at(at) {
+            return None;
+        }
+        let Self { physics, health, interactions, slots, pos, prev_pos } = self;
+        let is_player = pos.is_empty();
+        let id = slots.insert();
+        physics.grant(
             id,
             if is_player {
                 pass::motion::PLAYER_INV_MASS
+            } else if what.fixed() {
+                0.0
             } else {
                 pass::motion::ENEMY_INV_MASS
             },
         );
-        self.pos.push(at);
-        self.prev_pos.push(at);
-        if !is_player {
-            self.health.grant();
+        pos.push(at);
+        prev_pos.push(at);
+        if !is_player && what.interactable() {
+            interactions.grant(id);
+        }
+        if !is_player && !what.fixed() {
+            health.grant(id);
         }
         self.debug_check_paired();
-        id
+        Some(id)
     }
 
     /// The pairing `Slots` documents but cannot check: it holds no payload, so
@@ -375,25 +380,28 @@ impl Bodies {
         debug_assert_eq!(self.slots.len(), self.physics.len(), "physics and bodies disagree");
         debug_assert_eq!(self.slots.len(), self.pos.len(), "slots and pos disagree");
         debug_assert_eq!(self.slots.len(), self.prev_pos.len(), "slots and prev_pos disagree");
-        debug_assert_eq!(self.slots.len(), self.health.len() + 1, "slots and health disagree");
+        // Capability rows belong to their own membership sets. Checking their
+        // count is constant time; rescanning all ids on each spawn was quadratic.
+        debug_assert!(self.health.len() < self.slots.len(), "the player has no health");
     }
 
     /// Removes one body. Returns whether the id named a live one.
     ///
-    /// Every parallel array is `swap_remove`d at the index `Slots` hands back,
-    /// which keeps the rows dense and the correspondence intact. An array added
-    /// later and forgotten here is the one bug this shape still allows, and
-    /// [`Bodies::debug_check_paired`] is what catches it.
+    /// Dense arrays swap-remove the row returned by `Slots`; sparse capabilities
+    /// revoke the identity. Exhaustive destructuring makes adding a body field
+    /// require a cleanup decision here, including for bulk enemy resets.
     fn despawn(&mut self, id: EntityId) -> bool {
-        if self.slots.index(id) == Some(0) {
+        let Self { physics, health, interactions, slots, pos, prev_pos } = self;
+        if slots.index(id) == Some(0) {
             return false;
         }
-        let Some(dense) = self.slots.remove(id) else { return false };
+        let Some(dense) = slots.remove(id) else { return false };
 
-        self.physics.revoke(id);
-        self.pos.swap_remove(dense);
-        self.prev_pos.swap_remove(dense);
-        self.health.revoke(dense - 1);
+        physics.revoke(id);
+        interactions.revoke(id);
+        health.revoke(id);
+        pos.swap_remove(dense);
+        prev_pos.swap_remove(dense);
         self.debug_check_paired();
         true
     }
@@ -509,9 +517,9 @@ impl World {
     }
 }
 
-/// The one implementation of enemy removal, shared by between-tick callers and
+/// The one implementation of non-player body removal, shared by between-tick callers and
 /// the final scheduled defeat pass.
-fn remove_enemy(
+fn remove_body(
     bodies: &mut Bodies,
     seekers: &mut Members,
     scenes: &mut Scenes,
@@ -536,6 +544,12 @@ impl World {
     /// counter is a second copy of the same fact, and the two drift the first
     /// time something spawns or kills one without going through the same door.
     pub fn enemy_count(&self) -> usize {
+        self.bodies.health.len()
+    }
+
+    /// Non-player bodies, including props; all share the instance capacity.
+    #[must_use]
+    pub fn body_count(&self) -> usize {
         self.bodies.len() - 1
     }
 
@@ -575,7 +589,9 @@ impl World {
             crowd_contacts: _,
         } = self;
 
-        bodies.respawn(n.min(MAX_ENEMIES));
+        let props = bodies.len() - 1 - bodies.health.len();
+        bodies.respawn(n.min(MAX_ENEMIES - props));
+        scenes.retain_live_bodies(&bodies.slots);
 
         // Pending requests are decisions made *before* this reset, and granting
         // them afterwards would put bodies in an arena that was just rebuilt to
@@ -587,12 +603,11 @@ impl World {
         // alternative is a set that grows by the size of the old horde on every
         // respawn and costs every pass that walks it.
         seekers.clear();
-        scenes.clear_bodies();
 
         // Traced because it happens *outside* the schedule. State that changes
         // between ticks is the hardest kind to account for later, so it is
         // exactly what the trace is for. Stamped with the tick it precedes.
-        trace.sink(*tick).emit(Event::Spawned { count: bodies.len() - 1 });
+        trace.sink(*tick).emit(Event::Spawned { count: bodies.health.len() });
     }
 
     /// Places one body at a chosen spot and returns its name.
@@ -601,7 +616,8 @@ impl World {
     /// the same convention the storage uses. See [`on_ground`], the one place
     /// that swap is spelled out.
     ///
-    /// Returns `None` when the horde is already at [`MAX_ENEMIES`]. That is a
+    /// Returns `None` for an invalid position/template or when all non-player
+    /// bodies together fill [`MAX_ENEMIES`]. That is a
     /// refusal rather than a clamp because the budget exists to stop the
     /// instance buffer overrunning, and an overrun is silent — the upload just
     /// truncates, so bodies stop being drawn with no error anywhere. A caller
@@ -681,13 +697,13 @@ impl World {
         self.queue.push(at, what)
     }
 
-    /// Removes one body. Returns whether the id named a live one.
+    /// Removes one non-player body and its capabilities. Returns whether it existed.
     ///
     /// A stale id is a no-op rather than an error: something holding a
     /// reference to a body that has already died is the normal case, not a
     /// mistake, and it is exactly what [`EntityId`]'s generation makes safe to
     /// ask about.
-    pub fn despawn_enemy(&mut self, id: EntityId) -> bool {
+    pub fn despawn_body(&mut self, id: EntityId) -> bool {
         // Exhaustive for the same reason as `set_enemy_count`: the other door a
         // new behaviour has to be considered at. A line per behaviour rather
         // than a registry is deliberate — a list of sets to sweep would be a
@@ -709,15 +725,14 @@ impl World {
         } = self;
 
         let mut trace = trace.sink(*tick);
-        remove_enemy(bodies, seekers, scenes, id, &mut trace)
+        remove_body(bodies, seekers, scenes, id, &mut trace)
     }
 
-    /// Remaining hits before this enemy is defeated, or `None` for the player
-    /// and ids that no longer resolve.
+    /// Remaining hits before defeat, or `None` for props, the player, and
+    /// ids that no longer resolve.
     #[must_use]
     pub fn health(&self, id: EntityId) -> Option<u8> {
-        let row = self.bodies.slots.index(id)?.checked_sub(1)?;
-        Some(self.bodies.health.get(row))
+        self.bodies.health.get(id)
     }
 
     /// Makes a body chase the player. Returns whether it took effect.
@@ -726,10 +741,18 @@ impl World {
     /// than configuring: a body is placed first and granted behaviours after,
     /// so what an enemy *is* stays a list of the things it does.
     pub fn add_seek(&mut self, id: EntityId) -> bool {
-        if !self.bodies.slots.contains(id) || self.bodies.slots.index(id) == Some(0) {
+        if id == self.player_id()
+            || !self.motion(id).is_some_and(|motion| motion.inverse_mass() > 0.0)
+        {
             return false;
         }
         self.seekers.add(id).is_some()
+    }
+
+    /// The state of a live interaction member, or None for an ordinary body.
+    #[must_use]
+    pub fn interaction_state(&self, id: EntityId) -> Option<InteractionState> {
+        self.bodies.interactions.get(id)
     }
 
     /// Whether this body chases the player.
@@ -748,7 +771,7 @@ impl World {
     /// n", which is a fact about storage order rather than about the game.
     pub fn set_seeker_count(&mut self, n: usize) {
         self.seekers.clear();
-        for id in self.bodies.slots.ids().iter().skip(1).take(n) {
+        for id in self.bodies.health.ids().iter().take(n) {
             self.seekers.add(*id);
         }
     }
@@ -795,11 +818,11 @@ impl World {
         self.seekers.len()
     }
 
-    /// Where a named enemy stands, lifted to world space, or `None` if it is
+    /// Where a named body stands, lifted to world space, or `None` if it is
     /// dead or names the player. The height is a constant of the body's size rather than state —
     /// see [`Bodies::pos`].
     #[must_use]
-    pub fn enemy_pos(&self, id: EntityId) -> Option<Vec3> {
+    pub fn body_pos(&self, id: EntityId) -> Option<Vec3> {
         if id == self.player_id() {
             return None;
         }
@@ -834,7 +857,8 @@ impl World {
         let Player { facing, prev_facing, attack } = player;
 
         bodies.physics.report(&bodies.pos, &bodies.slots, out);
-        bodies.health.report(&bodies.slots.ids()[1..], out);
+        bodies.health.report(out);
+        bodies.interactions.report(out);
         out.int("tick", *tick);
         out.vec3("player_pos", on_ground(bodies.pos[0], PLAYER_HALF_HEIGHT));
         out.num("facing", *facing);
@@ -845,7 +869,8 @@ impl World {
         // visible in any of the values above — a NaN position prints as a
         // position and compares equal to nothing.
         out.bool("finite", self.all_positions_finite());
-        out.int("enemies", (bodies.len() - 1) as u64);
+        out.int("enemies", bodies.health.len() as u64);
+        out.int("props", (bodies.len() - 1 - bodies.health.len()) as u64);
         out.int("seekers", seekers.len() as u64);
 
         // Asked for and not yet made. Without it, "the spawn has not happened
@@ -921,7 +946,7 @@ impl World {
             &mut self.sources,
             &mut self.queue,
             self.bodies.pos[0],
-            self.bodies.len() - 1,
+            self.bodies.health.len(),
             trace.reborrow(),
         );
         pass::spawn::drain(
@@ -973,7 +998,7 @@ impl World {
         pass::motion::settle(&mut self.bodies.physics, dt, trace.reborrow());
         pass::face::face(&mut self.player.facing, move_dir, dt);
 
-        // **Last, and after `face`.** The hitbox is oriented by the facing this
+        // **After `face`.** The hitbox is oriented by the facing this
         // tick ended with, and it is tested against where the bodies actually
         // ended up — after seeking, after both solvers, after the wall. Running
         // it earlier would swing at positions that no longer exist by the time
@@ -986,6 +1011,14 @@ impl World {
             &self.bodies.pos[1..],
             self.bodies.physics.sink(self.bodies.slots.ids()[0]),
             self.bodies.health.sink(),
+            trace.reborrow(),
+        );
+        pass::interact::interact(
+            &mut self.bodies.interactions,
+            &self.bodies.slots,
+            &self.bodies.pos,
+            self.bodies.pos[0],
+            intent.interact(),
             trace.reborrow(),
         );
         pass::health::remove_defeated(
@@ -1050,9 +1083,10 @@ impl World {
         // disagree for a reason that has nothing to do with the simulation.
         let _ = trace;
         let Player { facing, prev_facing, attack } = player;
-        let Bodies { slots, physics, health, pos: enemy_pos, prev_pos: enemy_prev } = bodies;
+        let Bodies { slots, physics, health, interactions, pos: enemy_pos, prev_pos: enemy_prev } = bodies;
         let mut h = Fnv::default();
         physics.hash(&mut h);
+        interactions.hash(&mut h);
 
         h.u64(*tick);
         h.f32(*facing);
@@ -1232,7 +1266,7 @@ impl World {
     /// reads at session start.
     pub fn extract(&self, alpha: Alpha, mut out: InstanceSink<'_>) {
         self.extract_ground(&mut out);
-        self.extract_enemies(alpha, &mut out);
+        self.extract_bodies(alpha, &mut out);
         self.extract_swing(alpha, &mut out);
         self.extract_player(alpha, &mut out);
     }
@@ -1339,7 +1373,7 @@ impl World {
 
     /// Draws the horde from its stored positions, blended between the last two
     /// ticks. What is drawn is what the simulation believes.
-    fn extract_enemies(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
+    fn extract_bodies(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
         let a = alpha.get();
 
         for (i, (&pos, &prev)) in
@@ -1348,7 +1382,14 @@ impl World {
             // Linear-space colour, since the surface is sRGB and the hardware
             // encodes on write. These look darker here than they will on screen.
             let t = (i % 7) as f32 / 7.0;
-            let color = Vec3::new(0.30 + t * 0.12, 0.06 + t * 0.05, 0.05);
+            let id = self.bodies.slots.ids()[i + 1];
+            let color = if self.bodies.interactions.get(id) == Some(InteractionState::Activated) {
+                Vec3::new(0.06, 0.55, 0.12)
+            } else if self.bodies.health.get(id).is_none() {
+                Vec3::new(0.04, 0.18, 0.32)
+            } else {
+                Vec3::new(0.30 + t * 0.12, 0.06 + t * 0.05, 0.05)
+            };
 
             let drawn = prev.lerp(pos, a);
             out.push(Instance::new(on_ground(drawn, ENEMY_HALF_HEIGHT), ENEMY_SCALE, color));

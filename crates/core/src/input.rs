@@ -39,12 +39,14 @@ pub enum Action {
     /// swing exactly once. `just_pressed` is the accessor; `held` is the wrong
     /// question to ask about it.
     Attack,
+    /// Use a nearby object, once per press.
+    Interact,
 }
 
 impl Action {
     /// Every action, in bit order. Iterating this is how a mask is built.
-    pub const ALL: [Action; 5] =
-        [Action::MoveUp, Action::MoveDown, Action::MoveLeft, Action::MoveRight, Action::Attack];
+    pub const ALL: [Action; 6] =
+        [Action::MoveUp, Action::MoveDown, Action::MoveLeft, Action::MoveRight, Action::Attack, Action::Interact];
 
     const fn bit(self) -> u32 {
         1 << self as u32

@@ -216,7 +216,7 @@ crates/
     signature; `pass/attack.rs` argues that at the definition site.
   - `pass/` — one module per named pass: `source`, `spawn`, `remember`, `walk`,
     `seek`, `motion::integrate`, `separate`, `contain`, `motion::settle`,
-    `face`, `attack`, `health::remove_defeated`, in that order. The first
+    `face`, `attack`, `interact`, `health::remove_defeated`, in that order. The first
     two are *decide* and *perform*, split on purpose: `source` works out which
     sources fire and may only push onto the spawn queue — it is handed no
     storage, so the code that decides new bodies exist cannot make one — and
@@ -233,8 +233,8 @@ crates/
     form of one, and `Source` is reachable from a file only through it — so the
     axes have one definition rather than a runtime copy and a file copy.
   - `pass/health.rs` — how much killing a body takes, and the one pass that
-    removes one. Dense rather than sparse, unlike every other behaviour here;
-    the module doc says why, and names the change that would undo it.
+    removes one. Sparse membership now excludes static props; damage resolves
+    stable identity rather than assuming every non-player row has health.
     `DamageSink` can subtract a point and reach nothing else.
   - `pass/motion.rs` — sparse physical membership, mass, carried velocity and
     validated impulses. Collision response exchanges momentum; damping settles
@@ -266,7 +266,9 @@ crates/
 
 Game actions (rebindable, go through `Action`):
 
-`WASD` / arrows move the player · `space` swings
+`WASD` / arrows move the player · `space` swings · `E` interacts with a nearby object
+
+Static props and the activation playtest: [`docs/interaction.md`](docs/interaction.md).
 
 `F1` opens the attack profile panel · arrows choose Basic, Thrust, Sweep,
 Heavy sweep, Cleave, or Crowd breaker · `R` returns to Basic ·

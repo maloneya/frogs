@@ -528,7 +528,8 @@ impl App {
             // still swing exactly once.
             self.world.step(
                 dt,
-                Intent::new(to_world(intent.move_axis()), intent.just_pressed(Action::Attack)),
+                Intent::new(to_world(intent.move_axis()), intent.just_pressed(Action::Attack))
+                    .with_interact(intent.just_pressed(Action::Interact)),
             );
         }
 

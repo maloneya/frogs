@@ -41,6 +41,11 @@ const _: () = assert!(CAPACITY > 0, "a zero-length trace silently records nothin
 /// that occur rarely: a hitbox opening, a hit landing, hitstop starting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
+    /// A nearby object changed from Ready to Activated.
+    Activated {
+        /// The single object activated by this press.
+        id: EntityId,
+    },
     /// An entire scene became ready between ticks.
     SceneLoaded {
         /// Runtime instance, distinct from the authored name.
@@ -188,6 +193,7 @@ impl fmt::Display for Event {
     /// noise that hides the one line that mattered.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Activated { id } => write!(f, "activated id={id}"),
             Self::SceneLoaded { id } => write!(f, "scene loaded id={id}"),
             Self::SceneEvicted { id } => write!(f, "scene evicted id={id}"),
             Self::AttackRecoveryChanged { recovery } => {

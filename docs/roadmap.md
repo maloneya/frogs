@@ -209,7 +209,7 @@ change produces a reviewable diff rather than a claim about feel.
   bulk path ever becomes gameplay, fix it then.
 - **A source is never destroyed by the game.** Sources fire on a cadence and a
   condition, and only a scenario, the harness or a scene eviction removes one.
-  No pass does. Bodies can die now, but `remove_enemy` retires the body, its
+  No pass does. Bodies can die now, but `remove_body` retires the body, its
   behaviours and its scene ownership — it does not look for a source to retire
   with it, because a source is not hung off a body and deliberately so. A nest
   that dies when its body dies needs a source to *have* a body, which is the

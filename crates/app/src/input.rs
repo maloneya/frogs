@@ -37,6 +37,7 @@ const BINDINGS: &[Binding] = &[
     ("left", KeyCode::ArrowLeft, Some(Action::MoveLeft), Some(MenuKey::Decrease)),
     ("right", KeyCode::ArrowRight, Some(Action::MoveRight), Some(MenuKey::Increase)),
     ("space", KeyCode::Space, Some(Action::Attack), None),
+    ("e", KeyCode::KeyE, Some(Action::Interact), None),
     ("f1", KeyCode::F1, None, Some(MenuKey::Toggle)),
     ("f2", KeyCode::F2, None, Some(MenuKey::Scenes)),
     ("enter", KeyCode::Enter, None, Some(MenuKey::Accept)),
@@ -372,4 +373,24 @@ mod tests {
         input.on_key(KeyCode::KeyV, true, false, AttackProfile::default());
         assert_eq!(input.down, 0);
     }
+    /// E follows the same edge latch and modal capture as attacks. Two nearby
+    /// objects make a repeated edge a gameplay bug, even for one-shot objects.
+    #[test]
+    fn interaction_is_one_edge_and_is_captured_by_menus() {
+        let mut controls = Controls::default();
+        let profile = AttackProfile::default();
+        controls.on_key(KeyCode::KeyE, true, false, profile);
+        assert!(controls.sample().just_pressed(Action::Interact));
+        assert!(!controls.sample().just_pressed(Action::Interact));
+        controls.on_key(KeyCode::KeyE, true, true, profile);
+        assert!(!controls.sample().just_pressed(Action::Interact));
+        tap(&mut controls, "f2");
+        tap(&mut controls, "e");
+        assert!(!controls.sample().just_pressed(Action::Interact));
+        tap(&mut controls, "escape");
+        assert!(!controls.sample().just_pressed(Action::Interact));
+        tap(&mut controls, "e");
+        assert!(controls.sample().just_pressed(Action::Interact));
+    }
+
 }
