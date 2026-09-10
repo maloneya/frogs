@@ -105,15 +105,15 @@ const _: () = assert!(TILE > 0.0);
 const GROUND_INSTANCES: usize = GROUND_TILES * GROUND_TILES;
 const _: () = assert!(GROUND_INSTANCES < MAX_INSTANCES, "the floor alone must fit the buffer");
 
-/// The player's share of the instance budget: its body, plus the hitbox of a
-/// swing while one is in the air.
+/// The player's share of the instance budget: its body and facing marker,
+/// plus the hitbox of a swing while one is in the air.
 ///
 /// **Derived from the pass that decides how many discs a hitbox has**, not
 /// written down here. The swing is drawn from the same buffer as everything
 /// else, so a reservation that had to be kept in step by hand is a reservation
 /// that goes stale the first time the maximum active duration changes — silently,
 /// because overrunning the buffer truncates rather than errors.
-const PLAYER_INSTANCES: usize = 1 + pass::attack::HITBOX_SAMPLES;
+const PLAYER_INSTANCES: usize = 2 + pass::attack::HITBOX_SAMPLES;
 
 /// How large the horde may grow. The ground and the player are drawn from the
 /// same instance buffer in the same draw call, so the enemy budget is whatever
@@ -221,6 +221,15 @@ const _: () =
 /// the scale for the same reason the enemy's is: two numbers that must agree
 /// should be one number.
 const PLAYER_HALF_HEIGHT: f32 = PLAYER_SCALE.y * 0.5;
+
+/// A raised nose breaks the body's front/back symmetry. Its centre sits at
+/// the body's top, so the bright upper half stays visible when facing away.
+const PLAYER_NOSE_SCALE: Vec3 = Vec3::new(0.26, 0.24, 0.4);
+const _: () =
+    assert!(PLAYER_NOSE_SCALE.x > 0.0 && PLAYER_NOSE_SCALE.y > 0.0 && PLAYER_NOSE_SCALE.z > 0.0);
+
+/// Embed a quarter of the nose in the front face; the rest projects ahead.
+const PLAYER_NOSE_FORWARD: f32 = PLAYER_SCALE.z * 0.5 + PLAYER_NOSE_SCALE.z * 0.25;
 
 /// Shared body storage. Row zero is the persistent player; the remaining
 /// rows are the horde. `despawn` and `clear` preserve that boundary.
@@ -1282,14 +1291,24 @@ impl World {
         }
     }
 
-    /// The player is not a special case to the renderer either — one more cube
-    /// in the same draw call. Only the colour and the silhouette distinguish it.
+    /// Body and facing marker are ordinary cubes in the same draw call.
+    /// Both use one interpolated pose, so the marker cannot lead the turn.
     fn extract_player(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
         // Linear, and it looks wrong here on purpose: the surface is sRGB, so
         // the hardware encodes on write. This is roughly sRGB (0.35, 0.72, 0.95)
         // — a bright cyan-blue, chosen to sit opposite the horde's muted red on
         // the colour wheel so the eye separates them without effort.
         let (pos, facing) = self.drawn_player(alpha);
+        let forward = Vec3::new(facing.sin(), 0.0, facing.cos());
+        out.push(
+            Instance::new(
+                on_ground(pos, PLAYER_SCALE.y) + forward * PLAYER_NOSE_FORWARD,
+                PLAYER_NOSE_SCALE,
+                // Warm ivory in linear space, distinct from the blue body.
+                Vec3::new(0.95, 0.8, 0.4),
+            )
+            .with_yaw(facing),
+        );
         out.push(
             Instance::new(
                 on_ground(pos, PLAYER_HALF_HEIGHT),

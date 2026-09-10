@@ -245,7 +245,7 @@ fn shoving_through_the_crowd(enemies: usize) -> World {
     world
 }
 
-/// Reads the position of the last instance a sink was given — the player,
+/// Reads the position of the last instance a sink was given — the player body,
 /// since `extract` pushes it last.
 fn drawn_player(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec3 {
     world.extract(alpha, buffer.sink());
@@ -375,10 +375,10 @@ fn an_empty_horde_is_a_legal_world() {
     let expected = 30.0 * pass::walk::PER_TICK;
     assert!((world.player_pos().x - expected).abs() < 1e-4);
 
-    // And it still draws: ground plus the player, no horde.
+    // And it still draws: ground plus the player body and marker, no horde.
     let mut buffer = InstanceBuffer::default();
     world.extract(Alpha::ONE, buffer.sink());
-    assert_eq!(buffer.as_slice().len(), GROUND_INSTANCES + 1);
+    assert_eq!(buffer.as_slice().len(), GROUND_INSTANCES + 2);
 }
 
 /// **Found by mutation, and it is a real artefact.** Every other test here
@@ -842,8 +842,8 @@ fn the_swing_is_drawn_where_it_strikes() {
     // the live disc and nothing else, so there is exactly one of it.
     assert_eq!(
         buf.as_slice().len(),
-        GROUND_INSTANCES + 2,
-        "the active window should draw one disc, plus the player"
+        GROUND_INSTANCES + 3,
+        "the active window should draw one disc, plus the player body and marker"
     );
     let drawn = buf.as_slice()[GROUND_INSTANCES].pos();
 
