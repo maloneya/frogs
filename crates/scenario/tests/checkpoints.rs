@@ -9,6 +9,66 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn out_of_order_loads_cannot_validate_absence_against_a_different_scene() {
+    let fixture = Fixture::new(r#"(
+        scenes: [
+            (at: 1, action: Load(Inline((name: "source", sources: [(pos: (20.0, 0.0))])))),
+            (at: 0, action: Load(Inline((name: "empty")))),
+        ],
+        budget: (ticks: 2),
+        expect: (source_states: [(scene: 0, source: 0, state: None)]),
+    )"#);
+    for flags in [&[][..], &["--bless"][..]] {
+        let (output, text) = fixture.run(flags);
+        assert_eq!(output.status.code(), Some(1), "a nonexistent source passed: {text}");
+        assert!(text.contains("source_states"), "{text}");
+    }
+}
+
+#[test]
+fn source_commands_and_assertions_fail_closed_even_when_blessing() {
+    for fields in [
+        "source_switches: [(at: 2, source: 0, enabled: true)]",
+        "source_switches: [(at: 0, source: 1, enabled: true)]",
+        "source_switches: [(at: 0, source: 0, enabled: 1)]",
+        "remove_sources: [(at: 0, source: 0)], source_switches: [(at: 1, source: 0, enabled: true)]",
+        "expect: (source_states: [(source: 1, state: None)])",
+        "checkpoints: [(at: 0, expect: (source_states: [(source: 1, state: None)]))]",
+        "expect: (source_states: [(source: 0, state: Some((enabled: false, countdown: 0, emitted: 0, typo: 0)))])",
+    ] {
+        let fixture = Fixture::new(&format!(
+            "(setup: (sources: [(pos: (20.0, 0.0), enabled: false)]), budget: (ticks: 2), {fields})"
+        ));
+        for flags in [&[][..], &["--bless"][..]] {
+            let (output, text) = fixture.run(flags);
+            assert_eq!(output.status.code(), Some(1), "invalid source operation passed: {fields}\n{text}");
+        }
+    }
+}
+
+#[test]
+fn source_checkpoint_failure_survives_a_correct_final_state() {
+    let fixture = Fixture::new(
+        r#"(
+        setup: (sources: [(pos: (20.0, 0.0), enabled: false)]),
+        source_switches: [(at: 1, source: 0, enabled: true)],
+        checkpoints: [(at: 0, expect: (source_states: [
+            (source: 0, state: Some((enabled: true, countdown: 0, emitted: 1)))
+        ]))],
+        budget: (ticks: 2),
+        expect: (source_states: [
+            (source: 0, state: Some((enabled: true, countdown: 0, emitted: 1)))
+        ]),
+    )"#,
+    );
+    for flags in [&[][..], &["--bless"][..]] {
+        let (output, text) = fixture.run(flags);
+        assert_eq!(output.status.code(), Some(1), "{text}");
+        assert!(text.contains("checkpoint[0] after tick 0: source_states[0]"), "{text}");
+    }
+}
+
+#[test]
 fn scene_batches_cannot_bind_identities_from_a_truncated_trace() {
     // Evict before the step, so this tests the observation boundary without
     // asking the quadratic crowd solver to simulate a large coincident crowd.
@@ -212,4 +272,40 @@ fn checkpoint_fields_are_strict_and_final_expectations_still_run() {
     assert_eq!(output.status.code(), Some(1), "{text}");
     assert!(text.contains("enemy_count"), "{text}");
     assert!(!text.contains("checkpoint["), "{text}");
+}
+
+#[test]
+fn gameplay_content_and_relationship_assertions_fail_closed() {
+    let scene = r#"engine: (name: "trial",
+        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        sources: [(pos: (20.0, 0.0), enabled: false)])"#;
+    for connection in [
+        "[(body: 1, source: 0)]", "[(body: 0, source: 1)]",
+        "[(body: 0, source: 0), (body: 0, source: 0)]",
+        "[(body: 0, soruce: 0)]",
+    ] {
+        let fixture = Fixture::new(&format!(
+            "(setup: (scenes: [Gameplay(({scene}, source_controls: {connection}))]), budget: (ticks: 2))"
+        ));
+        for flags in [&[][..], &["--bless"][..]] {
+            let (output, text) = fixture.run(flags);
+            assert_eq!(output.status.code(), Some(1), "{connection}: {text}");
+        }
+    }
+    for fields in [
+        "expect: (controls: [(scene: 0, control: 1, state: None)])",
+        "expect: (controls: [(scene: 1, control: 0, state: None)])",
+        "source_switches: [(at: 0, scene: 0, source: 1, enabled: true)]",
+        "remove_sources: [(at: 0, scene: 1, source: 0)]",
+        "despawns: [(at: 0, body: 99)]",
+        "checkpoints: [(at: 0, expect: (controls: [(scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 0, emitted: 1)))))]))], interactions: [0]",
+    ] {
+        let fixture = Fixture::new(&format!(
+            "(setup: (scenes: [Gameplay(({scene}, source_controls: [(body: 0, source: 0)]))]), budget: (ticks: 2), {fields})"
+        ));
+        for flags in [&[][..], &["--bless"][..]] {
+            let (output, text) = fixture.run(flags);
+            assert_eq!(output.status.code(), Some(1), "{fields}: {text}");
+        }
+    }
 }

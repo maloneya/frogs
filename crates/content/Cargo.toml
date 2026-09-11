@@ -1,0 +1,17 @@
+[package]
+name = "arpg-content"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+# Read the owning crate's definitions directly; no renderer or test runner.
+[dependencies]
+arpg-game.workspace = true
+arpg-sim.workspace = true
+ron = "0.12"
+
+[build-dependencies]
+toml_edit.workspace = true
+
+[lints]
+workspace = true

@@ -40,9 +40,15 @@
 //! first tick the condition opens rather than on the next multiple of the
 //! cadence after it. That is the behaviour a room full of enemies wants: they
 //! appear when the player walks in, not up to `every` ticks later.
+//!
+//! Enablement is independent of those four choices. A disabled source freezes
+//! its countdown and emission sequence. Enabling resumes them: a ready source
+//! can fire on that tick if its condition is met. Accepted spawn requests are
+//! unaffected; enablement governs future decisions, not queued work.
 
 use core::fmt;
 
+use arpg_core::Report;
 use glam::Vec2;
 use serde::Deserialize;
 
@@ -71,7 +77,8 @@ use crate::{SceneId, Template};
 pub struct SourceId(u32);
 
 impl SourceId {
-    pub(crate) fn hash(self, hash: &mut Fnv) {
+    /// Feeds the complete identity into a deterministic fingerprint.
+    pub fn hash_into(self, hash: &mut Fnv) {
         hash.u64(u64::from(self.0));
     }
 
@@ -238,6 +245,35 @@ impl Placement {
     }
 }
 
+/// Live source state, also used directly for observation and scenario assertions.
+/// A returned value is a copy; changing it cannot mutate a running source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceState {
+    /// Whether the source may advance its cadence and request spawns.
+    pub enabled: bool,
+    /// Enabled ticks to spend waiting before the source is ready to fire.
+    pub countdown: u32,
+    /// Accepted emissions so far; determines the next point of a ring placement.
+    pub emitted: u32,
+}
+
+impl SourceState {
+    fn hash(&self, h: &mut Fnv) {
+        let Self { enabled, countdown, emitted } = self;
+        h.usize(usize::from(*enabled));
+        h.usize(*countdown as usize);
+        h.usize(*emitted as usize);
+    }
+
+    fn report(&self, out: &mut Report) {
+        let Self { enabled, countdown, emitted } = self;
+        out.bool("enabled", *enabled);
+        out.int("countdown", u64::from(*countdown));
+        out.int("emitted", u64::from(*emitted));
+    }
+}
+
 /// One thing that asks for spawns.
 ///
 /// Deserialised through [`SourceSpec`], which is the only written form of one
@@ -250,13 +286,7 @@ pub struct Source {
     /// Ticks between emissions. Never zero — see [`Source::every`].
     every: u32,
     condition: Condition,
-    /// Ticks left before the cadence is ready. Zero means ready *now*, and a
-    /// ready source that the condition holds back stays ready.
-    countdown: u32,
-    /// How many bodies this source has made. State, not a statistic: it is what
-    /// steps a ring placement around, so two runs that disagree on it put
-    /// bodies in different places.
-    emitted: u32,
+    state: SourceState,
 }
 
 impl Source {
@@ -272,8 +302,7 @@ impl Source {
             what,
             every: 1,
             condition: Condition::Always,
-            countdown: 0,
-            emitted: 0,
+            state: SourceState { enabled: true, countdown: 0, emitted: 0 },
         }
     }
 
@@ -293,22 +322,28 @@ impl Source {
         self
     }
 
+    /// Sets initial enablement. Disabling preserves cadence and ring progress.
+    #[must_use]
+    pub const fn enabled(mut self, enabled: bool) -> Self {
+        self.state.enabled = enabled;
+        self
+    }
+
     fn hash_into(&self, h: &mut Fnv) {
         // Exhaustive, as every hash in this crate is: a new axis stops this
         // compiling until someone has decided it is state.
-        let Self { placement, what, every, condition, countdown, emitted } = self;
+        let Self { placement, what, every, condition, state } = self;
 
         placement.hash_into(h);
         what.hash_into(h);
         condition.hash_into(h);
         h.usize(*every as usize);
-        h.usize(*countdown as usize);
-        h.usize(*emitted as usize);
+        state.hash(h);
     }
 }
 
-/// The written form of a source: the four axes, flat, as a scenario or a level
-/// file spells them.
+/// The written form of a source: its four axes and initial enablement, flat,
+/// as a scenario or a level file spells them.
 ///
 /// **This is the one definition of what a source looks like from outside.** It
 /// replaced a copy in the scenario crate's spec and a third in the harness
@@ -338,6 +373,9 @@ impl Source {
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceSpec {
+    /// Initially enabled by default. False creates a ready but dormant source.
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
     /// Ground-plane `(x, z)`: the point bodies appear at, or the centre of the
     /// ring they appear around.
     pub pos: (f32, f32),
@@ -363,13 +401,18 @@ fn one() -> u32 {
     1
 }
 
+fn enabled_by_default() -> bool {
+    true
+}
+
 impl From<SourceSpec> for Source {
     fn from(spec: SourceSpec) -> Self {
-        let SourceSpec { pos, radius, every, when, what } = spec;
+        let SourceSpec { pos, radius, every, when, what, enabled } = spec;
 
         Source::new(Placement::around(Vec2::new(pos.0, pos.1), radius), what)
             .every(every)
             .when(when)
+            .enabled(enabled)
     }
 }
 
@@ -390,6 +433,34 @@ pub(crate) struct Sources {
 }
 
 impl Sources {
+    pub(crate) fn state(&self, id: SourceId) -> Option<SourceState> {
+        self.rows.get(id.0 as usize)?.as_ref().map(|row| row.source.state)
+    }
+
+    /// A repeated setting succeeds without an event. A retired name is refused.
+    /// The signature has no queue access: accepted requests cannot be cancelled.
+    pub(crate) fn set_enabled(
+        &mut self, id: SourceId, enabled: bool, mut trace: TraceSink<'_>,
+    ) -> bool {
+        let Some(Some(row)) = self.rows.get_mut(id.0 as usize) else {
+            return false;
+        };
+        if row.source.state.enabled != enabled {
+            row.source.state.enabled = enabled;
+            trace.emit(Event::SourceEnablementChanged { id, enabled });
+        }
+        true
+    }
+
+    pub(crate) fn report(&self, out: &mut Report) {
+        let Self { rows } = self;
+        for (index, row) in rows.iter().enumerate() {
+            if let Some(row) = row {
+                out.object(&SourceId(index as u32).to_string(), |out| row.source.state.report(out));
+            }
+        }
+    }
+
     pub(crate) fn can_add(&self, count: usize) -> bool {
         self.rows.len().checked_add(count).is_some_and(|end| end <= u32::MAX as usize)
     }
@@ -438,7 +509,7 @@ impl Sources {
                     source.hash_into(h);
                     h.usize(usize::from(owner.is_some()));
                     if let Some(owner) = owner {
-                        owner.hash(h);
+                        owner.hash_into(h);
                     }
                 }
                 None => h.usize(0),
@@ -472,10 +543,14 @@ pub(crate) fn trigger(
             continue;
         };
 
+        if !source.state.enabled {
+            continue;
+        }
+
         // Cadence first, condition second. A ready source held back by its
         // condition stays ready — see the module docs.
-        if source.countdown > 0 {
-            source.countdown -= 1;
+        if source.state.countdown > 0 {
+            source.state.countdown -= 1;
             continue;
         }
 
@@ -484,14 +559,14 @@ pub(crate) fn trigger(
         }
 
         let id = SourceId(row as u32);
-        let at = source.placement.point(source.emitted);
+        let at = source.placement.point(source.state.emitted);
 
         // **A refused request still spends the cadence.** The queue counts the
         // refusal and the drain reports it, so nothing is lost; retrying on the
         // next tick instead would turn a saturated world into a source that
         // asks sixty times a second forever.
         if queue.push_owned(at, source.what, *owner) {
-            source.emitted += 1;
+            source.state.emitted += 1;
             // Per emission rather than summarised, and it is the one event here
             // that names *why* a body exists. `placed` says a body appeared;
             // this says which source asked for it, which is the only way to
@@ -501,6 +576,33 @@ pub(crate) fn trigger(
 
         // `every - 1`, not `every`: this tick is the first of the interval. At
         // `every = 1` that is zero, so the source is ready again immediately.
-        source.countdown = source.every - 1;
+        source.state.countdown = source.every - 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Accumulator, Dt, World};
+    use arpg_core::Intent;
+
+    #[test]
+    fn disabling_does_not_cancel_an_accepted_source_emission() {
+        let mut world = World::empty();
+        let id = world.add_source(
+            Source::new(Placement::At(Vec2::new(20.0, 0.0)), Template::BODY).every(2),
+        );
+        // Exercise the interval between decision and drain directly: the
+        // enablement setter has no authority over an already accepted request.
+        trigger(&mut world.sources, &mut world.queue, Vec2::ZERO, 0, world.trace.sink(0));
+        assert_eq!(world.queue.len(), 1);
+        assert!(world.set_source_enabled(id, false));
+        for dt in Accumulator::default().pending(Dt::SECS) {
+            world.step(dt, Intent::NONE);
+        }
+        assert_eq!(world.enemy_count(), 1);
+        assert_eq!(world.source_state(id), Some(SourceState {
+            enabled: false, countdown: 1, emitted: 1,
+        }));
     }
 }

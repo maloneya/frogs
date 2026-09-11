@@ -1,0 +1,25 @@
+(
+    description: "Enablement is independent of the population gate; a queued external spawn still lands while the source is disabled.",
+    setup: (sources: [(pos: (20.0, 0.0), when: FewerThan(2), enabled: false)]),
+    spawns: [(at: 0, pos: (40.0, 0.0))],
+    source_switches: [
+        (at: 2, source: 0, enabled: true),
+        (at: 4, source: 0, enabled: false),
+        (at: 5, source: 0, enabled: true),
+    ],
+    checkpoints: [
+        (at: 1, expect: (enemy_count: 1, source_states: [
+            (source: 0, state: (enabled: false, countdown: 0, emitted: 0)),
+        ])),
+        (at: 2, expect: (enemy_count: 2, source_states: [
+            (source: 0, state: (enabled: true, countdown: 0, emitted: 1)),
+        ])),
+        (at: 4, expect: (enemy_count: 2, source_states: [
+            (source: 0, state: (enabled: false, countdown: 0, emitted: 1)),
+        ])),
+    ],
+    budget: (ticks: 8),
+    expect: (enemy_count: 2, sources: 1, source_states: [
+        (source: 0, state: (enabled: true, countdown: 0, emitted: 1)),
+    ]),
+)

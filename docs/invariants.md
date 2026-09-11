@@ -16,7 +16,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Invariant | Layer | Mechanism |
 |---|---|---|
 | `gfx` cannot name a simulation type | 0 | separate crates — `use arpg_sim::…` is E0432 |
-| `gfx` cannot depend on `sim`; `sim` cannot depend on wgpu/winit | 1 | `crates/{gfx,sim,scenario}/build.rs`, run on every build |
+| `gfx` cannot depend on `sim`; `sim` cannot depend on wgpu/winit | 1 | `crates/{gfx,sim,content,scenario}/build.rs`, run on every build |
 | Enemy count stays within the instance budget | 0 | `enemies` is private; `set_enemy_count` clamps, `place` refuses at `MAX_ENEMIES` |
 | Zoom stays in a sane range | 0 | private field; `OrthoCamera::zoom_by` clamps |
 | Aspect ratio survives a minimised window | 0 | `aspect_of` guards inside the camera |
@@ -36,7 +36,15 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | `Instance` is exactly 48 bytes | 1 | `const _: () = assert!(…)` beside the type |
 | Rust vertex layout matches `shader.wgsl` | 2 | headless pipeline + draw test in `gfx/src/lib.rs` |
 | Public API stays deliberate | 1 | `unreachable_pub = "deny"` |
-| No dependency outside a crate's allowlist | 1 | `crates/{gfx,sim,scenario}/build.rs` — fails closed, so unknown crates are caught too |
+| No dependency outside a crate's allowlist | 1/3 | `crates/{gfx,sim,game,content,scenario}/build.rs` share `build_support/dependencies.rs`; TOML parsing resolves package aliases and workspace inheritance, including target and dev sections. Build-only parsing has its own allowlist; workspace tests exercise rejection paths |
+| Shared content decoding cannot depend on graphics or the scenario runner | 1 | `crates/content/build.rs` permits runtime dependencies on game, sim, and RON; app and runner import the same decoder |
+| Gameplay cannot depend on file decoding, graphics, or the scenario runner | 1 | `crates/game/build.rs` permits runtime dependencies on core, sim, glam, and serde |
+| A caller cannot step the engine world owned by a game directly | 0 | `Game` owns a private world with no mutable accessor or dereference implementation; compile-fail doctest covers privacy |
+| The new game entry point preserves existing engine state and timing | 3 | `construction_preserves_existing_identity_history` and `mixed_inputs_preserve_ticks_trace_reports_and_interpolation`, plus the existing scenarios now driving `Game` |
+| Failed game scene replacement preserves the active run and restart choice | 3 | `failed_start_and_additive_load_preserve_the_complete_run`; complete replacement is prepared before assignment |
+| Restart replaces all live state and pending work from an immutable snapshot | 0/3 | Whole-Game replacement; private validated `RestartScene`; `restart_uses_its_snapshot_and_replaces_all_live_state_and_pending_work` |
+| Cached restart choices cannot be omitted from the game hash | 1/3 | Exhaustive `Game::hash`; `restart_choice_is_hashed_even_when_active_worlds_are_identical` |
+| Game eviction preserves other instances and the selected restart snapshot | 3 | `eviction_is_local_and_preserves_the_restart_choice`, plus the shared lifecycle scenario |
 | Tuning constants stay in their valid range | 1 | a `const _: () = assert!(…)` beside each one |
 | The lead eases slower than the follow | 1 | const assert; swapping them reintroduces the whip |
 | The player footprint is never square | 1 | const assert; a square one makes facing invisible |
@@ -125,6 +133,12 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A gated source does not lose its turn | 3 | cadence is checked before the condition and a shut gate leaves the countdown alone; `a_source_waits_for_the_player_to_arrive` with `every: 60` inside a 40-tick budget, mutation-checked |
 | A removed source stops making bodies | 3 | `removing_a_source_stops_the_flow`, whose budget covers two ticks it would otherwise have fired on |
 | A source id can never be recycled | 0 | `Sources` is never compacted; a removed row stays `None`, which is why `SourceId` needs no generation |
+| Disabling freezes cadence and ring progress; enabling resumes them | 3 | `source_enablement_freezes_cadence` asserts intermediate `SourceState`, emission ticks, and ring positions; timing requires execution assertions |
+| Enabling does not bypass the source's condition | 3 | `source_enablement_preserves_population_gate` and `source_enablement_preserves_proximity_gate` |
+| Changing enablement cannot cancel accepted requests | 0/3 | `Sources::set_enabled` has no queue access; `disabling_does_not_cancel_an_accepted_source_emission` checks the decision/drain boundary |
+| Repeated or stale settings cannot silently mutate another source | 0/3 | private monotonic `SourceId` storage; `setting_is_hashed_observable_idempotent_and_refuses_retired_names` checks rejection, trace, report, and hash |
+| Source observations and assertions cannot drift into a second state definition | 0/1 | runtime storage, read-only queries and scenario assertions share `SourceState`; its report and hash destructure exhaustively |
+| Source enablement follows scene lifetime and authored restart | 3 | `source_enablement_is_instance_local_and_restart_restores_authored_state` exercises the public Game boundary |
 | A ring never stacks what it makes | 3 | golden-angle step per emission; `a_ring_does_not_stack_what_it_makes` |
 | Source state reaches the determinism hash | 1 | `World::hash` destructures `sources`; `Sources::hash` walks dead rows too, so ids line up on replay |
 | The horde can always be outrun | 1 | `const _: () = assert!(SPEED < PLAYER_SPEED)` in `pass/seek.rs` |
@@ -182,3 +196,10 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A fresh playtest cannot inherit player or pending input state | 3 | `restart_resets_the_complete_playtest_boundary` and `restart_cancels_old_delayed_actions_and_capture_replies` |
 | Scene ownership and pending ownership reach replay state | 3 | exhaustive hashes and `scene_state_and_pending_ownership_reach_the_hash` |
 | Authored names cannot corrupt the state protocol | 0 | `Report::text` and key encoding escape JSON strings at the write door |
+| Gameplay source control cannot move, damage, spawn, or remove bodies | 0 | its pass takes only `InteractionView`, `SourceEnablement`, private relationship storage, and a typed trace sink; no World or Game access |
+| Gameplay owns each relationship without duplicating source enablement | 0/1 | private `SourceControls` records store endpoints and phase; `ControlState` derives its source observation from sim |
+| Activation permits spawning on the following tick and is consumed once | 3 | `activation_starts_a_source_once` checks both ticks, resumed cadence, external pause, and transition traces |
+| Missing endpoints cannot redirect pending gameplay to recycled objects | 0/3 | resolved stable IDs plus `source_controls_retire_missing_endpoints` and `a_recycled_body_and_a_new_source_cannot_inherit_a_pending_connection` |
+| Relationships share the scene's atomic admission and complete lifetime | 3 | `invalid_relationships_leave_live_state_pending_work_and_restart_untouched`, `source_controls_are_instance_local`, and `activation_restart_eviction_and_independent_instances_share_one_lifecycle` |
+| Gameplay references, phases, and cached restart effects reach the hash | 1/3 | exhaustive record hashing and `relationship_identity_phase_and_restart_effect_participate_in_hashing` |
+| A malformed gameplay relationship or assertion cannot silently disappear | 1/3 | owning types deny unknown fields; `gameplay_content_and_relationship_assertions_fail_closed` exercises CLI rejection even while blessing |

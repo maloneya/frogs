@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/gfx", "crates/sim", "crates/app", "crates/scenario"]
+members = ["crates/core", "crates/gfx", "crates/sim", "crates/game", "crates/content", "crates/app", "crates/scenario"]
 resolver = "3"
 
 # So a bare `cargo run` still means "run the game".
@@ -13,7 +13,8 @@ edition = "2024"
 arpg-core = { path = "crates/core" }
 arpg-gfx = { path = "crates/gfx" }
 arpg-sim = { path = "crates/sim" }
-arpg-scenario = { package = "scenario", path = "crates/scenario" }
+arpg-game = { path = "crates/game" }
+arpg-content = { path = "crates/content" }
 
 bytemuck = { version = "1.25", features = ["derive"] }
 env_logger = "0.11"
@@ -30,6 +31,8 @@ png = "0.18.1"
 pollster = "1.0.1"
 wgpu = "30.0.1"
 winit = "0.30.13"
+# Manifest parsing for build-time architecture guards; never a runtime dependency.
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
 # The lint wall. These are compile errors, not style preferences: each one
 # corresponds to a mistake that is easy to make locally and expensive to find
@@ -69,12 +72,10 @@ unreachable_pub = "deny"
 # because it costs ~1.3s warm and that hook fires after every Bash call as well
 # as every edit. Move it up if that trade stops being worth it.
 #
-# That clause needs `--lib --bins`, which is not belt-and-braces: `cargo doc`
-# skips a bin target sharing its lib's name, so a plain `--workspace` run
-# documents `scenario`'s *library* and silently ignores `spec.rs`, `run.rs` and
-# `report.rs` — the bulk of the crate. A broken link there exited 0 until the
-# flags were added. The `--bins` run prints a harmless output-collision warning
-# for `scenario`, which is the price of checking both targets.
+# Keep `--lib --bins` explicit so both library APIs and runner internals are
+# checked. Previously scenario's same-named library hid its binary from plain
+# `cargo doc --workspace`; extracting content removes that collision without
+# weakening the gate that caught broken links in `spec.rs` and `run.rs`.
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 

@@ -1,0 +1,52 @@
+(
+    description: "A dormant source fires on enable, freezes its remaining cadence while disabled, resumes without resetting the ring, and ignores repeated settings.",
+    setup: (sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)]),
+    source_switches: [
+        (at: 2, source: 0, enabled: true),
+        (at: 4, source: 0, enabled: false),
+        (at: 8, source: 0, enabled: true),
+        (at: 10, source: 0, enabled: true),
+        (at: 11, source: 0, enabled: false),
+        (at: 12, source: 0, enabled: true),
+    ],
+    remove_sources: [(at: 16, source: 0)],
+    checkpoints: [
+        (at: 1, expect: (enemy_count: 0, source_states: [
+            (source: 0, state: (enabled: false, countdown: 0, emitted: 0)),
+        ])),
+        (at: 2, expect: (enemy_count: 1, source_states: [
+            (source: 0, state: (enabled: true, countdown: 3, emitted: 1)),
+        ])),
+        (at: 7, expect: (enemy_count: 1, source_states: [
+            (source: 0, state: (enabled: false, countdown: 2, emitted: 1)),
+        ])),
+        (at: 8, expect: (enemy_count: 1, source_states: [
+            (source: 0, state: (enabled: true, countdown: 1, emitted: 1)),
+        ])),
+        (at: 9, expect: (enemy_count: 1, source_states: [
+            (source: 0, state: (enabled: true, countdown: 0, emitted: 1)),
+        ])),
+        (at: 10, expect: (enemy_count: 2, source_states: [
+            (source: 0, state: (enabled: true, countdown: 3, emitted: 2)),
+        ])),
+        (at: 11, expect: (enemy_count: 2, source_states: [
+            (source: 0, state: (enabled: false, countdown: 3, emitted: 2)),
+        ])),
+        (at: 14, expect: (enemy_count: 2, source_states: [
+            (source: 0, state: (enabled: true, countdown: 0, emitted: 2)),
+        ])),
+        (at: 15, expect: (enemy_count: 3, source_states: [
+            (source: 0, state: (enabled: true, countdown: 3, emitted: 3)),
+        ])),
+    ],
+    budget: (ticks: 17),
+    expect: (
+        enemy_count: 3, sources: 0,
+        source_states: [(source: 0, state: None)],
+        bodies: [
+            (nth: 0, pos: (x: 22.0, z: 0.0, tol: 0.0001)),
+            (nth: 1, pos: (x: 18.52526, z: 1.35098, tol: 0.0001)),
+        ],
+        trace: "source_enablement_freezes_cadence.trace",
+    ),
+)

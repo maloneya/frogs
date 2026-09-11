@@ -2,6 +2,8 @@
 
 Open F2, select `activation_block.ron`, and press Enter. Walk toward the blue
 block and press E: it turns green once. Restart current restores Ready.
+For a connected gameplay trial, select `activate_horde.ron`: E starts a capped
+source of seekers. See [the playtest](source-control-playtest.md).
 The block uses the existing 0.5 m cube and circular collision footprint; larger
 boxes and door-shaped collision are later work.
 

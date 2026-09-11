@@ -1,0 +1,21 @@
+(
+    description: "An enabled ready source still waits for proximity. Walking 0.15 m per tick first puts the player inside range before source evaluation on tick 14.",
+    setup: (sources: [(pos: (3.0, 0.0), when: PlayerWithin(1.0), enabled: false)]),
+    source_switches: [(at: 4, source: 0, enabled: true)],
+    inputs: [(at: 0, ticks: 15, dir: (1.0, 0.0))],
+    checkpoints: [
+        (at: 3, expect: (enemy_count: 0, source_states: [
+            (source: 0, state: (enabled: false, countdown: 0, emitted: 0)),
+        ])),
+        (at: 4, expect: (enemy_count: 0, source_states: [
+            (source: 0, state: (enabled: true, countdown: 0, emitted: 0)),
+        ])),
+        (at: 13, expect: (enemy_count: 0, source_states: [
+            (source: 0, state: (enabled: true, countdown: 0, emitted: 0)),
+        ])),
+    ],
+    budget: (ticks: 15),
+    expect: (enemy_count: 1, source_states: [
+        (source: 0, state: (enabled: true, countdown: 0, emitted: 1)),
+    ]),
+)

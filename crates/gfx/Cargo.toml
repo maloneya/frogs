@@ -22,5 +22,8 @@ winit.workspace = true
 [dev-dependencies]
 pollster.workspace = true
 
+[build-dependencies]
+toml_edit.workspace = true
+
 [lints]
 workspace = true

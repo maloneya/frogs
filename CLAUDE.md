@@ -63,12 +63,14 @@ rather than by this paragraph.
 to make one game, and "could another game use this?" would push `contact.rs`
 and `pass/separate.rs` toward configurability nothing needs.
 
-The test that matters is blast radius: **the engine is whatever holds an
-invariant that could be violated silently; the game is tunable content no
-invariant guards.** [`docs/invariants.md`](docs/invariants.md) is the manifest
-of the first half.
+The test that matters is what an invariant governs: **the engine protects
+shared simulation mechanisms; gameplay owns the rules and relationships of a
+particular mechanic.** Gameplay has invariants too, such as an encounter awarding
+a reward only once. Both belong in deterministic execution and both need strong
+enforcement. [`docs/invariants.md`](docs/invariants.md) records current safeguards.
 
-So the line runs *through* files rather than between them.
+The new `game` crate isolates gameplay from the engine. Existing combat still
+keeps validation and tuning together within files during this staged migration.
 `crates/sim/src/pass/seek.rs` is engine: it carries the assert that a chaser
 must be slower than the player, without which kiting stops existing. The `3.5`
 that assert bounds is game. Same in `attack.rs` — that a swing's timings are
@@ -78,10 +80,10 @@ worth knowing before editing either: `ResolvedAttack::try_new` bounds startup an
 active, while recovery is bounded by the `RecoveryTicks` newtype, so the panel,
 the scenario format and serde all cross one validator rather than three.
 
-The rule that follows, and the one to apply while editing: **the game
-vocabulary has exactly one definition, and it lives in `sim` beside the thing
-it describes.** `Template`, `Condition`, `Placement`, `Source` and `SourceSpec`
-are that vocabulary; the scenario `.ron` format and the `ARPG_HARNESS` command
+The rule that follows, and the one to apply while editing: **each definition
+lives exactly once, beside the system that owns its meaning.** `Template`,
+`Condition`, `Placement`, `Source` and `SourceSpec` remain in `sim`; gameplay relationship definitions belong in `game`. The scenario `.ron` format
+and the `ARPG_HARNESS` command
 parser *derive* from those types rather than restating them. A second
 hand-written copy of an axis is the failure this rule exists to prevent, and it
 fails in the direction nothing reports — not by breaking a build, but by
@@ -114,8 +116,12 @@ echo 'hold d 500' | nc -U /tmp/arpg.sock
 `press`/`release`/`tap`/`hold <key> <ms>` · `wait <ms>` · `shot <path>` ·
 `state` · `trace since <tick>` · `enemies <n>` · `seekers <n>` ·
 `spawn <x> <z> [seek]` ·
-`source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>]` ·
-`source remove <id>` · `impulse <player|#id> <x> <z>` · `vsync on|off` · `quit`
+`source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>] [disabled]` ·
+`source remove|enable|disable <id>` · `impulse <player|#id> <x> <z>` · `vsync on|off` · `quit`
+
+Source enablement freezes cadence and ring progress while disabled; enabling
+resumes them. Read-only `SourceState` supplies reports and scenario assertions.
+See [source enablement](docs/source-enablement.md) for timing and lifetime rules.
 
 Scene playtests: `scene start <path>` starts fresh from a file; `scene restart`
 repeats the selected snapshot; `scene add <path>` / `scene evict <id>` exercise
@@ -158,7 +164,7 @@ ban on blocking the main thread, and none of that complexity is warranted here.
 never knows what a key is.** Outward, the vocabulary is `Instance` — position,
 scale, colour — and `sim` describes itself in it via `extract()`. Inward, a
 device becomes an `Action`, named in *screen* directions; `app` asks the camera
-to resolve those to world space and hands `sim` an `Intent`. Both dependencies
+to resolve those to world space and hands `game` an `Intent`. Game advances source control, then steps `sim`. Both dependencies
 run one way, and the simulation sees neither a key nor a screen.
 
 The overlay is that same rule applied one layer up. `Quad` is a rectangle in
@@ -183,15 +189,37 @@ crates/
   gfx/   Renderer, camera, cube, capture, shader.wgsl      core, wgpu, winit, png,
          Quad/QuadBuffer/QuadSink, Glyphs, overlay.wgsl                  fontdue
   sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace   core, glam, serde
-  app/   App, Controls + BINDINGS, Clock, harness, hud, ui  core, gfx, sim, scenario, winit
-  scenario/  lib: load_scene, the .ron decoder both sides use   core, sim, ron  (no gfx)
-             bin: the headless gate — run a .ron, assert, exit 0/1
+  game/  Game, GameScene, source_control, restart snapshot  core, sim, glam, serde
+  content/  load_scene, parse_template: shared RON decoding  game, sim, ron  (no gfx)
+  app/   App, Controls + BINDINGS, Clock, harness, hud, ui  core, gfx, game, sim, content, winit
+  scenario/  headless binary: run a .ron, assert, exit 0/1  core, game, sim, content, ron, serde
 ```
 
 - `core` is the shared vocabulary and belongs to neither side. It deliberately
   does **not** name wgpu — that is what keeps `sim` free of the graphics stack,
   so simulation tests never need a GPU. The vertex layout for `Instance` lives
   in `gfx/cube.rs` for exactly this reason.
+- `content` decodes `GameScene` and promotes legacy engine-only files. The
+  game scene wraps sim's physical definition and adds game-owned relationships;
+  no physical schema is copied. App and runner share this decoder.
+- `game` privately owns World, resolved source-control records, and the
+  immutable restart snapshot. `Game::step` runs the source-control pass before
+  the engine schedule: interaction on N permits source emission on N+1.
+  The pass receives only `InteractionView`, `SourceEnablement`, its own
+  records, and a gameplay trace sink. It cannot move or damage bodies.
+  `GameScene` validates authored references before physical installation,
+  resolves them per instance, and evicts relationships with their engine
+  resources. Start/restart atomically replace all of this state.
+  `Game::hash` includes live relationships and the complete cached restart
+  effect; `Game::engine_hash` remains the physical fingerprint. Reports expose
+  source-control phases beside the engine's authoritative source state.
+  Engine and gameplay diagnostics use separate typed trace streams; neither
+  drives gameplay. App and runner display/check both.
+  See [source control](docs/source-control.md) and
+  [the architecture plan](docs/gameplay-architecture-plan.md).
+  The app owns device, camera, capture, and run-id cleanup after successful
+  replacement. App and runner may import sim value types but never construct
+  or step an engine world themselves.
 - `gfx` — `lib.rs` (surface, device, depth, frame orchestration), `camera.rs`
   (isometric ortho camera, the follow rig, and the uniform), `cube.rs` (mesh,
   pipeline, instance buffer, vertex layout), `shader.wgsl`. The camera rig lives
@@ -323,8 +351,11 @@ rates as the weakest layer there is.
 stops compiling once the violation it covers disappears, so a suppression cannot
 go stale unnoticed and each one carries a written reason.
 
-**Crate dependencies are allowlists**, in `crates/{gfx,sim,scenario}/build.rs`,
-and they fail closed. Two things about them are tempting to get wrong, so both
+**Crate dependencies are allowlists**, in `crates/{gfx,sim,game,content,scenario}/build.rs`,
+checked by the shared `build_support/dependencies.rs`. It parses TOML and resolves
+package aliases and workspace inheritance across runtime, dev, and target
+sections. Build-time manifest parsing has a separate allowlist and never widens
+runtime dependencies. Two things about them are tempting to get wrong, so both
 are argued at the definition site: splitting into crates does *not* make
 `gfx → sim` a Cargo cycle — they are siblings, and Cargo accepts that edge — so
 the guards are doing work nothing else does. And a denylist would fail open:

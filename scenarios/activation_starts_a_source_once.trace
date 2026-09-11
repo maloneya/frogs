@@ -1,0 +1,10 @@
+2 activated id=#1v1
+3 source enabled id=s0 value=true
+3 fired source=s0
+3 placed id=#2v1
+6 source enabled id=s0 value=false
+11 source enabled id=s0 value=true
+12 fired source=s0
+12 placed id=#3v1
+# gameplay transitions
+3 control scene=c0 index=0 phase=Started

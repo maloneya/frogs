@@ -77,6 +77,13 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) remove_sources: Vec<SourceRemoval>,
 
+    /// Enablement changes before the named tick, in authored order.
+    #[serde(default)]
+    pub(crate) source_switches: Vec<SourceSwitch>,
+    /// Removes an individually resolved body before the named tick.
+    #[serde(default)]
+    pub(crate) despawns: Vec<DespawnAt>,
+
     /// State assertions immediately after the named zero-based tick completes.
     /// Input order is arbitrary; multiple checkpoints may inspect the same tick.
     #[serde(default)]
@@ -86,6 +93,40 @@ pub(crate) struct Scenario {
 
     #[serde(default)]
     pub(crate) expect: Expect,
+}
+
+impl Scenario {
+    /// The shared order for execution and authored instance-index validation.
+    /// Stable sorting preserves file order for operations on the same tick.
+    pub(crate) fn scene_commands(&self) -> Vec<&SceneAt> {
+        let mut commands: Vec<_> = self.scenes.iter().collect();
+        commands.sort_by_key(|command| command.at);
+        commands
+    }
+}
+
+/// A source number refers to setup.sources, just as source removal does.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceSwitch {
+    /// Optional scene load index; absent selects setup.sources.
+    #[serde(default)]
+    pub(crate) scene: Option<usize>,
+    pub(crate) at: u64,
+    pub(crate) source: usize,
+    pub(crate) enabled: bool,
+}
+
+/// Exact live state, using the engine's own type rather than a mirror schema.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceExpect {
+    /// Optional scene load index; absent selects setup.sources.
+    #[serde(default)]
+    pub(crate) scene: Option<usize>,
+    pub(crate) source: usize,
+    /// None asserts that a previously installed source has been removed.
+    pub(crate) state: Option<arpg_sim::SourceState>,
 }
 
 /// A tuning command uses sim's value type, including its deserialization guard.
@@ -109,7 +150,7 @@ pub(crate) struct AttackProfileAt {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Checkpoint {
-    /// Runs after tick `at`, when `World::tick()` is `at + 1`.
+    /// Runs after tick `at`, when `arpg_game::Game::tick()` is `at + 1`.
     /// Must be below the scenario's tick budget; there is no implicit setup tick.
     pub(crate) at: u64,
     pub(crate) expect: Expect,
@@ -164,6 +205,9 @@ pub(crate) struct Setup {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceRemoval {
+    /// Optional scene load index; absent selects setup.sources.
+    #[serde(default)]
+    pub(crate) scene: Option<usize>,
     /// The tick it is removed on, before that tick runs. A source removed at
     /// `at` does not fire on `at`.
     pub(crate) at: u64,
@@ -247,7 +291,7 @@ pub(crate) struct Budget {
     /// makes the count deterministic, so "ran fewer ticks than expected" is a
     /// bug rather than a timing artefact worth tolerating.
     pub(crate) ticks: u64,
-    /// Mean time in World::step only; excludes setup, hashing and assertions.
+    /// Mean time in arpg_game::Game::step only; excludes setup, hashing and assertions.
     #[serde(default)]
     pub(crate) max_mean_step_micros: Option<f64>,
 }
@@ -303,6 +347,10 @@ pub(crate) struct Expect {
     /// How many sources are still live at the end.
     #[serde(default)]
     pub(crate) sources: Option<usize>,
+    #[serde(default)]
+    pub(crate) source_states: Vec<SourceExpect>,
+    #[serde(default)]
+    pub(crate) controls: Vec<ControlExpect>,
     #[serde(default)]
     pub(crate) scene_count: Option<usize>,
     /// Predictions about individual bodies placed by [`Setup::actions`].
@@ -436,21 +484,24 @@ pub(crate) struct ImpulseAt {
 #[derive(Debug, Deserialize)]
 pub(crate) enum SceneRef {
     Inline(arpg_sim::Scene),
+    Gameplay(arpg_game::GameScene),
     File(std::path::PathBuf),
 }
 
 impl SceneRef {
-    pub(crate) fn resolve(&mut self, base: &std::path::Path) -> Result<(), scenario::LoadError> {
-        if let Self::File(path) = self {
-            *self = Self::Inline(scenario::load_scene(&base.join(path))?);
+    pub(crate) fn resolve(&mut self, base: &std::path::Path) -> Result<(), arpg_content::LoadError> {
+        match self {
+            Self::File(path) => *self = Self::Gameplay(arpg_content::load_scene(&base.join(path))?),
+            Self::Inline(scene) => *self = Self::Gameplay(scene.clone().into()),
+            Self::Gameplay(_) => {}
         }
         Ok(())
     }
 
-    pub(crate) fn content(&self) -> &arpg_sim::Scene {
+    pub(crate) fn content(&self) -> &arpg_game::GameScene {
         match self {
-            Self::Inline(scene) => scene,
-            Self::File(_) => panic!("scene references must resolve before validation and replay"),
+            Self::Gameplay(scene) => scene,
+            Self::File(_) | Self::Inline(_) => panic!("scene references must resolve before validation and replay"),
         }
     }
 }
@@ -467,4 +518,21 @@ pub(crate) struct SceneAt {
 pub(crate) enum SceneAction {
     Load(SceneRef),
     Evict(usize),
+}
+
+/// Exact game-owned relationship observation, including authoritative source state.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ControlExpect {
+    pub(crate) scene: usize,
+    pub(crate) control: usize,
+    pub(crate) state: Option<arpg_game::ControlState>,
+}
+
+/// A removal uses the same placement identity binding as body assertions.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DespawnAt {
+    pub(crate) at: u64,
+    pub(crate) body: usize,
 }

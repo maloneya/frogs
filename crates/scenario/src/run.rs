@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use arpg_core::{Intent, MoveDir};
-use arpg_sim::{Accumulator, Dt, EntityId, Event, SourceId, Template, World};
+use arpg_game::Game;
+use arpg_sim::{Accumulator, Dt, EntityId, Event, SourceId, Template};
 use glam::Vec3;
 
 use crate::spec::{Action, Expect, Scenario};
@@ -12,14 +13,18 @@ use crate::spec::{Action, Expect, Scenario};
 /// determinism pass can compare two runs without re-deciding what "passed"
 /// means.
 pub(crate) struct Run {
-    pub(crate) world: World,
+    pub(crate) game: Game,
+    /// Stable identities of setup.sources, retained even after removal.
+    sources: Vec<SourceId>,
+    instances: Vec<Option<arpg_sim::SceneId>>,
+    installed_sources: Vec<Vec<SourceId>>,
     /// Measured outside the simulation; never included in its replay state.
     mean_step_micros: f64,
     command_failures: Vec<Failure>,
-    /// Evaluated against the live world at each checkpoint, never reconstructed
-    /// from final state. Retain only failures, not copies of the world.
+    /// Evaluated against the live game at each checkpoint, never reconstructed
+    /// from final state. Retain only failures, not copies of the game.
     checkpoint_failures: Vec<Failure>,
-    /// The world's hash after every tick, in order. This is what makes a
+    /// The game's hash after every tick, in order. This is what makes a
     /// divergence report a tick number instead of a shrug.
     pub(crate) hashes: Vec<u64>,
     /// The name each `Place` action got back, in the order they appear.
@@ -73,6 +78,53 @@ use arpg_sim::WALK_PER_TICK as TICK_OF_WALKING;
 /// just to remove one field from checkpoints.
 pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     let mut failures = Vec::new();
+    let scenes: Vec<_> = scenario.setup.scenes.iter().chain(scenario.scene_commands().into_iter()
+        .filter_map(|command| match &command.action {
+            crate::spec::SceneAction::Load(scene) => Some(scene),
+            crate::spec::SceneAction::Evict(_) => None,
+        })).map(crate::spec::SceneRef::content).collect();
+    let source_exists = |scene: Option<usize>, source: usize| match scene {
+        None => source < scenario.setup.sources.len(),
+        Some(nth) => scenes.get(nth).is_some_and(|scene| source < scene.engine.sources.len()),
+    };
+    for command in &scenario.source_switches {
+        if command.at >= scenario.budget.ticks || !source_exists(command.scene, command.source) {
+            failures.push(Failure::new(
+                "source_switches",
+                "an existing setup source and a tick inside the budget".into(),
+                format!("source {} at tick {}", command.source, command.at),
+            ));
+        }
+    }
+    for expect in std::iter::once(&scenario.expect)
+        .chain(scenario.checkpoints.iter().map(|checkpoint| &checkpoint.expect))
+    {
+        for control in &expect.controls {
+            if !scenes.get(control.scene).is_some_and(|scene| control.control < scene.source_controls.len()) {
+                failures.push(Failure::new("controls", "an authored scene control".into(),
+                    format!("scene {} control {}", control.scene, control.control)));
+            }
+        }
+        for source in &expect.source_states {
+            if !source_exists(source.scene, source.source) {
+                failures.push(Failure::new(
+                    "source_states", "an existing setup source index".into(),
+                    source.source.to_string(),
+                ));
+            }
+        }
+    }
+    for command in &scenario.remove_sources {
+        if command.at >= scenario.budget.ticks || !source_exists(command.scene, command.source) {
+            failures.push(Failure::new("remove_sources", "an authored source and reachable tick".into(),
+                format!("source {} at tick {}", command.source, command.at)));
+        }
+    }
+    for command in &scenario.despawns {
+        if command.at >= scenario.budget.ticks {
+            failures.push(Failure::new("despawns", "a reachable tick".into(), command.at.to_string()));
+        }
+    }
     if !scenario.setup.scenes.is_empty() && scenario.setup.enemies != 0 {
         failures.push(Failure::new(
             "setup",
@@ -132,16 +184,17 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
 /// Deliberately mints its `Dt` from a real [`Accumulator`], one tick's worth at
 /// a time, rather than reaching for some test-only shortcut: the whole claim a
 /// scenario makes is about the code path the game runs, and a runner that
-/// stepped the world by some other route would be testing a different program.
+/// stepped the game by some other route would be testing a different program.
 pub(crate) fn run(scenario: &Scenario) -> Run {
-    let mut world = if scenario.setup.scenes.is_empty() {
-        let mut world = World::default();
-        world.set_enemy_count(scenario.setup.enemies);
-        world
+    let mut game = if scenario.setup.scenes.is_empty() {
+        let mut game = Game::default();
+        game.set_enemy_count(scenario.setup.enemies);
+        game
     } else {
-        World::empty()
+        Game::empty()
     };
     let mut instances = Vec::new();
+    let mut installed_sources = Vec::new();
     let mut command_failures = Vec::new();
 
     // Setup actions come after the horde grid, so a scenario can put a body at
@@ -152,7 +205,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     // here is what makes that case reachable at all.
     let mut placed: Vec<Option<EntityId>> = Vec::new();
     for scene in &scenario.setup.scenes {
-        load_scene(&mut world, scene.content(), &mut instances, &mut placed, &mut command_failures);
+        load_scene(&mut game, scene.content(), &mut instances, &mut installed_sources, &mut placed, &mut command_failures);
     }
     for action in &scenario.setup.actions {
         match action {
@@ -162,36 +215,36 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             // renumbering would instead re-point every later assertion at a
             // different body, silently.
             Action::Place((x, z)) => {
-                placed.push(world.place(glam::Vec2::new(*x, *z), Template::BODY));
+                placed.push(game.place(glam::Vec2::new(*x, *z), Template::BODY));
             }
             // `spec::Action` is designed to grow, so resolving a placement
             // number is written once rather than pasted into each new arm.
             Action::Despawn(nth) => {
                 if let Some(id) = placed.get(*nth).copied().flatten() {
-                    world.despawn_body(id);
+                    game.despawn_body(id);
                 }
             }
             Action::Seek(nth) => {
                 if let Some(id) = placed.get(*nth).copied().flatten() {
-                    world.add_seek(id);
+                    game.add_seek(id);
                 }
             }
         }
     }
 
-    // Sources last, so a source is described against a world that is already
+    // Sources last, so a source is described against a game that is already
     // laid out — and, more practically, so that adding one cannot renumber the
     // placements a scenario's assertions refer to.
     // The name each source got, in the order the scenario listed them: the
     // translation from a scenario's source number, exactly as `placed` is for a
     // body's placement number.
     let sources: Vec<SourceId> =
-        scenario.setup.sources.iter().map(|source| world.add_source(*source)).collect();
+        scenario.setup.sources.iter().map(|source| game.add_source(*source)).collect();
 
     // Setup is not the run. Without this the golden trace would also record
-    // `World::default()` building a horde this scenario just replaced, tying
+    // `Game::default()` building a horde this scenario just replaced, tying
     // every golden file to a constant none of them are about.
-    world.clear_trace();
+    game.clear_trace();
 
     let budget = scenario.budget.ticks as usize;
     let schedule = input_schedule(scenario);
@@ -214,6 +267,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     let mut checkpoints: Vec<_> = scenario.checkpoints.iter().enumerate().collect();
     checkpoints.sort_by_key(|(_, checkpoint)| checkpoint.at);
     let mut checkpoints = checkpoints.into_iter().peekable();
+    let mut scene_commands = scenario.scene_commands().into_iter().peekable();
 
     while hashes.len() < budget {
         for dt in accumulator.pending(Dt::SECS) {
@@ -221,14 +275,16 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             // Loads complete before source evaluation; evictions therefore stop
             // a source from firing on this very tick. No implicit warm-up tick.
             let mut installed = 0;
-            for command in scenario.scenes.iter().filter(|command| command.at == tick) {
+            while scene_commands.peek().is_some_and(|command| command.at == tick) {
+                let command = scene_commands.next().expect("peeked scene command");
                 match &command.action {
                     crate::spec::SceneAction::Load(scene) => {
                         let before = placed.len();
                         load_scene(
-                            &mut world,
+                            &mut game,
                             scene.content(),
                             &mut instances,
+                            &mut installed_sources,
                             &mut placed,
                             &mut command_failures,
                         );
@@ -239,7 +295,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                             .get(*nth)
                             .copied()
                             .flatten()
-                            .is_some_and(|id| world.evict_scene(id))
+                            .is_some_and(|id| game.evict_scene(id))
                         {
                             command_failures.push(Failure::new(
                                 "evict scene",
@@ -251,37 +307,59 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                 }
             }
             for command in scenario.attack_recovery.iter().filter(|command| command.at == tick) {
-                world.set_attack_recovery(command.recovery);
+                game.set_attack_recovery(command.recovery);
             }
             for command in scenario.attack_profiles.iter().filter(|command| command.at == tick) {
-                world.set_attack_profile(command.profile);
+                game.set_attack_profile(command.profile);
             }
 
-            // Asked for *before* the step, through the same queue anything
-            // inside the simulation will use. The first pass of this tick
-            // grants them, so the body exists for the whole of tick `at`.
+            // Switches precede removals and source evaluation. Each uses the
+            // same engine operation as the harness, with stale ids refused.
+            for command in scenario.source_switches.iter().filter(|command| command.at == tick) {
+                if !resolve_source(&sources, &installed_sources, command.scene, command.source).is_some_and(|id| {
+                    game.set_source_enabled(id, command.enabled)
+                }) {
+                    command_failures.push(Failure::new(
+                        "source_switches", "a live source".into(),
+                        format!("source {} at tick {}", command.source, tick),
+                    ));
+                }
+            }
+
             // Removals before the tick they name, so a source removed at `at`
             // does not fire on `at`. Stated in the spec, and it is the kind of
             // off-by-one that would otherwise be discovered by a golden trace
             // diff nobody could explain.
             for removal in scenario.remove_sources.iter().filter(|r| r.at == tick) {
-                if let Some(id) = sources.get(removal.source).copied() {
-                    world.remove_source(id);
+                if !resolve_source(&sources, &installed_sources, removal.scene, removal.source)
+                    .is_some_and(|id| game.remove_source(id)) {
+                    command_failures.push(Failure::new("remove_sources", "a live source".into(),
+                        format!("source {} at tick {tick}", removal.source)));
                 }
             }
 
+            for command in scenario.despawns.iter().filter(|command| command.at == tick) {
+                if !placed.get(command.body).copied().flatten().is_some_and(|id| game.despawn_body(id)) {
+                    command_failures.push(Failure::new("despawns", "a live removable body".into(),
+                        format!("body {} at tick {tick}", command.body)));
+                }
+            }
+
+            // Asked for before the step, through the same queue anything
+            // inside the simulation uses. The spawn pass grants them before
+            // row readers, so each body exists for the whole of tick `at`.
             let mut asked = 0;
             for spawn in scenario.spawns.iter().filter(|s| s.at == tick) {
-                let _ = world.request_spawn(glam::Vec2::new(spawn.pos.0, spawn.pos.1), spawn.what);
+                let _ = game.request_spawn(glam::Vec2::new(spawn.pos.0, spawn.pos.1), spawn.what);
                 asked += 1;
             }
 
             for command in scenario.impulses.iter().filter(|command| command.at == tick) {
                 let id = match command.target {
-                    crate::spec::Target::Player => Some(world.player_id()),
+                    crate::spec::Target::Player => Some(game.player_id()),
                     crate::spec::Target::Placed(nth) => placed.get(nth).copied().flatten(),
                 };
-                if !id.is_some_and(|id| world.apply_impulse(id, command.value)) {
+                if !id.is_some_and(|id| game.apply_impulse(id, command.value)) {
                     command_failures.push(Failure::new(
                         "impulse",
                         format!("a live target at tick {tick}"),
@@ -292,12 +370,12 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             let intent = Intent::new(schedule[tick as usize], scenario.attacks.contains(&tick))
                 .with_interact(scenario.interactions.contains(&tick));
             let started = std::time::Instant::now();
-            world.step(dt, intent);
+            game.step(dt, intent);
             step_time += started.elapsed();
-            hashes.push(world.hash());
+            hashes.push(game.hash());
 
             if watching {
-                if world.trace().dropped() > 0 {
+                if game.trace().dropped() > 0 {
                     // Scene batches can exceed the trace ring in one boundary
                     // operation. Binding only its surviving tail would silently
                     // change placement numbering, even without a golden trace.
@@ -308,14 +386,14 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                     ));
                     watching = false;
                 } else {
-                    record_placed(&world, tick, asked, installed, &mut placed);
+                    record_placed(&game, tick, asked, installed, &mut placed);
                 }
             }
             // After recording this tick's spawns, so a checkpoint can inspect
             // a newly granted body by the same name used at the end of the run.
             while checkpoints.peek().is_some_and(|(_, checkpoint)| checkpoint.at == tick) {
                 let (index, checkpoint) = checkpoints.next().expect("peeked checkpoint");
-                for mut failure in check_state(&checkpoint.expect, &world, &placed) {
+                for mut failure in check_state(&checkpoint.expect, &game, &placed, &sources, &instances, &installed_sources) {
                     failure.what =
                         format!("checkpoint[{index}] after tick {tick}: {}", failure.what);
                     checkpoint_failures.push(failure);
@@ -325,7 +403,10 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     }
 
     Run {
-        world,
+        game,
+        sources,
+        instances,
+        installed_sources,
         hashes,
         placed,
         mean_step_micros: step_time.as_secs_f64() * 1e6 / budget.max(1) as f64,
@@ -350,13 +431,13 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
 /// that refer to them. Refusal means the horde hit its budget, which cannot
 /// un-happen, so the shortfall is always the tail of what was asked for.
 fn record_placed(
-    world: &World,
+    game: &Game,
     tick: u64,
     asked: usize,
     installed: usize,
     placed: &mut Vec<Option<EntityId>>,
 ) {
-    let granted: Vec<EntityId> = world
+    let granted: Vec<EntityId> = game
         .trace()
         .since(tick)
         .filter_map(|(_, event)| match event {
@@ -418,7 +499,7 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
             format!("{:.2}", run.mean_step_micros),
         ));
     }
-    let ticks = run.world.tick();
+    let ticks = run.game.tick();
     if ticks != scenario.budget.ticks {
         failures.push(Failure::new(
             "tick count",
@@ -427,16 +508,19 @@ pub(crate) fn check(scenario: &Scenario, run: &Run) -> Vec<Failure> {
         ));
     }
 
-    failures.extend(check_state(&scenario.expect, &run.world, &run.placed));
+    failures.extend(check_state(&scenario.expect, &run.game, &run.placed, &run.sources, &run.instances, &run.installed_sources));
     failures
 }
 
 /// One implementation for every observation point. Borrowing state prevents
 /// checking a checkpoint from affecting the subsequent simulation or replay.
-fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> Vec<Failure> {
+fn check_state(
+    expect: &Expect, game: &Game, placed: &[Option<EntityId>], source_ids: &[SourceId],
+    instances: &[Option<arpg_sim::SceneId>], installed_sources: &[Vec<SourceId>],
+) -> Vec<Failure> {
     let mut failures = Vec::new();
     // Exhaustive, so an assertion added to the spec cannot be quietly left
-    // unchecked — the same trick `World::hash` uses, for the same reason.
+    // unchecked — the same trick `Game::hash` uses, for the same reason.
     let Expect {
         attack_phase,
         swing_tick,
@@ -454,12 +538,14 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
         enemy_count,
         seekers,
         sources,
+        source_states,
+        controls,
         scene_count,
         bodies,
         trace: _,
     } = expect;
 
-    let attack = world.attack_status();
+    let attack = game.attack_status();
     check_eq("attack_phase", attack_phase, attack.phase, &mut failures);
     check_eq("swing_tick", swing_tick, attack.elapsed, &mut failures);
     check_eq("recovery_ticks", recovery_ticks, attack.recovery.get(), &mut failures);
@@ -480,12 +566,12 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
         ));
     }
 
-    failures.extend(check_finite(world));
+    failures.extend(check_finite(game));
     if let Some(want) = player_velocity {
-        check_velocity("player_velocity", want, world.motion(world.player_id()), &mut failures);
+        check_velocity("player_velocity", want, game.motion(game.player_id()), &mut failures);
     }
     if let Some(want) = player_pos {
-        let got = world.player_pos();
+        let got = game.player_pos();
         if let Some(off) = want.off_by(got) {
             failures.push(
                 Failure::new(
@@ -503,7 +589,7 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
     }
 
     if let Some(want) = facing {
-        let got = world.player_facing();
+        let got = game.player_facing();
         if (got - want.value).abs() > want.tol {
             failures.push(
                 Failure::new(
@@ -516,17 +602,34 @@ fn check_state(expect: &Expect, world: &World, placed: &[Option<EntityId>]) -> V
         }
     }
 
-    check_eq("contacts", contacts, world.contacts(), &mut failures);
-    check_eq("crowd_contacts", crowd_contacts, world.crowd_contacts(), &mut failures);
-    check_eq("struck", struck, world.struck(), &mut failures);
-    check_eq("hitbox", hitbox, world.hitbox_is_live(), &mut failures);
-    check_eq("enemy_count", enemy_count, world.enemy_count(), &mut failures);
-    check_eq("seekers", seekers, world.seeker_count(), &mut failures);
-    check_eq("sources", sources, world.source_count(), &mut failures);
-    check_eq("scene_count", scene_count, world.scene_count(), &mut failures);
+    check_eq("contacts", contacts, game.contacts(), &mut failures);
+    check_eq("crowd_contacts", crowd_contacts, game.crowd_contacts(), &mut failures);
+    check_eq("struck", struck, game.struck(), &mut failures);
+    check_eq("hitbox", hitbox, game.hitbox_is_live(), &mut failures);
+    check_eq("enemy_count", enemy_count, game.enemy_count(), &mut failures);
+    check_eq("seekers", seekers, game.seeker_count(), &mut failures);
+    check_eq("sources", sources, game.source_count(), &mut failures);
+    for expected in source_states {
+        let actual = resolve_source(source_ids, installed_sources, expected.scene, expected.source).and_then(|id| game.source_state(id));
+        if actual != expected.state {
+            failures.push(Failure::new(
+                &format!("source_states[{}]", expected.source),
+                format!("{:?}", expected.state), format!("{actual:?}"),
+            ));
+        }
+    }
+    for expected in controls {
+        let actual = instances.get(expected.scene).copied().flatten()
+            .and_then(|id| game.source_control_state(id, expected.control));
+        if actual != expected.state {
+            failures.push(Failure::new(&format!("controls[{}/{}]", expected.scene, expected.control),
+                format!("{:?}", expected.state), format!("{actual:?}")));
+        }
+    }
+    check_eq("scene_count", scene_count, game.scene_count(), &mut failures);
 
     for body in bodies {
-        check_body(world, placed, body, &mut failures);
+        check_body(game, placed, body, &mut failures);
     }
 
     failures
@@ -558,7 +661,7 @@ fn check_eq<T: PartialEq + std::fmt::Display>(
 /// densely, so a despawn swaps the last row into the hole and every index after
 /// it changes without anything touching those bodies.
 fn check_body(
-    world: &World,
+    game: &Game,
     placed: &[Option<EntityId>],
     body: &crate::spec::BodyExpect,
     failures: &mut Vec<Failure>,
@@ -590,20 +693,20 @@ fn check_body(
     };
 
     if let Some(want) = body.interaction {
-        let got = world.interaction_state(id);
+        let got = game.interaction_state(id);
         if got != Some(want) {
             failures.push(Failure::new(&format!("bodies[{}].interaction", body.nth),
                 want.to_string(), got.map_or("no interaction".into(), |state| state.to_string())));
         }
     }
-    let alive = world.is_alive(id);
+    let alive = game.is_alive(id);
     check_eq(&format!("bodies[{}].damageable", body.nth), &body.damageable,
-        world.health(id).is_some(), failures);
+        game.health(id).is_some(), failures);
 
     check_eq(
         &format!("bodies[{}].seeking", body.nth),
         &body.seeking,
-        world.is_seeker(id),
+        game.is_seeker(id),
         failures,
     );
 
@@ -625,10 +728,10 @@ fn check_body(
     }
 
     if let Some(want) = &body.velocity {
-        check_velocity(&format!("bodies[{}].velocity", body.nth), want, world.motion(id), failures);
+        check_velocity(&format!("bodies[{}].velocity", body.nth), want, game.motion(id), failures);
     }
     if let Some(want) = body.health {
-        let got = world.health(id);
+        let got = game.health(id);
         if got != Some(want) {
             failures.push(Failure::new(
                 &format!("bodies[{}].health", body.nth),
@@ -639,7 +742,7 @@ fn check_body(
     }
     let Some(want) = &body.pos else { return };
 
-    let Some(got) = world.body_pos(id) else {
+    let Some(got) = game.body_pos(id) else {
         // Only reported when the scenario did not already say it expects this.
         // A file asserting `alive: false` and no position would otherwise fail
         // twice for one fact.
@@ -687,8 +790,8 @@ fn check_body(
 /// This still earns its place: it costs one pass over the bodies, and it holds
 /// for the cases `contain` cannot launder — a position written after it, or a
 /// pass order that changes.
-fn check_finite(world: &World) -> Option<Failure> {
-    if world.all_positions_finite() {
+fn check_finite(game: &Game) -> Option<Failure> {
+    if game.all_positions_finite() {
         return None;
     }
 
@@ -752,12 +855,12 @@ pub(crate) fn check_trace(
 ) -> Option<Failure> {
     let name = scenario.expect.trace.as_ref()?;
     let path = beside.parent().unwrap_or(Path::new(".")).join(name);
-    let actual = run.world.trace().render();
+    let actual = run.game.render_trace_since(0);
 
     // A wrapped ring buffer means the beginning of the run is simply gone, so
     // the golden file would silently stop describing what it is named after.
     // Refused rather than compared.
-    let dropped = run.world.trace().dropped();
+    let dropped = run.game.trace_dropped();
     if dropped > 0 {
         return Some(
             Failure::new("trace", "a complete trace".into(), format!("{dropped} event(s) dropped"))
@@ -841,20 +944,31 @@ fn check_velocity(
 }
 
 fn load_scene(
-    world: &mut World,
-    scene: &arpg_sim::Scene,
+    game: &mut Game,
+    scene: &arpg_game::GameScene,
     instances: &mut Vec<Option<arpg_sim::SceneId>>,
+    installed_sources: &mut Vec<Vec<SourceId>>,
     placed: &mut Vec<Option<EntityId>>,
     failures: &mut Vec<Failure>,
 ) {
-    match world.load_scene(scene) {
+    match game.load_scene(scene) {
         Ok(id) => {
             instances.push(Some(id));
-            placed.extend(world.scene_bodies(id).unwrap_or_default().iter().copied().map(Some));
+            installed_sources.push(game.scene_sources(id).unwrap_or_default().to_vec());
+            placed.extend(game.scene_bodies(id).unwrap_or_default().iter().copied().map(Some));
         }
         Err(error) => {
             instances.push(None);
+            installed_sources.push(Vec::new());
             failures.push(Failure::new("load scene", "a ready scene".into(), error.to_string()));
         }
     }
+}
+
+fn resolve_source(setup: &[SourceId], installed: &[Vec<SourceId>],
+    scene: Option<usize>, source: usize) -> Option<SourceId> {
+    match scene {
+        None => setup.get(source),
+        Some(nth) => installed.get(nth).and_then(|sources| sources.get(source)),
+    }.copied()
 }

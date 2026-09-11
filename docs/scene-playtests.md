@@ -5,6 +5,22 @@ relaunching the game. A scene describes disposable content; a playtest owns the
 world and player. Restarting constructs a fresh world, then calls the same
 scene instantiation door that additive loading uses.
 
+The app and scenario runner now own a `Game`, which wraps the engine world.
+They step and observe it through the same entry point. Game owns the cached
+restart description and atomically replaces the complete run on start/restart.
+Game-owned relationships and engine resources share one eviction boundary. Additive loads
+and eviction preserve the restart choice, even if its live instance is removed.
+Run-scoped identity rules stay the same.
+
+The `sim` report keeps its physical fields and adds `restart.available`, plus
+`restart.name` and `restart.initial_hash` when a snapshot is selected. The latter
+is the hexadecimal fingerprint of the snapshot's initial engine and gameplay state, computed
+once when the snapshot is validated. It is immutable, so it cannot drift from
+the description. The existing `sim_hash` and ready-reply hash now cover both the
+active engine, gameplay relationships, and the restart effect. Their values intentionally change at this
+migration; gameplay timing and event traces do not. `Game::engine_hash` remains
+available for comparing engine state independently of the restart choice.
+
 ## Driving it
 
 Launch from the repository:
@@ -177,7 +193,7 @@ outside the correctness gate; change the budget to 16,666.67 to test 60 Hz.
 ```
 
 Coordinates are world `(x, z)`. `Scene`, `Placed`, `BodyGrid`, `Template`, and
-`SourceSpec` live in sim; the scenario library reads those types directly.
+`SourceSpec` live in sim; the content library reads those types directly.
 Source population conditions still count the whole world's enemies, not just
 their scene.
 
@@ -197,7 +213,9 @@ placement per line it was a 16,524-line fixture, and the same 128x128 horde is
 now a single grid entry in a 13-line file.
 
 ```text
-scene file -> scenario library -> Scene description
+scene file -> content library -> Scene description
+                                     |
+                    Game prepares the complete lifecycle operation
                                      |
                  +-------------------+------------------+
                  |                                      |
@@ -236,10 +254,15 @@ scenes: [
 ```
 
 References resolve relative to the scenario file, once before both replay runs.
-Eviction indices refer to load order, starting with setup. Operations run in file
-order before the named tick. Placed body numbering includes authored bodies,
+Eviction, source, and control indices refer to load order, starting with setup,
+then ascending tick order, preserving file order at equal ticks. Validation and
+execution share this order. Placed body numbering includes authored bodies,
 then ordinary setup actions, then later loads and emissions in execution order.
 `scene_count` and existing body/source assertions inspect the result.
+
+Step-time budgets now measure `Game::step`, including its call to the existing
+engine schedule. Setup, hashing, and assertions remain outside the timer. The
+historical measurements above predate this wrapper and measured `World::step`.
 
 The lifecycle scenario asserts surviving identities and positions, source
 descendants, reload, and load-then-evict before a source's first tick. Unit tests
@@ -249,6 +272,13 @@ commands even with blessing enabled. Runtime placement tracking requires an
 untruncated trace; a batch that overflows it fails explicitly rather than
 renumbering the bodies an assertion refers to.
 
+Public game lifecycle tests also cover failed replacement preserving its
+snapshot and accepted pending work, restart after additive loading and eviction,
+reset of interaction/motion/attack state, and hashing of distinct restart choices
+when their active engine worlds are identical. App cleanup runs only after the
+game operation succeeds; invalid content and exhausted run ids preserve the
+current run without cancelling its inputs or capture requests.
+
 These instances are disposable. An enemy following the player elsewhere still
 belongs to its originating instance and disappears on eviction. Reload recreates
 authored content. Persistence, ownership transfer, proximity residency, partial
@@ -256,3 +286,12 @@ activation, background file loading, and changing arena bounds remain separate
 design work. Synchronous instantiation can hitch for large scenes. Source ids
 still retain the existing registry's historical holes; long-lived streaming
 will need to revisit that storage assumption.
+
+## Gameplay scene composition
+
+New gameplay scenes wrap physical content in `GameScene.engine` and add
+`source_controls`. Legacy engine-only files still decode unchanged. Inline
+scenario references use `Gameplay(...)` for complete game scenes and retain
+`Inline(...)` for legacy physical scenes. File references support both forms.
+See [source control](source-control.md) for validation and lifecycle rules;
+`scenes/source_control.ron` is the minimal connected fixture.

@@ -1,0 +1,31 @@
+(
+    description: "Source and control indices follow actual load order: setup first, then tick order, with file order breaking ties. Removal retains original bindings.",
+    setup: (scenes: [Inline((name: "setup"))]),
+    scenes: [
+        (at: 3, action: Load(Inline((name: "late")))),
+        (at: 0, action: Load(File("../scenes/source_control.ron"))),
+        (at: 0, action: Load(Inline((name: "external source",
+            sources: [(pos: (-20.0, 0.0), enabled: false)])))),
+        (at: 3, action: Evict(1)),
+    ],
+    interactions: [0],
+    source_switches: [(at: 1, scene: 2, source: 0, enabled: true)],
+    remove_sources: [(at: 2, scene: 2, source: 0)],
+    checkpoints: [
+        (at: 0, expect: (enemy_count: 0, controls: [
+            (scene: 1, control: 0, state: Some((phase: Pending,
+                source: Some((enabled: false, countdown: 0, emitted: 0))))),
+        ])),
+        (at: 1, expect: (enemy_count: 2, controls: [
+            (scene: 1, control: 0, state: Some((phase: Started,
+                source: Some((enabled: true, countdown: 3, emitted: 1))))),
+        ], source_states: [
+            (scene: 2, source: 0, state: Some((enabled: true, countdown: 0, emitted: 1))),
+        ])),
+    ],
+    budget: (ticks: 4),
+    expect: (scene_count: 3, enemy_count: 1, sources: 0,
+        controls: [(scene: 1, control: 0, state: None)],
+        source_states: [(scene: 1, source: 0, state: None),
+                        (scene: 2, source: 0, state: None)]),
+)

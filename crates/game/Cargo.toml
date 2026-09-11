@@ -1,0 +1,18 @@
+[package]
+name = "arpg-game"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+# Deterministic gameplay and its vocabulary; no file I/O or graphics adapters.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+arpg-core.workspace = true
+arpg-sim.workspace = true
+glam.workspace = true
+
+[build-dependencies]
+toml_edit.workspace = true
+
+[lints]
+workspace = true

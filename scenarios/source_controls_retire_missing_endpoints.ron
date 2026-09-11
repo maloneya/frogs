@@ -1,0 +1,21 @@
+(
+    description: "Removing an activated body or its source before the next tick retires the connection; recycled body storage cannot activate the old relationship.",
+    setup: (scenes: [File("../scenes/source_control.ron"), File("../scenes/source_control.ron")]),
+    interactions: [0, 1, 2, 3],
+    despawns: [(at: 1, body: 0)],
+    remove_sources: [(at: 3, scene: 1, source: 0)],
+    spawns: [(at: 1, pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+    checkpoints: [
+        (at: 2, expect: (enemy_count: 0, bodies: [(nth: 1, interaction: Activated)], controls: [
+            (scene: 1, control: 0, state: Some((phase: Pending, source: Some((enabled: false, countdown: 0, emitted: 0))))),
+        ])),
+        (at: 1, expect: (enemy_count: 0, bodies: [(nth: 0, alive: false)], controls: [
+            (scene: 0, control: 0, state: Some((phase: Orphaned, source: Some((enabled: false, countdown: 0, emitted: 0))))),
+        ])),
+    ],
+    budget: (ticks: 5),
+    expect: (enemy_count: 0, controls: [
+        (scene: 0, control: 0, state: Some((phase: Orphaned, source: Some((enabled: false, countdown: 0, emitted: 0))))),
+        (scene: 1, control: 0, state: Some((phase: Orphaned, source: None))),
+    ]),
+)

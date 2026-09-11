@@ -1,0 +1,29 @@
+(
+    description: "Activation on tick 2 permits the first emission on tick 3; repeated interaction cannot re-enable a source later paused by an external command.",
+    setup: (scenes: [File("../scenes/source_control.ron")]),
+    interactions: [2, 4, 6, 8, 10],
+    source_switches: [
+        (at: 6, scene: 0, source: 0, enabled: false),
+        (at: 11, scene: 0, source: 0, enabled: true),
+    ],
+    checkpoints: [
+        (at: 1, expect: (enemy_count: 0, controls: [
+            (scene: 0, control: 0, state: Some((phase: Pending, source: Some((enabled: false, countdown: 0, emitted: 0)))))
+        ])),
+        (at: 2, expect: (enemy_count: 0, bodies: [(nth: 0, interaction: Activated)], controls: [
+            (scene: 0, control: 0, state: Some((phase: Pending, source: Some((enabled: false, countdown: 0, emitted: 0)))))
+        ])),
+        (at: 3, expect: (enemy_count: 1, controls: [
+            (scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 3, emitted: 1)))))
+        ])),
+        (at: 10, expect: (enemy_count: 1, controls: [
+            (scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: false, countdown: 1, emitted: 1)))))
+        ])),
+    ],
+    budget: (ticks: 13),
+    expect: (
+        enemy_count: 2,
+        controls: [(scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 3, emitted: 2)))))],
+        trace: "activation_starts_a_source_once.trace",
+    ),
+)

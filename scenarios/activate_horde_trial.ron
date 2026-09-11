@@ -1,0 +1,35 @@
+(
+    description: "The playable trial stays empty for two seconds, activates once, emits on N+1 then every 45 ticks, stops at eight seekers, and refills a removed enemy without counting the control prop.",
+    setup: (scenes: [File("../scenes/activate_horde.ron")]),
+    interactions: [120, 122, 200],
+    // At 436 the eighth body has arrived. By 481 the cadence is ready and
+    // the population gate holds it. Removing one at 540 permits an immediate refill.
+    despawns: [(at: 540, body: 1)],
+    checkpoints: [
+        (at: 119, expect: (enemy_count: 0, bodies: [(nth: 0, interaction: Ready, damageable: false)], controls: [
+            (scene: 0, control: 0, state: Some((phase: Pending, source: Some((enabled: false, countdown: 0, emitted: 0))))),
+        ])),
+        (at: 120, expect: (enemy_count: 0, bodies: [(nth: 0, interaction: Activated)], controls: [
+            (scene: 0, control: 0, state: Some((phase: Pending, source: Some((enabled: false, countdown: 0, emitted: 0))))),
+        ])),
+        (at: 121, expect: (enemy_count: 1, seekers: 1, bodies: [(nth: 1, seeking: true, health: 3)], controls: [
+            (scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 44, emitted: 1))))),
+        ])),
+        (at: 165, expect: (enemy_count: 1, controls: [
+            (scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 0, emitted: 1))))),
+        ])),
+        (at: 166, expect: (enemy_count: 2, seekers: 2)),
+        (at: 435, expect: (enemy_count: 7)),
+        (at: 436, expect: (enemy_count: 8, seekers: 8)),
+        (at: 539, expect: (enemy_count: 8, controls: [
+            (scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 0, emitted: 8))))),
+        ])),
+        (at: 540, expect: (enemy_count: 8, seekers: 8, bodies: [(nth: 1, alive: false)], controls: [
+            (scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 44, emitted: 9))))),
+        ])),
+    ],
+    budget: (ticks: 600),
+    expect: (enemy_count: 8, seekers: 8, bodies: [(nth: 0, alive: true, interaction: Activated)], controls: [
+        (scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 0, emitted: 9))))),
+    ]),
+)

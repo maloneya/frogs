@@ -7,7 +7,7 @@ description: Write, run and update arpg scenarios — the headless, exit-code-ga
 
 A scenario is the unit of verification in this repo. Setup, an input stream
 measured in ticks, assertions at checkpoints, over final state and over the trace, a tick
-budget. It runs headless against `sim` — no GPU, no window, microseconds per
+budget. It runs headless through `Game::step` — no GPU, no window, microseconds per
 run — and it exits 0 or 1.
 
 The harness socket (`playtest` skill) stays useful for the interactive and
@@ -29,7 +29,7 @@ The `Stop` hook runs this when a turn ends and blocks on failure.
     description: "One sentence on what this would catch.",
     setup: (enemies: 0),
     // Inputs are indexed in ticks, never milliseconds. Wall clock has no
-    // meaning here: the whole run is a loop over World::step. Spans apply in
+    // meaning here: the whole run is a loop over Game::step. Spans apply in
     // order, so a later one overrides an earlier one where they overlap.
     inputs: [
         (at: 0, ticks: 30, dir: (1.0, 0.0)),
@@ -85,6 +85,22 @@ remove_sources: [ (at: 15, source: 0) ],
 `radius` of zero puts every body on the one point, which stacks them on purpose.
 Bodies that appear mid-run continue the placement numbering `actions` starts, in
 the order they were granted, so `bodies: [(nth: 1, ...)]` can name one.
+
+Sources default to enabled; `enabled: false` authors a dormant one. Use
+`source_switches: [(at: 2, source: 0, enabled: true)]` to change it before that
+tick's removals and source evaluation. Disabling freezes countdown and ring
+progress; enabling resumes them and still respects the source's condition.
+Switches, removals, and assertions index `setup.sources` by default. An optional
+`scene` load index selects that instance's original source bindings instead.
+Load indices count setup first, then timeline loads in ascending tick order;
+loads on the same tick retain file order.
+Unknown indices, unreachable ticks, and switches to removed sources fail.
+
+Both checkpoints and final expectations accept exact engine-owned `SourceState`:
+`source_states: [(source: 0, state: Some((enabled: true, countdown: 3, emitted: 1)))]`.
+Use `state: None` for a removed setup source. Do not create a second copy of
+these state fields in the runner. See `docs/source-enablement.md` and
+`scenarios/source_enablement_freezes_cadence.ron` for timing examples.
 
 ## What can be asserted today
 
@@ -142,7 +158,7 @@ or placing the *player* anywhere but the origin.
 
 ## Every scenario is also a replay test
 
-The runner runs each scenario **twice** and compares `World::hash()` tick by
+The runner runs each scenario **twice** and compares `Game::hash()` tick by
 tick, whether or not the scenario asks. A divergence reports the tick it
 happened on:
 
@@ -276,7 +292,31 @@ These are carried velocities, excluding powered walk/seek displacement.
 A source attack applies its impulse after integration, so its first displacement
 occurs on the following tick. The hit and impulse events pin this boundary.
 
-A budget may also set `max_mean_step_micros`. Timing surrounds `World::step`
+A budget may also set `max_mean_step_micros`. Timing surrounds `Game::step`
 only, outside simulation, and excludes hashing and verification. `sim` is
 optimized even in the debug scenario runner; validate performance in release
 as well. This is a mean budget, not a worst-tick latency guarantee.
+
+## Gameplay source control
+
+Complete game scenes use `Gameplay((engine: (...), source_controls: [...]))`
+inline, or `File(...)` with the same game-owned schema. Existing `Inline(...)`
+physical scenes and legacy files remain supported. Local control indices name
+explicit authored bodies and sources; all references validate before install.
+
+Assert the game-owned type directly, at checkpoints or final state:
+`controls: [(scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 3, emitted: 1)))))]`.
+`state: None` means that authored connection's scene has been evicted; an
+unknown authored scene/control index is rejected. Pending, Started, and
+Orphaned are the mechanic's own phases, not a runner copy.
+
+`despawns: [(at: 3, body: 0)]` retires a resolved placed identity before the
+tick. Source removal can select a scene:
+`remove_sources: [(at: 3, scene: 0, source: 0)]`. Removed bindings never shift
+to another source. Missing command targets and unreachable ticks fail.
+
+Activation on N is consumed before the engine step on N+1. Assert both ticks.
+The complete golden trace includes engine events followed by a labelled
+gameplay-transition stream; each preserves its own order. There is no claimed
+cross-stream order between equal-tick external commands and gameplay.
+See `scenarios/activation_starts_a_source_once.ron` and `docs/source-control.md`.

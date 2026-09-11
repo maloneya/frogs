@@ -1,0 +1,12 @@
+// Does one nearby interaction start a dormant source exactly once?
+// Press E at the starting position. The block activates immediately; the
+// source may first emit on the next tick. Trace/state assertions verify timing.
+// This is the architecture fixture; live placement and cadence tuning are next.
+(
+    engine: (
+        name: "Source control",
+        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
+    ),
+    source_controls: [(body: 0, source: 0)],
+)

@@ -1,6 +1,6 @@
 //! What the overlay says, and where.
 //!
-//! The counterpart to `World::extract`, one layer up. `extract` is the
+//! The counterpart to `arpg_game::Game::extract`, one layer up. `extract` is the
 //! simulation describing itself to a renderer in world terms; this is the
 //! *app* describing a screen to the same renderer in pixels. Both hand over
 //! nothing but geometry and colour, which is what lets `gfx` draw a readout
@@ -319,7 +319,7 @@ mod tests {
         let mut buf = QuadBuffer::default();
         {
             let mut sink = buf.sink();
-            let world = arpg_sim::World::default();
+            let world = arpg_game::Game::default();
             let mut menu = Menu::default();
             menu.on_key(crate::ui::MenuKey::Toggle, world.attack_status().profile);
             draw(

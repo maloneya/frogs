@@ -98,6 +98,7 @@ pub(crate) enum Command {
     /// separately about an axis the others already had.
     Source(SourceSpec),
     RemoveSource(SourceId),
+    SetSourceEnabled { id: SourceId, enabled: bool },
     SetVsync(bool),
     Quit,
 }
@@ -125,8 +126,8 @@ fn key(arg: Option<&str>) -> Result<KeyCode, String> {
 
 /// Named once, because it is quoted from four error paths and a usage message
 /// that disagrees with the parser is worse than none.
-const USAGE: &str = "expected: source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>], \
-     or source remove <id>";
+const USAGE: &str = "expected: source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>] [disabled], \
+     or source remove|enable|disable <id>";
 
 fn parse(line: &str) -> Result<Command, String> {
     if let Some(rest) = line.trim().strip_prefix("scene")
@@ -169,7 +170,7 @@ fn parse(line: &str) -> Result<Command, String> {
             // word here rather than another column nobody can read.
             let what = match it.next() {
                 Some("seek") if it.next().is_none() => Template::BODY.seeking(),
-                Some("template") => arpg_scenario::parse_template(&it.collect::<Vec<_>>().join(" "))
+                Some("template") => arpg_content::parse_template(&it.collect::<Vec<_>>().join(" "))
                     .map_err(|error| error.to_string())?,
                 None => Template::BODY,
                 Some(other) => return Err(format!("unknown spawn option {other:?}; use template (<fields>)")),
@@ -177,6 +178,14 @@ fn parse(line: &str) -> Result<Command, String> {
             Command::Spawn { x, z, what }
         }
         "source" => {
+            if matches!(arg, Some("enable" | "disable")) {
+                let id = it.next().and_then(SourceId::parse)
+                    .ok_or_else(|| USAGE.to_string())?;
+                if it.next().is_some() {
+                    return Err(USAGE.to_string());
+                }
+                return Ok(Command::SetSourceEnabled { id, enabled: arg == Some("enable") });
+            }
             if arg == Some("remove") {
                 // Named in the form the trace prints — `s0`, not `0` — so an id
                 // read out of `trace since` can be handed straight back.
@@ -197,6 +206,7 @@ fn parse(line: &str) -> Result<Command, String> {
             let z = coord(it.next())?;
 
             let (mut every, mut radius, mut what) = (1, 0.0, Template::BODY);
+            let mut enabled = true;
             let (mut near, mut fewer) = (None, None);
 
             // Flags in any order, each either a word or a word and a number.
@@ -207,9 +217,10 @@ fn parse(line: &str) -> Result<Command, String> {
                 match flag {
                     "seek" => what = what.seeking(),
                     "template" => {
-                        what = arpg_scenario::parse_template(&it.by_ref().collect::<Vec<_>>().join(" "))
+                        what = arpg_content::parse_template(&it.by_ref().collect::<Vec<_>>().join(" "))
                             .map_err(|error| error.to_string())?;
                     },
+                    "disabled" => enabled = false,
                     "every" => every = number(it.next())? as u32,
                     "ring" => radius = coord(it.next())?,
                     "near" => near = Some(coord(it.next())?),
@@ -232,6 +243,7 @@ fn parse(line: &str) -> Result<Command, String> {
             // file compiling until somebody has decided which flag fills it —
             // which is the only check a text protocol can get for free.
             Command::Source(SourceSpec {
+                enabled,
                 pos: (x, z),
                 radius,
                 every,
@@ -399,6 +411,27 @@ mod tests {
         assert_eq!((spec.radius, spec.every), (0.0, 1));
         assert_eq!(spec.when, Condition::Always);
         assert!(!spec.what.seeks());
+        assert!(spec.enabled);
+    }
+
+    #[test]
+    fn source_enablement_is_explicit_and_rejects_malformed_commands() {
+        let Ok(Command::Source(spec)) = parse("source 30 0 disabled every 4 template (seeks: true)") else {
+            panic!("dormant source must parse");
+        };
+        assert!(!spec.enabled);
+        assert_eq!(spec.every, 4);
+        assert!(spec.what.seeks());
+        for (verb, expected) in [("enable", true), ("disable", false)] {
+            let Ok(Command::SetSourceEnabled { id, enabled }) = parse(&format!("source {verb} s3")) else {
+                panic!("enablement command must parse");
+            };
+            assert_eq!(id, SourceId::parse("s3").unwrap());
+            assert_eq!(enabled, expected);
+            for suffix in ["", "c0", "s3 extra", "s-1"] {
+                assert!(parse(&format!("source {verb} {suffix}")).is_err());
+            }
+        }
     }
 
     /// `spawn` names a [`Template`] for the same reason: a behaviour added to

@@ -115,6 +115,13 @@ pub enum Event {
         /// resolves to nothing rather than to a source added later.
         id: SourceId,
     },
+    /// A live source's enablement changed; repeated settings emit nothing.
+    SourceEnablementChanged {
+        /// Stable source identity.
+        id: SourceId,
+        /// Whether its cadence may now advance.
+        enabled: bool,
+    },
     /// A source asked for a body.
     ///
     /// **The causal half of a spawn**, and the reason it is separate from
@@ -215,6 +222,9 @@ impl fmt::Display for Event {
             Self::Placed { id } => write!(f, "placed id={id}"),
             Self::SourceAdded { id } => write!(f, "source added id={id}"),
             Self::SourceRemoved { id } => write!(f, "source removed id={id}"),
+            Self::SourceEnablementChanged { id, enabled } => {
+                write!(f, "source enabled id={id} value={enabled}")
+            }
             Self::Fired { source } => write!(f, "fired source={source}"),
             Self::Refused { count } => write!(f, "refused count={count}"),
             Self::Removed { id } => write!(f, "removed id={id}"),
@@ -230,8 +240,8 @@ impl fmt::Display for Event {
 }
 
 /// A ring buffer of tick-stamped events.
-pub struct Trace {
-    events: Vec<(u64, Event)>,
+pub struct Trace<E = Event> {
+    events: Vec<(u64, E)>,
     /// Where the next event goes once `events` is full.
     next: usize,
     /// Events overwritten because the buffer wrapped.
@@ -243,7 +253,7 @@ pub struct Trace {
     dropped: usize,
 }
 
-impl Default for Trace {
+impl<E> Default for Trace<E> {
     fn default() -> Self {
         // Allocated once, up front, for the same reason the instance buffer is:
         // a steady-state tick must not touch the allocator.
@@ -251,9 +261,9 @@ impl Default for Trace {
     }
 }
 
-impl Trace {
+impl<E: Copy + fmt::Display> Trace<E> {
     /// Hands out the only thing a pass may write through.
-    pub(crate) fn sink(&mut self, tick: u64) -> TraceSink<'_> {
+    pub fn sink(&mut self, tick: u64) -> TraceSink<'_, E> {
         TraceSink { trace: self, tick }
     }
 
@@ -280,13 +290,13 @@ impl Trace {
     }
 
     /// Events in the order they happened, oldest first.
-    pub fn iter(&self) -> impl Iterator<Item = (u64, Event)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = (u64, E)> + '_ {
         let (old, new) = self.events.split_at(self.next.min(self.events.len()));
         new.iter().chain(old).copied()
     }
 
     /// Everything from `tick` onward. What the harness's `trace since` serves.
-    pub fn since(&self, tick: u64) -> impl Iterator<Item = (u64, Event)> + '_ {
+    pub fn since(&self, tick: u64) -> impl Iterator<Item = (u64, E)> + '_ {
         self.iter().filter(move |(t, _)| *t >= tick)
     }
 
@@ -312,7 +322,7 @@ impl Trace {
         out
     }
 
-    fn push(&mut self, tick: u64, event: Event) {
+    fn push(&mut self, tick: u64, event: E) {
         if self.events.len() < CAPACITY {
             self.events.push((tick, event));
             // `next` only means anything once the buffer is full; until then the
@@ -332,19 +342,19 @@ impl Trace {
 /// slice it touches, and gets no other access to the trace: it cannot read the
 /// history, cannot reset it, and cannot stamp an event with a tick other than
 /// the one being run.
-pub(crate) struct TraceSink<'a> {
-    trace: &'a mut Trace,
+pub struct TraceSink<'a, E = Event> {
+    trace: &'a mut Trace<E>,
     tick: u64,
 }
 
-impl TraceSink<'_> {
+impl<E: Copy + fmt::Display> TraceSink<'_, E> {
     /// Records an event at the current tick.
-    pub(crate) fn emit(&mut self, event: Event) {
+    pub fn emit(&mut self, event: E) {
         self.trace.push(self.tick, event);
     }
 
     /// Re-borrows, so one tick's sink can be handed to several passes in turn.
-    pub(crate) fn reborrow(&mut self) -> TraceSink<'_> {
+    pub fn reborrow(&mut self) -> TraceSink<'_, E> {
         TraceSink { trace: self.trace, tick: self.tick }
     }
 }

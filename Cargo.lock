@@ -140,15 +140,27 @@ dependencies = [
 name = "arpg"
 version = "0.2.0"
 dependencies = [
+ "arpg-content",
  "arpg-core",
+ "arpg-game",
  "arpg-gfx",
  "arpg-sim",
  "env_logger",
  "glam",
  "log",
  "pollster",
- "scenario",
+ "toml_edit",
  "winit",
+]
+
+[[package]]
+name = "arpg-content"
+version = "0.2.0"
+dependencies = [
+ "arpg-game",
+ "arpg-sim",
+ "ron",
+ "toml_edit",
 ]
 
 [[package]]
@@ -157,6 +169,17 @@ version = "0.2.0"
 dependencies = [
  "bytemuck",
  "glam",
+]
+
+[[package]]
+name = "arpg-game"
+version = "0.2.0"
+dependencies = [
+ "arpg-core",
+ "arpg-sim",
+ "glam",
+ "serde",
+ "toml_edit",
 ]
 
 [[package]]
@@ -170,6 +193,7 @@ dependencies = [
  "log",
  "png",
  "pollster",
+ "toml_edit",
  "wgpu",
  "winit",
 ]
@@ -181,6 +205,7 @@ dependencies = [
  "arpg-core",
  "glam",
  "serde",
+ "toml_edit",
 ]
 
 [[package]]
@@ -1821,11 +1846,14 @@ dependencies = [
 name = "scenario"
 version = "0.2.0"
 dependencies = [
+ "arpg-content",
  "arpg-core",
+ "arpg-game",
  "arpg-sim",
  "glam",
  "ron",
  "serde",
+ "toml_edit",
 ]
 
 [[package]]

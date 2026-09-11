@@ -1,0 +1,12 @@
+2 source enabled id=s0 value=true
+2 fired source=s0
+2 placed id=#1v2
+4 source enabled id=s0 value=false
+8 source enabled id=s0 value=true
+10 fired source=s0
+10 placed id=#2v2
+11 source enabled id=s0 value=false
+12 source enabled id=s0 value=true
+15 fired source=s0
+15 placed id=#3v2
+16 source removed id=s0

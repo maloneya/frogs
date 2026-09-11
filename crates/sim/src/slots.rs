@@ -71,7 +71,7 @@ impl EntityId {
     }
 
     /// Feeds the whole name into the determinism hash.
-    pub(crate) fn hash_into(self, h: &mut Fnv) {
+    pub fn hash_into(self, h: &mut Fnv) {
         h.u64(u64::from(self.index));
         h.u64(u64::from(self.generation));
     }

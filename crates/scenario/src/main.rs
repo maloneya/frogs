@@ -7,7 +7,7 @@
 //!
 //! A scenario is setup, an input stream measured in ticks, a tick budget, and
 //! assertions at checkpoints and over the state it ends in. It runs against
-//! `sim` with no GPU, no window and no wall-clock pacing — which lets it be the
+//! `game` with no GPU, no window and no wall-clock pacing — which lets it be the
 //! gate on *every* change rather than something run occasionally.
 //!
 //! **Why this exists rather than a careful look at the numbers.** Driving the
@@ -145,7 +145,7 @@ fn run_one(path: &Path, bless: bool) -> bool {
         report::passed(
             &name,
             scenario.budget.ticks,
-            outcome.world.enemy_count(),
+            outcome.game.enemy_count(),
             &scenario.description,
         );
         true

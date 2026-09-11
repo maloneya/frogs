@@ -238,7 +238,7 @@ impl SpawnQueue {
             what.hash_into(h);
             h.usize(usize::from(owner.is_some()));
             if let Some(owner) = owner {
-                owner.hash(h);
+                owner.hash_into(h);
             }
         }
     }

@@ -1,0 +1,16 @@
+// Does a visible one-shot control give a clear start to a small horde fight?
+// Press E beside the blue block: it turns green and starts the distant source.
+// Move with WASD and swing with Space. Eight seekers approach at 0.75-second
+// intervals; the source replaces defeated enemies up to eight. E is not a toggle.
+// Use F2 > Restart current to restore the blue block and empty arena.
+(
+    engine: (
+        name: "Activate the horde",
+        bodies: [(pos: (0.0, 1.2), what: (fixed: true, interactable: true))],
+        sources: [(
+            pos: (0.0, -8.0), radius: 2.5, every: 45,
+            when: FewerThan(8), what: (seeks: true), enabled: false,
+        )],
+    ),
+    source_controls: [(body: 0, source: 0)],
+)

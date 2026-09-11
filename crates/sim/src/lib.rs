@@ -38,6 +38,8 @@ use pass::source::Sources;
 /// Who asks for spawns, and when. See [`crate::pass::source`] for why a source
 /// is its own thing rather than a behaviour on a body.
 pub use pass::source::{Condition, Placement, Source, SourceId, SourceSpec};
+/// Read-only snapshot of a source's enablement, cadence, and emission progress.
+pub use pass::source::SourceState;
 use pass::spawn::SpawnQueue;
 /// What to make, and what behaviours it should be granted. See
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
@@ -47,7 +49,9 @@ pub use scene::{BodyGrid, Placed, Scene, SceneError, SceneId};
 pub use slots::EntityId;
 use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, TICK_HZ, Ticks};
-pub use trace::{Event, Trace};
+pub use trace::{Event, Trace, TraceSink};
+mod access;
+pub use access::{InteractionView, SourceEnablement};
 
 /// One tick of walking, in world units. Re-exported because a scenario or a
 /// harness reading a position is almost always trying to work out how many
@@ -680,6 +684,20 @@ impl World {
         self.sources.len()
     }
 
+    /// Reads a live source's state; a retired or unknown identity resolves to None.
+    #[must_use]
+    pub fn source_state(&self, id: SourceId) -> Option<SourceState> {
+        self.sources.state(id)
+    }
+
+    /// Sets enablement before the next source evaluation. Disabled cadence is
+    /// frozen; re-enabling never resets it. Returns false only for an absent id.
+    /// Repeated settings succeed without adding trace events or changing state.
+    #[must_use]
+    pub fn set_source_enabled(&mut self, id: SourceId, enabled: bool) -> bool {
+        self.sources.set_enabled(id, enabled, self.trace.sink(self.tick))
+    }
+
     /// Asks for something to be made. It exists at the end of the next tick to
     /// run.
     ///
@@ -878,6 +896,7 @@ impl World {
         // one of those is a bug.
         out.int("queued", queue.len() as u64);
         out.int("sources", sources.len() as u64);
+        out.object("source_states", |out| sources.report(out));
         out.int("scene_count", scenes.len() as u64);
         out.object("scenes", |out| scenes.report(out));
 

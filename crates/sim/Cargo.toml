@@ -15,5 +15,8 @@ glam.workspace = true
 # one definition instead of each keeping a copy of the axes.
 serde = { version = "1", features = ["derive"] }
 
+[build-dependencies]
+toml_edit.workspace = true
+
 [lints]
 workspace = true

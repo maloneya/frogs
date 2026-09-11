@@ -23,7 +23,8 @@
 //!    drain**, so a source that fires on a tick produces a body that lives the
 //!    whole of it; and separate from the drain, because deciding and performing
 //!    have different privileges — this pass is handed no storage at all, so the
-//!    code that decides bodies exist cannot make one.
+//!    code that decides bodies exist cannot make one. Disabled sources skip
+//!    cadence and condition evaluation, preserving countdown and ring progress.
 //! 2. [`spawn::drain`] — grant everything asked for since the last tick.
 //!    **Before anything holds a row**, and structurally so: it is the only pass
 //!    that changes what exists, so running it here makes the horde's length

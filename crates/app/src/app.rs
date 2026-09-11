@@ -10,7 +10,8 @@ use glam::Vec2;
 
 use arpg_core::{Action, InstanceBuffer, Intent, MoveDir, Report};
 use arpg_gfx::{OrthoCamera, QuadBuffer, Renderer};
-use arpg_sim::{Accumulator, Alpha, Scene, World};
+use arpg_game::{Game, GameScene as Scene};
+use arpg_sim::{Accumulator, Alpha};
 
 use crate::harness::{self, Command, Request};
 use crate::hud;
@@ -19,17 +20,15 @@ use crate::time::Clock;
 use crate::ui::{MenuRequest, SceneChoice};
 
 /// Owns everything and wires it together. Deliberately the only place that
-/// knows about all the subsystems at once — `gfx` and `world` stay ignorant of
+/// knows about all the subsystems at once — `gfx` and `game` stay ignorant of
 /// each other, and this is where they meet.
 #[derive(Default)]
 pub(crate) struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     camera: Option<OrthoCamera>,
-    world: World,
-    /// Parsed snapshot for repeatable restart. Start reads a file; restart does not.
-    selected_scene: Option<Scene>,
-    /// World ids and ticks are scoped to this playtest generation.
+    game: Game,
+    /// Game ids and ticks are scoped to this playtest generation.
     run_id: u64,
     /// Numbers the screenshots, so repeated captures do not overwrite.
     captures: u32,
@@ -102,7 +101,7 @@ fn capture_dir() -> std::path::PathBuf {
 
 /// Preserve the file identity in diagnostics from either caller.
 fn read_scene(path: &std::path::Path) -> Result<Scene, String> {
-    arpg_scenario::load_scene(path).map_err(|error| format!("{}: {error}", path.display()))
+    arpg_content::load_scene(path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// Discovery happens only when the picker opens. Do not parse here: a broken
@@ -125,9 +124,9 @@ fn scene_catalog(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>,
 
 impl App {
     /// Both native keys and harness keys execute menu requests at this same
-    /// between-tick boundary. No file I/O or world replacement happens in draw.
+    /// between-tick boundary. No file I/O or game replacement happens in draw.
     fn handle_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
-        let consumed = self.input.on_key(key, pressed, repeat, self.world.attack_status().profile);
+        let consumed = self.input.on_key(key, pressed, repeat, self.game.attack_status().profile);
         match self.input.menu_mut().take_request() {
             Some(MenuRequest::RefreshScenes) => {
                 self.input.menu_mut().set_catalog(scene_catalog(std::path::Path::new("scenes")));
@@ -152,21 +151,31 @@ impl App {
     }
 
     fn restart_playtest(&mut self) -> Result<(), String> {
-        let scene = self.selected_scene.clone().ok_or("No current playtest")?;
-        self.start_playtest(scene)
+        let run_id = self.run_id.checked_add(1).ok_or("playtest identities exhausted")?;
+        let old_profile = self.game.attack_status().profile;
+        self.game.restart().map_err(|error| error.to_string())?;
+        self.finish_playtest_start(run_id, old_profile);
+        Ok(())
     }
 
     /// Prepare before committing: a bad replacement cannot destroy the current
     /// playtest. Construction is synchronous and runs zero simulation ticks.
     fn start_playtest(&mut self, scene: Scene) -> Result<(), String> {
-        let world = World::from_scene(&scene).map_err(|error| error.to_string())?;
         let run_id = self.run_id.checked_add(1).ok_or("playtest identities exhausted")?;
+        let old_profile = self.game.attack_status().profile;
+        self.game.start_scene(&scene).map_err(|error| error.to_string())?;
+        self.finish_playtest_start(run_id, old_profile);
+        Ok(())
+    }
 
+    /// Infallible adapter cleanup after Game has installed a complete replacement.
+    /// Device input, captures, and camera state belong to the app, not gameplay.
+    fn finish_playtest_start(&mut self, run_id: u64, old_profile: arpg_sim::AttackProfile) {
         // Old delayed key releases must not lift a new run's presses. Pending
         // callers receive a cancellation rather than a success for another run.
         for deferred in std::mem::take(&mut self.scheduled) {
             if let Some(key) = deferred.release {
-                self.input.on_key(key, false, false, self.world.attack_status().profile);
+                self.input.on_key(key, false, false, old_profile);
             }
             if let Some(reply) = deferred.reply {
                 let _ = reply.send("error: cancelled by playtest restart".into());
@@ -180,22 +189,19 @@ impl App {
         }
         self.capture_stall = 0;
         self.input.restart();
-        self.world = world;
-        self.selected_scene = Some(scene);
         self.run_id = run_id;
         self.accumulator = Accumulator::default();
         if let Some(camera) = &mut self.camera {
-            camera.snap_to(self.world.player_pos());
+            camera.snap_to(self.game.player_pos());
         }
-        self.world.extract(Alpha::ZERO, self.instances.sink());
+        self.game.extract(Alpha::ZERO, self.instances.sink());
         self.quads.sink();
         // Exclude file reading, construction, and the old run's frame remainder.
         self.clock = Clock::default();
-        Ok(())
     }
 
     fn ready_reply(&self) -> String {
-        format!("ready run={} tick=0 hash={:016x}", self.run_id, self.world.hash())
+        format!("ready run={} tick=0 hash={:016x}", self.run_id, self.game.hash())
     }
 
     /// Debug and meta commands, kept deliberately apart from the action layer.
@@ -217,12 +223,12 @@ impl App {
             KeyCode::BracketRight => {
                 // `max(1)` because doubling zero is zero: the horde can now
                 // be emptied, and without this `]` could not refill it.
-                self.world.set_enemy_count((self.world.enemy_count() * 2).max(1));
-                log::info!("N = {}", self.world.enemy_count());
+                self.game.set_enemy_count((self.game.enemy_count() * 2).max(1));
+                log::info!("N = {}", self.game.enemy_count());
             }
             KeyCode::BracketLeft => {
-                self.world.set_enemy_count(self.world.enemy_count() / 2);
-                log::info!("N = {}", self.world.enemy_count());
+                self.game.set_enemy_count(self.game.enemy_count() / 2);
+                log::info!("N = {}", self.game.enemy_count());
             }
             KeyCode::Equal => {
                 if let Some(c) = &mut self.camera {
@@ -261,15 +267,15 @@ impl App {
                     Err(error) => format!("error: {error}"),
                 },
                 Command::AddScene(path) => match read_scene(&path).and_then(|scene| {
-                    self.world.load_scene(&scene).map_err(|error| error.to_string())
+                    self.game.load_scene(&scene).map_err(|error| error.to_string())
                 }) {
                     Ok(id) => {
-                        format!("ready run={} scene={id} tick={}", self.run_id, self.world.tick())
+                        format!("ready run={} scene={id} tick={}", self.run_id, self.game.tick())
                     }
                     Err(error) => format!("error: {error}"),
                 },
                 Command::EvictScene(id) => {
-                    if self.world.evict_scene(id) {
+                    if self.game.evict_scene(id) {
                         format!("evicted run={} scene={id}", self.run_id)
                     } else {
                         format!("error: no live scene {id} in run {}", self.run_id)
@@ -278,7 +284,7 @@ impl App {
                 Command::ListScenes => {
                     let mut out = Report::default();
                     out.int("run_id", self.run_id);
-                    for (id, name) in self.world.scene_instances() {
+                    for (id, name) in self.game.scene_instances() {
                         out.text(&id.to_string(), name);
                     }
                     out.finish()
@@ -315,23 +321,23 @@ impl App {
                     continue; // replies once the file exists
                 }
                 Command::State => self.report_state(),
-                Command::Impulse { target, value } => match self.world.body_named(&target) {
-                    Some(id) if self.world.apply_impulse(id, value) => {
+                Command::Impulse { target, value } => match self.game.body_named(&target) {
+                    Some(id) if self.game.apply_impulse(id, value) => {
                         format!("impulse applied to {id}")
                     }
                     _ => format!("error: no physical body {target}"),
                 },
                 Command::TraceSince(tick) => self.report_trace(tick),
                 Command::SetEnemies(n) => {
-                    self.world.set_enemy_count(n);
+                    self.game.set_enemy_count(n);
                     // Respawning retires every name, so it revokes every
                     // behaviour with them. Said in the reply rather than left
                     // to be discovered, because "I set the horde and the
                     // chasing stopped" is otherwise a puzzle.
                     format!(
                         "enemies {} seekers {}",
-                        self.world.enemy_count(),
-                        self.world.seeker_count()
+                        self.game.enemy_count(),
+                        self.game.seeker_count()
                     )
                 }
                 Command::Spawn { x, z, what } => {
@@ -339,7 +345,7 @@ impl App {
                     // happened: the body appears when the next tick runs. A
                     // reply claiming otherwise would make a `state` taken
                     // immediately afterwards look like a bug.
-                    if self.world.request_spawn(Vec2::new(x, z), what) {
+                    if self.game.request_spawn(Vec2::new(x, z), what) {
                         format!("queued at ({x}, {z}) seeks={}", what.seeks())
                     } else {
                         "error: spawn queue full".to_string()
@@ -349,16 +355,23 @@ impl App {
                     // The conversion is where `Placement::around` and the
                     // cadence clamp are applied, so the socket cannot reach a
                     // source that skipped either.
-                    let id = self.world.add_source(spec.into());
+                    let id = self.game.add_source(spec.into());
                     format!("source {id}")
                 }
-                Command::RemoveSource(id) => match self.world.remove_source(id) {
+                Command::SetSourceEnabled { id, enabled } => {
+                    if self.game.set_source_enabled(id, enabled) {
+                        format!("source {id} enabled={enabled}")
+                    } else {
+                        format!("error: no live source {id}")
+                    }
+                }
+                Command::RemoveSource(id) => match self.game.remove_source(id) {
                     true => format!("removed {id}"),
                     false => format!("error: no live source {id}"),
                 },
                 Command::SetSeekers(n) => {
-                    self.world.set_seeker_count(n);
-                    format!("seekers {}", self.world.seeker_count())
+                    self.game.set_seeker_count(n);
+                    format!("seekers {}", self.game.seeker_count())
                 }
                 Command::SetVsync(on) => match self.renderer.as_mut() {
                     Some(renderer) => {
@@ -382,8 +395,8 @@ impl App {
     /// Everything worth knowing about the running program, as JSON.
     ///
     /// **Derived, not hand-written.** The simulation's half comes from
-    /// `World::report`, which destructures `World` exhaustively — so a field
-    /// added to the world fails to compile until it is observable. What is left
+    /// `Game::report`, which destructures `Game` exhaustively — so a field
+    /// added to the game fails to compile until it is observable. What is left
     /// here is the part `sim` genuinely cannot know: how the frame went, what
     /// the camera is doing, whether the renderer is presenting.
     ///
@@ -396,10 +409,10 @@ impl App {
         out.int("run_id", self.run_id);
         out.text(
             "selected_scene",
-            self.selected_scene.as_ref().map_or("", |scene| scene.name.as_str()),
+            self.game.selected_scene_name().unwrap_or(""),
         );
-        out.text("sim_hash", &format!("{:016x}", self.world.hash()));
-        out.object("sim", |sim| self.world.report(sim));
+        out.text("sim_hash", &format!("{:016x}", self.game.hash()));
+        out.object("sim", |sim| self.game.report(sim));
         out.object("ui", |ui| self.input.menu().report(ui));
 
         out.object("render", |r| {
@@ -422,19 +435,14 @@ impl App {
     /// and the whole point is that what you read here is what a scenario can
     /// assert on.
     fn report_trace(&self, tick: u64) -> String {
-        let trace = self.world.trace();
         let mut out = format!("# run {}\n", self.run_id);
-
-        // Said out loud rather than left to be inferred from a suspiciously
-        // short reply: the buffer is bounded, and a caller asking for a tick
-        // that has already scrolled away should be told so.
-        if trace.dropped() > 0 {
-            out.push_str(&format!("# {} event(s) dropped; the buffer wrapped\n", trace.dropped()));
+        let dropped = self.game.trace_dropped();
+        if dropped > 0 {
+            out.push_str(&format!("# {dropped} event(s) dropped; the buffer wrapped\n"));
         }
-        for (t, event) in trace.since(tick) {
-            out.push_str(&format!("{t} {event}\n"));
-        }
-        out.push_str(&format!("# {} event(s)", trace.since(tick).count()));
+        let events = self.game.render_trace_since(tick);
+        out.push_str(&events);
+        out.push_str(&format!("# {} event(s)", self.game.trace().since(tick).count() + self.game.control_trace().since(tick).count()));
         out
     }
 
@@ -481,7 +489,7 @@ impl App {
                 continue;
             }
             if let Some(key) = deferred.release {
-                self.input.on_key(key, false, false, self.world.attack_status().profile);
+                self.input.on_key(key, false, false, self.game.attack_status().profile);
             }
             if let Some(reply) = deferred.reply {
                 let _ = reply.send("ok".to_string());
@@ -520,13 +528,13 @@ impl App {
             // Requests wait through zero-tick frames and apply before this
             // tick's attack input. Drawing below cannot consume or apply one.
             if let Some(profile) = self.input.take_profile() {
-                self.world.set_attack_profile(profile);
+                self.game.set_attack_profile(profile);
             }
             let intent = self.input.sample();
             // `just_pressed`, not `held`: a swing is an edge. Holding the key
             // must not swing every tick, and a tap shorter than a frame must
             // still swing exactly once.
-            self.world.step(
+            self.game.step(
                 dt,
                 Intent::new(to_world(intent.move_axis()), intent.just_pressed(Action::Attack))
                     .with_interact(intent.just_pressed(Action::Interact)),
@@ -544,9 +552,9 @@ impl App {
         // stair-step to follow. And `held`, never `sample` — a camera that
         // consumed a keypress would be the same bug wearing a different hat.
         let facing = to_world(self.input.held().move_axis());
-        camera.follow(self.world.player_pos_at(alpha), facing, frame);
+        camera.follow(self.game.player_pos_at(alpha), facing, frame);
 
-        self.world.extract(alpha, self.instances.sink());
+        self.game.extract(alpha, self.instances.sink());
 
         // The overlay is built here rather than inside `render` for the same
         // reason `extract` is: what a readout says is a decision this crate
@@ -558,8 +566,8 @@ impl App {
             hud::draw(
                 renderer.glyphs(),
                 self.input.menu(),
-                self.world.attack_status(),
-                self.selected_scene.as_ref().map_or("--", |scene| scene.name.as_str()),
+                self.game.attack_status(),
+                self.game.selected_scene_name().unwrap_or("--"),
                 Vec2::new(size.width as f32, size.height as f32),
                 &mut sink,
             );
@@ -603,7 +611,7 @@ impl App {
                 "arpg — {:.2}ms  {:.0}fps  N={}  ({} instances){}",
                 self.clock.frame_ms(),
                 self.clock.fps(),
-                self.world.enemy_count(),
+                self.game.enemy_count(),
                 self.instances.as_slice().len(),
                 if renderer.vsync() { "  [vsync]" } else { "  [uncapped]" },
             ));
@@ -648,9 +656,9 @@ impl ApplicationHandler for App {
         // Start framed on the character rather than easing in from the origin.
         // Harmless today, since both begin there — but the moment anything
         // spawns the player elsewhere, the first thing the player would see is
-        // the camera flying across the world to catch up.
+        // the camera flying across the game to catch up.
         let mut camera = OrthoCamera::new(size.width, size.height);
-        camera.snap_to(self.world.player_pos());
+        camera.snap_to(self.game.player_pos());
 
         self.camera = Some(camera);
         self.window = Some(window);
@@ -747,12 +755,12 @@ mod tests {
     use super::*;
 
     fn pair() -> Scene {
-        Scene {
+        arpg_sim::Scene {
             name: "pair".into(),
             bodies: vec![arpg_sim::Placed { pos: (20.0, 0.0), what: arpg_sim::Template::BODY }],
             grids: vec![],
             sources: vec![],
-        }
+        }.into()
     }
 
     fn tap(app: &mut App, key: KeyCode) {
@@ -779,8 +787,8 @@ mod tests {
         tap(&mut app, KeyCode::ArrowDown);
         tap(&mut app, KeyCode::ArrowDown);
         tap(&mut app, KeyCode::Enter);
-        let initial = app.world.hash();
-        let direct = World::from_scene(&arpg_scenario::load_scene(&path).unwrap()).unwrap();
+        let initial = app.game.hash();
+        let direct = Game::from_scene(&arpg_content::load_scene(&path).unwrap()).unwrap();
         assert_eq!(
             initial,
             direct.hash(),
@@ -792,7 +800,7 @@ mod tests {
         std::fs::write(&path, "(name: \"changed\")").unwrap();
         tap(&mut app, KeyCode::F2);
         tap(&mut app, KeyCode::Enter); // Cached restart remains independent of disk.
-        assert_eq!(app.world.hash(), initial);
+        assert_eq!(app.game.hash(), initial);
         assert_eq!(app.run_id, 3);
 
         tap(&mut app, KeyCode::F2);
@@ -803,43 +811,65 @@ mod tests {
         tap(&mut app, KeyCode::Enter);
         assert!(app.input.menu().picker().error().unwrap().contains("b.ron"));
         assert!(app.input.menu().open());
-        assert_eq!(app.world.hash(), initial);
+        assert_eq!(app.game.hash(), initial);
         assert_eq!(app.run_id, 3);
         std::fs::remove_file(&path).unwrap();
         tap(&mut app, KeyCode::ArrowUp);
         tap(&mut app, KeyCode::Enter); // A file disappearing after discovery is safe too.
         assert!(app.input.menu().picker().error().is_some());
-        assert_eq!(app.world.hash(), initial);
+        assert_eq!(app.game.hash(), initial);
 
         std::fs::write(&path, "(name: \"changed\")").unwrap();
         tap(&mut app, KeyCode::Enter); // Retry reads the repaired file.
-        assert_ne!(app.world.hash(), initial);
+        assert_ne!(app.game.hash(), initial);
         assert_eq!(app.run_id, 4);
         assert!(!app.input.menu().open());
         tap(&mut app, KeyCode::F2);
         tap(&mut app, KeyCode::ArrowDown);
         tap(&mut app, KeyCode::Enter);
-        assert_eq!(app.world.hash(), World::from_scene(&Scene::boot()).unwrap().hash());
+        assert_eq!(app.game.hash(), Game::from_scene(&Scene::boot()).unwrap().hash());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn exhausted_run_ids_preserve_the_game_input_and_pending_capture() {
+        let mut app = App::default();
+        app.start_playtest(pair()).unwrap();
+        app.run_id = u64::MAX;
+        let profile = app.game.attack_status().profile;
+        app.input.on_key(KeyCode::KeyW, true, false, profile);
+        let (reply, response) = std::sync::mpsc::channel();
+        app.awaiting_frame.push(reply);
+        let before = app.game.hash();
+        let held = app.input.held().move_axis();
+
+        assert!(app.start_playtest(Scene::boot()).is_err());
+        assert!(app.restart_playtest().is_err());
+        assert_eq!(app.game.hash(), before);
+        assert_eq!(app.game.selected_scene_name(), Some("pair"));
+        assert_eq!(app.run_id, u64::MAX);
+        assert_eq!(app.input.held().move_axis(), held);
+        assert_eq!(app.awaiting_frame.len(), 1);
+        assert!(matches!(response.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
     }
 
     #[test]
     fn restart_resets_the_complete_playtest_boundary() {
         let mut app = App::default();
         app.start_playtest(pair()).unwrap();
-        let initial = app.world.hash();
-        let profile = app.world.attack_status().profile;
+        let initial = app.game.hash();
+        let profile = app.game.attack_status().profile;
         app.input.on_key(KeyCode::KeyW, true, false, profile);
         app.input.on_key(KeyCode::Space, true, false, profile);
         for dt in app.accumulator.pending(arpg_sim::Dt::SECS) {
-            app.world.step(dt, Intent::new(MoveDir::new(glam::Vec3::X), true));
+            app.game.step(dt, Intent::new(MoveDir::new(glam::Vec3::X), true));
         }
-        app.world.set_attack_recovery(arpg_sim::RecoveryTicks::try_from(1).unwrap());
-        assert!(app.world.apply_impulse(
-            app.world.player_id(),
+        app.game.set_attack_recovery(arpg_sim::RecoveryTicks::try_from(1).unwrap());
+        assert!(app.game.apply_impulse(
+            app.game.player_id(),
             arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()
         ));
-        assert!(app.world.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
+        assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
         app.input.on_key(KeyCode::F1, true, false, profile);
         app.input.on_key(KeyCode::ArrowRight, true, false, profile);
         assert!(app.input.menu().pending().is_some());
@@ -848,10 +878,10 @@ mod tests {
         app.camera = Some(camera);
         assert_eq!(app.accumulator.pending(arpg_sim::Dt::SECS * 0.5).count(), 0);
 
-        app.start_playtest(pair()).unwrap();
+        app.restart_playtest().unwrap();
         assert_eq!(app.run_id, 2);
-        assert_eq!(app.world.hash(), initial, "all simulation state returns to the baseline");
-        assert_eq!(app.world.tick(), 0);
+        assert_eq!(app.game.hash(), initial, "all simulation state returns to the baseline");
+        assert_eq!(app.game.tick(), 0);
         assert_eq!(app.accumulator.alpha().get(), 0.0);
         assert_eq!(app.camera.as_ref().unwrap().target(), glam::Vec3::ZERO);
         assert!(!app.input.menu().open());
@@ -869,7 +899,7 @@ mod tests {
         let mut app = App::default();
         let (reply, response) = std::sync::mpsc::channel();
         let (shot_reply, shot_response) = std::sync::mpsc::channel();
-        app.input.on_key(KeyCode::KeyD, true, false, app.world.attack_status().profile);
+        app.input.on_key(KeyCode::KeyD, true, false, app.game.attack_status().profile);
         app.scheduled.push(Deferred {
             due: std::time::Instant::now() + std::time::Duration::from_secs(60),
             release: Some(KeyCode::KeyD),
@@ -880,7 +910,7 @@ mod tests {
         assert!(response.try_recv().unwrap().contains("cancelled"));
         assert!(shot_response.try_recv().unwrap().contains("cancelled"));
         assert!(app.scheduled.is_empty());
-        app.input.on_key(KeyCode::KeyD, true, false, app.world.attack_status().profile);
+        app.input.on_key(KeyCode::KeyD, true, false, app.game.attack_status().profile);
         app.service_schedule();
         assert_ne!(
             app.input.sample().move_axis(),
@@ -893,14 +923,14 @@ mod tests {
     fn rejected_replacement_preserves_the_current_playtest() {
         let mut app = App::default();
         app.start_playtest(pair()).unwrap();
-        app.input.on_key(KeyCode::KeyW, true, false, app.world.attack_status().profile);
+        app.input.on_key(KeyCode::KeyW, true, false, app.game.attack_status().profile);
         let before = app.report_state();
-        let trace = app.world.trace().render();
+        let trace = app.game.trace().render();
         let mut bad = pair();
-        bad.bodies[0].pos.0 = f32::INFINITY;
+        bad.engine.bodies[0].pos.0 = f32::INFINITY;
         assert!(app.start_playtest(bad).is_err());
         assert_eq!(app.report_state(), before);
-        assert_eq!(app.world.trace().render(), trace);
+        assert_eq!(app.game.trace().render(), trace);
         assert_ne!(app.input.sample().move_axis(), Vec2::ZERO);
     }
 
@@ -913,7 +943,7 @@ mod tests {
             let (reply, response) = std::sync::mpsc::channel();
             tx.send(Request { command, reply }).unwrap();
             assert!(!app.drain_harness());
-            (response.try_recv().unwrap(), app.world.hash(), app.run_id)
+            (response.try_recv().unwrap(), app.game.hash(), app.run_id)
         };
         let path =
             std::env::temp_dir().join(format!("arpg-scene-snapshot-{}.ron", std::process::id()));

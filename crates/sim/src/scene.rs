@@ -121,7 +121,7 @@ impl Scene {
             count = count.checked_add(grid.validate()?).ok_or(SceneError::Capacity)?;
         }
         for source in sources {
-            let SourceSpec { pos, radius, every: _, when, what } = source;
+            let SourceSpec { pos, radius, every: _, when, what, enabled: _ } = source;
             if !Vec2::from(*pos).is_finite()
                 || !radius.is_finite()
                 || *radius < 0.0
@@ -157,7 +157,8 @@ impl SceneId {
         text.strip_prefix('c')?.parse().ok().map(Self)
     }
 
-    pub(crate) fn hash(self, hash: &mut Fnv) {
+    /// Feeds the complete identity into a deterministic fingerprint.
+    pub fn hash_into(self, hash: &mut Fnv) {
         hash.u64(self.0);
     }
 }
@@ -282,7 +283,7 @@ impl Scenes {
         hash.usize(live.len());
         for scene in live {
             let Resident { id, name, bodies, sources } = scene;
-            id.hash(hash);
+            id.hash_into(hash);
             hash.usize(name.len());
             for byte in name.bytes() {
                 hash.u64(u64::from(byte));
@@ -293,7 +294,7 @@ impl Scenes {
             }
             hash.usize(sources.len());
             for source in sources {
-                source.hash(hash);
+                source.hash_into(hash);
             }
         }
     }
@@ -395,6 +396,13 @@ impl crate::World {
         self.scenes.live.iter().map(|scene| (scene.id, scene.name.as_str()))
     }
 
+    /// Live source identities in installation order. Read immediately after
+    /// loading to resolve authored indices; removals subsequently prune the list.
+    #[must_use]
+    pub fn scene_sources(&self, id: SceneId) -> Option<&[SourceId]> {
+        self.scenes.get(id).map(|scene| scene.sources.as_slice())
+    }
+
     /// Live bodies owned by an instance, including its source descendants.
     /// The shared slice cannot change ownership; absent means evicted/unknown.
     #[must_use]
@@ -415,6 +423,7 @@ mod tests {
             bodies: vec![Placed { pos: (20.0, 0.0), what: Template::BODY }],
             grids: Vec::new(),
             sources: vec![SourceSpec {
+                enabled: true,
                 pos: (30.0, 0.0),
                 radius: 4.0,
                 every: 2,
@@ -519,7 +528,7 @@ mod tests {
             let before = world.hash();
             let trace = world.trace().render();
             let mut invalid = scene();
-            invalid.sources.push(SourceSpec { pos, radius, every: 1, when, what: Template::BODY });
+            invalid.sources.push(SourceSpec { pos, radius, every: 1, when, what: Template::BODY, enabled: true });
             assert!(matches!(world.load_scene(&invalid), Err(SceneError::Invalid(_))));
             assert_eq!(
                 world.hash(),

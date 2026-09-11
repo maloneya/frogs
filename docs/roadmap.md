@@ -5,6 +5,15 @@ before the chunk is done. "It looks right when I run it" is not a gate.
 
 One chunk at a time, built and running before the next starts.
 
+The planned engine/gameplay boundary and its first mechanic are recorded in
+[Gameplay architecture and source-control plan](gameplay-architecture-plan.md).
+That document owns the staged migration checklist and completion gates.
+All six phases are complete; [Activate the horde](source-control-playtest.md)
+is the repeatable trial for the first gameplay relationship.
+The plan's [lessons and next architecture priority](gameplay-architecture-plan.md#lessons-and-next-architecture-priority)
+record named authored references as the next safeguard before scenes gain many
+relationships, along with ownership, timing, and verification guidance.
+
 ## Built so far
 
 Ordered as they landed. The reasoning behind each is in its commit message;
