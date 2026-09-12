@@ -6,14 +6,18 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use glam::Vec2;
+use glam::{Mat4, Vec2, Vec3};
 
 use arpg_core::{Action, Instance, InstanceBuffer, Intent, MoveDir, Report};
-use arpg_gfx::{
-    CharacterMesh, CharacterPreview, MeshAsset, MeshPreview, OrthoCamera, QuadBuffer, Renderer,
-};
 use arpg_game::{Game, GameScene as Scene};
-use arpg_sim::{Accumulator, Alpha, TICK_HZ};
+use arpg_gfx::{
+    CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
+    MeshAsset, MeshPreview, OrthoCamera, QuadBuffer, Renderer,
+};
+use arpg_sim::{
+    Accumulator, Alpha, AttackPhase, AttackProfile, EnemyPresentation, Fnv, PlayerPresentation,
+    TICK_HZ,
+};
 
 use crate::harness::{self, Command, Request};
 use crate::hud;
@@ -32,6 +36,8 @@ pub(crate) struct App {
     asset_preview: Option<AssetPreview<MeshAsset>>,
     /// Hierarchical character presentation, also independent of simulation.
     character_preview: Option<LoadedCharacter<CharacterMesh>>,
+    /// Shared-pose horde presentation, independent of playable scene state.
+    horde_preview: Option<LoadedHorde<CharacterMesh>>,
     camera: Option<OrthoCamera>,
     game: Game,
     /// Game ids and ticks are scoped to this playtest generation.
@@ -114,18 +120,401 @@ fn report_asset_preview<T>(preview: Option<&AssetPreview<T>>, out: &mut Report) 
     }
 }
 
-/// CPU hierarchy and GPU resources committed together after a complete load.
+const CROSS_FADE_SECONDS: f64 = 0.10;
+const WEAPON_JOINT: &str = "Weapon";
+const WEAPON_LENGTH: f32 = 0.85;
+const WEAPON_THICKNESS: f32 = 0.07;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PresentationRole {
+    Idle,
+    Run,
+    Attack(AttackProfile),
+}
+
+impl PresentationRole {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Run => "run",
+            Self::Attack(AttackProfile::Basic) => "attack_basic",
+            Self::Attack(AttackProfile::Thrust) => "attack_thrust",
+            Self::Attack(AttackProfile::Sweep) => "attack_sweep",
+            Self::Attack(AttackProfile::HeavySweep) => "attack_heavy_sweep",
+            Self::Attack(AttackProfile::Cleave) => "attack_cleave",
+            Self::Attack(AttackProfile::CrowdBreaker) => "attack_crowd_breaker",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CharacterClips {
+    idle: arpg_assets::ClipId,
+    run: arpg_assets::ClipId,
+    attacks: [arpg_assets::ClipId; AttackProfile::ALL.len()],
+}
+
+impl CharacterClips {
+    fn resolve(asset: &arpg_assets::CharacterAsset) -> Result<Self, String> {
+        let clip = |name| {
+            asset
+                .clip_named(name)
+                .ok_or_else(|| format!("missing player presentation clip {name}"))
+        };
+        let idle = clip("Idle")?;
+        let mut attacks = [idle; AttackProfile::ALL.len()];
+        for (slot, profile) in attacks.iter_mut().zip(AttackProfile::ALL) {
+            *slot = clip(Self::attack_name(profile))?;
+        }
+        Ok(Self {
+            idle,
+            run: clip("Run")?,
+            attacks,
+        })
+    }
+
+    fn attack_name(profile: AttackProfile) -> &'static str {
+        match profile {
+            AttackProfile::Basic => "AttackBasic",
+            AttackProfile::Thrust => "AttackThrust",
+            AttackProfile::Sweep => "AttackSweep",
+            AttackProfile::HeavySweep => "AttackHeavySweep",
+            AttackProfile::Cleave => "AttackCleave",
+            AttackProfile::CrowdBreaker => "AttackCrowdBreaker",
+        }
+    }
+
+    fn for_role(self, role: PresentationRole) -> arpg_assets::ClipId {
+        match role {
+            PresentationRole::Idle => self.idle,
+            PresentationRole::Run => self.run,
+            PresentationRole::Attack(profile) => {
+                let index = AttackProfile::ALL
+                    .iter()
+                    .position(|candidate| *candidate == profile)
+                    .expect("every attack profile is present in ALL");
+                self.attacks[index]
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Transition {
+    role: PresentationRole,
+    clip_seconds: f32,
+    started_at: f64,
+}
+
+struct CharacterPlayback {
+    role: PresentationRole,
+    transition: Option<Transition>,
+    clip_seconds: f32,
+    blend: f32,
+    last_presentation_seconds: f64,
+}
+
+impl Default for CharacterPlayback {
+    fn default() -> Self {
+        Self {
+            role: PresentationRole::Idle,
+            transition: None,
+            clip_seconds: 0.0,
+            blend: 1.0,
+            last_presentation_seconds: 0.0,
+        }
+    }
+}
+
+impl CharacterPlayback {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// CPU hierarchy, role mapping and GPU resources committed after a complete load.
 struct LoadedCharacter<T> {
     path: std::path::PathBuf,
     asset: arpg_assets::CharacterAsset,
     pose: arpg_assets::CharacterPose,
+    clips: CharacterClips,
+    weapon: arpg_assets::JointId,
+    playback: CharacterPlayback,
     gpu: T,
 }
 
 impl<T> LoadedCharacter<T> {
-    fn sample(&mut self, presentation_seconds: f64) -> f32 {
-        self.asset
-            .sample_looping(presentation_seconds, &mut self.pose)
+    fn role(player: PlayerPresentation) -> PresentationRole {
+        let attack = player.attack();
+        if attack.phase != AttackPhase::Idle {
+            PresentationRole::Attack(
+                attack
+                    .swing_profile
+                    .expect("a non-idle attack retains its committed profile"),
+            )
+        } else if player.displacement().length_squared() > 1.0e-8 {
+            PresentationRole::Run
+        } else {
+            PresentationRole::Idle
+        }
+    }
+
+    fn role_time(
+        &self,
+        role: PresentationRole,
+        player: PlayerPresentation,
+        alpha: Alpha,
+        presentation_seconds: f64,
+    ) -> f32 {
+        let clip = self.clips.for_role(role);
+        let metadata = self.asset.clip(clip).expect("resolved clip remains live");
+        match role {
+            PresentationRole::Idle | PresentationRole::Run => {
+                metadata.loop_time(presentation_seconds)
+            }
+            PresentationRole::Attack(_) => {
+                let attack = player.attack();
+                let resolved = attack
+                    .swing_resolved
+                    .expect("a non-idle attack retains its committed resolution");
+                let total = resolved.startup() + resolved.active() + resolved.recovery().get();
+                ((attack.elapsed as f32 + alpha.get()) / total as f32).clamp(0.0, 1.0)
+                    * metadata.duration_seconds()
+            }
+        }
+    }
+
+    fn sample(&mut self, player: PlayerPresentation, alpha: Alpha, presentation_seconds: f64) {
+        if presentation_seconds < self.playback.last_presentation_seconds {
+            self.playback.reset();
+        }
+        let role = Self::role(player);
+        if role != self.playback.role {
+            self.playback.transition = Some(Transition {
+                role: self.playback.role,
+                clip_seconds: self.playback.clip_seconds,
+                started_at: presentation_seconds,
+            });
+            self.playback.role = role;
+        }
+        let clip_seconds = self.role_time(role, player, alpha, presentation_seconds);
+        let clip = self.clips.for_role(role);
+        let blend = self.playback.transition.map_or(1.0, |transition| {
+            ((presentation_seconds - transition.started_at) / CROSS_FADE_SECONDS).clamp(0.0, 1.0)
+                as f32
+        });
+        if let Some(transition) = self.playback.transition {
+            let from = self.clips.for_role(transition.role);
+            let _ = self.asset.sample_blended(
+                (from, transition.clip_seconds),
+                (clip, clip_seconds),
+                blend,
+                &mut self.pose,
+            );
+            if blend >= 1.0 {
+                self.playback.transition = None;
+            }
+        } else {
+            let _ = self.asset.sample(clip, clip_seconds, &mut self.pose);
+        }
+        self.playback.clip_seconds = clip_seconds;
+        self.playback.blend = blend;
+        self.playback.last_presentation_seconds = presentation_seconds;
+    }
+
+    fn character_instance(&self, player: PlayerPresentation) -> Instance {
+        Instance::new(player.ground_position(), Vec3::ONE, Vec3::ONE).with_yaw(player.facing())
+    }
+
+    fn weapon_instance(&self, player: PlayerPresentation) -> Instance {
+        let joint = self
+            .asset
+            .joint_transform(&self.pose, self.weapon)
+            .expect("resolved weapon joint remains live");
+        let along = joint.transform_vector3(Vec3::Y).normalize_or_zero();
+        let centre = joint.transform_point3(Vec3::ZERO) + along * (WEAPON_LENGTH * 0.5);
+        let world = Mat4::from_rotation_y(player.facing());
+        let centre = player.ground_position() + world.transform_vector3(centre);
+        let along = world.transform_vector3(along);
+        let flat = Vec2::new(along.x, along.z).normalize_or_zero();
+        let yaw = if flat == Vec2::ZERO {
+            player.facing()
+        } else {
+            flat.x.atan2(flat.y)
+        };
+        Instance::new(
+            centre,
+            Vec3::new(WEAPON_THICKNESS, WEAPON_THICKNESS, WEAPON_LENGTH),
+            Vec3::new(0.82, 0.86, 0.92),
+        )
+        .with_yaw(yaw)
+    }
+}
+
+const HORDE_PHASES_PER_ROLE: usize = MAX_HORDE_POSE_BUCKETS / 2;
+const HORDE_SCALE: f32 = 0.42;
+const _: () = assert!(MAX_HORDE_POSE_BUCKETS > 0 && MAX_HORDE_POSE_BUCKETS.is_multiple_of(2));
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HordeRole {
+    Idle,
+    Run,
+}
+
+#[derive(Clone, Copy)]
+struct HordeClips {
+    idle: arpg_assets::ClipId,
+    run: arpg_assets::ClipId,
+}
+
+impl HordeClips {
+    fn resolve(asset: &arpg_assets::CharacterAsset) -> Result<Self, String> {
+        let clip = |name| {
+            asset
+                .clip_named(name)
+                .ok_or_else(|| format!("missing horde presentation clip {name}"))
+        };
+        Ok(Self {
+            idle: clip("Idle")?,
+            run: clip("Run")?,
+        })
+    }
+
+    fn for_role(self, role: HordeRole) -> arpg_assets::ClipId {
+        match role {
+            HordeRole::Idle => self.idle,
+            HordeRole::Run => self.run,
+        }
+    }
+}
+
+struct HordeBucket {
+    pose: arpg_assets::CharacterPose,
+    instances: Vec<Instance>,
+}
+
+/// One mesh and a bounded set of shared poses for every ordinary enemy.
+struct LoadedHorde<T> {
+    path: std::path::PathBuf,
+    asset: arpg_assets::CharacterAsset,
+    clips: HordeClips,
+    buckets: [HordeBucket; MAX_HORDE_POSE_BUCKETS],
+    occupied_buckets: usize,
+    instance_count: usize,
+    gpu: T,
+}
+
+impl<T> LoadedHorde<T> {
+    fn new(
+        path: std::path::PathBuf,
+        asset: arpg_assets::CharacterAsset,
+        clips: HordeClips,
+        gpu: T,
+    ) -> Self {
+        let buckets = std::array::from_fn(|_| HordeBucket {
+            pose: asset.bind_pose(),
+            instances: Vec::new(),
+        });
+        Self {
+            path,
+            asset,
+            clips,
+            buckets,
+            occupied_buckets: 0,
+            instance_count: 0,
+            gpu,
+        }
+    }
+
+    fn phase_key(id: arpg_sim::EntityId) -> u64 {
+        let mut hash = Fnv::default();
+        id.hash_into(&mut hash);
+        hash.finish()
+    }
+
+    fn bucket(enemy: EnemyPresentation) -> (usize, u64) {
+        let role = if enemy.displacement().length_squared() > 1.0e-8 {
+            HordeRole::Run
+        } else {
+            HordeRole::Idle
+        };
+        let key = Self::phase_key(enemy.id());
+        let phase = (key % HORDE_PHASES_PER_ROLE as u64) as usize;
+        let role_offset = match role {
+            HordeRole::Idle => 0,
+            HordeRole::Run => HORDE_PHASES_PER_ROLE,
+        };
+        (role_offset + phase, key)
+    }
+
+    fn rebuild(
+        &mut self,
+        enemies: impl Iterator<Item = EnemyPresentation>,
+        presentation_seconds: f64,
+    ) {
+        for bucket in &mut self.buckets {
+            bucket.instances.clear();
+        }
+
+        self.instance_count = 0;
+        for enemy in enemies {
+            let (bucket, key) = Self::bucket(enemy);
+            let displacement = enemy.displacement();
+            let yaw = if displacement.length_squared() > 1.0e-8 {
+                displacement.x.atan2(displacement.y)
+            } else {
+                0.0
+            };
+            let shade = 0.72 + ((key >> 8) & 0xff) as f32 / 255.0 * 0.28;
+            self.buckets[bucket].instances.push(
+                Instance::new(
+                    enemy.ground_position(),
+                    Vec3::splat(HORDE_SCALE),
+                    Vec3::splat(shade),
+                )
+                .with_yaw(yaw),
+            );
+            self.instance_count += 1;
+        }
+
+        self.occupied_buckets = 0;
+        for (index, bucket) in self.buckets.iter_mut().enumerate() {
+            if bucket.instances.is_empty() {
+                continue;
+            }
+            self.occupied_buckets += 1;
+            let role = if index < HORDE_PHASES_PER_ROLE {
+                HordeRole::Idle
+            } else {
+                HordeRole::Run
+            };
+            let clip = self.clips.for_role(role);
+            let metadata = self.asset.clip(clip).expect("resolved clip remains live");
+            let phase = index % HORDE_PHASES_PER_ROLE;
+            let offset = f64::from(metadata.duration_seconds()) * phase as f64
+                / HORDE_PHASES_PER_ROLE as f64;
+            let time = metadata.loop_time(presentation_seconds + offset);
+            let sampled = self.asset.sample(clip, time, &mut bucket.pose);
+            debug_assert!(sampled, "resolved clip remains live");
+        }
+    }
+
+    fn clear(&mut self) {
+        for bucket in &mut self.buckets {
+            bucket.instances.clear();
+        }
+        self.occupied_buckets = 0;
+        self.instance_count = 0;
+    }
+}
+
+impl LoadedHorde<CharacterMesh> {
+    fn draw(&self) -> CharacterHorde<'_> {
+        let buckets = std::array::from_fn(|index| {
+            let bucket = &self.buckets[index];
+            CharacterBucket::new(&bucket.pose, &bucket.instances)
+        });
+        CharacterHorde::new(&self.gpu, buckets)
     }
 }
 
@@ -133,14 +522,14 @@ fn presentation_seconds(tick: u64, alpha: Alpha) -> f64 {
     (tick as f64 + f64::from(alpha.get())) / f64::from(TICK_HZ)
 }
 
-fn report_character_preview<T>(
-    preview: Option<&LoadedCharacter<T>>,
-    presentation_seconds: f64,
-    out: &mut Report,
-) {
+fn report_character_preview<T>(preview: Option<&LoadedCharacter<T>>, out: &mut Report) {
     if let Some(preview) = preview {
         let texture = preview.asset.base_color_texture();
-        let clip = preview.asset.clip();
+        let clip = preview.clips.for_role(preview.playback.role);
+        let clip = preview
+            .asset
+            .clip(clip)
+            .expect("resolved clip remains live");
         out.bool("active", true);
         out.text("path", &preview.path.to_string_lossy());
         out.int("vertices", preview.asset.vertex_count() as u64);
@@ -149,10 +538,21 @@ fn report_character_preview<T>(
         out.int("texture_height", u64::from(texture.height()));
         out.int("nodes", preview.asset.node_count() as u64);
         out.int("joints", preview.asset.joint_count() as u64);
+        out.int("clips", preview.asset.clip_count() as u64);
+        out.text("role", preview.playback.role.label());
         out.text("clip", clip.name());
         out.num("clip_duration", clip.duration_seconds());
         out.int("channels", clip.channel_count() as u64);
-        out.num("sample_seconds", clip.loop_time(presentation_seconds));
+        out.num("sample_seconds", preview.playback.clip_seconds);
+        out.text(
+            "blend_from",
+            preview
+                .playback
+                .transition
+                .map_or("", |transition| transition.role.label()),
+        );
+        out.num("blend", preview.playback.blend);
+        out.text("weapon_joint", WEAPON_JOINT);
     } else {
         out.bool("active", false);
         out.text("path", "");
@@ -162,10 +562,78 @@ fn report_character_preview<T>(
         out.int("texture_height", 0);
         out.int("nodes", 0);
         out.int("joints", 0);
+        out.int("clips", 0);
+        out.text("role", "");
         out.text("clip", "");
         out.num("clip_duration", 0.0);
         out.int("channels", 0);
         out.num("sample_seconds", 0.0);
+        out.text("blend_from", "");
+        out.num("blend", 0.0);
+        out.text("weapon_joint", "");
+    }
+}
+
+fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mut Report) {
+    if let Some(preview) = preview {
+        let texture = preview.asset.base_color_texture();
+        out.bool("active", true);
+        out.text("path", &preview.path.to_string_lossy());
+        out.int("vertices", preview.asset.vertex_count() as u64);
+        out.int("indices", preview.asset.index_count() as u64);
+        out.int("texture_width", u64::from(texture.width()));
+        out.int("texture_height", u64::from(texture.height()));
+        out.int("nodes", preview.asset.node_count() as u64);
+        out.int("joints", preview.asset.joint_count() as u64);
+        out.text(
+            "idle_clip",
+            preview
+                .asset
+                .clip(preview.clips.idle)
+                .expect("resolved clip remains live")
+                .name(),
+        );
+        out.text(
+            "run_clip",
+            preview
+                .asset
+                .clip(preview.clips.run)
+                .expect("resolved clip remains live")
+                .name(),
+        );
+        out.int("pose_buckets", MAX_HORDE_POSE_BUCKETS as u64);
+        out.int("occupied_buckets", preview.occupied_buckets as u64);
+        out.int("instances", preview.instance_count as u64);
+        out.int(
+            "idle_instances",
+            preview.buckets[..HORDE_PHASES_PER_ROLE]
+                .iter()
+                .map(|bucket| bucket.instances.len() as u64)
+                .sum(),
+        );
+        out.int(
+            "run_instances",
+            preview.buckets[HORDE_PHASES_PER_ROLE..]
+                .iter()
+                .map(|bucket| bucket.instances.len() as u64)
+                .sum(),
+        );
+    } else {
+        out.bool("active", false);
+        out.text("path", "");
+        out.int("vertices", 0);
+        out.int("indices", 0);
+        out.int("texture_width", 0);
+        out.int("texture_height", 0);
+        out.int("nodes", 0);
+        out.int("joints", 0);
+        out.text("idle_clip", "");
+        out.text("run_clip", "");
+        out.int("pose_buckets", 0);
+        out.int("occupied_buckets", 0);
+        out.int("instances", 0);
+        out.int("idle_instances", 0);
+        out.int("run_instances", 0);
     }
 }
 
@@ -175,14 +643,6 @@ fn preview_instance() -> Instance {
         glam::Vec3::new(-3.0, 0.0, -3.0),
         glam::Vec3::ONE,
         // White preserves the asset's authored base colour and factor.
-        glam::Vec3::ONE,
-    )
-}
-
-fn character_instance() -> Instance {
-    Instance::new(
-        glam::Vec3::new(3.0, 0.0, -3.0),
-        glam::Vec3::ONE,
         glam::Vec3::ONE,
     )
 }
@@ -237,9 +697,41 @@ fn replace_character<T>(
     let source = read_glb(&path)?;
     let asset = arpg_assets::import_character_glb(&source)
         .map_err(|error| format!("{}: {error}", path.display()))?;
+    let clips =
+        CharacterClips::resolve(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
+    let weapon = asset.joint_named(WEAPON_JOINT).ok_or_else(|| {
+        format!(
+            "{}: missing player attachment joint {WEAPON_JOINT}",
+            path.display()
+        )
+    })?;
     let gpu = upload(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
     let pose = asset.bind_pose();
-    *slot = Some(LoadedCharacter { path, asset, pose, gpu });
+    *slot = Some(LoadedCharacter {
+        path,
+        asset,
+        pose,
+        clips,
+        weapon,
+        playback: CharacterPlayback::default(),
+        gpu,
+    });
+    Ok(())
+}
+
+/// Prepares horde clips, poses and GPU resources before replacing `slot`.
+fn replace_horde<T>(
+    slot: &mut Option<LoadedHorde<T>>,
+    path: std::path::PathBuf,
+    upload: impl FnOnce(&arpg_assets::CharacterAsset) -> Result<T, String>,
+) -> Result<(), String> {
+    let source = read_glb(&path)?;
+    let asset = arpg_assets::import_character_glb(&source)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let clips =
+        HordeClips::resolve(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
+    let gpu = upload(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
+    *slot = Some(LoadedHorde::new(path, asset, clips, gpu));
     Ok(())
 }
 
@@ -310,25 +802,64 @@ impl App {
     }
 
     fn show_character(&mut self, path: std::path::PathBuf) -> Result<String, String> {
-        let Self { renderer, character_preview, .. } = self;
-        let renderer = renderer.as_ref().ok_or_else(|| "no renderer yet".to_string())?;
+        let Self {
+            renderer,
+            character_preview,
+            ..
+        } = self;
+        let renderer = renderer
+            .as_ref()
+            .ok_or_else(|| "no renderer yet".to_string())?;
         replace_character(character_preview, path, |character| {
-            renderer.upload_character(character).map_err(|error| error.to_string())
+            renderer
+                .upload_character(character)
+                .map_err(|error| error.to_string())
         })?;
         let preview = character_preview
             .as_ref()
             .expect("successful replacement selects a character");
-        let clip = preview.asset.clip();
+        let clip = preview
+            .asset
+            .clip(preview.clips.idle)
+            .expect("resolved clip remains live");
         Ok(format!(
-            "character preview vertices={} indices={} nodes={} joints={} texture={}x{} clip={} duration={:.3}s path={}",
+            "player character vertices={} indices={} nodes={} joints={} clips={} texture={}x{} idle={} weapon={} path={}",
             preview.asset.vertex_count(),
             preview.asset.index_count(),
             preview.asset.node_count(),
             preview.asset.joint_count(),
+            preview.asset.clip_count(),
             preview.asset.base_color_texture().width(),
             preview.asset.base_color_texture().height(),
             clip.name(),
-            clip.duration_seconds(),
+            WEAPON_JOINT,
+            preview.path.display()
+        ))
+    }
+
+    fn show_horde(&mut self, path: std::path::PathBuf) -> Result<String, String> {
+        let Self {
+            renderer,
+            horde_preview,
+            ..
+        } = self;
+        let renderer = renderer
+            .as_ref()
+            .ok_or_else(|| "no renderer yet".to_string())?;
+        replace_horde(horde_preview, path, |character| {
+            renderer
+                .upload_character(character)
+                .map_err(|error| error.to_string())
+        })?;
+        let preview = horde_preview
+            .as_ref()
+            .expect("successful replacement selects a horde");
+        Ok(format!(
+            "horde character vertices={} indices={} joints={} pose_buckets={} idle=Idle run=Run path={}",
+            preview.asset.vertex_count(),
+            preview.asset.index_count(),
+            preview.asset.joint_count(),
+            MAX_HORDE_POSE_BUCKETS,
             preview.path.display()
         ))
     }
@@ -401,6 +932,12 @@ impl App {
         self.input.restart();
         self.run_id = run_id;
         self.accumulator = Accumulator::default();
+        if let Some(character) = &mut self.character_preview {
+            character.playback.reset();
+        }
+        if let Some(horde) = &mut self.horde_preview {
+            horde.clear();
+        }
         if let Some(camera) = &mut self.camera {
             camera.snap_to(self.game.player_pos());
         }
@@ -461,7 +998,9 @@ impl App {
     fn drain_harness(&mut self) -> bool {
         // Collected up front so the receiver borrow ends before the loop needs
         // the rest of `self`.
-        let Some(rx) = &self.harness else { return false };
+        let Some(rx) = &self.harness else {
+            return false;
+        };
         let requests: Vec<Request> = rx.try_iter().collect();
         let mut quit = false;
 
@@ -482,6 +1021,14 @@ impl App {
                 },
                 Command::ClearCharacter => {
                     self.character_preview = None;
+                    "ok".to_string()
+                }
+                Command::ShowHorde(path) => match self.show_horde(path) {
+                    Ok(answer) => answer,
+                    Err(error) => format!("error: {error}"),
+                },
+                Command::ClearHorde => {
+                    self.horde_preview = None;
                     "ok".to_string()
                 }
                 Command::StartScene(path) => match self.start_scene_file(&path) {
@@ -525,18 +1072,30 @@ impl App {
                 }
                 Command::Tap(key) => {
                     self.handle_key(key, true, false);
-                    self.scheduled.push(Deferred { due: now, release: Some(key), reply: None });
+                    self.scheduled.push(Deferred {
+                        due: now,
+                        release: Some(key),
+                        reply: None,
+                    });
                     "ok".to_string()
                 }
                 Command::Hold(key, ms) => {
                     self.handle_key(key, true, false);
                     let due = now + std::time::Duration::from_millis(ms);
-                    self.scheduled.push(Deferred { due, release: Some(key), reply: Some(reply) });
+                    self.scheduled.push(Deferred {
+                        due,
+                        release: Some(key),
+                        reply: Some(reply),
+                    });
                     continue; // replies once the key comes back up
                 }
                 Command::Wait(ms) => {
                     let due = now + std::time::Duration::from_millis(ms);
-                    self.scheduled.push(Deferred { due, release: None, reply: Some(reply) });
+                    self.scheduled.push(Deferred {
+                        due,
+                        release: None,
+                        reply: Some(reply),
+                    });
                     continue;
                 }
                 Command::Shot(path) => {
@@ -643,20 +1202,38 @@ impl App {
         out.object("asset_preview", |asset| {
             report_asset_preview(self.asset_preview.as_ref(), asset);
         });
-        let presentation_seconds =
-            presentation_seconds(self.game.tick(), self.accumulator.alpha());
         out.object("character_preview", |character| {
-            report_character_preview(
-                self.character_preview.as_ref(),
-                presentation_seconds,
-                character,
-            );
+            report_character_preview(self.character_preview.as_ref(), character);
+        });
+        out.object("horde_preview", |horde| {
+            report_horde_preview(self.horde_preview.as_ref(), horde);
         });
 
         out.object("render", |r| {
-            let target = self.camera.as_ref().map(OrthoCamera::target).unwrap_or_default();
+            let target = self
+                .camera
+                .as_ref()
+                .map(OrthoCamera::target)
+                .unwrap_or_default();
             r.vec3("camera_target", target);
-            r.int("instances", self.instances.as_slice().len() as u64);
+            let player_instances = u64::from(self.character_preview.is_some());
+            let horde_instances = self
+                .horde_preview
+                .as_ref()
+                .map_or(0, |horde| horde.instance_count as u64);
+            r.int(
+                "instances",
+                self.instances.as_slice().len() as u64 + player_instances + horde_instances,
+            );
+            r.int("cube_instances", self.instances.as_slice().len() as u64);
+            r.int("player_character_instances", player_instances);
+            r.int("horde_character_instances", horde_instances);
+            r.int(
+                "horde_pose_draws",
+                self.horde_preview
+                    .as_ref()
+                    .map_or(0, |horde| horde.occupied_buckets as u64),
+            );
             r.int("frames", self.frames);
             r.int("skipped", self.skipped);
             r.num("frame_ms", self.clock.frame_ms());
@@ -774,14 +1351,19 @@ impl App {
             // still swing exactly once.
             self.game.step(
                 dt,
-                Intent::new(to_world(intent.move_axis()), intent.just_pressed(Action::Attack))
-                    .with_interact(intent.just_pressed(Action::Interact)),
+                Intent::new(
+                    to_world(intent.move_axis()),
+                    intent.just_pressed(Action::Attack),
+                )
+                .with_interact(intent.just_pressed(Action::Interact)),
             );
         }
 
         // How far this frame falls between the tick just run and the next one.
         // Everything below draws; nothing below simulates.
         let alpha = self.accumulator.alpha();
+        let player = self.game.player_presentation(alpha);
+        let presentation_seconds = presentation_seconds(self.game.tick(), alpha);
 
         // Presentation, in three ways at once. **After** the step, or it would
         // add a frame of lag on top of the smoothing that is there on purpose.
@@ -790,9 +1372,34 @@ impl App {
         // stair-step to follow. And `held`, never `sample` — a camera that
         // consumed a keypress would be the same bug wearing a different hat.
         let facing = to_world(self.input.held().move_axis());
-        camera.follow(self.game.player_pos_at(alpha), facing, frame);
+        camera.follow(player.ground_position(), facing, frame);
 
-        self.game.extract(alpha, self.instances.sink());
+        if let Some(horde) = &mut self.horde_preview {
+            horde.rebuild(self.game.enemy_presentations(alpha), presentation_seconds);
+        }
+        let has_player_character = self.character_preview.is_some();
+        let has_horde_character = self.horde_preview.is_some();
+        let weapon = self.character_preview.as_mut().map(|character| {
+            character.sample(player, alpha, presentation_seconds);
+            character.weapon_instance(player)
+        });
+
+        if !has_player_character && !has_horde_character {
+            self.game.extract(alpha, self.instances.sink());
+        } else {
+            let mut sink = self.instances.sink();
+            if has_horde_character {
+                self.game.extract_without_characters(alpha, &mut sink);
+                if !has_player_character {
+                    player.extract_fallback(&mut sink);
+                }
+            } else {
+                self.game.extract_without_player(alpha, &mut sink);
+            }
+            if let Some(weapon) = weapon {
+                sink.push(weapon);
+            }
+        }
 
         // The overlay is built here rather than inside `render` for the same
         // reason `extract` is: what a readout says is a decision this crate
@@ -818,16 +1425,20 @@ impl App {
             .asset_preview
             .as_ref()
             .map(|preview| MeshPreview::new(&preview.gpu, preview_instance()));
-        let presentation_seconds = presentation_seconds(self.game.tick(), alpha);
-        let character = self.character_preview.as_mut().map(|preview| {
-            let _ = preview.sample(presentation_seconds);
-            CharacterPreview::new(&preview.gpu, &preview.pose, character_instance())
+        let character = self.character_preview.as_ref().map(|preview| {
+            CharacterPreview::new(
+                &preview.gpu,
+                &preview.pose,
+                preview.character_instance(player),
+            )
         });
+        let horde = self.horde_preview.as_ref().map(LoadedHorde::draw);
         if renderer.render(
             camera,
             self.instances.as_slice(),
             preview,
             character,
+            horde,
             self.quads.as_slice(),
         ) {
             self.frames += 1;
@@ -903,7 +1514,10 @@ impl ApplicationHandler for App {
         // Native-only, so we can simply block until the GPU is ready. The
         // cross-platform examples route this back through the event loop
         // because the browser forbids blocking the main thread.
-        self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), display_handle)));
+        self.renderer = Some(pollster::block_on(Renderer::new(
+            window.clone(),
+            display_handle,
+        )));
         let size = window.inner_size();
 
         // Start framed on the character rather than easing in from the origin.
@@ -1010,10 +1624,14 @@ mod tests {
     fn pair() -> Scene {
         arpg_sim::Scene {
             name: "pair".into(),
-            bodies: vec![arpg_sim::Placed { pos: (20.0, 0.0), what: arpg_sim::Template::BODY }],
+            bodies: vec![arpg_sim::Placed {
+                pos: (20.0, 0.0),
+                what: arpg_sim::Template::BODY,
+            }],
             grids: vec![],
             sources: vec![],
-        }.into()
+        }
+        .into()
     }
 
     fn fixture_path() -> std::path::PathBuf {
@@ -1024,6 +1642,30 @@ mod tests {
     fn character_fixture_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/fixtures/blender-bind-pose.glb")
+    }
+
+    fn loaded_character(path: &str) -> LoadedCharacter<()> {
+        let source = std::fs::read(character_fixture_path()).unwrap();
+        let asset = arpg_assets::import_character_glb(&source).unwrap();
+        let clips = CharacterClips::resolve(&asset).unwrap();
+        let weapon = asset.joint_named(WEAPON_JOINT).unwrap();
+        let pose = asset.bind_pose();
+        LoadedCharacter {
+            path: path.into(),
+            asset,
+            pose,
+            clips,
+            weapon,
+            playback: CharacterPlayback::default(),
+            gpu: (),
+        }
+    }
+
+    fn loaded_horde(path: &str) -> LoadedHorde<()> {
+        let source = std::fs::read(character_fixture_path()).unwrap();
+        let asset = arpg_assets::import_character_glb(&source).unwrap();
+        let clips = HordeClips::resolve(&asset).unwrap();
+        LoadedHorde::new(path.into(), asset, clips, ())
     }
 
     #[test]
@@ -1076,15 +1718,7 @@ mod tests {
 
     #[test]
     fn character_replacement_is_atomic_across_import_and_upload_failure() {
-        let source = std::fs::read(character_fixture_path()).unwrap();
-        let asset = arpg_assets::import_character_glb(&source).unwrap();
-        let pose = asset.bind_pose();
-        let mut slot = Some(LoadedCharacter {
-            path: "old.glb".into(),
-            asset,
-            pose,
-            gpu: (),
-        });
+        let mut slot = Some(loaded_character("old.glb"));
         let missing = std::env::temp_dir().join("arpg-character-that-does-not-exist.glb");
         assert!(replace_character(&mut slot, missing, |_| Ok(())).is_err());
         assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
@@ -1099,41 +1733,199 @@ mod tests {
 
         replace_character(&mut slot, character_fixture_path(), |_| Ok(())).unwrap();
         let current = slot.as_ref().unwrap();
-        assert_eq!((current.asset.vertex_count(), current.asset.index_count()), (144, 216));
-        assert_eq!((current.asset.node_count(), current.asset.joint_count()), (5, 3));
+        assert_eq!(
+            (current.asset.vertex_count(), current.asset.index_count()),
+            (144, 216)
+        );
+        assert_eq!(
+            (current.asset.node_count(), current.asset.joint_count()),
+            (6, 4)
+        );
+        assert_eq!(current.asset.clip_count(), 8);
         let current = slot.as_mut().unwrap();
-        assert!((current.sample(0.5) - 0.5).abs() < 1.0e-5);
-        assert!(current
-            .pose
-            .joint_matrices()
-            .iter()
-            .any(|matrix| !matrix.matrix().abs_diff_eq(glam::Mat4::IDENTITY, 1.0e-3)));
+        let player = Game::empty().player_presentation(Alpha::ONE);
+        current.sample(player, Alpha::ONE, 0.5);
+        assert!(
+            current
+                .pose
+                .joint_matrices()
+                .iter()
+                .any(|matrix| !matrix.matrix().abs_diff_eq(glam::Mat4::IDENTITY, 1.0e-3))
+        );
     }
 
     #[test]
     fn character_preview_report_is_derived_from_the_committed_selection() {
         let mut inactive = Report::default();
-        report_character_preview::<()>(None, 0.0, &mut inactive);
+        report_character_preview::<()>(None, &mut inactive);
         assert_eq!(
             inactive.finish(),
-            r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0,"nodes":0,"joints":0,"clip":"","clip_duration":0.0000,"channels":0,"sample_seconds":0.0000}"#
+            r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0,"nodes":0,"joints":0,"clips":0,"role":"","clip":"","clip_duration":0.0000,"channels":0,"sample_seconds":0.0000,"blend_from":"","blend":0.0000,"weapon_joint":""}"#
         );
 
-        let source = std::fs::read(character_fixture_path()).unwrap();
-        let asset = arpg_assets::import_character_glb(&source).unwrap();
-        let pose = asset.bind_pose();
-        let preview = LoadedCharacter {
-            path: "assets/character.glb".into(),
-            asset,
-            pose,
-            gpu: (),
-        };
+        let mut preview = loaded_character("assets/character.glb");
+        let player = Game::empty().player_presentation(Alpha::ONE);
+        preview.sample(player, Alpha::ONE, 0.25);
         let mut active = Report::default();
-        report_character_preview(Some(&preview), 0.25, &mut active);
+        report_character_preview(Some(&preview), &mut active);
         assert_eq!(
             active.finish(),
-            r#"{"active":true,"path":"assets/character.glb","vertices":144,"indices":216,"texture_width":16,"texture_height":16,"nodes":5,"joints":3,"clip":"Sway","clip_duration":1.0000,"channels":9,"sample_seconds":0.2500}"#
+            r#"{"active":true,"path":"assets/character.glb","vertices":144,"indices":216,"texture_width":16,"texture_height":16,"nodes":6,"joints":4,"clips":8,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":12,"sample_seconds":0.2500,"blend_from":"","blend":1.0000,"weapon_joint":"Weapon"}"#
         );
+    }
+
+    #[test]
+    fn horde_replacement_is_atomic_and_its_report_is_derived() {
+        let mut slot = Some(loaded_horde("old.glb"));
+        let missing = std::env::temp_dir().join("arpg-horde-that-does-not-exist.glb");
+        assert!(replace_horde(&mut slot, missing, |_| Ok(())).is_err());
+        assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
+
+        assert!(
+            replace_horde(&mut slot, character_fixture_path(), |_| {
+                Err("GPU refused it".into())
+            })
+            .is_err()
+        );
+        assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
+
+        replace_horde(&mut slot, character_fixture_path(), |_| Ok(())).unwrap();
+        let mut game = Game::empty();
+        game.set_enemy_count(32);
+        let current = slot.as_mut().unwrap();
+        current.rebuild(game.enemy_presentations(Alpha::ONE), 0.25);
+        assert_eq!(current.instance_count, 32);
+        assert!((1..=HORDE_PHASES_PER_ROLE).contains(&current.occupied_buckets));
+
+        let mut active = Report::default();
+        report_horde_preview(Some(current), &mut active);
+        let report = active.finish();
+        assert!(report.contains(r#""active":true"#));
+        assert!(report.contains(r#""idle_clip":"Idle""#));
+        assert!(report.contains(r#""run_clip":"Run""#));
+        assert!(report.contains(r#""pose_buckets":8"#));
+        assert!(report.contains(r#""instances":32"#));
+        assert!(report.contains(r#""idle_instances":32"#));
+        assert!(report.contains(r#""run_instances":0"#));
+    }
+
+    #[test]
+    fn stable_identity_selects_bounded_reused_horde_pose_buckets() {
+        let mut horde = loaded_horde("horde.glb");
+        let mut game = Game::empty();
+        game.set_enemy_count(32);
+        let enemies: Vec<_> = game.enemy_presentations(Alpha::ONE).collect();
+        let removed = enemies[0].id();
+        let survivor = enemies[1];
+        let survivor_bucket = LoadedHorde::<()>::bucket(survivor).0;
+
+        horde.rebuild(enemies.into_iter(), 0.0);
+        let capacities = horde
+            .buckets
+            .each_ref()
+            .map(|bucket| bucket.instances.capacity());
+        horde.rebuild(game.enemy_presentations(Alpha::ONE), 0.1);
+        assert_eq!(
+            horde
+                .buckets
+                .each_ref()
+                .map(|bucket| bucket.instances.capacity()),
+            capacities,
+            "a steady horde reallocated its instance buckets"
+        );
+
+        assert!(game.despawn_body(removed));
+        let survivor_after_swap = game
+            .enemy_presentations(Alpha::ONE)
+            .find(|enemy| enemy.id() == survivor.id())
+            .unwrap();
+        assert_eq!(
+            LoadedHorde::<()>::bucket(survivor_after_swap).0,
+            survivor_bucket
+        );
+
+        game.set_seeker_count(31);
+        let dt = Accumulator::default()
+            .pending(arpg_sim::Dt::SECS)
+            .next()
+            .unwrap();
+        game.step(dt, Intent::default());
+        horde.rebuild(game.enemy_presentations(Alpha::ONE), 0.2);
+        assert!(
+            horde.buckets[..HORDE_PHASES_PER_ROLE]
+                .iter()
+                .all(|bucket| bucket.instances.is_empty())
+        );
+        assert_eq!(
+            horde.buckets[HORDE_PHASES_PER_ROLE..]
+                .iter()
+                .map(|bucket| bucket.instances.len())
+                .sum::<usize>(),
+            31
+        );
+        assert!(horde.occupied_buckets <= HORDE_PHASES_PER_ROLE);
+    }
+
+    #[test]
+    fn every_attack_profile_resolves_to_its_own_presentation_clip() {
+        let character = loaded_character("character.glb");
+        let expected = [
+            "AttackBasic",
+            "AttackThrust",
+            "AttackSweep",
+            "AttackHeavySweep",
+            "AttackCleave",
+            "AttackCrowdBreaker",
+        ];
+        for (profile, expected) in AttackProfile::ALL.into_iter().zip(expected) {
+            let id = character.clips.for_role(PresentationRole::Attack(profile));
+            assert_eq!(character.asset.clip(id).unwrap().name(), expected);
+        }
+    }
+
+    #[test]
+    fn authoritative_player_facts_drive_roles_cross_fade_and_weapon() {
+        let mut character = loaded_character("character.glb");
+        let mut game = Game::empty();
+        let idle = game.player_presentation(Alpha::ONE);
+        character.sample(idle, Alpha::ONE, 0.0);
+        assert_eq!(character.playback.role, PresentationRole::Idle);
+
+        let dt = Accumulator::default()
+            .pending(arpg_sim::Dt::SECS)
+            .next()
+            .unwrap();
+        game.step(dt, Intent::new(MoveDir::new(Vec3::X), false));
+        let running = game.player_presentation(Alpha::ONE);
+        character.sample(running, Alpha::ONE, 1.0 / 60.0);
+        assert_eq!(character.playback.role, PresentationRole::Run);
+        assert_eq!(character.playback.blend, 0.0);
+        assert_eq!(
+            character.playback.transition.unwrap().role,
+            PresentationRole::Idle
+        );
+
+        character.sample(running, Alpha::ONE, 0.2);
+        assert_eq!(character.playback.blend, 1.0);
+        assert!(character.playback.transition.is_none());
+        let weapon = character.weapon_instance(running);
+        assert!(weapon.pos().is_finite());
+        assert!(weapon.yaw().is_finite());
+
+        game.set_attack_profile(AttackProfile::Sweep);
+        let dt = Accumulator::default()
+            .pending(arpg_sim::Dt::SECS)
+            .next()
+            .unwrap();
+        game.step(dt, Intent::new(MoveDir::NONE, true));
+        let attacking = game.player_presentation(Alpha::ONE);
+        character.sample(attacking, Alpha::ONE, 0.25);
+        assert_eq!(
+            character.playback.role,
+            PresentationRole::Attack(AttackProfile::Sweep)
+        );
+        let clip = character.clips.for_role(character.playback.role);
+        assert_eq!(character.asset.clip(clip).unwrap().name(), "AttackSweep");
     }
 
     #[test]

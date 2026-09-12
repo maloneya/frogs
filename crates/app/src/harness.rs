@@ -45,10 +45,14 @@ pub(crate) enum Command {
     ShowAsset(PathBuf),
     /// Remove the app-global preview selection.
     ClearAsset,
-    /// Atomically load and select one app-global bind-pose character.
+    /// Atomically load and select one app-global player character.
     ShowCharacter(PathBuf),
     /// Remove the app-global character selection.
     ClearCharacter,
+    /// Atomically load and select one app-global horde character.
+    ShowHorde(PathBuf),
+    /// Return the horde to fallback cubes.
+    ClearHorde,
     /// Reconstruct the complete playtest from a scene file.
     StartScene(PathBuf),
     /// Reuse the selected content snapshot, even if its file has since changed.
@@ -106,7 +110,10 @@ pub(crate) enum Command {
     /// separately about an axis the others already had.
     Source(SourceSpec),
     RemoveSource(SourceId),
-    SetSourceEnabled { id: SourceId, enabled: bool },
+    SetSourceEnabled {
+        id: SourceId,
+        enabled: bool,
+    },
     SetVsync(bool),
     Quit,
 }
@@ -148,6 +155,11 @@ fn parse(line: &str) -> Result<Command, String> {
     {
         return parse_character(rest.trim());
     }
+    if let Some(rest) = line.trim().strip_prefix("horde")
+        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        return parse_horde(rest.trim());
+    }
     if let Some(rest) = line.trim().strip_prefix("scene")
         && (rest.is_empty() || rest.starts_with(char::is_whitespace))
     {
@@ -168,7 +180,9 @@ fn parse(line: &str) -> Result<Command, String> {
         "tap" => Command::Tap(key(arg)?),
         "hold" => Command::Hold(key(arg)?, number(it.next())?),
         "wait" => Command::Wait(number(arg)?),
-        "shot" => Command::Shot(PathBuf::from(arg.ok_or_else(|| "expected a path".to_string())?)),
+        "shot" => Command::Shot(PathBuf::from(
+            arg.ok_or_else(|| "expected a path".to_string())?,
+        )),
         "state" => Command::State,
         // `trace since <tick>` rather than `trace <tick>`, so the reply cannot
         // be misread as "the trace at tick N".
@@ -179,8 +193,10 @@ fn parse(line: &str) -> Result<Command, String> {
         },
         "spawn" => {
             let coord = |arg: Option<&str>| {
-                arg.ok_or_else(|| "expected: spawn <x> <z> [seek | template (<fields>)]".to_string())
-                    .and_then(|v| v.parse::<f32>().map_err(|e| e.to_string()))
+                arg.ok_or_else(|| {
+                    "expected: spawn <x> <z> [seek | template (<fields>)]".to_string()
+                })
+                .and_then(|v| v.parse::<f32>().map_err(|e| e.to_string()))
             };
             let x = coord(arg)?;
             let z = coord(it.next())?;
@@ -191,18 +207,27 @@ fn parse(line: &str) -> Result<Command, String> {
                 Some("template") => arpg_content::parse_template(&it.collect::<Vec<_>>().join(" "))
                     .map_err(|error| error.to_string())?,
                 None => Template::BODY,
-                Some(other) => return Err(format!("unknown spawn option {other:?}; use template (<fields>)")),
+                Some(other) => {
+                    return Err(format!(
+                        "unknown spawn option {other:?}; use template (<fields>)"
+                    ));
+                }
             };
             Command::Spawn { x, z, what }
         }
         "source" => {
             if matches!(arg, Some("enable" | "disable")) {
-                let id = it.next().and_then(SourceId::parse)
+                let id = it
+                    .next()
+                    .and_then(SourceId::parse)
                     .ok_or_else(|| USAGE.to_string())?;
                 if it.next().is_some() {
                     return Err(USAGE.to_string());
                 }
-                return Ok(Command::SetSourceEnabled { id, enabled: arg == Some("enable") });
+                return Ok(Command::SetSourceEnabled {
+                    id,
+                    enabled: arg == Some("enable"),
+                });
             }
             if arg == Some("remove") {
                 // Named in the form the trace prints — `s0`, not `0` — so an id
@@ -235,9 +260,11 @@ fn parse(line: &str) -> Result<Command, String> {
                 match flag {
                     "seek" => what = what.seeking(),
                     "template" => {
-                        what = arpg_content::parse_template(&it.by_ref().collect::<Vec<_>>().join(" "))
-                            .map_err(|error| error.to_string())?;
-                    },
+                        what = arpg_content::parse_template(
+                            &it.by_ref().collect::<Vec<_>>().join(" "),
+                        )
+                        .map_err(|error| error.to_string())?;
+                    }
                     "disabled" => enabled = false,
                     "every" => every = number(it.next())? as u32,
                     "ring" => radius = coord(it.next())?,
@@ -289,24 +316,34 @@ fn parse(line: &str) -> Result<Command, String> {
 }
 
 fn parse_asset(text: &str) -> Result<Command, String> {
-    let (verb, value) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    let value = value.trim();
-    let usage = "expected: asset show <path>, asset clear";
-    match (verb, value) {
-        ("show", path) if !path.is_empty() => Ok(Command::ShowAsset(path.into())),
-        ("clear", "") => Ok(Command::ClearAsset),
-        _ => Err(usage.into()),
-    }
+    parse_selection(text, "asset", Command::ShowAsset, Command::ClearAsset)
 }
 
 fn parse_character(text: &str) -> Result<Command, String> {
+    parse_selection(
+        text,
+        "character",
+        Command::ShowCharacter,
+        Command::ClearCharacter,
+    )
+}
+
+fn parse_horde(text: &str) -> Result<Command, String> {
+    parse_selection(text, "horde", Command::ShowHorde, Command::ClearHorde)
+}
+
+fn parse_selection(
+    text: &str,
+    noun: &str,
+    show: fn(PathBuf) -> Command,
+    clear: Command,
+) -> Result<Command, String> {
     let (verb, value) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let value = value.trim();
-    let usage = "expected: character show <path>, character clear";
     match (verb, value) {
-        ("show", path) if !path.is_empty() => Ok(Command::ShowCharacter(path.into())),
-        ("clear", "") => Ok(Command::ClearCharacter),
-        _ => Err(usage.into()),
+        ("show", path) if !path.is_empty() => Ok(show(path.into())),
+        ("clear", "") => Ok(clear),
+        _ => Err(format!("expected: {noun} show <path>, {noun} clear")),
     }
 }
 
@@ -319,9 +356,9 @@ fn parse_scene(text: &str) -> Result<Command, String> {
         ("add", path) if !path.is_empty() => Ok(Command::AddScene(path.into())),
         ("restart", "") => Ok(Command::RestartScene),
         ("list", "") => Ok(Command::ListScenes),
-        ("evict", id) => {
-            arpg_sim::SceneId::parse(id).map(Command::EvictScene).ok_or_else(|| usage.into())
-        }
+        ("evict", id) => arpg_sim::SceneId::parse(id)
+            .map(Command::EvictScene)
+            .ok_or_else(|| usage.into()),
         _ => Err(usage.into()),
     }
 }
@@ -374,7 +411,13 @@ fn serve(stream: UnixStream, tx: &Sender<Request>) {
         Err(e) => format!("error: {e}\n"),
         Ok(command) => {
             let (reply_tx, reply_rx) = channel();
-            if tx.send(Request { command, reply: reply_tx }).is_err() {
+            if tx
+                .send(Request {
+                    command,
+                    reply: reply_tx,
+                })
+                .is_err()
+            {
                 "error: game is shutting down\n".to_string()
             } else {
                 // Blocks until the game loop has actually applied it, which is
@@ -421,6 +464,22 @@ mod tests {
             "character show",
             "character clear extra",
             "character hide file.glb",
+        ] {
+            assert!(parse(bad).is_err(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn horde_commands_are_explicit_and_preserve_paths_with_spaces() {
+        assert!(
+            matches!(parse("horde show assets/my crowd.glb"), Ok(Command::ShowHorde(path)) if path == std::path::Path::new("assets/my crowd.glb"))
+        );
+        assert!(matches!(parse("horde clear"), Ok(Command::ClearHorde)));
+        for bad in [
+            "horde",
+            "horde show",
+            "horde clear extra",
+            "horde hide file.glb",
         ] {
             assert!(parse(bad).is_err(), "{bad} should be rejected");
         }
@@ -527,21 +586,32 @@ mod tests {
     /// untrustworthy in the first place.
     #[test]
     fn bad_input_is_reported_rather_than_ignored() {
-        for bad in ["", "fly", "press", "press q", "hold d", "hold d soon", "wait"] {
+        for bad in [
+            "",
+            "fly",
+            "press",
+            "press q",
+            "hold d",
+            "hold d soon",
+            "wait",
+        ] {
             assert!(parse(bad).is_err(), "{bad:?} should not parse");
         }
     }
     #[test]
     fn harness_templates_use_the_sim_schema() {
-        let Ok(Command::Spawn { what, .. }) = parse("spawn 0 2 template (fixed: true, interactable: true)") else {
+        let Ok(Command::Spawn { what, .. }) =
+            parse("spawn 0 2 template (fixed: true, interactable: true)")
+        else {
             panic!("sim template must parse");
         };
         assert_eq!(what, Template::BLOCK.interactive());
-        let Ok(Command::Source(spec)) = parse("source 0 2 every 60 template (fixed: true, interactable: true)") else {
+        let Ok(Command::Source(spec)) =
+            parse("source 0 2 every 60 template (fixed: true, interactable: true)")
+        else {
             panic!("source template must parse");
         };
         assert_eq!(spec.what, what);
         assert!(parse("spawn 0 2 template (interactble: true)").is_err());
     }
-
 }

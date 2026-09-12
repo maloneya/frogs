@@ -21,9 +21,11 @@ mod quad;
 mod text;
 
 pub use camera::OrthoCamera;
-pub use character::{CharacterMesh, CharacterPreview};
+pub use character::{
+    CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
+};
 pub use mesh::{MeshAsset, MeshPreview, MeshUploadError};
-pub use quad::{Quad, QuadBuffer, QuadSink, MAX_QUADS};
+pub use quad::{MAX_QUADS, Quad, QuadBuffer, QuadSink};
 pub use text::Glyphs;
 
 use arpg_core::Instance;
@@ -121,7 +123,10 @@ impl Renderer {
     ///
     /// Blocks until the device is ready. That is fine here and would not be on
     /// the web, which is why the wgpu examples route this through the event loop.
-    pub async fn new(window: Arc<Window>, display_handle: winit::event_loop::OwnedDisplayHandle) -> Self {
+    pub async fn new(
+        window: Arc<Window>,
+        display_handle: winit::event_loop::OwnedDisplayHandle,
+    ) -> Self {
         let size = window.inner_size();
 
         // `from_env` lets WGPU_BACKEND / WGPU_POWER_PREF override our choices at
@@ -321,8 +326,8 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Draws one frame: the whole horde and the ground in a single instanced
-    /// draw call.
+    /// Draws one frame: cubes in one instanced call, plus one call per occupied
+    /// character-pose bucket.
     ///
     /// Returns whether a frame was actually **presented**. Several of the
     /// recoverable surface states below skip the frame entirely, and a caller
@@ -340,6 +345,7 @@ impl Renderer {
         instances: &[Instance],
         preview: Option<MeshPreview<'_>>,
         character: Option<CharacterPreview<'_>>,
+        horde: Option<CharacterHorde<'_>>,
         overlay: &[Quad],
     ) -> bool {
         // Acquiring a swapchain image can fail in several recoverable ways —
@@ -389,18 +395,19 @@ impl Renderer {
         // buffer; it only becomes real work at `queue.submit`.
         let mut encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame"),
+            });
 
         self.camera.upload(&self.queue, camera);
         let count = self.cubes.upload(&self.queue, instances);
         if let Some(preview) = preview {
             self.asset_preview.upload(&self.queue, preview.instance);
         }
-        if let Some(character) = character {
-            self.character_preview.upload(&self.queue, character);
-        }
+        let character_draws = self.character_preview.upload(&self.queue, character, horde);
         let quads =
-            self.overlay.upload(&self.queue, overlay, self.config.width, self.config.height);
+            self.overlay
+                .upload(&self.queue, overlay, self.config.width, self.config.height);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -450,9 +457,21 @@ impl Renderer {
                 self.asset_preview
                     .draw(&mut pass, &self.camera, preview.mesh);
             }
+            if let Some(horde) = horde {
+                self.character_preview.draw_horde(
+                    &mut pass,
+                    &self.camera,
+                    horde.mesh,
+                    &character_draws.horde,
+                );
+            }
             if let Some(character) = character {
-                self.character_preview
-                    .draw(&mut pass, &self.camera, character.mesh);
+                self.character_preview.draw_player(
+                    &mut pass,
+                    &self.camera,
+                    character.mesh,
+                    character_draws.player,
+                );
             }
 
             // After the world and inside the same pass. The overlay neither
@@ -557,7 +576,11 @@ mod tests {
 
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("silhouette target"),
-            size: wgpu::Extent3d { width: N, height: N, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: N,
+                height: N,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -572,13 +595,12 @@ mod tests {
 
         let mut buf = InstanceBuffer::default();
         let mut sink = buf.sink();
-        sink.push(
-            Instance::new(Vec3::ZERO, Vec3::new(0.5, 0.5, 8.0), Vec3::ONE).with_yaw(yaw),
-        );
+        sink.push(Instance::new(Vec3::ZERO, Vec3::new(0.5, 0.5, 8.0), Vec3::ONE).with_yaw(yaw));
         let count = cubes.upload(&queue, buf.as_slice());
 
-        let mut encoder = device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("silhouette") });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("silhouette"),
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("silhouette pass"),
@@ -632,7 +654,11 @@ mod tests {
         let cy = lit.iter().map(|p| p.1).sum::<f32>() / n;
         let lean = lit.iter().map(|(x, y)| (x - cx) * (y - cy)).sum::<f32>() / n;
 
-        Silhouette { width: x1 - x0 + 1, height: y1 - y0 + 1, lean }
+        Silhouette {
+            width: x1 - x0 + 1,
+            height: y1 - y0 + 1,
+            lean,
+        }
     }
 
     /// **The Rust/WGSL seam that nothing else covers.**
@@ -726,7 +752,11 @@ mod tests {
         let color = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("test colour target"),
-                size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: W,
+                    height: H,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -752,8 +782,9 @@ mod tests {
         let count = cubes.upload(&queue, buf.as_slice());
         assert_eq!(count, 64, "upload should report every instance as live");
 
-        let mut encoder = device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test frame") });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("test frame"),
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("test pass"),
@@ -972,12 +1003,12 @@ mod tests {
         );
     }
 
-    /// A sampled non-bind pose crosses every character seam in one real draw:
+    /// A sampled non-bind pose bucket crosses every character seam in one real draw:
     /// Blender's channels, joint indices and weights, CPU sampling, the uniform
     /// upload and WGSL skinning. A missing palette upload collapses these vertices
     /// to the origin, while a layout disagreement reaches the validation scope.
     #[test]
-    fn the_character_preview_draws_a_sampled_pose() {
+    fn a_character_pose_bucket_draws_its_instances() {
         const N: u32 = 256;
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -998,7 +1029,7 @@ mod tests {
             .expect("character fixture uploads");
 
         let color = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("character bind pose"),
+            label: Some("character pose bucket"),
             size: wgpu::Extent3d {
                 width: N,
                 height: N,
@@ -1017,21 +1048,23 @@ mod tests {
         camera.zoom_by(0.125);
         camera_binding.upload(&queue, &camera);
         let mut pose = cpu.bind_pose();
-        let sampled = cpu.sample_looping(0.5, &mut pose);
-        assert!((sampled - 0.5).abs() < 1.0e-5, "fixture carries its Sway clip");
-        let preview = CharacterPreview::new(
-            &gpu,
-            &pose,
-            Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE),
-        );
-        pipeline.upload(&queue, preview);
+        let idle = cpu
+            .clip_named("Idle")
+            .expect("fixture carries its Idle clip");
+        assert!(cpu.sample(idle, 0.5, &mut pose));
+        let instances = [Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)];
+        let empty = CharacterBucket::new(&pose, &[]);
+        let mut buckets = [empty; MAX_HORDE_POSE_BUCKETS];
+        buckets[3] = CharacterBucket::new(&pose, &instances);
+        let horde = CharacterHorde::new(&gpu, buckets);
+        let draws = pipeline.upload(&queue, None, Some(horde));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("character bind pose"),
+            label: Some("character pose bucket"),
         });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("character bind pose"),
+                label: Some("character pose bucket"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -1053,7 +1086,7 @@ mod tests {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pipeline.draw(&mut pass, &camera_binding, &gpu);
+            pipeline.draw_horde(&mut pass, &camera_binding, &gpu, &draws.horde);
         }
         let readback = Readback::new(&device, N, N);
         readback.record(&mut encoder, &color);
@@ -1085,7 +1118,7 @@ mod tests {
         let height = bounds.3 - bounds.2 + 1;
         assert!(
             height > width && height >= 70 && width >= 45,
-            "expected the 1.9m upright bind pose, got {width}x{height} from {bounds:?}"
+            "expected a 1.9m upright sampled pose, got {width}x{height} from {bounds:?}"
         );
     }
 
@@ -1109,7 +1142,11 @@ mod tests {
 
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("overlay target"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1127,8 +1164,9 @@ mod tests {
         }
         let count = overlay.upload(&queue, buf.as_slice(), width, height);
 
-        let mut encoder = device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("overlay") });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("overlay"),
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("overlay pass"),
@@ -1197,8 +1235,18 @@ mod tests {
         // covered smear would pass a "brighter than the clear colour" check.
         let (x0, y0) = (RECT.0 as u32, RECT.1 as u32);
         let (x1, y1) = (x0 + RECT.2 as u32 - 1, y0 + RECT.3 as u32 - 1);
-        for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1), ((x0 + x1) / 2, (y0 + y1) / 2)] {
-            assert_eq!(at(x, y), u8::MAX, "the quad should cover ({x}, {y}) opaquely");
+        for (x, y) in [
+            (x0, y0),
+            (x1, y0),
+            (x0, y1),
+            (x1, y1),
+            ((x0 + x1) / 2, (y0 + y1) / 2),
+        ] {
+            assert_eq!(
+                at(x, y),
+                u8::MAX,
+                "the quad should cover ({x}, {y}) opaquely"
+            );
         }
 
         // Just outside, on every side. A half-pixel offset in the projection

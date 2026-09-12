@@ -1,8 +1,8 @@
 # Character asset authoring
 
 The asset boundary accepts two deliberately small Blender-to-GLB paths: a baked
-static preview and a one-skin character with one looping transform clip. Neither
-is a general scene loader.
+static preview and a one-skin character with a bounded transform-clip catalog.
+Neither is a general scene loader.
 
 ## Blender convention
 
@@ -62,23 +62,44 @@ must not be applied to the mesh. This division is deliberate: the skeleton
 produces asset-local poses, while the app's `Instance` is the only placement,
 scale and facing transform used by the renderer.
 
-Export the selected mesh and armature together as a binary GLB with UVs, normals,
-skinning and one active action enabled. Keep shape keys, cameras, lights and glTF
-extensions disabled. Blender must emit inverse bind matrices;
+Export the selected mesh and armature together as a binary GLB with UVs,
+normals, skinning and Actions animation export enabled. Keep shape keys,
+cameras, lights and glTF extensions disabled. Blender must emit inverse bind matrices;
 the importer rejects a skin whose bind-pose palette does not reproduce every
 authored vertex.
 
-The action must have a non-empty unique name, two to 256 keys per channel, a
+Each action must have a non-empty unique name, two to 256 keys per channel, a
 duration no longer than 60 seconds, and matching start/end times across every
 channel. The emitted glTF may use `LINEAR` or `STEP`; Blender commonly exports
 motion as `LINEAR` and unchanged components as `STEP`. Cubic splines, morph
 targets, non-joint targets and non-uniform scale are rejected explicitly. Key
-the bind pose at both ends when the clip should loop without a seam.
+the bind pose at both ends when the clip should loop without a seam. One asset
+may contain at most 16 clips.
+
+The player presentation contract resolves `Idle`, `Run`, `AttackBasic`,
+`AttackThrust`, `AttackSweep`, `AttackHeavySweep`, `AttackCleave` and
+`AttackCrowdBreaker` once at load. It also requires an unweighted `Weapon`
+joint. Author that bone from the grip toward the blade along its local +Y axis;
+the app derives the attached weapon's position and facing from its sampled
+transform. These names are gameplay-presentation roles owned by `app`, not
+special cases in the asset importer.
+
+The ordinary-horde contract is a smaller view of the same interchange format:
+it requires only `Idle` and `Run`. `horde show <path.glb>` selects one shared
+mesh and material, then groups live enemies into four stable phases for each
+role. The phase comes from stable entity identity rather than authored or
+stored randomness. `horde clear` restores the fallback enemy cubes.
 
 The checked-in `assets/fixtures/blender-bind-pose.glb` exercises this contract
-with a three-bone, asymmetric training dummy and a one-second `Sway` action.
+with a four-bone, asymmetric training dummy, the eight player actions and the
+unweighted weapon attachment joint.
 Regenerate it from the repository root with:
 
 ```text
 blender --background --python assets/fixtures/generate-blender-bind-pose.py
 ```
+
+The playable low-poly example and its editable Blender source live in
+[`assets/characters/basic-player`](../assets/characters/basic-player/README.md).
+Its generator produces both checked-in artifacts and the GLB is byte-stable
+across regeneration.

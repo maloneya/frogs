@@ -117,7 +117,9 @@ echo 'hold d 500' | nc -U /tmp/arpg.sock
 `state` · `trace since <tick>` · `enemies <n>` · `seekers <n>` ·
 `spawn <x> <z> [seek]` ·
 `source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>] [disabled]` ·
-`source remove|enable|disable <id>` · `impulse <player|#id> <x> <z>` · `vsync on|off` · `quit`
+`source remove|enable|disable <id>` · `impulse <player|#id> <x> <z>` ·
+`asset|character|horde show <path.glb>` · `asset|character|horde clear` ·
+`vsync on|off` · `quit`
 
 Static asset preview: `asset show <path.glb>` atomically imports, uploads and
 selects one app-global preview beside the initial camera target; `asset clear`
@@ -131,9 +133,19 @@ The preview has no body and no simulation effect. See
 Animated character preview: `character show <path.glb>` atomically imports,
 uploads and selects the separate one-skin path; `character clear` removes it.
 `state.character_preview` reports its path, mesh, texture, node and joint
-counts plus the clip name, duration, channel count and current loop time. The
-one imported clip is sampled from `tick + alpha`; it is presentation-only and
-may coexist with the static preview.
+counts plus its current role, clip, sample time and cross-fade. A selected
+character replaces the player's fallback cubes, maps authoritative movement
+and attack state to the authored clip catalog, and carries a weapon on the
+sampled `Weapon` joint. It is presentation-only and may coexist with the static
+preview.
+
+Animated horde preview: `horde show <path.glb>` atomically selects one shared
+enemy mesh with `Idle` and `Run` clips; `horde clear` restores enemy cubes.
+Stable entity identity assigns four reusable pose phases per role, so the horde
+remains at most eight instanced draws rather than one pose and draw per enemy.
+`state.horde_preview` reports the selection, role counts and occupied buckets;
+`state.render.horde_pose_draws` reports the draw workload. Like player
+animation, this path is presentation-only and cannot write into simulation.
 
 Source enablement freezes cadence and ring progress while disabled; enabling
 resumes them. Read-only `SourceState` supplies reports and scenario assertions.
@@ -222,9 +234,9 @@ crates/
 - `assets` — the one-way interchange boundary. It accepts bounded, explicit
   subsets of binary glTF. Static meshes return transformed CPU geometry;
   character assets retain their named node hierarchy, one skin, inverse binds
-  and one sampled clip. Both return one decoded base-colour texture. glTF
-  handles never escape it. It owns no paths, scene selection, simulation
-  meaning, window state or GPU resources.
+  and a bounded sampled clip catalog. Both return one decoded base-colour
+  texture. glTF handles never escape it. It owns no paths, scene selection,
+  simulation meaning, window state or GPU resources.
 - `content` decodes `GameScene` and promotes legacy engine-only files. The
   game scene wraps sim's physical definition and adds game-owned relationships;
   no physical schema is copied. App and runner share this decoder.
@@ -249,7 +261,8 @@ crates/
 - `gfx` — `lib.rs` (surface, device, depth, frame orchestration), `camera.rs`
   (isometric ortho camera, the follow rig, and the uniform), `cube.rs` (unit-cube
   pipeline and instance buffer), `mesh.rs`/`character.rs` (imported static and
-  skinned GPU resources), shared `material.rs`, and their WGSL shaders. The camera rig lives
+  skinned GPU resources, including bounded shared-pose horde instancing), shared
+  `material.rs`, and their WGSL shaders. The camera rig lives
   here rather than in `app` or `sim` because where the camera points is a
   presentation decision; it is handed a bare `Vec3`, which is exactly as
   anonymous as an `Instance`.
@@ -397,11 +410,13 @@ and the depth buffer then handles occlusion exactly, in hardware. The sprite
 approach would require re-sorting every entity by depth each frame and still
 produce popping where entities overlap.
 
-**The horde is drawn with instancing.** One cube mesh, one per-instance buffer
-of position/scale/colour, one draw call for all N enemies. Draw call cost is
-roughly independent of how much that call draws, so per-entity draw calls are
-the failure mode to avoid. (This is why raylib was rejected — its immediate-mode
-`DrawCube` forces exactly that.)
+**The horde is drawn with instancing.** Fallback enemies use one cube mesh, one
+per-instance buffer of position/scale/colour and one draw call for all N bodies.
+Animated enemies use that same principle once per occupied shared-pose bucket,
+with a fixed ceiling of eight calls. Draw call cost is roughly independent of
+how much that call draws, so per-entity draws are the failure mode to avoid.
+(This is why raylib was rejected — its immediate-mode `DrawCube` forces exactly
+that.)
 
 **Vsync (`PresentMode::AutoVsync`) is the default, with a toggle.** Frame pacing
 is the foundation every feel mechanic is measured against: hitstop is "freeze for

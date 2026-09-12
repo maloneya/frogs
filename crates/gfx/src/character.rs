@@ -2,13 +2,23 @@
 
 use std::num::NonZeroU64;
 
-use arpg_core::Instance;
+use std::ops::Range;
+
+use arpg_core::{Instance, MAX_INSTANCES};
 use wgpu::util::DeviceExt as _;
 
 use crate::camera::CameraBinding;
 use crate::cube::instance_layout;
 use crate::material::{Material, MaterialLayout};
 use crate::mesh::MeshUploadError;
+
+/// Maximum number of shared poses one horde may draw in a frame.
+///
+/// This is a renderer budget rather than gameplay content. The app decides
+/// which clip/phase each bucket represents, while this bound fixes GPU buffer
+/// sizes at initialization.
+pub const MAX_HORDE_POSE_BUCKETS: usize = 8;
+const PALETTE_SLOTS: usize = 1 + MAX_HORDE_POSE_BUCKETS;
 
 /// One uploaded character mesh and material.
 pub struct CharacterMesh {
@@ -89,6 +99,56 @@ impl<'a> CharacterPreview<'a> {
     }
 }
 
+/// One shared joint palette and all world placements that use it.
+#[derive(Clone, Copy)]
+pub struct CharacterBucket<'a> {
+    joints: &'a [arpg_assets::JointMatrix],
+    instances: &'a [Instance],
+}
+
+impl<'a> CharacterBucket<'a> {
+    /// Pairs one evaluated pose with its already-grouped instances.
+    #[must_use]
+    pub fn new(pose: &'a arpg_assets::CharacterPose, instances: &'a [Instance]) -> Self {
+        Self {
+            joints: pose.joint_matrices(),
+            instances,
+        }
+    }
+}
+
+/// One uploaded mesh drawn through a fixed set of shared pose buckets.
+#[derive(Clone, Copy)]
+pub struct CharacterHorde<'a> {
+    pub(crate) mesh: &'a CharacterMesh,
+    buckets: [CharacterBucket<'a>; MAX_HORDE_POSE_BUCKETS],
+}
+
+impl<'a> CharacterHorde<'a> {
+    /// Creates one horde draw description without allocating or copying poses.
+    #[must_use]
+    pub fn new(
+        mesh: &'a CharacterMesh,
+        buckets: [CharacterBucket<'a>; MAX_HORDE_POSE_BUCKETS],
+    ) -> Self {
+        Self { mesh, buckets }
+    }
+}
+
+pub(crate) struct CharacterDraws {
+    pub(crate) player: Range<u32>,
+    pub(crate) horde: [Range<u32>; MAX_HORDE_POSE_BUCKETS],
+}
+
+impl Default for CharacterDraws {
+    fn default() -> Self {
+        Self {
+            player: 0..0,
+            horde: std::array::from_fn(|_| 0..0),
+        }
+    }
+}
+
 pub(crate) struct CharacterPipeline {
     pipeline: wgpu::RenderPipeline,
     instance: wgpu::Buffer,
@@ -106,6 +166,11 @@ impl CharacterPipeline {
         depth_format: wgpu::TextureFormat,
     ) -> Self {
         let joint_bytes = (arpg_assets::MAX_JOINTS * size_of::<arpg_assets::JointMatrix>()) as u64;
+        debug_assert_eq!(
+            joint_bytes % u64::from(device.limits().min_uniform_buffer_offset_alignment),
+            0,
+            "one palette must align every dynamic uniform offset"
+        );
         let joint_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("character joint palette"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -113,15 +178,15 @@ impl CharacterPipeline {
                 visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: NonZeroU64::new(joint_bytes),
                 },
                 count: None,
             }],
         });
         let joints = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("character joint palette"),
-            size: joint_bytes,
+            label: Some("character joint palettes"),
+            size: joint_bytes * PALETTE_SLOTS as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -130,7 +195,11 @@ impl CharacterPipeline {
             layout: &joint_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: joints.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &joints,
+                    offset: 0,
+                    size: NonZeroU64::new(joint_bytes),
+                }),
             }],
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("character.wgsl"));
@@ -188,8 +257,8 @@ impl CharacterPipeline {
             cache: None,
         });
         let instance = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("character instance"),
-            size: size_of::<Instance>() as wgpu::BufferAddress,
+            label: Some("character instances"),
+            size: (MAX_INSTANCES * size_of::<Instance>()) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -211,26 +280,94 @@ impl CharacterPipeline {
         CharacterMesh::new(device, queue, &self.material_layout, character)
     }
 
-    pub(crate) fn upload(&self, queue: &wgpu::Queue, preview: CharacterPreview<'_>) {
-        debug_assert!(!preview.joints.is_empty());
-        debug_assert!(preview.joints.len() <= arpg_assets::MAX_JOINTS);
-        queue.write_buffer(&self.instance, 0, bytemuck::bytes_of(&preview.instance));
-        queue.write_buffer(&self.joints, 0, bytemuck::cast_slice(preview.joints));
+    pub(crate) fn upload(
+        &self,
+        queue: &wgpu::Queue,
+        player: Option<CharacterPreview<'_>>,
+        horde: Option<CharacterHorde<'_>>,
+    ) -> CharacterDraws {
+        let instance_bytes = size_of::<Instance>() as u64;
+        let palette_bytes =
+            (arpg_assets::MAX_JOINTS * size_of::<arpg_assets::JointMatrix>()) as u64;
+        let mut draws = CharacterDraws::default();
+        let mut next_instance = 0_usize;
+
+        if let Some(player) = player {
+            debug_assert!(!player.joints.is_empty());
+            debug_assert!(player.joints.len() <= arpg_assets::MAX_JOINTS);
+            queue.write_buffer(&self.instance, 0, bytemuck::bytes_of(&player.instance));
+            queue.write_buffer(&self.joints, 0, bytemuck::cast_slice(player.joints));
+            draws.player = 0..1;
+            next_instance = 1;
+        }
+
+        if let Some(horde) = horde {
+            for (index, bucket) in horde.buckets.iter().enumerate() {
+                debug_assert!(!bucket.joints.is_empty());
+                debug_assert!(bucket.joints.len() <= arpg_assets::MAX_JOINTS);
+                let count = bucket.instances.len().min(MAX_INSTANCES - next_instance);
+                if count == 0 {
+                    continue;
+                }
+                queue.write_buffer(
+                    &self.instance,
+                    next_instance as u64 * instance_bytes,
+                    bytemuck::cast_slice(&bucket.instances[..count]),
+                );
+                queue.write_buffer(
+                    &self.joints,
+                    (index as u64 + 1) * palette_bytes,
+                    bytemuck::cast_slice(bucket.joints),
+                );
+                draws.horde[index] = next_instance as u32..(next_instance + count) as u32;
+                next_instance += count;
+            }
+        }
+        draws
     }
 
-    pub(crate) fn draw(
+    fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         camera: &CameraBinding,
         mesh: &CharacterMesh,
+        palette: usize,
+        instances: Range<u32>,
     ) {
+        if instances.is_empty() {
+            return;
+        }
+        let palette_bytes =
+            (arpg_assets::MAX_JOINTS * size_of::<arpg_assets::JointMatrix>()) as u32;
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &camera.bind_group, &[]);
         pass.set_bind_group(1, mesh.material.bind_group(), &[]);
-        pass.set_bind_group(2, &self.joint_bind_group, &[]);
+        pass.set_bind_group(2, &self.joint_bind_group, &[palette as u32 * palette_bytes]);
         pass.set_vertex_buffer(0, mesh.vertices.slice(..));
         pass.set_vertex_buffer(1, self.instance.slice(..));
         pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        pass.draw_indexed(0..mesh.index_count, 0, instances);
+    }
+
+    pub(crate) fn draw_player(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        camera: &CameraBinding,
+        mesh: &CharacterMesh,
+        instances: Range<u32>,
+    ) {
+        self.draw(pass, camera, mesh, 0, instances);
+    }
+
+    pub(crate) fn draw_horde(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        camera: &CameraBinding,
+        mesh: &CharacterMesh,
+        instances: &[Range<u32>; MAX_HORDE_POSE_BUCKETS],
+    ) {
+        for (index, instances) in instances.iter().enumerate() {
+            self.draw(pass, camera, mesh, index + 1, instances.clone());
+        }
     }
 }

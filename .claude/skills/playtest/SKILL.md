@@ -56,6 +56,8 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `enemies <n>` | clamped count, **and the seeker count**, which a respawn resets to 0 |
 | `impulse <player\|#id> <x> <z>` | momentum applied; movement starts on the next tick |
 | `seekers <n>` | how many of the bodies now chase the player |
+| `asset\|character\|horde show <path.glb>` | after that preview has imported, uploaded and replaced its prior selection |
+| `asset\|character\|horde clear` | after that preview has returned to its fallback |
 | `spawn <x> <z> [seek]` | `queued`, not `spawned` — it lands on the next tick |
 | `source <x> <z> [flags]` | the source's name, e.g. `source s0` |
 | `source remove <id>` | takes the name as printed, `s0` |

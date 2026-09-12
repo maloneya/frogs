@@ -1,12 +1,11 @@
+use crate::scene::{GameScene, RestartError, RestartScene, SceneError, fingerprint};
+use crate::source_control::{self, ControlEvent, ControlState, SourceControls};
 use arpg_core::{InstanceSink, Intent, Report};
 use arpg_sim::{
-    Alpha, AttackProfile, AttackStatus, Dt, EntityId, Fnv, Impulse, InteractionState,
-    Motion, RecoveryTicks, SceneId, Source, SourceId, Template,
-    Trace, World,
+    Alpha, AttackProfile, AttackStatus, Dt, EntityId, Fnv, Impulse, InteractionState, Motion,
+    RecoveryTicks, SceneId, Source, SourceId, Template, Trace, World,
 };
 use glam::{Vec2, Vec3};
-use crate::scene::{GameScene, SceneError, RestartError, RestartScene, fingerprint};
-use crate::source_control::{self, SourceControls, ControlEvent, ControlState};
 
 /// Complete playable state and the entry point used by production and tests.
 ///
@@ -29,7 +28,12 @@ pub struct Game {
 impl Default for Game {
     /// Preserves the engine's default horde, including its identity history.
     fn default() -> Self {
-        Self { world: World::default(), restart: None, controls: SourceControls::default(), control_trace: Trace::default() }
+        Self {
+            world: World::default(),
+            restart: None,
+            controls: SourceControls::default(),
+            control_trace: Trace::default(),
+        }
     }
 }
 
@@ -37,13 +41,23 @@ impl Game {
     /// A fresh player without content, at tick zero with default tuning.
     #[must_use]
     pub fn empty() -> Self {
-        Self { world: World::empty(), restart: None, controls: SourceControls::default(), control_trace: Trace::default() }
+        Self {
+            world: World::empty(),
+            restart: None,
+            controls: SourceControls::default(),
+            control_trace: Trace::default(),
+        }
     }
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
         let (world, controls, restart) = RestartScene::prepare(scene)?;
-        Ok(Self { world, restart: Some(restart), controls, control_trace: Trace::default() })
+        Ok(Self {
+            world,
+            restart: Some(restart),
+            controls,
+            control_trace: Trace::default(),
+        })
     }
 
     /// Starts a fresh run and selects its restart snapshot, atomically.
@@ -79,7 +93,12 @@ impl Game {
     /// Neither adapter owns a second schedule. Exhaustive destructuring forces
     /// any future gameplay state to receive an explicit scheduling decision.
     pub fn step(&mut self, dt: Dt, intent: Intent) {
-        let Self { world, restart: _, controls, control_trace } = self;
+        let Self {
+            world,
+            restart: _,
+            controls,
+            control_trace,
+        } = self;
         let tick = world.tick();
         let (interactions, sources) = world.interaction_sources();
         source_control::advance(controls, interactions, sources, control_trace.sink(tick));
@@ -89,7 +108,12 @@ impl Game {
     /// Hashes engine state, live relationships, and the cached restart effect.
     #[must_use]
     pub fn hash(&self) -> u64 {
-        let Self { world, restart, controls, control_trace: _ } = self;
+        let Self {
+            world,
+            restart,
+            controls,
+            control_trace: _,
+        } = self;
         let mut hash = Fnv::default();
         hash.u64(fingerprint(world, controls));
         hash.usize(usize::from(restart.is_some()));
@@ -107,7 +131,12 @@ impl Game {
 
     /// Reports engine state, resolved gameplay relationships, and restart selection.
     pub fn report(&self, out: &mut Report) {
-        let Self { world, restart, controls, control_trace } = self;
+        let Self {
+            world,
+            restart,
+            controls,
+            control_trace,
+        } = self;
         world.report(out);
         controls.report(out);
         out.int("control_events_dropped", control_trace.dropped() as u64);
@@ -121,13 +150,33 @@ impl Game {
 
     /// Extracts interpolated instances without modifying playable state.
     pub fn extract(&self, alpha: Alpha, out: InstanceSink<'_>) {
-        let Self { world, restart: _, controls: _, control_trace: _ } = self;
+        let Self {
+            world,
+            restart: _,
+            controls: _,
+            control_trace: _,
+        } = self;
         world.extract(alpha, out);
+    }
+
+    /// Extracts everything except the fallback player cubes.
+    pub fn extract_without_player(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
+        self.world.extract_without_player(alpha, out);
+    }
+
+    /// Extracts ground, props and attack telegraph but no animated bodies.
+    pub fn extract_without_characters(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
+        self.world.extract_without_characters(alpha, out);
     }
 
     /// Installs a scene between ticks through the engine admission boundary.
     pub fn load_scene(&mut self, scene: &GameScene) -> Result<SceneId, SceneError> {
-        let Self { world, restart: _, controls, control_trace: _ } = self;
+        let Self {
+            world,
+            restart: _,
+            controls,
+            control_trace: _,
+        } = self;
         scene.install(world, controls)
     }
 
@@ -135,8 +184,15 @@ impl Game {
     #[must_use]
     pub fn evict_scene(&mut self, id: SceneId) -> bool {
         // Both owners retire at this boundary; callers cannot omit one cleanup.
-        let Self { world, restart: _, controls, control_trace: _ } = self;
-        if !world.evict_scene(id) { return false; }
+        let Self {
+            world,
+            restart: _,
+            controls,
+            control_trace: _,
+        } = self;
+        if !world.evict_scene(id) {
+            return false;
+        }
         controls.evict(id);
         true
     }
@@ -293,6 +349,20 @@ impl Game {
     #[must_use]
     pub fn player_pos_at(&self, alpha: Alpha) -> Vec3 {
         self.world.player_pos_at(alpha)
+    }
+
+    /// Immutable player facts for asset-driven presentation.
+    #[must_use]
+    pub fn player_presentation(&self, alpha: Alpha) -> arpg_sim::PlayerPresentation {
+        self.world.player_presentation(alpha)
+    }
+
+    /// Immutable, allocation-free presentation facts for live enemies.
+    pub fn enemy_presentations(
+        &self,
+        alpha: Alpha,
+    ) -> impl Iterator<Item = arpg_sim::EnemyPresentation> + '_ {
+        self.world.enemy_presentations(alpha)
     }
 
     /// Player simulation facing in radians.

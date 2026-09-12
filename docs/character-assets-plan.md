@@ -1,7 +1,7 @@
 # Character assets and animation plan
 
-Status: static preview, Blender compatibility, bind-pose skinning and one named
-looping clip are implemented. Player presentation is next.
+Status: complete. Static and animated imports, authored player presentation and
+pose-bucketed horde presentation are implemented and verified end to end.
 
 ## Purpose
 
@@ -80,7 +80,7 @@ GPU path only after uncapped measurement shows a visible or performance need.
 
 ## Staged delivery
 
-Each remaining stage is a separate running change.
+Each stage was delivered as a separate running change.
 
 1. **Complete — static textured preview.** The `assets` boundary imports a
    bounded static `.glb`; `gfx` uploads and draws it; `app` owns an atomic,
@@ -103,15 +103,29 @@ Each remaining stage is a separate running change.
    morph targets and non-joint targets. A reusable CPU pose samples from
    continuous simulation presentation time (`tick + alpha`), rebuilds the joint
    palette without per-frame allocation and reaches the existing skinning draw.
-   The Blender fixture's `Sway` action exercises both supported interpolation
+   The Blender fixture's `Idle` action exercises both supported interpolation
    forms through a non-bind-pose GPU pixel test.
-5. **Next — player presentation.** Add a typed, read-only extraction carrying stable
-   identity, interpolated transform and authoritative movement and attack
-   state. Drive idle, run and profile-specific attacks, with a short cross-fade
-   and weapon attachment. This is derived presentation, not stored gameplay
-   state.
-6. **Horde presentation.** Draw one enemy asset through pose-bucketed
-   instancing and measure representative horde sizes uncapped.
+5. **Complete — player presentation.** A typed, read-only extraction carries
+   stable identity, interpolated ground transform, last-tick displacement and
+   authoritative attack state. App-owned role mapping drives idle, run and six
+   profile-specific attack clips through a 100 ms cross-fade. A named,
+   non-deforming joint places a weapon cube from the sampled pose. Character
+   selection replaces only the fallback player cubes; no asset or presentation
+   state enters gameplay.
+6. **Complete — horde presentation.** A read-only, allocation-free enemy view
+   supplies stable identity, interpolated ground position and last-tick
+   displacement. App maps that view to idle or run and one of four stable phase
+   offsets per role. Gfx uploads at most eight shared palettes and issues one
+   instanced draw per occupied bucket; no animation state enters simulation.
+   The harness selects this path atomically and reports its instance and draw
+   counts.
+
+   On Apple M4/Metal, a 1,024-enemy release run measured 512 FPS for fallback
+   cubes and 496 FPS for the animated horde uncapped (best of eight short
+   samples), with 60+ simulation ticks/s and no skips. At 16,384 enemies the
+   existing simulation workload dominated at roughly 225 ms/frame in both
+   presentation modes; the animated path still used four pose draws and added
+   no measurable frame-time cost there.
 
 ## Deliberately deferred
 

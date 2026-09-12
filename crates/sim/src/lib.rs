@@ -17,6 +17,7 @@ mod contact;
 mod hash;
 mod members;
 mod pass;
+mod presentation;
 mod scene;
 mod slots;
 mod swing;
@@ -31,19 +32,20 @@ pub use hash::Fnv;
 use members::Members;
 use pass::health::Health;
 use pass::interact::Interactions;
-pub use pass::interact::{InteractionState, INTERACTION_REACH};
+pub use pass::interact::{INTERACTION_REACH, InteractionState};
 use pass::motion::Physics;
 pub use pass::motion::{Impulse, Motion};
+/// Read-only snapshot of a source's enablement, cadence, and emission progress.
+pub use pass::source::SourceState;
 use pass::source::Sources;
 /// Who asks for spawns, and when. See [`crate::pass::source`] for why a source
 /// is its own thing rather than a behaviour on a body.
 pub use pass::source::{Condition, Placement, Source, SourceId, SourceSpec};
-/// Read-only snapshot of a source's enablement, cadence, and emission progress.
-pub use pass::source::SourceState;
 use pass::spawn::SpawnQueue;
 /// What to make, and what behaviours it should be granted. See
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
 pub use pass::spawn::Template;
+pub use presentation::{EnemyPresentation, PlayerPresentation};
 use scene::Scenes;
 pub use scene::{BodyGrid, Placed, Scene, SceneError, SceneId};
 pub use slots::EntityId;
@@ -351,7 +353,14 @@ impl Bodies {
         if self.len() > MAX_ENEMIES || !what.valid_at(at) {
             return None;
         }
-        let Self { physics, health, interactions, slots, pos, prev_pos } = self;
+        let Self {
+            physics,
+            health,
+            interactions,
+            slots,
+            pos,
+            prev_pos,
+        } = self;
         let is_player = pos.is_empty();
         let id = slots.insert();
         physics.grant(
@@ -395,11 +404,20 @@ impl Bodies {
     /// revoke the identity. Exhaustive destructuring makes adding a body field
     /// require a cleanup decision here, including for bulk enemy resets.
     fn despawn(&mut self, id: EntityId) -> bool {
-        let Self { physics, health, interactions, slots, pos, prev_pos } = self;
+        let Self {
+            physics,
+            health,
+            interactions,
+            slots,
+            pos,
+            prev_pos,
+        } = self;
         if slots.index(id) == Some(0) {
             return false;
         }
-        let Some(dense) = slots.remove(id) else { return false };
+        let Some(dense) = slots.remove(id) else {
+            return false;
+        };
 
         physics.revoke(id);
         interactions.revoke(id);
@@ -611,7 +629,9 @@ impl World {
         // Traced because it happens *outside* the schedule. State that changes
         // between ticks is the hardest kind to account for later, so it is
         // exactly what the trace is for. Stamped with the tick it precedes.
-        trace.sink(*tick).emit(Event::Spawned { count: bodies.health.len() });
+        trace.sink(*tick).emit(Event::Spawned {
+            count: bodies.health.len(),
+        });
     }
 
     /// Places one body at a chosen spot and returns its name.
@@ -872,7 +892,11 @@ impl World {
             crowd_contacts,
             trace,
         } = self;
-        let Player { facing, prev_facing, attack } = player;
+        let Player {
+            facing,
+            prev_facing,
+            attack,
+        } = player;
 
         bodies.physics.report(&bodies.pos, &bodies.slots, out);
         bodies.health.report(out);
@@ -910,7 +934,10 @@ impl World {
         // Previous-tick state is what render interpolation blends from. Not
         // interesting most of the time, and exactly the thing to look at when
         // something on screen is a tick behind where it should be.
-        out.vec3("player_prev_pos", on_ground(bodies.prev_pos[0], PLAYER_HALF_HEIGHT));
+        out.vec3(
+            "player_prev_pos",
+            on_ground(bodies.prev_pos[0], PLAYER_HALF_HEIGHT),
+        );
         out.num("prev_facing", *prev_facing);
     }
 
@@ -995,7 +1022,12 @@ impl World {
 
         // Carried motion moves before contacts. Crowd resolution precedes
         // player resolution, retaining the existing crowd priority.
-        pass::motion::integrate(&self.bodies.physics, &self.bodies.slots, &mut self.bodies.pos, dt);
+        pass::motion::integrate(
+            &self.bodies.physics,
+            &self.bodies.slots,
+            &mut self.bodies.pos,
+            dt,
+        );
         self.crowd_contacts = pass::separate::crowd(
             &mut self.bodies.pos[1..],
             &self.bodies.slots.ids()[1..],
@@ -1024,7 +1056,10 @@ impl World {
         // the tick is over.
         pass::attack::attack(
             &mut self.player.attack,
-            pass::attack::Pose { pos: self.bodies.pos[0], facing: self.player.facing },
+            pass::attack::Pose {
+                pos: self.bodies.pos[0],
+                facing: self.player.facing,
+            },
             intent.attack(),
             &self.bodies.slots.ids()[1..],
             &self.bodies.pos[1..],
@@ -1101,8 +1136,19 @@ impl World {
         // bounded and wraps, which would make two runs of different lengths
         // disagree for a reason that has nothing to do with the simulation.
         let _ = trace;
-        let Player { facing, prev_facing, attack } = player;
-        let Bodies { slots, physics, health, interactions, pos: enemy_pos, prev_pos: enemy_prev } = bodies;
+        let Player {
+            facing,
+            prev_facing,
+            attack,
+        } = player;
+        let Bodies {
+            slots,
+            physics,
+            health,
+            interactions,
+            pos: enemy_pos,
+            prev_pos: enemy_prev,
+        } = bodies;
         let mut h = Fnv::default();
         physics.hash(&mut h);
         interactions.hash(&mut h);
@@ -1180,6 +1226,45 @@ impl World {
     #[must_use]
     pub fn player_pos_at(&self, alpha: Alpha) -> Vec3 {
         on_ground(self.drawn_player(alpha).0, PLAYER_HALF_HEIGHT)
+    }
+
+    /// Immutable player facts for animation and other presentation systems.
+    #[must_use]
+    pub fn player_presentation(&self, alpha: Alpha) -> PlayerPresentation {
+        let (position, facing) = self.drawn_player(alpha);
+        PlayerPresentation::new(
+            self.player_id(),
+            on_ground(position, 0.0),
+            facing,
+            self.bodies.pos[0] - self.bodies.prev_pos[0],
+            self.attack_status(),
+        )
+    }
+
+    /// Immutable, allocation-free presentation facts for every live enemy.
+    ///
+    /// Static props are excluded by health membership rather than body order.
+    /// Dense rows may move after a despawn, so callers receive stable ids and
+    /// must not treat iterator position as identity.
+    pub fn enemy_presentations(
+        &self,
+        alpha: Alpha,
+    ) -> impl Iterator<Item = EnemyPresentation> + '_ {
+        let a = alpha.get();
+        self.bodies.slots.ids()[1..]
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(move |(offset, id)| {
+                self.bodies.health.get(id)?;
+                let row = offset + 1;
+                let position = self.bodies.prev_pos[row].lerp(self.bodies.pos[row], a);
+                Some(EnemyPresentation::new(
+                    id,
+                    on_ground(position, 0.0),
+                    self.bodies.pos[row] - self.bodies.prev_pos[row],
+                ))
+            })
     }
 
     /// Where the player *appears* this frame, and which way it appears to
@@ -1284,10 +1369,24 @@ impl World {
     /// back through, so the rule is layer 0 rather than a paragraph someone
     /// reads at session start.
     pub fn extract(&self, alpha: Alpha, mut out: InstanceSink<'_>) {
-        self.extract_ground(&mut out);
-        self.extract_bodies(alpha, &mut out);
-        self.extract_swing(alpha, &mut out);
-        self.extract_player(alpha, &mut out);
+        let player = self.player_presentation(alpha);
+        self.extract_without_player(alpha, &mut out);
+        player.extract_fallback(&mut out);
+    }
+
+    /// Extracts the world while leaving the player body to an asset renderer.
+    pub fn extract_without_player(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
+        self.extract_ground(out);
+        self.extract_bodies(alpha, true, out);
+        self.extract_swing(alpha, out);
+    }
+
+    /// Extracts ground, props and attack telegraph, leaving animated bodies to
+    /// presentation-owned character renderers.
+    pub fn extract_without_characters(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
+        self.extract_ground(out);
+        self.extract_bodies(alpha, false, out);
+        self.extract_swing(alpha, out);
     }
 
     /// Draws the swing's hitbox — **the same value [`pass::attack`] tests
@@ -1322,7 +1421,9 @@ impl World {
     /// error anywhere, which is exactly the class of failure a swing drawn
     /// from its own formula would produce and nothing would catch.
     fn extract_swing(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
-        let Some(swing) = self.player.attack.in_flight() else { return };
+        let Some(swing) = self.player.attack.in_flight() else {
+            return;
+        };
         let discs = swing.discs();
 
         let (drawn, intensity) = match swing.phase() {
@@ -1342,34 +1443,6 @@ impl World {
                 SWING_COLOR * intensity,
             ));
         }
-    }
-
-    /// Body and facing marker are ordinary cubes in the same draw call.
-    /// Both use one interpolated pose, so the marker cannot lead the turn.
-    fn extract_player(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
-        // Linear, and it looks wrong here on purpose: the surface is sRGB, so
-        // the hardware encodes on write. This is roughly sRGB (0.35, 0.72, 0.95)
-        // — a bright cyan-blue, chosen to sit opposite the horde's muted red on
-        // the colour wheel so the eye separates them without effort.
-        let (pos, facing) = self.drawn_player(alpha);
-        let forward = Vec3::new(facing.sin(), 0.0, facing.cos());
-        out.push(
-            Instance::new(
-                on_ground(pos, PLAYER_SCALE.y) + forward * PLAYER_NOSE_FORWARD,
-                PLAYER_NOSE_SCALE,
-                // Warm ivory in linear space, distinct from the blue body.
-                Vec3::new(0.95, 0.8, 0.4),
-            )
-            .with_yaw(facing),
-        );
-        out.push(
-            Instance::new(
-                on_ground(pos, PLAYER_HALF_HEIGHT),
-                PLAYER_SCALE,
-                Vec3::new(0.10, 0.47, 0.88),
-            )
-            .with_yaw(facing),
-        );
     }
 
     /// The floor is not a special case — it is just more cube instances, flat
@@ -1392,16 +1465,21 @@ impl World {
 
     /// Draws the horde from its stored positions, blended between the last two
     /// ticks. What is drawn is what the simulation believes.
-    fn extract_bodies(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
+    fn extract_bodies(&self, alpha: Alpha, include_enemies: bool, out: &mut InstanceSink<'_>) {
         let a = alpha.get();
 
-        for (i, (&pos, &prev)) in
-            self.bodies.pos[1..].iter().zip(&self.bodies.prev_pos[1..]).enumerate()
+        for (i, (&pos, &prev)) in self.bodies.pos[1..]
+            .iter()
+            .zip(&self.bodies.prev_pos[1..])
+            .enumerate()
         {
             // Linear-space colour, since the surface is sRGB and the hardware
             // encodes on write. These look darker here than they will on screen.
             let t = (i % 7) as f32 / 7.0;
             let id = self.bodies.slots.ids()[i + 1];
+            if !include_enemies && self.bodies.health.get(id).is_some() {
+                continue;
+            }
             let color = if self.bodies.interactions.get(id) == Some(InteractionState::Activated) {
                 Vec3::new(0.06, 0.55, 0.12)
             } else if self.bodies.health.get(id).is_none() {
@@ -1411,7 +1489,11 @@ impl World {
             };
 
             let drawn = prev.lerp(pos, a);
-            out.push(Instance::new(on_ground(drawn, ENEMY_HALF_HEIGHT), ENEMY_SCALE, color));
+            out.push(Instance::new(
+                on_ground(drawn, ENEMY_HALF_HEIGHT),
+                ENEMY_SCALE,
+                color,
+            ));
         }
     }
 }

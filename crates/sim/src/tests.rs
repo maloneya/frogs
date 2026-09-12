@@ -277,6 +277,67 @@ fn the_blend_endpoints_are_the_two_ticks_themselves() {
     );
 }
 
+/// Asset animation receives one immutable snapshot of simulation-owned facts.
+#[test]
+fn player_presentation_carries_identity_transform_movement_and_attack() {
+    let mut world = World::empty();
+    let id = world.player_id();
+    world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), true));
+
+    let player = world.player_presentation(Alpha::ONE);
+    assert_eq!(player.id(), id);
+    assert_eq!(player.ground_position().y, 0.0);
+    assert!((player.ground_position().x - WALK_PER_TICK).abs() < 1.0e-6);
+    assert_eq!(player.displacement(), Vec2::X * WALK_PER_TICK);
+    assert_eq!(player.facing(), world.player_facing());
+    assert_eq!(player.attack().phase, AttackPhase::Startup);
+    assert_eq!(
+        world.player_id(),
+        id,
+        "presentation changed stable identity"
+    );
+}
+
+#[test]
+fn character_extraction_omits_exactly_the_two_fallback_instances() {
+    let world = World::empty();
+    let mut full = InstanceBuffer::default();
+    let mut character = InstanceBuffer::default();
+    world.extract(Alpha::ONE, full.sink());
+    {
+        let mut sink = character.sink();
+        world.extract_without_player(Alpha::ONE, &mut sink);
+    }
+    assert_eq!(full.as_slice().len(), character.as_slice().len() + 2);
+}
+
+#[test]
+fn horde_presentation_is_stable_derived_and_excludes_props() {
+    let mut world = World::empty();
+    let enemy = world.place(Vec2::new(2.0, 0.0), Template::BODY).unwrap();
+    let prop = world.place(Vec2::new(-2.0, 0.0), Template::BLOCK).unwrap();
+    world.step(tick_dt(), Intent::default());
+
+    let presentations: Vec<_> = world.enemy_presentations(Alpha::ONE).collect();
+    assert_eq!(presentations.len(), 1);
+    assert_eq!(presentations[0].id(), enemy);
+    assert_eq!(presentations[0].ground_position(), Vec3::new(2.0, 0.0, 0.0));
+    assert_eq!(presentations[0].displacement(), Vec2::ZERO);
+    assert!(world.is_alive(prop));
+
+    let mut full = InstanceBuffer::default();
+    let mut without_characters = InstanceBuffer::default();
+    world.extract(Alpha::ONE, full.sink());
+    {
+        let mut sink = without_characters.sink();
+        world.extract_without_characters(Alpha::ONE, &mut sink);
+    }
+    assert_eq!(
+        full.as_slice().len(),
+        without_characters.as_slice().len() + 3
+    );
+}
+
 /// Between the endpoints it has to actually be *between*, and monotonic —
 /// a blend that jumps or backtracks is judder wearing a different hat.
 #[test]
@@ -539,13 +600,17 @@ fn every_field_of_the_world_reaches_the_hash() {
         ("tick", |w| w.tick += 1),
         ("contacts", |w| w.contacts += 1),
         ("enemies.pos", |w| w.bodies.pos[1].x += 0.001),
-        ("interactions", |w| w.bodies.interactions.grant(w.bodies.slots.ids()[1])),
+        ("interactions", |w| {
+            w.bodies.interactions.grant(w.bodies.slots.ids()[1])
+        }),
         ("enemies.health", |w| {
             w.bodies.health.sink().hit(w.bodies.slots.ids()[1]);
         }),
         // A pending request is a body that exists in one of two otherwise
         // identical worlds one tick from now.
-        ("queue", |w| assert!(w.request_spawn(Vec2::ZERO, Template::BODY))),
+        ("queue", |w| {
+            assert!(w.request_spawn(Vec2::ZERO, Template::BODY))
+        }),
         // A source's own state decides when and where the next body appears,
         // so two worlds agreeing on every body still diverge from here.
         ("sources", |w| {
@@ -1160,14 +1225,24 @@ fn a_population_condition_fills_to_its_number_and_stops() {
     let mut world = World::default();
     world.set_enemy_count(0);
     world.add_source(
-        Source::new(Placement::Ring { centre: Vec2::new(30.0, 0.0), radius: 3.0 }, Template::BODY)
-            .when(Condition::FewerThan(3)),
+        Source::new(
+            Placement::Ring {
+                centre: Vec2::new(30.0, 0.0),
+                radius: 3.0,
+            },
+            Template::BODY,
+        )
+        .when(Condition::FewerThan(3)),
     );
 
     for _ in 0..60 {
         world.step(tick_dt(), Intent::NONE);
     }
-    assert_eq!(world.enemy_count(), 3, "the population condition overshot or stalled");
+    assert_eq!(
+        world.enemy_count(),
+        3,
+        "the population condition overshot or stalled"
+    );
 
     // Kill one, and it is replaced — which is the half a fixed emission count
     // cannot do.
@@ -1187,7 +1262,10 @@ fn a_removed_source_stops_and_its_name_stays_dead() {
     let mut world = World::default();
     world.set_enemy_count(0);
 
-    let id = world.add_source(Source::new(Placement::At(Vec2::new(30.0, 0.0)), Template::BODY));
+    let id = world.add_source(Source::new(
+        Placement::At(Vec2::new(30.0, 0.0)),
+        Template::BODY,
+    ));
     for _ in 0..5 {
         world.step(tick_dt(), Intent::NONE);
     }
@@ -1216,7 +1294,10 @@ fn a_ring_does_not_stack_what_it_makes() {
     let mut world = World::default();
     world.set_enemy_count(0);
     world.add_source(Source::new(
-        Placement::Ring { centre: Vec2::new(30.0, 0.0), radius: 3.0 },
+        Placement::Ring {
+            centre: Vec2::new(30.0, 0.0),
+            radius: 3.0,
+        },
         Template::BODY,
     ));
 

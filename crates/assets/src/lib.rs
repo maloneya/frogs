@@ -11,7 +11,8 @@ mod character;
 
 pub use character::import_character_glb;
 pub use character::{
-    AnimationClip, CharacterAsset, CharacterPose, CharacterVertex, JointMatrix, MAX_JOINTS,
+    AnimationClip, CharacterAsset, CharacterPose, CharacterVertex, ClipId, JointId, JointMatrix,
+    MAX_JOINTS,
 };
 
 /// Largest binary glTF accepted by the first asset path: eight MiB.

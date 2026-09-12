@@ -97,6 +97,14 @@ head.head = spine.tail
 head.tail = (0.0, 0.0, 1.90)
 head.parent = spine
 head.use_connect = True
+
+# An unweighted attachment bone. It belongs to the skin's joint tree but does
+# not deform the mannequin; presentation resolves it by name and attaches the
+# weapon at its animated asset-local transform.
+weapon = armature.data.edit_bones.new("Weapon")
+weapon.head = (0.43, -0.13, 1.24)
+weapon.tail = (0.43, -0.83, 1.24)
+weapon.parent = spine
 bpy.ops.object.mode_set(mode="OBJECT")
 
 groups = {
@@ -117,17 +125,41 @@ modifier = character.modifiers.new(name="BindPoseRig", type="ARMATURE")
 modifier.object = armature
 character.parent = armature
 
-# One deliberately small looping clip. The bind pose is keyed at both ends so
-# modulo playback has no seam; the middle key visibly leans the upper body.
+# A small role catalog. Every action is authored over normalized time; runtime
+# stretches attack playback over the authoritative swing duration. Bind-pose
+# end keys make looping actions seamless and one-shot attacks settle cleanly.
 bpy.context.scene.render.fps = 30
 armature.animation_data_create()
-action = bpy.data.actions.new("Sway")
-armature.animation_data.action = action
 spine_pose = armature.pose.bones["Spine"]
 spine_pose.rotation_mode = "QUATERNION"
-for frame, angle in [(1, 0.0), (16, math.radians(24.0)), (31, 0.0)]:
-    spine_pose.rotation_quaternion = Quaternion((0.0, 1.0, 0.0), angle)
-    spine_pose.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+weapon_pose = armature.pose.bones["Weapon"]
+weapon_pose.rotation_mode = "QUATERNION"
+
+
+def add_action(name, keys):
+    action = bpy.data.actions.new(name)
+    action.use_fake_user = True
+    armature.animation_data.action = action
+    for frame, spine_x, spine_y, weapon_z in keys:
+        spine_pose.rotation_quaternion = Quaternion((1.0, 0.0, 0.0), math.radians(spine_x))
+        spine_pose.rotation_quaternion @= Quaternion(
+            (0.0, 1.0, 0.0), math.radians(spine_y)
+        )
+        weapon_pose.rotation_quaternion = Quaternion(
+            (0.0, 0.0, 1.0), math.radians(weapon_z)
+        )
+        spine_pose.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+        weapon_pose.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+
+
+add_action("Idle", [(1, 0, 0, 0), (16, 0, 4, 0), (31, 0, 0, 0)])
+add_action("Run", [(1, -8, -7, 0), (8, -8, 7, 0), (16, -8, -7, 0)])
+add_action("AttackBasic", [(1, 0, 0, -25), (16, 0, 0, 35), (31, 0, 0, 0)])
+add_action("AttackThrust", [(1, 8, 0, -10), (16, -14, 0, 5), (31, 0, 0, 0)])
+add_action("AttackSweep", [(1, 0, 0, -70), (16, 0, 0, 70), (31, 0, 0, 0)])
+add_action("AttackHeavySweep", [(1, 8, 0, -100), (18, -8, 0, 100), (31, 0, 0, 0)])
+add_action("AttackCleave", [(1, 0, 0, -130), (14, 0, 0, 130), (31, 0, 0, 0)])
+add_action("AttackCrowdBreaker", [(1, 18, 0, 0), (16, -22, 0, 0), (31, 0, 0, 0)])
 bpy.context.scene.frame_set(1)
 
 bpy.context.scene.render.image_settings.file_format = "PNG"
@@ -142,5 +174,7 @@ bpy.ops.export_scene.gltf(
     export_cameras=False,
     export_lights=False,
     export_animations=True,
+    export_animation_mode="ACTIONS",
+    export_nla_strips=False,
 )
 print(f"wrote {output}")

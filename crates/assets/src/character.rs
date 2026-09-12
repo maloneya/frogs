@@ -13,8 +13,11 @@ pub(crate) const MAX_CHARACTER_NODES: usize = 128;
 /// Largest joint palette accepted by the first character renderer.
 pub const MAX_JOINTS: usize = 64;
 
-/// Largest number of transform channels accepted in the first clip.
+/// Largest number of transform channels accepted in one clip.
 pub(crate) const MAX_ANIMATION_CHANNELS: usize = MAX_JOINTS * 3;
+
+/// Largest named clip catalog admitted for one character.
+pub(crate) const MAX_ANIMATION_CLIPS: usize = 16;
 
 /// Largest key count accepted for one transform channel.
 pub(crate) const MAX_KEYFRAMES_PER_CHANNEL: usize = 256;
@@ -25,6 +28,7 @@ pub(crate) const MAX_CLIP_SECONDS: f32 = 60.0;
 const _: () = assert!(MAX_CHARACTER_NODES <= u16::MAX as usize);
 const _: () = assert!(MAX_JOINTS <= u16::MAX as usize);
 const _: () = assert!(MAX_ANIMATION_CHANNELS <= u16::MAX as usize);
+const _: () = assert!(MAX_ANIMATION_CLIPS <= u16::MAX as usize);
 
 /// One skinned vertex in asset-local metres.
 #[repr(C)]
@@ -127,6 +131,14 @@ pub struct AnimationClip {
     channels: Vec<AnimationChannel>,
 }
 
+/// Opaque index into one character asset's validated clip catalog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClipId(u16);
+
+/// Opaque index into one character asset's joint palette.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JointId(u16);
+
 impl AnimationClip {
     /// Unique authored clip name.
     #[must_use]
@@ -161,6 +173,7 @@ impl AnimationClip {
 #[derive(Debug)]
 pub struct CharacterPose {
     locals: Vec<NodePose>,
+    blend_locals: Vec<NodePose>,
     globals: Vec<Mat4>,
     joints: Vec<JointMatrix>,
 }
@@ -233,7 +246,7 @@ pub struct CharacterAsset {
     nodes: Vec<CharacterNode>,
     joints: Vec<SkinJoint>,
     hierarchy_order: Vec<u16>,
-    clip: AnimationClip,
+    clips: Vec<AnimationClip>,
 }
 
 impl CharacterAsset {
@@ -285,10 +298,41 @@ impl CharacterAsset {
         self.joints.len()
     }
 
-    /// The sole named clip admitted by the initial character boundary.
+    /// Number of named clips retained in authored order.
     #[must_use]
-    pub fn clip(&self) -> &AnimationClip {
-        &self.clip
+    pub fn clip_count(&self) -> usize {
+        self.clips.len()
+    }
+
+    /// Resolves an authored clip name once, before per-frame sampling.
+    #[must_use]
+    pub fn clip_named(&self, name: &str) -> Option<ClipId> {
+        self.clips
+            .iter()
+            .position(|clip| clip.name.as_ref() == name)
+            .map(|index| ClipId(index as u16))
+    }
+
+    /// Metadata for a clip handle minted by this asset.
+    #[must_use]
+    pub fn clip(&self, id: ClipId) -> Option<&AnimationClip> {
+        self.clips.get(usize::from(id.0))
+    }
+
+    /// Resolves a skin joint by its retained node name.
+    #[must_use]
+    pub fn joint_named(&self, name: &str) -> Option<JointId> {
+        self.joints
+            .iter()
+            .position(|joint| self.nodes[joint.node()].name() == name)
+            .map(|index| JointId(index as u16))
+    }
+
+    /// Sampled asset-local transform of one joint.
+    #[must_use]
+    pub fn joint_transform(&self, pose: &CharacterPose, joint: JointId) -> Option<Mat4> {
+        let joint = self.joints.get(usize::from(joint.0))?;
+        pose.globals.get(joint.node()).copied()
     }
 
     /// Builds reusable sampling storage initialized to the authored bind pose.
@@ -296,6 +340,7 @@ impl CharacterAsset {
     pub fn bind_pose(&self) -> CharacterPose {
         let mut pose = CharacterPose {
             locals: self.nodes.iter().map(|node| node.bind_pose).collect(),
+            blend_locals: self.nodes.iter().map(|node| node.bind_pose).collect(),
             globals: vec![Mat4::IDENTITY; self.nodes.len()],
             joints: vec![JointMatrix::new(Mat4::IDENTITY); self.joints.len()],
         };
@@ -303,26 +348,78 @@ impl CharacterAsset {
         pose
     }
 
-    /// Samples the character's clip as a loop and rebuilds `pose`.
+    /// Samples one clip at a bounded time and rebuilds `pose`.
     ///
     /// A matching-size pose reuses its allocations; other shapes are replaced.
     /// Non-finite time selects the clip start.
-    pub fn sample_looping(&self, presentation_seconds: f64, pose: &mut CharacterPose) -> f32 {
+    pub fn sample(&self, clip: ClipId, seconds: f32, pose: &mut CharacterPose) -> bool {
+        let Some(clip) = self.clips.get(usize::from(clip.0)) else {
+            return false;
+        };
+        self.ensure_pose_shape(pose);
+        Self::sample_locals(&self.nodes, clip, seconds, &mut pose.locals);
+        self.rebuild_pose(pose);
+        true
+    }
+
+    /// Blends two sampled local poses, then rebuilds one joint palette.
+    pub fn sample_blended(
+        &self,
+        from: (ClipId, f32),
+        to: (ClipId, f32),
+        amount: f32,
+        pose: &mut CharacterPose,
+    ) -> bool {
+        let Some(from_clip) = self.clips.get(usize::from(from.0.0)) else {
+            return false;
+        };
+        let Some(to_clip) = self.clips.get(usize::from(to.0.0)) else {
+            return false;
+        };
+        self.ensure_pose_shape(pose);
+        Self::sample_locals(&self.nodes, from_clip, from.1, &mut pose.locals);
+        Self::sample_locals(&self.nodes, to_clip, to.1, &mut pose.blend_locals);
+        let amount = if amount.is_finite() {
+            amount.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        for (from, to) in pose.locals.iter_mut().zip(&pose.blend_locals) {
+            from.translation = from.translation.lerp(to.translation, amount);
+            from.rotation = from.rotation.slerp(to.rotation, amount).normalize();
+            from.scale = from.scale.lerp(to.scale, amount);
+        }
+        self.rebuild_pose(pose);
+        true
+    }
+
+    fn ensure_pose_shape(&self, pose: &mut CharacterPose) {
         if pose.locals.len() != self.nodes.len()
+            || pose.blend_locals.len() != self.nodes.len()
             || pose.globals.len() != self.nodes.len()
             || pose.joints.len() != self.joints.len()
         {
             *pose = self.bind_pose();
         }
-        for (local, node) in pose.locals.iter_mut().zip(&self.nodes) {
+    }
+
+    fn sample_locals(
+        nodes: &[CharacterNode],
+        clip: &AnimationClip,
+        seconds: f32,
+        locals: &mut [NodePose],
+    ) {
+        for (local, node) in locals.iter_mut().zip(nodes) {
             *local = node.bind_pose;
         }
-        let time = self.clip.loop_time(presentation_seconds);
-        for channel in &self.clip.channels {
-            channel.sample(time, &mut pose.locals[channel.node()]);
+        let time = if seconds.is_finite() {
+            seconds.clamp(0.0, clip.duration_seconds)
+        } else {
+            0.0
+        };
+        for channel in &clip.channels {
+            channel.sample(time, &mut locals[channel.node()]);
         }
-        self.rebuild_pose(pose);
-        time
     }
 
     fn rebuild_pose(&self, pose: &mut CharacterPose) {
@@ -578,7 +675,7 @@ fn import_animation<'a>(
 ///
 /// Unlike [`super::import_glb`], node transforms are retained. The importer
 /// validates one rooted hierarchy, one named joint tree, inverse bind matrices,
-/// exactly four joint/weight lanes per vertex and one named transform clip.
+/// exactly four joint/weight lanes per vertex and a bounded named clip catalog.
 pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError> {
     if bytes.len() > MAX_GLB_BYTES {
         return Err(ImportError::Capacity("file bytes"));
@@ -603,11 +700,10 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
     )?;
     exactly(document.meshes().count(), 1, "exactly one mesh is required")?;
     exactly(document.skins().count(), 1, "exactly one skin is required")?;
-    exactly(
-        document.animations().count(),
-        1,
-        "exactly one animation is required",
-    )?;
+    let animation_count = document.animations().count();
+    if animation_count == 0 || animation_count > MAX_ANIMATION_CLIPS {
+        return Err(ImportError::Capacity("animation clip count"));
+    }
     exactly(
         document.buffers().count(),
         1,
@@ -905,8 +1001,19 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
             "the declared skeleton root must contain every joint",
         ));
     }
-    let animation = document.animations().next().expect("count checked");
-    let (clip, animation_accessors) = import_animation(animation, blob, &joint_membership)?;
+    let mut clips = Vec::with_capacity(animation_count);
+    let mut animation_accessors = Vec::new();
+    for animation in document.animations() {
+        let (clip, accessors) = import_animation(animation, blob, &joint_membership)?;
+        if clips
+            .iter()
+            .any(|existing: &AnimationClip| existing.name == clip.name)
+        {
+            return Err(ImportError::Invalid("animation clip names must be unique"));
+        }
+        clips.push(clip);
+        animation_accessors.extend(accessors);
+    }
     let inverse_accessor = skin
         .inverse_bind_matrices()
         .ok_or(ImportError::Invalid("inverseBindMatrices are required"))?;
@@ -1107,7 +1214,7 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         nodes,
         joints,
         hierarchy_order,
-        clip,
+        clips,
     })
 }
 
@@ -1156,21 +1263,21 @@ mod tests {
     }
 
     #[test]
-    fn imports_blenders_named_joint_tree_bind_pose_and_clip() {
+    fn imports_blenders_named_joint_tree_bind_pose_and_clip_catalog() {
         let character = import_character_glb(FIXTURE).unwrap();
         assert_eq!(
             (character.vertex_count(), character.index_count()),
             (144, 216)
         );
-        assert_eq!(character.node_count(), 5);
-        assert_eq!(character.joint_count(), 3);
+        assert_eq!(character.node_count(), 6);
+        assert_eq!(character.joint_count(), 4);
         assert_eq!(
             character
                 .joints
                 .iter()
                 .map(|joint| character.nodes[joint.node()].name())
                 .collect::<Vec<_>>(),
-            ["Root", "Spine", "Head"]
+            ["Root", "Spine", "Head", "Weapon"]
         );
         assert_eq!(
             (
@@ -1186,13 +1293,19 @@ mod tests {
                 .iter()
                 .all(|vertex| { (vertex.weights().into_iter().sum::<f32>() - 1.0).abs() < 1.0e-6 })
         );
-        assert!(character.bind_pose().joint_matrices().iter().all(|matrix| {
-            matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-5)
-        }));
-        let clip = character.clip();
-        assert_eq!(clip.name(), "Sway");
+        assert!(
+            character
+                .bind_pose()
+                .joint_matrices()
+                .iter()
+                .all(|matrix| { matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-5) })
+        );
+        assert_eq!(character.clip_count(), 8);
+        let idle = character.clip_named("Idle").unwrap();
+        let clip = character.clip(idle).unwrap();
+        assert_eq!(clip.name(), "Idle");
         assert!((clip.duration_seconds() - 1.0).abs() < 1.0e-5);
-        assert_eq!(clip.channel_count(), 9);
+        assert_eq!(clip.channel_count(), 12);
         assert_eq!(
             clip.channels
                 .iter()
@@ -1205,8 +1318,20 @@ mod tests {
                 .iter()
                 .filter(|channel| channel.interpolation == AnimationInterpolation::Step)
                 .count(),
-            8
+            11
         );
+        assert!(character.joint_named("Weapon").is_some());
+        for name in [
+            "Run",
+            "AttackBasic",
+            "AttackThrust",
+            "AttackSweep",
+            "AttackHeavySweep",
+            "AttackCleave",
+            "AttackCrowdBreaker",
+        ] {
+            assert!(character.clip_named(name).is_some(), "missing {name}");
+        }
     }
 
     #[test]
@@ -1236,8 +1361,8 @@ mod tests {
     fn clip_sampling_wraps_continuously_and_rebuilds_the_joint_palette() {
         let character = import_character_glb(FIXTURE).unwrap();
         let mut pose = character.bind_pose();
-        let sampled = character.sample_looping(0.5, &mut pose);
-        assert!((sampled - 0.5).abs() < 1.0e-5);
+        let idle = character.clip_named("Idle").unwrap();
+        assert!(character.sample(idle, 0.5, &mut pose));
         assert!(
             pose.joint_matrices()
                 .iter()
@@ -1249,8 +1374,9 @@ mod tests {
             .map(|matrix| matrix.matrix())
             .collect();
 
-        let sampled = character.sample_looping(1.5, &mut pose);
+        let sampled = character.clip(idle).unwrap().loop_time(1.5);
         assert!((sampled - 0.5).abs() < 1.0e-5);
+        assert!(character.sample(idle, sampled, &mut pose));
         assert!(
             pose.joint_matrices()
                 .iter()
@@ -1258,11 +1384,21 @@ mod tests {
                 .all(|(actual, expected)| actual.matrix().abs_diff_eq(expected, 1.0e-5))
         );
 
-        assert_eq!(character.sample_looping(f64::NAN, &mut pose), 0.0);
+        assert!(character.sample(idle, f32::NAN, &mut pose));
         assert!(
             pose.joint_matrices()
                 .iter()
                 .all(|matrix| matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-5))
+        );
+
+        let run = character.clip_named("Run").unwrap();
+        assert!(character.sample_blended((idle, 0.5), (run, 0.25), 0.5, &mut pose));
+        let weapon = character.joint_named("Weapon").unwrap();
+        assert!(
+            character
+                .joint_transform(&pose, weapon)
+                .unwrap()
+                .is_finite()
         );
     }
 
@@ -1281,13 +1417,17 @@ mod tests {
                 "\"inverseBindMatrices\":6",
                 "\"inverseBindMatrixes\":6",
             ),
-            mutate_json(FIXTURE, "\"joints\":[2,1,0]", "\"joints\":[3,1,0]"),
+            mutate_json(FIXTURE, "\"joints\":[3,2,0,1]", "\"joints\":[3,2,0,0]"),
             mutate_json(
                 FIXTURE,
                 "\"mesh\":0,\"name\"",
                 "\"mesh\":0,\"translation\":[1,0,0],\"name\"",
             ),
-            mutate_json(FIXTURE, "\"name\":\"Sway\"", "\"names\":\"Sway\""),
+            mutate_json(
+                FIXTURE,
+                "\"name\":\"AttackCleave\"",
+                "\"name\":\"AttackBasic\"",
+            ),
             mutate_json(
                 FIXTURE,
                 "\"name\":\"Head\",\"translation\"",
