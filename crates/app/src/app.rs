@@ -9,9 +9,11 @@ use winit::window::{Window, WindowId};
 use glam::Vec2;
 
 use arpg_core::{Action, Instance, InstanceBuffer, Intent, MoveDir, Report};
-use arpg_gfx::{CharacterMesh, CharacterPreview, MeshAsset, MeshPreview, OrthoCamera, QuadBuffer, Renderer};
+use arpg_gfx::{
+    CharacterMesh, CharacterPreview, MeshAsset, MeshPreview, OrthoCamera, QuadBuffer, Renderer,
+};
 use arpg_game::{Game, GameScene as Scene};
-use arpg_sim::{Accumulator, Alpha};
+use arpg_sim::{Accumulator, Alpha, TICK_HZ};
 
 use crate::harness::{self, Command, Request};
 use crate::hud;
@@ -116,20 +118,41 @@ fn report_asset_preview<T>(preview: Option<&AssetPreview<T>>, out: &mut Report) 
 struct LoadedCharacter<T> {
     path: std::path::PathBuf,
     asset: arpg_assets::CharacterAsset,
+    pose: arpg_assets::CharacterPose,
     gpu: T,
 }
 
-fn report_character_preview<T>(preview: Option<&LoadedCharacter<T>>, out: &mut Report) {
+impl<T> LoadedCharacter<T> {
+    fn sample(&mut self, presentation_seconds: f64) -> f32 {
+        self.asset
+            .sample_looping(presentation_seconds, &mut self.pose)
+    }
+}
+
+fn presentation_seconds(tick: u64, alpha: Alpha) -> f64 {
+    (tick as f64 + f64::from(alpha.get())) / f64::from(TICK_HZ)
+}
+
+fn report_character_preview<T>(
+    preview: Option<&LoadedCharacter<T>>,
+    presentation_seconds: f64,
+    out: &mut Report,
+) {
     if let Some(preview) = preview {
         let texture = preview.asset.base_color_texture();
+        let clip = preview.asset.clip();
         out.bool("active", true);
         out.text("path", &preview.path.to_string_lossy());
         out.int("vertices", preview.asset.vertex_count() as u64);
         out.int("indices", preview.asset.index_count() as u64);
         out.int("texture_width", u64::from(texture.width()));
         out.int("texture_height", u64::from(texture.height()));
-        out.int("nodes", preview.asset.nodes().len() as u64);
-        out.int("joints", preview.asset.joints().len() as u64);
+        out.int("nodes", preview.asset.node_count() as u64);
+        out.int("joints", preview.asset.joint_count() as u64);
+        out.text("clip", clip.name());
+        out.num("clip_duration", clip.duration_seconds());
+        out.int("channels", clip.channel_count() as u64);
+        out.num("sample_seconds", clip.loop_time(presentation_seconds));
     } else {
         out.bool("active", false);
         out.text("path", "");
@@ -139,6 +162,10 @@ fn report_character_preview<T>(preview: Option<&LoadedCharacter<T>>, out: &mut R
         out.int("texture_height", 0);
         out.int("nodes", 0);
         out.int("joints", 0);
+        out.text("clip", "");
+        out.num("clip_duration", 0.0);
+        out.int("channels", 0);
+        out.num("sample_seconds", 0.0);
     }
 }
 
@@ -211,7 +238,8 @@ fn replace_character<T>(
     let asset = arpg_assets::import_character_glb(&source)
         .map_err(|error| format!("{}: {error}", path.display()))?;
     let gpu = upload(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
-    *slot = Some(LoadedCharacter { path, asset, gpu });
+    let pose = asset.bind_pose();
+    *slot = Some(LoadedCharacter { path, asset, pose, gpu });
     Ok(())
 }
 
@@ -290,14 +318,17 @@ impl App {
         let preview = character_preview
             .as_ref()
             .expect("successful replacement selects a character");
+        let clip = preview.asset.clip();
         Ok(format!(
-            "character preview vertices={} indices={} nodes={} joints={} texture={}x{} path={}",
+            "character preview vertices={} indices={} nodes={} joints={} texture={}x{} clip={} duration={:.3}s path={}",
             preview.asset.vertex_count(),
             preview.asset.index_count(),
-            preview.asset.nodes().len(),
-            preview.asset.joints().len(),
+            preview.asset.node_count(),
+            preview.asset.joint_count(),
             preview.asset.base_color_texture().width(),
             preview.asset.base_color_texture().height(),
+            clip.name(),
+            clip.duration_seconds(),
             preview.path.display()
         ))
     }
@@ -612,8 +643,14 @@ impl App {
         out.object("asset_preview", |asset| {
             report_asset_preview(self.asset_preview.as_ref(), asset);
         });
+        let presentation_seconds =
+            presentation_seconds(self.game.tick(), self.accumulator.alpha());
         out.object("character_preview", |character| {
-            report_character_preview(self.character_preview.as_ref(), character);
+            report_character_preview(
+                self.character_preview.as_ref(),
+                presentation_seconds,
+                character,
+            );
         });
 
         out.object("render", |r| {
@@ -781,8 +818,10 @@ impl App {
             .asset_preview
             .as_ref()
             .map(|preview| MeshPreview::new(&preview.gpu, preview_instance()));
-        let character = self.character_preview.as_ref().map(|preview| {
-            CharacterPreview::new(&preview.gpu, &preview.asset, character_instance())
+        let presentation_seconds = presentation_seconds(self.game.tick(), alpha);
+        let character = self.character_preview.as_mut().map(|preview| {
+            let _ = preview.sample(presentation_seconds);
+            CharacterPreview::new(&preview.gpu, &preview.pose, character_instance())
         });
         if renderer.render(
             camera,
@@ -1038,9 +1077,12 @@ mod tests {
     #[test]
     fn character_replacement_is_atomic_across_import_and_upload_failure() {
         let source = std::fs::read(character_fixture_path()).unwrap();
+        let asset = arpg_assets::import_character_glb(&source).unwrap();
+        let pose = asset.bind_pose();
         let mut slot = Some(LoadedCharacter {
             path: "old.glb".into(),
-            asset: arpg_assets::import_character_glb(&source).unwrap(),
+            asset,
+            pose,
             gpu: (),
         });
         let missing = std::env::temp_dir().join("arpg-character-that-does-not-exist.glb");
@@ -1058,30 +1100,46 @@ mod tests {
         replace_character(&mut slot, character_fixture_path(), |_| Ok(())).unwrap();
         let current = slot.as_ref().unwrap();
         assert_eq!((current.asset.vertex_count(), current.asset.index_count()), (144, 216));
-        assert_eq!((current.asset.nodes().len(), current.asset.joints().len()), (5, 3));
+        assert_eq!((current.asset.node_count(), current.asset.joint_count()), (5, 3));
+        let current = slot.as_mut().unwrap();
+        assert!((current.sample(0.5) - 0.5).abs() < 1.0e-5);
+        assert!(current
+            .pose
+            .joint_matrices()
+            .iter()
+            .any(|matrix| !matrix.matrix().abs_diff_eq(glam::Mat4::IDENTITY, 1.0e-3)));
     }
 
     #[test]
     fn character_preview_report_is_derived_from_the_committed_selection() {
         let mut inactive = Report::default();
-        report_character_preview::<()>(None, &mut inactive);
+        report_character_preview::<()>(None, 0.0, &mut inactive);
         assert_eq!(
             inactive.finish(),
-            r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0,"nodes":0,"joints":0}"#
+            r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0,"nodes":0,"joints":0,"clip":"","clip_duration":0.0000,"channels":0,"sample_seconds":0.0000}"#
         );
 
         let source = std::fs::read(character_fixture_path()).unwrap();
+        let asset = arpg_assets::import_character_glb(&source).unwrap();
+        let pose = asset.bind_pose();
         let preview = LoadedCharacter {
             path: "assets/character.glb".into(),
-            asset: arpg_assets::import_character_glb(&source).unwrap(),
+            asset,
+            pose,
             gpu: (),
         };
         let mut active = Report::default();
-        report_character_preview(Some(&preview), &mut active);
+        report_character_preview(Some(&preview), 0.25, &mut active);
         assert_eq!(
             active.finish(),
-            r#"{"active":true,"path":"assets/character.glb","vertices":144,"indices":216,"texture_width":16,"texture_height":16,"nodes":5,"joints":3}"#
+            r#"{"active":true,"path":"assets/character.glb","vertices":144,"indices":216,"texture_width":16,"texture_height":16,"nodes":5,"joints":3,"clip":"Sway","clip_duration":1.0000,"channels":9,"sample_seconds":0.2500}"#
         );
+    }
+
+    #[test]
+    fn character_time_is_the_continuous_tick_plus_alpha_clock() {
+        assert_eq!(presentation_seconds(60, Alpha::ZERO), 1.0);
+        assert_eq!(presentation_seconds(59, Alpha::ONE), 1.0);
     }
 
     fn tap(app: &mut App, key: KeyCode) {

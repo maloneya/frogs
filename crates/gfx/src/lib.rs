@@ -972,12 +972,12 @@ mod tests {
         );
     }
 
-    /// The bind pose crosses every new seam in one real draw: Blender's joint
-    /// indices and weights, the CPU palette, the uniform upload and WGSL skinning.
-    /// A missing palette upload collapses these vertices to the origin, while a
-    /// layout disagreement is reported by the validation scope.
+    /// A sampled non-bind pose crosses every character seam in one real draw:
+    /// Blender's channels, joint indices and weights, CPU sampling, the uniform
+    /// upload and WGSL skinning. A missing palette upload collapses these vertices
+    /// to the origin, while a layout disagreement reaches the validation scope.
     #[test]
-    fn the_character_preview_draws_its_bind_pose() {
+    fn the_character_preview_draws_a_sampled_pose() {
         const N: u32 = 256;
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1016,9 +1016,12 @@ mod tests {
         let mut camera = OrthoCamera::new(N, N);
         camera.zoom_by(0.125);
         camera_binding.upload(&queue, &camera);
+        let mut pose = cpu.bind_pose();
+        let sampled = cpu.sample_looping(0.5, &mut pose);
+        assert!((sampled - 0.5).abs() < 1.0e-5, "fixture carries its Sway clip");
         let preview = CharacterPreview::new(
             &gpu,
-            &cpu,
+            &pose,
             Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE),
         );
         pipeline.upload(&queue, preview);

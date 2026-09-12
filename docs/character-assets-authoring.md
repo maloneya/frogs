@@ -1,8 +1,8 @@
 # Character asset authoring
 
 The asset boundary accepts two deliberately small Blender-to-GLB paths: a baked
-static preview and a one-skin character shown in its bind pose. Neither is a
-general scene loader, and animation clips remain deferred to the next stage.
+static preview and a one-skin character with one looping transform clip. Neither
+is a general scene loader.
 
 ## Blender convention
 
@@ -62,15 +62,22 @@ must not be applied to the mesh. This division is deliberate: the skeleton
 produces asset-local poses, while the app's `Instance` is the only placement,
 scale and facing transform used by the renderer.
 
-Export the selected mesh and armature together as a binary GLB with UVs, normals
-and skinning enabled. Keep animations, shape keys, cameras, lights and glTF
-extensions disabled for this stage. Blender must emit inverse bind matrices;
+Export the selected mesh and armature together as a binary GLB with UVs, normals,
+skinning and one active action enabled. Keep shape keys, cameras, lights and glTF
+extensions disabled. Blender must emit inverse bind matrices;
 the importer rejects a skin whose bind-pose palette does not reproduce every
 authored vertex.
 
+The action must have a non-empty unique name, two to 256 keys per channel, a
+duration no longer than 60 seconds, and matching start/end times across every
+channel. The emitted glTF may use `LINEAR` or `STEP`; Blender commonly exports
+motion as `LINEAR` and unchanged components as `STEP`. Cubic splines, morph
+targets, non-joint targets and non-uniform scale are rejected explicitly. Key
+the bind pose at both ends when the clip should loop without a seam.
+
 The checked-in `assets/fixtures/blender-bind-pose.glb` exercises this contract
-with a three-bone, asymmetric training dummy. Regenerate it from the repository
-root with:
+with a three-bone, asymmetric training dummy and a one-second `Sway` action.
+Regenerate it from the repository root with:
 
 ```text
 blender --background --python assets/fixtures/generate-blender-bind-pose.py

@@ -1,7 +1,7 @@
 # Character assets and animation plan
 
-Status: static preview, Blender compatibility and the separate bind-pose
-character path are implemented. Sampling one named animation clip is next.
+Status: static preview, Blender compatibility, bind-pose skinning and one named
+looping clip are implemented. Player presentation is next.
 
 ## Purpose
 
@@ -98,10 +98,14 @@ Each remaining stage is a separate running change.
    The importer proves that the joint palette reproduces the authored bind pose;
    `gfx` uploads that palette and draws the Blender-authored mannequin through a
    dedicated skinning pipeline. Harness selection is atomic and observable.
-4. **Next — one clip.** Sample one named clip from continuous simulation presentation
-   time (`tick + alpha`) and draw the resulting pose. Start with linear and step
-   interpolation; reject unsupported channel forms explicitly.
-5. **Player presentation.** Add a typed, read-only extraction carrying stable
+4. **Complete — one clip.** The character boundary imports one named, bounded
+   transform clip with linear and step interpolation, rejecting cubic splines,
+   morph targets and non-joint targets. A reusable CPU pose samples from
+   continuous simulation presentation time (`tick + alpha`), rebuilds the joint
+   palette without per-frame allocation and reaches the existing skinning draw.
+   The Blender fixture's `Sway` action exercises both supported interpolation
+   forms through a non-bind-pose GPU pixel test.
+5. **Next — player presentation.** Add a typed, read-only extraction carrying stable
    identity, interpolated transform and authoritative movement and attack
    state. Drive idle, run and profile-specific attacks, with a short cross-fade
    and weapon attachment. This is derived presentation, not stored gameplay

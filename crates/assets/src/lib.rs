@@ -1,8 +1,9 @@
 //! Validated CPU-side assets imported from interchange formats.
 //!
 //! This crate is the one-way door from glTF into the engine. Format-specific
-//! handles stay private; callers receive finite, bounded arrays with node
-//! transforms already applied. It owns neither file selection nor GPU state.
+//! handles stay private; callers receive finite, bounded static geometry or a
+//! retained character hierarchy, skin and clip. It owns neither file selection
+//! nor GPU state.
 
 use glam::{Mat3, Mat4, Vec2, Vec3};
 
@@ -10,8 +11,7 @@ mod character;
 
 pub use character::import_character_glb;
 pub use character::{
-    CharacterAsset, CharacterNode, CharacterVertex, JointMatrix, SkinJoint, MAX_CHARACTER_NODES,
-    MAX_JOINTS,
+    AnimationClip, CharacterAsset, CharacterPose, CharacterVertex, JointMatrix, MAX_JOINTS,
 };
 
 /// Largest binary glTF accepted by the first asset path: eight MiB.

@@ -8,9 +8,11 @@ Pass an alternate output after ``--`` when comparing exporter versions.
 """
 
 from pathlib import Path
+import math
 import sys
 
 import bpy
+from mathutils import Quaternion
 
 
 def add_box(name, location, dimensions, material):
@@ -115,6 +117,19 @@ modifier = character.modifiers.new(name="BindPoseRig", type="ARMATURE")
 modifier.object = armature
 character.parent = armature
 
+# One deliberately small looping clip. The bind pose is keyed at both ends so
+# modulo playback has no seam; the middle key visibly leans the upper body.
+bpy.context.scene.render.fps = 30
+armature.animation_data_create()
+action = bpy.data.actions.new("Sway")
+armature.animation_data.action = action
+spine_pose = armature.pose.bones["Spine"]
+spine_pose.rotation_mode = "QUATERNION"
+for frame, angle in [(1, 0.0), (16, math.radians(24.0)), (31, 0.0)]:
+    spine_pose.rotation_quaternion = Quaternion((0.0, 1.0, 0.0), angle)
+    spine_pose.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+bpy.context.scene.frame_set(1)
+
 bpy.context.scene.render.image_settings.file_format = "PNG"
 bpy.ops.object.select_all(action="SELECT")
 arguments = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
@@ -126,5 +141,6 @@ bpy.ops.export_scene.gltf(
     export_apply=False,
     export_cameras=False,
     export_lights=False,
+    export_animations=True,
 )
 print(f"wrote {output}")

@@ -65,7 +65,7 @@ impl CharacterMesh {
     }
 }
 
-/// One frame's placement and validated bind pose for an uploaded character.
+/// One frame's placement and sampled pose for an uploaded character.
 #[derive(Clone, Copy)]
 pub struct CharacterPreview<'a> {
     pub(crate) mesh: &'a CharacterMesh,
@@ -74,16 +74,16 @@ pub struct CharacterPreview<'a> {
 }
 
 impl<'a> CharacterPreview<'a> {
-    /// Pairs matching CPU and GPU assets with an app-owned world transform.
+    /// Pairs an uploaded mesh, a sampled CPU pose and an app-owned world transform.
     #[must_use]
     pub fn new(
         mesh: &'a CharacterMesh,
-        character: &'a arpg_assets::CharacterAsset,
+        pose: &'a arpg_assets::CharacterPose,
         instance: Instance,
     ) -> Self {
         Self {
             mesh,
-            joints: character.bind_joint_matrices(),
+            joints: pose.joint_matrices(),
             instance,
         }
     }

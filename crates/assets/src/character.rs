@@ -1,6 +1,6 @@
 //! Hierarchical, skinned character assets kept separate from baked static meshes.
 
-use glam::{Mat3, Mat4, Vec2, Vec3};
+use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
 use super::{
     BaseColorTexture, ImportError, MAX_GLB_BYTES, MAX_INDICES, MAX_VERTICES, exactly,
@@ -8,13 +8,23 @@ use super::{
 };
 
 /// Largest retained node hierarchy accepted for one character.
-pub const MAX_CHARACTER_NODES: usize = 128;
+pub(crate) const MAX_CHARACTER_NODES: usize = 128;
 
 /// Largest joint palette accepted by the first character renderer.
 pub const MAX_JOINTS: usize = 64;
 
+/// Largest number of transform channels accepted in the first clip.
+pub(crate) const MAX_ANIMATION_CHANNELS: usize = MAX_JOINTS * 3;
+
+/// Largest key count accepted for one transform channel.
+pub(crate) const MAX_KEYFRAMES_PER_CHANNEL: usize = 256;
+
+/// Long clips are an authoring error for the initial action-sized path.
+pub(crate) const MAX_CLIP_SECONDS: f32 = 60.0;
+
 const _: () = assert!(MAX_CHARACTER_NODES <= u16::MAX as usize);
 const _: () = assert!(MAX_JOINTS <= u16::MAX as usize);
+const _: () = assert!(MAX_ANIMATION_CHANNELS <= u16::MAX as usize);
 
 /// One skinned vertex in asset-local metres.
 #[repr(C)]
@@ -61,51 +71,131 @@ impl CharacterVertex {
     }
 }
 
-/// One retained node in the character's asset-local hierarchy.
-#[derive(Debug)]
-pub struct CharacterNode {
-    name: Box<str>,
-    parent: Option<u16>,
-    local_transform: Mat4,
+#[derive(Clone, Copy, Debug)]
+struct NodePose {
+    translation: Vec3,
+    rotation: Quat,
+    scale: Vec3,
 }
 
-impl CharacterNode {
-    /// Unique authored node name.
+/// One retained node in the character's asset-local hierarchy.
+#[derive(Debug)]
+struct CharacterNode {
+    name: Box<str>,
+    parent: Option<u16>,
+    bind_pose: NodePose,
+}
+
+impl NodePose {
+    fn matrix(self) -> Mat4 {
+        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AnimationInterpolation {
+    Linear,
+    Step,
+}
+
+#[derive(Debug)]
+enum ChannelValues {
+    Translations(Vec<Vec3>),
+    Rotations(Vec<Quat>),
+    Scales(Vec<Vec3>),
+}
+
+#[derive(Debug)]
+struct AnimationChannel {
+    node: u16,
+    interpolation: AnimationInterpolation,
+    times: Vec<f32>,
+    values: ChannelValues,
+}
+
+impl AnimationChannel {
+    fn node(&self) -> usize {
+        usize::from(self.node)
+    }
+}
+
+/// One named, bounded transform clip.
+#[derive(Debug)]
+pub struct AnimationClip {
+    name: Box<str>,
+    duration_seconds: f32,
+    channels: Vec<AnimationChannel>,
+}
+
+impl AnimationClip {
+    /// Unique authored clip name.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Parent node index, or `None` for the sole scene root.
+    /// Loop duration after subtracting the authored start time.
     #[must_use]
-    pub fn parent(&self) -> Option<usize> {
-        self.parent.map(usize::from)
+    pub fn duration_seconds(&self) -> f32 {
+        self.duration_seconds
     }
 
-    /// Authored bind-pose transform relative to the parent.
+    /// Number of transform channels in the clip.
     #[must_use]
-    pub fn local_transform(&self) -> Mat4 {
-        self.local_transform
+    pub fn channel_count(&self) -> usize {
+        self.channels.len()
+    }
+
+    /// Wraps continuous presentation time into this clip's loop interval.
+    #[must_use]
+    pub fn loop_time(&self, presentation_seconds: f64) -> f32 {
+        if presentation_seconds.is_finite() {
+            presentation_seconds.rem_euclid(f64::from(self.duration_seconds)) as f32
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Reusable CPU scratch and GPU-ready matrices for one sampled character pose.
+#[derive(Debug)]
+pub struct CharacterPose {
+    locals: Vec<NodePose>,
+    globals: Vec<Mat4>,
+    joints: Vec<JointMatrix>,
+}
+
+impl CharacterPose {
+    /// Joint palette consumed by the character renderer.
+    #[must_use]
+    pub fn joint_matrices(&self) -> &[JointMatrix] {
+        &self.joints
+    }
+}
+
+impl CharacterNode {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn parent(&self) -> Option<usize> {
+        self.parent.map(usize::from)
     }
 }
 
 /// One joint's link into the node hierarchy and its authored inverse bind.
 #[derive(Debug)]
-pub struct SkinJoint {
+struct SkinJoint {
     node: u16,
     inverse_bind: Mat4,
 }
 
 impl SkinJoint {
-    /// Node index whose transform drives this joint.
-    #[must_use]
-    pub fn node(&self) -> usize {
+    fn node(&self) -> usize {
         usize::from(self.node)
     }
 
-    /// Matrix taking mesh-local positions into this joint's bind space.
-    #[must_use]
-    pub fn inverse_bind(&self) -> Mat4 {
+    fn inverse_bind(&self) -> Mat4 {
         self.inverse_bind
     }
 }
@@ -142,8 +232,8 @@ pub struct CharacterAsset {
     base_color_texture: BaseColorTexture,
     nodes: Vec<CharacterNode>,
     joints: Vec<SkinJoint>,
-    bind_joint_matrices: Vec<JointMatrix>,
-    mesh_node: u16,
+    hierarchy_order: Vec<u16>,
+    clip: AnimationClip,
 }
 
 impl CharacterAsset {
@@ -183,28 +273,93 @@ impl CharacterAsset {
         &self.base_color_texture
     }
 
-    /// Complete retained node hierarchy in glTF node-index order.
+    /// Number of retained nodes in the character hierarchy.
     #[must_use]
-    pub fn nodes(&self) -> &[CharacterNode] {
-        &self.nodes
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
     }
 
-    /// Joints in the same order vertex joint indices and GPU palettes use.
+    /// Number of joints in the skin and sampled GPU palette.
     #[must_use]
-    pub fn joints(&self) -> &[SkinJoint] {
-        &self.joints
+    pub fn joint_count(&self) -> usize {
+        self.joints.len()
     }
 
-    /// Bind-pose transforms from mesh-local positions to asset-local positions.
+    /// The sole named clip admitted by the initial character boundary.
     #[must_use]
-    pub fn bind_joint_matrices(&self) -> &[JointMatrix] {
-        &self.bind_joint_matrices
+    pub fn clip(&self) -> &AnimationClip {
+        &self.clip
     }
 
-    /// Node carrying the skinned mesh and skin reference.
+    /// Builds reusable sampling storage initialized to the authored bind pose.
     #[must_use]
-    pub fn mesh_node(&self) -> usize {
-        usize::from(self.mesh_node)
+    pub fn bind_pose(&self) -> CharacterPose {
+        let mut pose = CharacterPose {
+            locals: self.nodes.iter().map(|node| node.bind_pose).collect(),
+            globals: vec![Mat4::IDENTITY; self.nodes.len()],
+            joints: vec![JointMatrix::new(Mat4::IDENTITY); self.joints.len()],
+        };
+        self.rebuild_pose(&mut pose);
+        pose
+    }
+
+    /// Samples the character's clip as a loop and rebuilds `pose`.
+    ///
+    /// A matching-size pose reuses its allocations; other shapes are replaced.
+    /// Non-finite time selects the clip start.
+    pub fn sample_looping(&self, presentation_seconds: f64, pose: &mut CharacterPose) -> f32 {
+        if pose.locals.len() != self.nodes.len()
+            || pose.globals.len() != self.nodes.len()
+            || pose.joints.len() != self.joints.len()
+        {
+            *pose = self.bind_pose();
+        }
+        for (local, node) in pose.locals.iter_mut().zip(&self.nodes) {
+            *local = node.bind_pose;
+        }
+        let time = self.clip.loop_time(presentation_seconds);
+        for channel in &self.clip.channels {
+            channel.sample(time, &mut pose.locals[channel.node()]);
+        }
+        self.rebuild_pose(pose);
+        time
+    }
+
+    fn rebuild_pose(&self, pose: &mut CharacterPose) {
+        for &node in &self.hierarchy_order {
+            let node = usize::from(node);
+            let local = pose.locals[node].matrix();
+            pose.globals[node] = self.nodes[node]
+                .parent()
+                .map_or(local, |parent| pose.globals[parent] * local);
+        }
+        for (out, joint) in pose.joints.iter_mut().zip(&self.joints) {
+            *out = JointMatrix::new(pose.globals[joint.node()] * joint.inverse_bind());
+        }
+    }
+}
+
+impl AnimationChannel {
+    fn sample(&self, time: f32, pose: &mut NodePose) {
+        let upper = self.times.partition_point(|&key| key <= time);
+        let left = upper.saturating_sub(1).min(self.times.len() - 1);
+        let right = upper.min(self.times.len() - 1);
+        let amount = if self.interpolation == AnimationInterpolation::Step || left == right {
+            0.0
+        } else {
+            (time - self.times[left]) / (self.times[right] - self.times[left])
+        };
+        match &self.values {
+            ChannelValues::Translations(values) => {
+                pose.translation = values[left].lerp(values[right], amount);
+            }
+            ChannelValues::Rotations(values) => {
+                pose.rotation = values[left].slerp(values[right], amount).normalize();
+            }
+            ChannelValues::Scales(values) => {
+                pose.scale = values[left].lerp(values[right], amount);
+            }
+        }
     }
 }
 
@@ -227,11 +382,203 @@ fn is_ancestor(ancestor: usize, mut node: usize, parents: &[Option<usize>]) -> b
     }
 }
 
+fn import_animation<'a>(
+    animation: gltf::Animation<'a>,
+    blob: &[u8],
+    joint_membership: &[bool],
+) -> Result<(AnimationClip, Vec<gltf::Accessor<'a>>), ImportError> {
+    let name = animation
+        .name()
+        .filter(|name| !name.is_empty())
+        .ok_or(ImportError::Invalid("the animation must be named"))?;
+    let channel_count = animation.channels().count();
+    if channel_count == 0 || channel_count > MAX_ANIMATION_CHANNELS {
+        return Err(ImportError::Capacity("animation channel count"));
+    }
+    exactly(
+        animation.samplers().count(),
+        channel_count,
+        "each animation channel must own one sampler",
+    )?;
+
+    let mut sampler_used = vec![false; channel_count];
+    let mut targets = vec![[false; 3]; joint_membership.len()];
+    let mut accessors = Vec::with_capacity(channel_count * 2);
+    let mut channels = Vec::with_capacity(channel_count);
+    let mut clip_range: Option<(f32, f32)> = None;
+
+    for channel in animation.channels() {
+        let target = channel.target();
+        let node = target.node().index();
+        if !joint_membership[node] {
+            return Err(ImportError::Unsupported(
+                "animation channels may target only skin joints",
+            ));
+        }
+        let property = target.property();
+        let property_index = match property {
+            gltf::animation::Property::Translation => 0,
+            gltf::animation::Property::Rotation => 1,
+            gltf::animation::Property::Scale => 2,
+            gltf::animation::Property::MorphTargetWeights => {
+                return Err(ImportError::Unsupported(
+                    "morph target animation is deferred",
+                ));
+            }
+        };
+        if std::mem::replace(&mut targets[node][property_index], true) {
+            return Err(ImportError::Invalid(
+                "a clip cannot animate one node property twice",
+            ));
+        }
+
+        let sampler = channel.sampler();
+        if std::mem::replace(&mut sampler_used[sampler.index()], true) {
+            return Err(ImportError::Unsupported(
+                "animation samplers cannot be shared between channels",
+            ));
+        }
+        let interpolation = match sampler.interpolation() {
+            gltf::animation::Interpolation::Linear => AnimationInterpolation::Linear,
+            gltf::animation::Interpolation::Step => AnimationInterpolation::Step,
+            gltf::animation::Interpolation::CubicSpline => {
+                return Err(ImportError::Unsupported(
+                    "cubic-spline animation is deferred",
+                ));
+            }
+        };
+        let input = sampler.input();
+        let output = sampler.output();
+        if input.data_type() != gltf::accessor::DataType::F32
+            || input.dimensions() != gltf::accessor::Dimensions::Scalar
+            || input.normalized()
+        {
+            return Err(ImportError::Unsupported(
+                "animation times must be unnormalized FLOAT scalars",
+            ));
+        }
+        if input.count() < 2 || input.count() > MAX_KEYFRAMES_PER_CHANNEL {
+            return Err(ImportError::Capacity("animation keyframe count"));
+        }
+        let expected_dimensions = match property {
+            gltf::animation::Property::Translation | gltf::animation::Property::Scale => {
+                gltf::accessor::Dimensions::Vec3
+            }
+            gltf::animation::Property::Rotation => gltf::accessor::Dimensions::Vec4,
+            gltf::animation::Property::MorphTargetWeights => unreachable!("rejected above"),
+        };
+        if output.data_type() != gltf::accessor::DataType::F32
+            || output.dimensions() != expected_dimensions
+            || output.normalized()
+            || output.count() != input.count()
+        {
+            return Err(ImportError::Unsupported(
+                "animation outputs must be matching unnormalized FLOAT vectors",
+            ));
+        }
+
+        let reader = channel.reader(|_| Some(blob));
+        let mut times: Vec<f32> = reader
+            .read_inputs()
+            .ok_or(ImportError::Invalid("read animation times"))?
+            .collect();
+        if times.len() != input.count()
+            || times.iter().any(|time| !time.is_finite() || *time < 0.0)
+            || times.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(ImportError::Invalid(
+                "animation times must be finite, non-negative and strictly increasing",
+            ));
+        }
+        let start = times[0];
+        let end = *times.last().expect("at least two keys checked");
+        let duration = end - start;
+        if !duration.is_finite() || duration <= 0.0 || duration > MAX_CLIP_SECONDS {
+            return Err(ImportError::Capacity("animation duration"));
+        }
+        if let Some((clip_start, clip_end)) = clip_range {
+            if (start - clip_start).abs() > 1.0e-5 || (end - clip_end).abs() > 1.0e-5 {
+                return Err(ImportError::Unsupported(
+                    "all channels must span the same clip range",
+                ));
+            }
+        } else {
+            clip_range = Some((start, end));
+        }
+        for time in &mut times {
+            *time -= start;
+        }
+
+        let outputs = reader
+            .read_outputs()
+            .ok_or(ImportError::Invalid("read animation values"))?;
+        let values = match outputs {
+            gltf::animation::util::ReadOutputs::Translations(values) => {
+                let values: Vec<Vec3> = values.map(Vec3::from).collect();
+                if values.len() != times.len() || values.iter().any(|value| !value.is_finite()) {
+                    return Err(ImportError::Invalid(
+                        "animation translations must be finite",
+                    ));
+                }
+                ChannelValues::Translations(values)
+            }
+            gltf::animation::util::ReadOutputs::Rotations(values) => {
+                let values: Vec<Quat> = values.into_f32().map(Quat::from_array).collect();
+                if values.len() != times.len()
+                    || values.iter().any(|value| {
+                        !value.is_finite() || (value.length_squared() - 1.0).abs() > 1.0e-3
+                    })
+                {
+                    return Err(ImportError::Invalid(
+                        "animation rotations must be finite unit quaternions",
+                    ));
+                }
+                ChannelValues::Rotations(values.into_iter().map(Quat::normalize).collect())
+            }
+            gltf::animation::util::ReadOutputs::Scales(values) => {
+                let values: Vec<Vec3> = values.map(Vec3::from).collect();
+                if values.len() != times.len()
+                    || values.iter().any(|value| {
+                        !value.is_finite()
+                            || value.min_element() <= 1.0e-8
+                            || value.max_element() - value.min_element() > 1.0e-5
+                    })
+                {
+                    return Err(ImportError::Invalid(
+                        "animation scales must be finite, positive and uniform",
+                    ));
+                }
+                ChannelValues::Scales(values)
+            }
+            gltf::animation::util::ReadOutputs::MorphTargetWeights(_) => {
+                unreachable!("morph target channels rejected above")
+            }
+        };
+        accessors.extend([input, output]);
+        channels.push(AnimationChannel {
+            node: node as u16,
+            interpolation,
+            times,
+            values,
+        });
+    }
+    debug_assert!(sampler_used.into_iter().all(|used| used));
+    let (start, end) = clip_range.expect("non-empty channels checked");
+    Ok((
+        AnimationClip {
+            name: name.into(),
+            duration_seconds: end - start,
+            channels,
+        },
+        accessors,
+    ))
+}
+
 /// Imports the bounded one-mesh, one-skin character subset of binary glTF.
 ///
 /// Unlike [`super::import_glb`], node transforms are retained. The importer
 /// validates one rooted hierarchy, one named joint tree, inverse bind matrices,
-/// and exactly four joint/weight lanes per vertex. Animation remains rejected.
+/// exactly four joint/weight lanes per vertex and one named transform clip.
 pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError> {
     if bytes.len() > MAX_GLB_BYTES {
         return Err(ImportError::Capacity("file bytes"));
@@ -246,7 +593,7 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         || document.extensions_required().next().is_some()
     {
         return Err(ImportError::Unsupported(
-            "extensions are not accepted in bind-pose characters",
+            "extensions are not accepted in characters",
         ));
     }
     exactly(
@@ -257,14 +604,14 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
     exactly(document.meshes().count(), 1, "exactly one mesh is required")?;
     exactly(document.skins().count(), 1, "exactly one skin is required")?;
     exactly(
+        document.animations().count(),
+        1,
+        "exactly one animation is required",
+    )?;
+    exactly(
         document.buffers().count(),
         1,
         "exactly one embedded buffer is required",
-    )?;
-    exactly(
-        document.accessors().count(),
-        7,
-        "exactly seven character accessors are required",
     )?;
     exactly(
         document.images().count(),
@@ -286,10 +633,8 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         1,
         "exactly one texture is required",
     )?;
-    if document.animations().next().is_some() || document.cameras().next().is_some() {
-        return Err(ImportError::Unsupported(
-            "cameras and animation are deferred",
-        ));
+    if document.cameras().next().is_some() {
+        return Err(ImportError::Unsupported("cameras are deferred"));
     }
     if document
         .accessors()
@@ -326,6 +671,7 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         std::iter::repeat_with(|| None).take(node_count).collect();
     let mut parents = vec![None; node_count];
     let mut globals = vec![Mat4::IDENTITY; node_count];
+    let mut hierarchy_order = Vec::with_capacity(node_count);
     let mut stack = vec![(
         scene.nodes().next().expect("count checked"),
         None,
@@ -340,6 +686,20 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
             ));
         }
         let local_transform = node_transform(node.clone())?;
+        let (scale, rotation, translation) = local_transform.to_scale_rotation_translation();
+        if !scale.is_finite()
+            || scale.min_element() <= 1.0e-8
+            || scale.max_element() - scale.min_element() > 1.0e-5
+            || !rotation.is_finite()
+            || (rotation.length_squared() - 1.0).abs() > 1.0e-4
+            || !translation.is_finite()
+            || !Mat4::from_scale_rotation_translation(scale, rotation, translation)
+                .abs_diff_eq(local_transform, 1.0e-5)
+        {
+            return Err(ImportError::Unsupported(
+                "character node transforms must be finite positive uniform TRS without shear",
+            ));
+        }
         let global = parent_global * local_transform;
         let determinant = Mat3::from_mat4(global).determinant();
         if !determinant.is_finite() || determinant <= 1.0e-8 {
@@ -381,10 +741,15 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         }
         parents[index] = parent;
         globals[index] = global;
+        hierarchy_order.push(index as u16);
         nodes[index] = Some(CharacterNode {
             name: name.into(),
             parent: parent.map(|value| value as u16),
-            local_transform,
+            bind_pose: NodePose {
+                translation,
+                rotation,
+                scale,
+            },
         });
         let mut children: Vec<_> = node.children().collect();
         children.reverse();
@@ -540,6 +905,8 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
             "the declared skeleton root must contain every joint",
         ));
     }
+    let animation = document.animations().next().expect("count checked");
+    let (clip, animation_accessors) = import_animation(animation, blob, &joint_membership)?;
     let inverse_accessor = skin
         .inverse_bind_matrices()
         .ok_or(ImportError::Invalid("inverseBindMatrices are required"))?;
@@ -565,6 +932,13 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
     .into_iter()
     .map(|view| view.ok_or(ImportError::Unsupported("sparse accessors are deferred")))
     .collect::<Result<Vec<_>, _>>()?;
+    for accessor in &animation_accessors {
+        used_views.push(
+            accessor
+                .view()
+                .ok_or(ImportError::Unsupported("sparse accessors are deferred"))?,
+        );
+    }
     used_views.push(material.image_view.clone());
     used_views.sort_by_key(gltf::buffer::View::index);
     used_views.dedup_by_key(|view| view.index());
@@ -578,6 +952,23 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
             "character data must use the embedded buffer",
         ));
     }
+    let mut used_accessors = vec![
+        positions.clone(),
+        normals.clone(),
+        uvs.clone(),
+        joint_indices.clone(),
+        weights.clone(),
+        indices.clone(),
+        inverse_accessor.clone(),
+    ];
+    used_accessors.extend(animation_accessors);
+    used_accessors.sort_by_key(gltf::Accessor::index);
+    used_accessors.dedup_by_key(|accessor| accessor.index());
+    exactly(
+        document.accessors().count(),
+        used_accessors.len(),
+        "unused character accessors are rejected",
+    )?;
 
     let inverse_binds: Vec<Mat4> = skin
         .reader(|_| Some(blob))
@@ -715,8 +1106,8 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         base_color_texture: material.base_color_texture,
         nodes,
         joints,
-        bind_joint_matrices,
-        mesh_node: mesh_node as u16,
+        hierarchy_order,
+        clip,
     })
 }
 
@@ -765,25 +1156,21 @@ mod tests {
     }
 
     #[test]
-    fn imports_blenders_named_joint_tree_and_bind_pose() {
+    fn imports_blenders_named_joint_tree_bind_pose_and_clip() {
         let character = import_character_glb(FIXTURE).unwrap();
         assert_eq!(
             (character.vertex_count(), character.index_count()),
             (144, 216)
         );
-        assert_eq!(character.nodes().len(), 5);
-        assert_eq!(character.joints().len(), 3);
+        assert_eq!(character.node_count(), 5);
+        assert_eq!(character.joint_count(), 3);
         assert_eq!(
             character
-                .joints()
+                .joints
                 .iter()
-                .map(|joint| character.nodes()[joint.node()].name())
+                .map(|joint| character.nodes[joint.node()].name())
                 .collect::<Vec<_>>(),
             ["Root", "Spine", "Head"]
-        );
-        assert_eq!(
-            character.nodes()[character.mesh_node()].name(),
-            "BindPoseCharacter"
         );
         assert_eq!(
             (
@@ -799,9 +1186,81 @@ mod tests {
                 .iter()
                 .all(|vertex| { (vertex.weights().into_iter().sum::<f32>() - 1.0).abs() < 1.0e-6 })
         );
+        assert!(character.bind_pose().joint_matrices().iter().all(|matrix| {
+            matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-5)
+        }));
+        let clip = character.clip();
+        assert_eq!(clip.name(), "Sway");
+        assert!((clip.duration_seconds() - 1.0).abs() < 1.0e-5);
+        assert_eq!(clip.channel_count(), 9);
+        assert_eq!(
+            clip.channels
+                .iter()
+                .filter(|channel| channel.interpolation == AnimationInterpolation::Linear)
+                .count(),
+            1
+        );
+        assert_eq!(
+            clip.channels
+                .iter()
+                .filter(|channel| channel.interpolation == AnimationInterpolation::Step)
+                .count(),
+            8
+        );
+    }
+
+    #[test]
+    fn linear_and_step_channels_obey_their_two_edges() {
+        let mut pose = NodePose {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
+        };
+        let mut channel = AnimationChannel {
+            node: 0,
+            interpolation: AnimationInterpolation::Linear,
+            times: vec![0.0, 1.0],
+            values: ChannelValues::Translations(vec![Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0)]),
+        };
+        channel.sample(0.25, &mut pose);
+        assert_eq!(pose.translation, Vec3::new(0.5, 0.0, 0.0));
+
+        channel.interpolation = AnimationInterpolation::Step;
+        channel.sample(0.25, &mut pose);
+        assert_eq!(pose.translation, Vec3::ZERO);
+        channel.sample(1.0, &mut pose);
+        assert_eq!(pose.translation, Vec3::new(2.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn clip_sampling_wraps_continuously_and_rebuilds_the_joint_palette() {
+        let character = import_character_glb(FIXTURE).unwrap();
+        let mut pose = character.bind_pose();
+        let sampled = character.sample_looping(0.5, &mut pose);
+        assert!((sampled - 0.5).abs() < 1.0e-5);
         assert!(
-            character
-                .bind_joint_matrices()
+            pose.joint_matrices()
+                .iter()
+                .any(|matrix| !matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-3))
+        );
+        let halfway: Vec<Mat4> = pose
+            .joint_matrices()
+            .iter()
+            .map(|matrix| matrix.matrix())
+            .collect();
+
+        let sampled = character.sample_looping(1.5, &mut pose);
+        assert!((sampled - 0.5).abs() < 1.0e-5);
+        assert!(
+            pose.joint_matrices()
+                .iter()
+                .zip(halfway)
+                .all(|(actual, expected)| actual.matrix().abs_diff_eq(expected, 1.0e-5))
+        );
+
+        assert_eq!(character.sample_looping(f64::NAN, &mut pose), 0.0);
+        assert!(
+            pose.joint_matrices()
                 .iter()
                 .all(|matrix| matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-5))
         );
@@ -827,6 +1286,22 @@ mod tests {
                 FIXTURE,
                 "\"mesh\":0,\"name\"",
                 "\"mesh\":0,\"translation\":[1,0,0],\"name\"",
+            ),
+            mutate_json(FIXTURE, "\"name\":\"Sway\"", "\"names\":\"Sway\""),
+            mutate_json(
+                FIXTURE,
+                "\"name\":\"Head\",\"translation\"",
+                "\"name\":\"Head\",\"scale\":[1,2,1],\"translation\"",
+            ),
+            mutate_json(
+                FIXTURE,
+                "\"target\":{\"node\":2,\"path\":\"translation\"}",
+                "\"target\":{\"node\":3,\"path\":\"translation\"}",
+            ),
+            mutate_json(
+                FIXTURE,
+                "\"interpolation\":\"LINEAR\"",
+                "\"interpolation\":\"CUBICSPLINE\"",
             ),
         ] {
             assert!(import_character_glb(&invalid).is_err());

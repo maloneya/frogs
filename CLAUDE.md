@@ -128,10 +128,12 @@ and the generated mip-chain contract are documented in
 The preview has no body and no simulation effect. See
 [`docs/character-assets-plan.md`](docs/character-assets-plan.md).
 
-Bind-pose character preview: `character show <path.glb>` atomically imports,
+Animated character preview: `character show <path.glb>` atomically imports,
 uploads and selects the separate one-skin path; `character clear` removes it.
 `state.character_preview` reports its path, mesh, texture, node and joint
-counts. It is presentation-only and may coexist with the static preview.
+counts plus the clip name, duration, channel count and current loop time. The
+one imported clip is sampled from `tick + alpha`; it is presentation-only and
+may coexist with the static preview.
 
 Source enablement freezes cadence and ring progress while disabled; enabling
 resumes them. Read-only `SourceState` supplies reports and scenario assertions.
@@ -200,7 +202,7 @@ crates/
          Action, ActionMask, InputState, Actions            (input.rs)
          MoveDir, Intent                                    (intent.rs)
          Report, damp
-  assets/ validated static/skinned CPU meshes, hierarchy, base colour and .glb boundary
+  assets/ validated static/skinned CPU meshes, hierarchy, clips, base colour and .glb boundary
                                                                   gltf, png, glam, bytemuck
   gfx/   Renderer, camera, cube, capture, shader.wgsl      core, wgpu, winit, png,
          imported static/skinned mesh GPU resources, joint palettes,
@@ -220,7 +222,7 @@ crates/
 - `assets` — the one-way interchange boundary. It accepts bounded, explicit
   subsets of binary glTF. Static meshes return transformed CPU geometry;
   character assets retain their named node hierarchy, one skin, inverse binds
-  and GPU-ready bind palette. Both return one decoded base-colour texture. glTF
+  and one sampled clip. Both return one decoded base-colour texture. glTF
   handles never escape it. It owns no paths, scene selection, simulation
   meaning, window state or GPU resources.
 - `content` decodes `GameScene` and promotes legacy engine-only files. The
