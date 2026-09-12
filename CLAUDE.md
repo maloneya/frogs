@@ -119,6 +119,13 @@ echo 'hold d 500' | nc -U /tmp/arpg.sock
 `source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>] [disabled]` ·
 `source remove|enable|disable <id>` · `impulse <player|#id> <x> <z>` · `vsync on|off` · `quit`
 
+Static asset preview: `asset show <path.glb>` atomically imports, uploads and
+selects one app-global preview beside the initial camera target; `asset clear`
+removes it. `state.asset_preview` reports the selected path and mesh counts.
+It also reports the decoded base-colour texture dimensions.
+The preview has no body and no simulation effect. See
+[`docs/character-assets-plan.md`](docs/character-assets-plan.md).
+
 Source enablement freezes cadence and ring progress while disabled; enabling
 resumes them. Read-only `SourceState` supplies reports and scenario assertions.
 See [source enablement](docs/source-enablement.md) for timing and lifetime rules.
@@ -186,8 +193,10 @@ crates/
          Action, ActionMask, InputState, Actions            (input.rs)
          MoveDir, Intent                                    (intent.rs)
          Report, damp
+  assets/ validated CPU meshes, base colour and .glb boundary  gltf, png, glam, bytemuck
   gfx/   Renderer, camera, cube, capture, shader.wgsl      core, wgpu, winit, png,
-         Quad/QuadBuffer/QuadSink, Glyphs, overlay.wgsl                  fontdue
+         imported mesh GPU resources, Quad/QuadBuffer/QuadSink,
+         Glyphs, overlay.wgsl                                  assets, fontdue
   sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace   core, glam, serde
   game/  Game, GameScene, source_control, restart snapshot  core, sim, glam, serde
   content/  load_scene, parse_template: shared RON decoding  game, sim, ron  (no gfx)
@@ -199,6 +208,11 @@ crates/
   does **not** name wgpu — that is what keeps `sim` free of the graphics stack,
   so simulation tests never need a GPU. The vertex layout for `Instance` lives
   in `gfx/cube.rs` for exactly this reason.
+- `assets` — the one-way interchange boundary. It accepts a bounded, explicit
+  subset of binary glTF and returns finite CPU vertices, indices and one decoded
+  base-colour texture with node transforms already applied. glTF handles never
+  escape it. It owns no paths, scene selection, simulation meaning, window
+  state or GPU resources.
 - `content` decodes `GameScene` and promotes legacy engine-only files. The
   game scene wraps sim's physical definition and adds game-owned relationships;
   no physical schema is copied. App and runner share this decoder.
@@ -221,8 +235,9 @@ crates/
   replacement. App and runner may import sim value types but never construct
   or step an engine world themselves.
 - `gfx` — `lib.rs` (surface, device, depth, frame orchestration), `camera.rs`
-  (isometric ortho camera, the follow rig, and the uniform), `cube.rs` (mesh,
-  pipeline, instance buffer, vertex layout), `shader.wgsl`. The camera rig lives
+  (isometric ortho camera, the follow rig, and the uniform), `cube.rs` (unit-cube
+  pipeline and instance buffer), `mesh.rs` (imported mesh GPU resources), and
+  `shader.wgsl`. The camera rig lives
   here rather than in `app` or `sim` because where the camera points is a
   presentation decision; it is handed a bare `Vec3`, which is exactly as
   anonymous as an `Instance`.

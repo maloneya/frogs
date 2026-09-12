@@ -8,13 +8,24 @@
 const CRATE: &str = "arpg-gfx";
 const FILE: &str = "crates/gfx/build.rs";
 
-const REASON: &str = "gfx must never know what an enemy is. Its vocabulary is \
-                      arpg_core::Instance — position, scale, colour. If the renderer needs \
-                      something the simulation has, widen Instance; do not reach across.";
+const REASON: &str = "gfx must never know what an enemy is. Simulation reaches it through \
+                      arpg_core::Instance; imported geometry reaches it through arpg-assets. \
+                      If the renderer needs simulation state, widen the shared vocabulary; \
+                      do not reach across.";
 
 /// The complete set, dev-dependencies included.
-const ALLOWED: &[&str] =
-    &["arpg-core", "bytemuck", "fontdue", "glam", "log", "png", "wgpu", "winit", "pollster"];
+const ALLOWED: &[&str] = &[
+    "arpg-assets",
+    "arpg-core",
+    "bytemuck",
+    "fontdue",
+    "glam",
+    "log",
+    "png",
+    "wgpu",
+    "winit",
+    "pollster",
+];
 
 #[path = "../../build_support/dependencies.rs"]
 mod dependencies;

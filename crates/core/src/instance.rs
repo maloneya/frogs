@@ -10,9 +10,10 @@ use glam::Vec3;
 /// referencing the old one — not something to do mid-frame while tuning a dial.
 pub const MAX_INSTANCES: usize = 200_000;
 
-/// Per-entity data handed to the GPU. **This is the renderer's entire
-/// vocabulary** — `gfx` knows about positions, scales and colours, and nothing
-/// whatsoever about enemies, health, or attacks.
+/// Per-entity data handed to the GPU. **This is the simulation's entire
+/// rendering vocabulary** — `gfx` knows about positions, scales and colours,
+/// and nothing whatsoever about enemies, health, or attacks. Imported mesh
+/// geometry reaches `gfx` through the separate asset boundary.
 ///
 /// 48 bytes, laid out as three `vec4`s. It could be packed to 36 (vertex
 /// buffers have no 16-byte alignment requirement, unlike uniforms), but the

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/gfx", "crates/sim", "crates/game", "crates/content", "crates/app", "crates/scenario"]
+members = ["crates/core", "crates/assets", "crates/gfx", "crates/sim", "crates/game", "crates/content", "crates/app", "crates/scenario"]
 resolver = "3"
 
 # So a bare `cargo run` still means "run the game".
@@ -11,6 +11,7 @@ edition = "2024"
 
 [workspace.dependencies]
 arpg-core = { path = "crates/core" }
+arpg-assets = { path = "crates/assets" }
 arpg-gfx = { path = "crates/gfx" }
 arpg-sim = { path = "crates/sim" }
 arpg-game = { path = "crates/game" }
@@ -26,6 +27,7 @@ env_logger = "0.11"
 # renderer and its own atlas, leaving the overlay pipeline still to write.
 fontdue = "0.9"
 glam = "0.33"
+gltf = { version = "1.4.1", default-features = false, features = ["utils"] }
 log = "0.4"
 png = "0.18.1"
 pollster = "1.0.1"

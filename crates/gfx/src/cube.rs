@@ -61,7 +61,7 @@ const ATTRS: [wgpu::VertexAttribute; 3] =
 /// `step_mode: Instance` tells the GPU to advance this buffer once per
 /// *instance* instead of once per vertex. Same buffer machinery, different
 /// stepping rule — that's the whole trick.
-fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
+pub(crate) fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
         array_stride: size_of::<Instance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,

@@ -8,8 +8,8 @@ use winit::window::{Window, WindowId};
 
 use glam::Vec2;
 
-use arpg_core::{Action, InstanceBuffer, Intent, MoveDir, Report};
-use arpg_gfx::{OrthoCamera, QuadBuffer, Renderer};
+use arpg_core::{Action, Instance, InstanceBuffer, Intent, MoveDir, Report};
+use arpg_gfx::{MeshAsset, MeshPreview, OrthoCamera, QuadBuffer, Renderer};
 use arpg_game::{Game, GameScene as Scene};
 use arpg_sim::{Accumulator, Alpha};
 
@@ -26,6 +26,8 @@ use crate::ui::{MenuRequest, SceneChoice};
 pub(crate) struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
+    /// App-global presentation selected independently of playable scene state.
+    asset_preview: Option<AssetPreview<MeshAsset>>,
     camera: Option<OrthoCamera>,
     game: Game,
     /// Game ids and ticks are scoped to this playtest generation.
@@ -72,6 +74,89 @@ pub(crate) struct App {
     /// this crate measures wall clock and is structurally unable to hand any of
     /// it to the simulation.
     accumulator: Accumulator,
+}
+
+/// Metadata and GPU ownership committed together after a complete load.
+struct AssetPreview<T> {
+    path: std::path::PathBuf,
+    vertex_count: usize,
+    index_count: usize,
+    texture_width: u32,
+    texture_height: u32,
+    gpu: T,
+}
+
+impl<T> AssetPreview<T> {
+    fn report(&self, out: &mut Report) {
+        out.bool("active", true);
+        out.text("path", &self.path.to_string_lossy());
+        out.int("vertices", self.vertex_count as u64);
+        out.int("indices", self.index_count as u64);
+        out.int("texture_width", u64::from(self.texture_width));
+        out.int("texture_height", u64::from(self.texture_height));
+    }
+}
+
+fn report_asset_preview<T>(preview: Option<&AssetPreview<T>>, out: &mut Report) {
+    if let Some(preview) = preview {
+        preview.report(out);
+    } else {
+        out.bool("active", false);
+        out.text("path", "");
+        out.int("vertices", 0);
+        out.int("indices", 0);
+        out.int("texture_width", 0);
+        out.int("texture_height", 0);
+    }
+}
+
+/// World-space placement belongs to app, never to the imported mesh or sim.
+fn preview_instance() -> Instance {
+    Instance::new(
+        glam::Vec3::new(-3.0, 0.0, -3.0),
+        glam::Vec3::ONE,
+        // White preserves the asset's authored base colour and factor.
+        glam::Vec3::ONE,
+    )
+}
+
+/// Prepares every fallible part before replacing `slot`.
+fn replace_preview<T>(
+    slot: &mut Option<AssetPreview<T>>,
+    path: std::path::PathBuf,
+    upload: impl FnOnce(&arpg_assets::StaticMesh) -> Result<T, String>,
+) -> Result<(), String> {
+    if path.extension() != Some(std::ffi::OsStr::new("glb")) {
+        return Err(format!("{}: expected a .glb file", path.display()));
+    }
+    let metadata = std::fs::metadata(&path)
+        .map_err(|error| format!("{}: read metadata: {error}", path.display()))?;
+    let bytes = usize::try_from(metadata.len())
+        .map_err(|_| format!("{}: file size cannot fit this process", path.display()))?;
+    if bytes > arpg_assets::MAX_GLB_BYTES {
+        return Err(format!(
+            "{}: GLB exceeds preview capacity: file bytes",
+            path.display()
+        ));
+    }
+    let source = std::fs::read(&path)
+        .map_err(|error| format!("{}: read GLB: {error}", path.display()))?;
+    let mesh = arpg_assets::import_glb(&source)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let vertex_count = mesh.vertex_count();
+    let index_count = mesh.index_count();
+    let texture_width = mesh.base_color_texture().width();
+    let texture_height = mesh.base_color_texture().height();
+    let gpu = upload(&mesh).map_err(|error| format!("{}: {error}", path.display()))?;
+    *slot = Some(AssetPreview {
+        path,
+        vertex_count,
+        index_count,
+        texture_width,
+        texture_height,
+        gpu,
+    });
+    Ok(())
 }
 
 /// A key release, a harness reply, or both, owed once `due` passes.
@@ -123,6 +208,23 @@ fn scene_catalog(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>,
 }
 
 impl App {
+    fn show_asset(&mut self, path: std::path::PathBuf) -> Result<String, String> {
+        let Self { renderer, asset_preview, .. } = self;
+        let renderer = renderer.as_ref().ok_or_else(|| "no renderer yet".to_string())?;
+        replace_preview(asset_preview, path, |mesh| {
+            renderer.upload_mesh(mesh).map_err(|error| error.to_string())
+        })?;
+        let preview = asset_preview.as_ref().expect("successful replacement selects a preview");
+        Ok(format!(
+            "asset preview vertices={} indices={} texture={}x{} path={}",
+            preview.vertex_count,
+            preview.index_count,
+            preview.texture_width,
+            preview.texture_height,
+            preview.path.display()
+        ))
+    }
+
     /// Both native keys and harness keys execute menu requests at this same
     /// between-tick boundary. No file I/O or game replacement happens in draw.
     fn handle_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
@@ -258,6 +360,14 @@ impl App {
         for Request { command, reply } in requests {
             let now = std::time::Instant::now();
             let answer = match command {
+                Command::ShowAsset(path) => match self.show_asset(path) {
+                    Ok(answer) => answer,
+                    Err(error) => format!("error: {error}"),
+                },
+                Command::ClearAsset => {
+                    self.asset_preview = None;
+                    "ok".to_string()
+                }
                 Command::StartScene(path) => match self.start_scene_file(&path) {
                     Ok(()) => self.ready_reply(),
                     Err(error) => format!("error: {error}"),
@@ -414,6 +524,9 @@ impl App {
         out.text("sim_hash", &format!("{:016x}", self.game.hash()));
         out.object("sim", |sim| self.game.report(sim));
         out.object("ui", |ui| self.input.menu().report(ui));
+        out.object("asset_preview", |asset| {
+            report_asset_preview(self.asset_preview.as_ref(), asset);
+        });
 
         out.object("render", |r| {
             let target = self.camera.as_ref().map(OrthoCamera::target).unwrap_or_default();
@@ -576,7 +689,11 @@ impl App {
         // Counted only when a frame actually reached the screen. An occluded
         // window skips the draw entirely, and counting those would report
         // thousands of frames a second for drawing nothing.
-        if renderer.render(camera, self.instances.as_slice(), self.quads.as_slice()) {
+        let preview = self
+            .asset_preview
+            .as_ref()
+            .map(|preview| MeshPreview::new(&preview.gpu, preview_instance()));
+        if renderer.render(camera, self.instances.as_slice(), preview, self.quads.as_slice()) {
             self.frames += 1;
 
             // The capture is written inside `render`, and only on the path that
@@ -761,6 +878,59 @@ mod tests {
             grids: vec![],
             sources: vec![],
         }.into()
+    }
+
+    fn fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/fixtures/static-preview.glb")
+    }
+
+    #[test]
+    fn preview_replacement_is_atomic_across_import_and_upload_failure() {
+        let mut slot = Some(AssetPreview {
+            path: "old.glb".into(),
+            vertex_count: 3,
+            index_count: 3,
+            texture_width: 1,
+            texture_height: 1,
+            gpu: (),
+        });
+        let missing = std::env::temp_dir().join("arpg-preview-that-does-not-exist.glb");
+        assert!(replace_preview(&mut slot, missing, |_| Ok(())).is_err());
+        assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
+
+        assert!(replace_preview(&mut slot, fixture_path(), |_| Err("GPU refused it".into())).is_err());
+        assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
+
+        replace_preview(&mut slot, fixture_path(), |_| Ok(())).unwrap();
+        let current = slot.as_ref().unwrap();
+        assert_eq!((current.vertex_count, current.index_count), (12, 12));
+        assert_eq!((current.texture_width, current.texture_height), (4, 4));
+    }
+
+    #[test]
+    fn asset_preview_report_is_derived_from_the_committed_selection() {
+        let mut inactive = Report::default();
+        report_asset_preview::<()>(None, &mut inactive);
+        assert_eq!(
+            inactive.finish(),
+            r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0}"#
+        );
+
+        let preview = AssetPreview {
+            path: "assets/fixture.glb".into(),
+            vertex_count: 12,
+            index_count: 18,
+            texture_width: 2,
+            texture_height: 4,
+            gpu: (),
+        };
+        let mut active = Report::default();
+        report_asset_preview(Some(&preview), &mut active);
+        assert_eq!(
+            active.finish(),
+            r#"{"active":true,"path":"assets/fixture.glb","vertices":12,"indices":18,"texture_width":2,"texture_height":4}"#
+        );
     }
 
     fn tap(app: &mut App, key: KeyCode) {

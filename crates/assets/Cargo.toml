@@ -1,0 +1,19 @@
+[package]
+name = "arpg-assets"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+# The interchange boundary. It owns validated CPU data, never GPU resources,
+# simulation state, scene schemas, or window/file-selection policy.
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+gltf.workspace = true
+png.workspace = true
+
+[build-dependencies]
+toml_edit.workspace = true
+
+[lints]
+workspace = true

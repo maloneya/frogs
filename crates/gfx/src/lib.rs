@@ -1,9 +1,10 @@
 //! Turning [`Instance`]s into pixels.
 //!
-//! This crate's entire vocabulary is position, scale and colour, and it has no
-//! dependency on `arpg-sim`. Naming a simulation type here is a compile error
-//! (E0432, unresolved import) because the crate is not in this one's dependency
-//! closure; adding it to `Cargo.toml` to fix that is caught by `build.rs`.
+//! Its simulation-facing vocabulary is position, scale and colour, and it has
+//! no dependency on `arpg-sim`. The separate asset boundary supplies anonymous
+//! validated geometry. Naming a simulation type here is a compile error (E0432,
+//! unresolved import) because the crate is not in this one's dependency closure;
+//! adding it to `Cargo.toml` to fix that is caught by `build.rs`.
 //!
 //! Note it is *not* a Cargo cycle — `arpg-gfx` and `arpg-sim` are siblings, both
 //! depending only on `arpg-core`, so Cargo would accept that edge without
@@ -12,11 +13,13 @@
 mod camera;
 mod capture;
 mod cube;
+mod mesh;
 mod overlay;
 mod quad;
 mod text;
 
 pub use camera::OrthoCamera;
+pub use mesh::{MeshAsset, MeshPreview, MeshUploadError};
 pub use quad::{Quad, QuadBuffer, QuadSink, MAX_QUADS};
 pub use text::Glyphs;
 
@@ -30,6 +33,7 @@ use winit::window::Window;
 use camera::CameraBinding;
 use capture::Readback;
 use cube::CubePipeline;
+use mesh::MeshPipeline;
 use overlay::QuadPipeline;
 
 /// Depth32Float is the safe universal choice. Under an orthographic camera
@@ -62,6 +66,7 @@ pub struct Renderer {
     depth: wgpu::TextureView,
     camera: CameraBinding,
     cubes: CubePipeline,
+    asset_preview: MeshPipeline,
     /// The rasterised font, and the pipeline that draws what it lays out.
     ///
     /// Both live here rather than in `app` because a glyph's place in the atlas
@@ -187,6 +192,7 @@ impl Renderer {
         let depth = create_depth(&device, config.width, config.height);
         let camera = CameraBinding::new(&device);
         let cubes = CubePipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
+        let asset_preview = MeshPipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
         let font = text::Font::new(&device, &queue);
         let overlay = QuadPipeline::new(&device, &font, config.format, DEPTH_FORMAT);
 
@@ -200,6 +206,7 @@ impl Renderer {
             depth,
             camera,
             cubes,
+            asset_preview,
             font,
             overlay,
             uncapped,
@@ -239,6 +246,15 @@ impl Renderer {
     /// file minutes later, after whoever asked had been told it failed.
     pub fn cancel_capture(&mut self) {
         self.pending_capture = None;
+    }
+
+    /// Uploads one already validated CPU mesh without performing file I/O.
+    pub fn upload_mesh(
+        &self,
+        mesh: &arpg_assets::StaticMesh,
+    ) -> Result<MeshAsset, MeshUploadError> {
+        self.asset_preview
+            .upload_mesh(&self.device, &self.queue, mesh)
     }
 
     /// Where the letters are, for laying text out into a [`QuadSink`].
@@ -292,6 +308,7 @@ impl Renderer {
         &mut self,
         camera: &OrthoCamera,
         instances: &[Instance],
+        preview: Option<MeshPreview<'_>>,
         overlay: &[Quad],
     ) -> bool {
         // Acquiring a swapchain image can fail in several recoverable ways —
@@ -345,6 +362,9 @@ impl Renderer {
 
         self.camera.upload(&self.queue, camera);
         let count = self.cubes.upload(&self.queue, instances);
+        if let Some(preview) = preview {
+            self.asset_preview.upload(&self.queue, preview.instance);
+        }
         let quads =
             self.overlay.upload(&self.queue, overlay, self.config.width, self.config.height);
 
@@ -392,6 +412,10 @@ impl Renderer {
             });
 
             self.cubes.draw(&mut pass, &self.camera.bind_group, count);
+            if let Some(preview) = preview {
+                self.asset_preview
+                    .draw(&mut pass, &self.camera, preview.mesh);
+            }
 
             // After the world and inside the same pass. The overlay neither
             // reads nor writes depth, so joining the pass costs nothing and
@@ -724,6 +748,185 @@ mod tests {
         if let Some(err) = pollster::block_on(scope.pop()) {
             panic!("wgpu rejected the frame: {err}");
         }
+    }
+
+    /// The asymmetric fixture must survive import, upload, projection, culling
+    /// and shading as the metre-scale +Z-facing shape that was authored.
+    /// Pipeline validation alone would accept an empty or reflected picture.
+    #[test]
+    fn the_static_preview_has_the_authored_silhouette() {
+        const N: u32 = 256;
+        let (device, queue) = headless_device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let camera_binding = CameraBinding::new(&device);
+        let pipeline =
+            MeshPipeline::new(&device, &camera_binding.layout, TEST_FORMAT, DEPTH_FORMAT);
+        let cpu = arpg_assets::import_glb(include_bytes!(
+            "../../../assets/fixtures/static-preview.glb"
+        ))
+        .expect("fixture crosses the import boundary");
+        let gpu = pipeline
+            .upload_mesh(&device, &queue, &cpu)
+            .expect("fixture uploads");
+
+        let color = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("asset preview silhouette"),
+            size: wgpu::Extent3d {
+                width: N,
+                height: N,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEST_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = create_depth(&device, N, N);
+        let mut camera = OrthoCamera::new(N, N);
+        camera.zoom_by(0.125); // Clamp to a two-metre half-height.
+        camera_binding.upload(&queue, &camera);
+        pipeline.upload(&queue, Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("asset preview silhouette"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("asset preview silhouette"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pipeline.draw(&mut pass, &camera_binding, &gpu);
+        }
+        let readback = Readback::new(&device, N, N);
+        readback.record(&mut encoder, &color);
+        queue.submit(Some(encoder.finish()));
+        let rgba = readback.to_rgba(&device).expect("read preview pixels");
+        if let Some(error) = pollster::block_on(scope.pop()) {
+            panic!("wgpu rejected the preview: {error}");
+        }
+        let (pixels, remainder) = rgba.as_chunks::<4>();
+        assert!(remainder.is_empty(), "RGBA readback must contain whole pixels");
+        let mut diagnostic = [(0_usize, 0_u64, 0_u64); 3];
+        for (index, pixel) in pixels.iter().enumerate() {
+            let class = if pixel[2].saturating_add(20) < pixel[0]
+                && pixel[2].saturating_add(20) < pixel[1]
+            {
+                Some(0) // upper-left muted yellow
+            } else if pixel[0].saturating_add(20) < pixel[1]
+                && pixel[0].saturating_add(20) < pixel[2]
+            {
+                Some(1) // upper-right cyan
+            } else if pixel[1].saturating_add(20) < pixel[0]
+                && pixel[1].saturating_add(20) < pixel[2]
+            {
+                Some(2) // lower-left magenta
+            } else {
+                None
+            };
+            if let Some(class) = class {
+                diagnostic[class].0 += 1;
+                diagnostic[class].1 += (index as u32 % N) as u64;
+                diagnostic[class].2 += (index as u32 / N) as u64;
+            }
+        }
+        let yellow = pixels
+            .iter()
+            .filter(|pixel| pixel[2] < 10)
+            .max_by_key(|pixel| pixel[1])
+            .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+            .unwrap();
+        assert!(
+            diagnostic.iter().all(|class| class.0 > 500),
+            "all three authored texture regions must survive sampling: {diagnostic:?}"
+        );
+        let centre = |class: (usize, u64, u64)| {
+            (
+                class.1 as f32 / class.0 as f32,
+                class.2 as f32 / class.0 as f32,
+            )
+        };
+        let (yellow_centre, cyan_centre, magenta_centre) = (
+            centre(diagnostic[0]),
+            centre(diagnostic[1]),
+            centre(diagnostic[2]),
+        );
+        assert!(
+            cyan_centre.1 < yellow_centre.1
+                && magenta_centre.0 < cyan_centre.0
+                && magenta_centre.1 > yellow_centre.1,
+            "upper-left UV origin or texture orientation changed: {diagnostic:?}"
+        );
+        assert!(
+            (45..=75).contains(&yellow[0]) && (100..=135).contains(&yellow[1]),
+            "sRGB decoding and the quarter-red factor must happen in linear space: {yellow:?}"
+        );
+
+        let lit: Vec<(f32, f32)> = (0..N * N)
+            .filter_map(|pixel| {
+                let offset = (pixel * 4) as usize;
+                (rgba[offset..offset + 3].iter().copied().max().unwrap_or(0) > 32)
+                    .then_some(((pixel % N) as f32, (pixel / N) as f32))
+            })
+            .collect();
+        assert!(
+            lit.len() > 1_000,
+            "a metre-scale solid should cover substantial pixels"
+        );
+        let (min_x, max_x, min_y, max_y) = lit.iter().fold(
+            (
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+            ),
+            |(min_x, max_x, min_y, max_y), &(x, y)| {
+                (min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y))
+            },
+        );
+        let (width, height) = (max_x - min_x + 1.0, max_y - min_y + 1.0);
+        assert!(
+            (50.0..=100.0).contains(&width),
+            "one metre projected to width {width}"
+        );
+        assert!(
+            (50.0..=110.0).contains(&height),
+            "one metre projected to height {height}"
+        );
+
+        let count = lit.len() as f32;
+        let mean_x = lit.iter().map(|point| point.0).sum::<f32>() / count;
+        let mean_y = lit.iter().map(|point| point.1).sum::<f32>() / count;
+        let covariance = lit
+            .iter()
+            .map(|&(x, y)| (x - mean_x) * (y - mean_y))
+            .sum::<f32>()
+            / count;
+        assert!(
+            covariance < -20.0,
+            "+Z asymmetry should lean up-right, got {covariance}"
+        );
     }
 
     /// Renders one overlay frame offscreen and hands back its pixels.

@@ -17,6 +17,11 @@ that rule fires on every edit. The inventory below only matters when auditing.
 |---|---|---|
 | `gfx` cannot name a simulation type | 0 | separate crates — `use arpg_sim::…` is E0432 |
 | `gfx` cannot depend on `sim`; `sim` cannot depend on wgpu/winit | 1 | `crates/{gfx,sim,content,scenario}/build.rs`, run on every build |
+| Asset import cannot name simulation, gameplay, windows, or GPU resources | 1 | `crates/assets/build.rs` permits only `gltf`, `png`, `glam`, and `bytemuck` |
+| A preview GLB cannot allocate beyond its fixed byte, geometry, or decoded-texture budgets | 0/1 | private `StaticMesh` and `BaseColorTexture` fields; admission in `import_glb`; compile-time bounds on count constants; importer rejection tests |
+| Failed preview read, import, or GPU upload preserves the selected preview | 0/3 | assignment occurs only after `replace_preview` prepares a complete replacement; `preview_replacement_is_atomic_across_import_and_upload_failure` |
+| Imported node transforms are never re-applied at runtime | 0 | `StaticMesh` exposes read-only, already transformed vertices; glTF nodes do not cross the import boundary |
+| glTF base colour is sampled in linear space without a V flip | 0/3 | imported UVs retain the upper-left origin; `MeshAsset` uploads `Rgba8UnormSrgb`; the headless GPU test asserts diagnostic-region ordering and factor-sensitive pixel ranges |
 | Enemy count stays within the instance budget | 0 | `enemies` is private; `set_enemy_count` clamps, `place` refuses at `MAX_ENEMIES` |
 | Zoom stays in a sane range | 0 | private field; `OrthoCamera::zoom_by` clamps |
 | Aspect ratio survives a minimised window | 0 | `aspect_of` guards inside the camera |

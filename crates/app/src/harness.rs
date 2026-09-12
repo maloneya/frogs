@@ -41,6 +41,10 @@ pub(crate) struct Request {
 }
 
 pub(crate) enum Command {
+    /// Atomically load and select one app-global static preview.
+    ShowAsset(PathBuf),
+    /// Remove the app-global preview selection.
+    ClearAsset,
     /// Reconstruct the complete playtest from a scene file.
     StartScene(PathBuf),
     /// Reuse the selected content snapshot, even if its file has since changed.
@@ -130,6 +134,11 @@ const USAGE: &str = "expected: source <x> <z> [seek] [every <n>] [ring <r>] [nea
      or source remove|enable|disable <id>";
 
 fn parse(line: &str) -> Result<Command, String> {
+    if let Some(rest) = line.trim().strip_prefix("asset")
+        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        return parse_asset(rest.trim());
+    }
     if let Some(rest) = line.trim().strip_prefix("scene")
         && (rest.is_empty() || rest.starts_with(char::is_whitespace))
     {
@@ -270,6 +279,17 @@ fn parse(line: &str) -> Result<Command, String> {
     })
 }
 
+fn parse_asset(text: &str) -> Result<Command, String> {
+    let (verb, value) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    let value = value.trim();
+    let usage = "expected: asset show <path>, asset clear";
+    match (verb, value) {
+        ("show", path) if !path.is_empty() => Ok(Command::ShowAsset(path.into())),
+        ("clear", "") => Ok(Command::ClearAsset),
+        _ => Err(usage.into()),
+    }
+}
+
 fn parse_scene(text: &str) -> Result<Command, String> {
     let (verb, value) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let value = value.trim();
@@ -353,6 +373,22 @@ fn serve(stream: UnixStream, tx: &Sender<Request>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asset_commands_are_explicit_and_preserve_paths_with_spaces() {
+        assert!(
+            matches!(parse("asset show assets/my mesh.glb"), Ok(Command::ShowAsset(path)) if path == std::path::Path::new("assets/my mesh.glb"))
+        );
+        assert!(matches!(parse("asset clear"), Ok(Command::ClearAsset)));
+        for bad in [
+            "asset",
+            "asset show",
+            "asset clear extra",
+            "asset hide file.glb",
+        ] {
+            assert!(parse(bad).is_err(), "{bad} should be rejected");
+        }
+    }
 
     #[test]
     fn scene_commands_are_explicit_and_preserve_paths_with_spaces() {
