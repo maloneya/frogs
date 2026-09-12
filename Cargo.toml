@@ -27,7 +27,7 @@ env_logger = "0.11"
 # renderer and its own atlas, leaving the overlay pipeline still to write.
 fontdue = "0.9"
 glam = "0.33"
-gltf = { version = "1.4.1", default-features = false, features = ["utils"] }
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
 log = "0.4"
 png = "0.18.1"
 pollster = "1.0.1"

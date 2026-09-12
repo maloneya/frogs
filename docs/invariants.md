@@ -18,10 +18,15 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | `gfx` cannot name a simulation type | 0 | separate crates — `use arpg_sim::…` is E0432 |
 | `gfx` cannot depend on `sim`; `sim` cannot depend on wgpu/winit | 1 | `crates/{gfx,sim,content,scenario}/build.rs`, run on every build |
 | Asset import cannot name simulation, gameplay, windows, or GPU resources | 1 | `crates/assets/build.rs` permits only `gltf`, `png`, `glam`, and `bytemuck` |
-| A preview GLB cannot allocate beyond its fixed byte, geometry, or decoded-texture budgets | 0/1 | private `StaticMesh` and `BaseColorTexture` fields; admission in `import_glb`; compile-time bounds on count constants; importer rejection tests |
+| A preview GLB cannot allocate beyond its fixed byte, geometry, decoded-texture, or mip-chain budgets | 0/1 | private `StaticMesh` and `BaseColorTexture` fields; admission in `import_glb`; compile-time bounds on count constants; importer rejection tests |
+| Pulled-out base-colour sampling cannot silently regress to gamma-space averaging or a single level | 3 | `mip_generation_averages_base_colour_in_linear_space`; the headless mesh render uploads and samples the complete validated chain |
 | Failed preview read, import, or GPU upload preserves the selected preview | 0/3 | assignment occurs only after `replace_preview` prepares a complete replacement; `preview_replacement_is_atomic_across_import_and_upload_failure` |
 | Imported node transforms are never re-applied at runtime | 0 | `StaticMesh` exposes read-only, already transformed vertices; glTF nodes do not cross the import boundary |
 | glTF base colour is sampled in linear space without a V flip | 0/3 | imported UVs retain the upper-left origin; `MeshAsset` uploads `Rgba8UnormSrgb`; the headless GPU test asserts diagnostic-region ordering and factor-sensitive pixel ranges |
+| A character cannot exceed the retained hierarchy or joint-palette budgets | 0/1 | private `CharacterAsset` fields; `MAX_CHARACTER_NODES` and `MAX_JOINTS` admission checks; joint indices are validated before vertices cross the boundary |
+| A character skin cannot disagree with its hierarchy or authored bind pose | 0/3 | import admits one named node tree and one rooted skin, requires invertible inverse binds and an identity mesh node, then verifies every weighted bind-pose position; mutation tests reject malformed variants |
+| Rust character vertices and joint uniforms cannot silently disagree with WGSL | 2/3 | the headless bind-pose pixel test creates and draws the shipping pipeline under a validation scope and rejects a collapsed silhouette |
+| Failed character read, import, or GPU upload preserves the selected character | 0/3 | assignment occurs only after `replace_character` prepares the complete replacement; app tests exercise every failure boundary and derive `state.character_preview` from the committed asset |
 | Enemy count stays within the instance budget | 0 | `enemies` is private; `set_enemy_count` clamps, `place` refuses at `MAX_ENEMIES` |
 | Zoom stays in a sane range | 0 | private field; `OrthoCamera::zoom_by` clamps |
 | Aspect ratio survives a minimised window | 0 | `aspect_of` guards inside the camera |

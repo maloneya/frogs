@@ -12,13 +12,16 @@
 
 mod camera;
 mod capture;
+mod character;
 mod cube;
+mod material;
 mod mesh;
 mod overlay;
 mod quad;
 mod text;
 
 pub use camera::OrthoCamera;
+pub use character::{CharacterMesh, CharacterPreview};
 pub use mesh::{MeshAsset, MeshPreview, MeshUploadError};
 pub use quad::{Quad, QuadBuffer, QuadSink, MAX_QUADS};
 pub use text::Glyphs;
@@ -32,7 +35,9 @@ use winit::window::Window;
 
 use camera::CameraBinding;
 use capture::Readback;
+use character::CharacterPipeline;
 use cube::CubePipeline;
+use material::MaterialLayout;
 use mesh::MeshPipeline;
 use overlay::QuadPipeline;
 
@@ -67,6 +72,7 @@ pub struct Renderer {
     camera: CameraBinding,
     cubes: CubePipeline,
     asset_preview: MeshPipeline,
+    character_preview: CharacterPipeline,
     /// The rasterised font, and the pipeline that draws what it lays out.
     ///
     /// Both live here rather than in `app` because a glyph's place in the atlas
@@ -192,7 +198,21 @@ impl Renderer {
         let depth = create_depth(&device, config.width, config.height);
         let camera = CameraBinding::new(&device);
         let cubes = CubePipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
-        let asset_preview = MeshPipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
+        let material_layout = MaterialLayout::new(&device);
+        let asset_preview = MeshPipeline::new(
+            &device,
+            &camera.layout,
+            material_layout.clone(),
+            config.format,
+            DEPTH_FORMAT,
+        );
+        let character_preview = CharacterPipeline::new(
+            &device,
+            &camera.layout,
+            material_layout,
+            config.format,
+            DEPTH_FORMAT,
+        );
         let font = text::Font::new(&device, &queue);
         let overlay = QuadPipeline::new(&device, &font, config.format, DEPTH_FORMAT);
 
@@ -207,6 +227,7 @@ impl Renderer {
             camera,
             cubes,
             asset_preview,
+            character_preview,
             font,
             overlay,
             uncapped,
@@ -255,6 +276,15 @@ impl Renderer {
     ) -> Result<MeshAsset, MeshUploadError> {
         self.asset_preview
             .upload_mesh(&self.device, &self.queue, mesh)
+    }
+
+    /// Uploads one validated hierarchical character without performing file I/O.
+    pub fn upload_character(
+        &self,
+        character: &arpg_assets::CharacterAsset,
+    ) -> Result<CharacterMesh, MeshUploadError> {
+        self.character_preview
+            .upload_character(&self.device, &self.queue, character)
     }
 
     /// Where the letters are, for laying text out into a [`QuadSink`].
@@ -309,6 +339,7 @@ impl Renderer {
         camera: &OrthoCamera,
         instances: &[Instance],
         preview: Option<MeshPreview<'_>>,
+        character: Option<CharacterPreview<'_>>,
         overlay: &[Quad],
     ) -> bool {
         // Acquiring a swapchain image can fail in several recoverable ways —
@@ -365,6 +396,9 @@ impl Renderer {
         if let Some(preview) = preview {
             self.asset_preview.upload(&self.queue, preview.instance);
         }
+        if let Some(character) = character {
+            self.character_preview.upload(&self.queue, character);
+        }
         let quads =
             self.overlay.upload(&self.queue, overlay, self.config.width, self.config.height);
 
@@ -415,6 +449,10 @@ impl Renderer {
             if let Some(preview) = preview {
                 self.asset_preview
                     .draw(&mut pass, &self.camera, preview.mesh);
+            }
+            if let Some(character) = character {
+                self.character_preview
+                    .draw(&mut pass, &self.camera, character.mesh);
             }
 
             // After the world and inside the same pass. The overlay neither
@@ -759,8 +797,13 @@ mod tests {
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let camera_binding = CameraBinding::new(&device);
-        let pipeline =
-            MeshPipeline::new(&device, &camera_binding.layout, TEST_FORMAT, DEPTH_FORMAT);
+        let pipeline = MeshPipeline::new(
+            &device,
+            &camera_binding.layout,
+            MaterialLayout::new(&device),
+            TEST_FORMAT,
+            DEPTH_FORMAT,
+        );
         let cpu = arpg_assets::import_glb(include_bytes!(
             "../../../assets/fixtures/static-preview.glb"
         ))
@@ -926,6 +969,120 @@ mod tests {
         assert!(
             covariance < -20.0,
             "+Z asymmetry should lean up-right, got {covariance}"
+        );
+    }
+
+    /// The bind pose crosses every new seam in one real draw: Blender's joint
+    /// indices and weights, the CPU palette, the uniform upload and WGSL skinning.
+    /// A missing palette upload collapses these vertices to the origin, while a
+    /// layout disagreement is reported by the validation scope.
+    #[test]
+    fn the_character_preview_draws_its_bind_pose() {
+        const N: u32 = 256;
+        let (device, queue) = headless_device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let camera_binding = CameraBinding::new(&device);
+        let pipeline = CharacterPipeline::new(
+            &device,
+            &camera_binding.layout,
+            MaterialLayout::new(&device),
+            TEST_FORMAT,
+            DEPTH_FORMAT,
+        );
+        let cpu = arpg_assets::import_character_glb(include_bytes!(
+            "../../../assets/fixtures/blender-bind-pose.glb"
+        ))
+        .expect("fixture crosses the character import boundary");
+        let gpu = pipeline
+            .upload_character(&device, &queue, &cpu)
+            .expect("character fixture uploads");
+
+        let color = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("character bind pose"),
+            size: wgpu::Extent3d {
+                width: N,
+                height: N,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEST_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = create_depth(&device, N, N);
+        let mut camera = OrthoCamera::new(N, N);
+        camera.zoom_by(0.125);
+        camera_binding.upload(&queue, &camera);
+        let preview = CharacterPreview::new(
+            &gpu,
+            &cpu,
+            Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE),
+        );
+        pipeline.upload(&queue, preview);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("character bind pose"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("character bind pose"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pipeline.draw(&mut pass, &camera_binding, &gpu);
+        }
+        let readback = Readback::new(&device, N, N);
+        readback.record(&mut encoder, &color);
+        queue.submit(Some(encoder.finish()));
+        let rgba = readback.to_rgba(&device).expect("read character pixels");
+        if let Some(error) = pollster::block_on(scope.pop()) {
+            panic!("wgpu rejected the character preview: {error}");
+        }
+
+        let lit: Vec<(u32, u32)> = (0..N * N)
+            .filter_map(|pixel| {
+                let offset = (pixel * 4) as usize;
+                (rgba[offset..offset + 3].iter().copied().max().unwrap_or(0) > 32)
+                    .then_some((pixel % N, pixel / N))
+            })
+            .collect();
+        assert!(
+            lit.len() > 1_000,
+            "the skinned mannequin collapsed or disappeared: {} lit pixels",
+            lit.len()
+        );
+        let bounds = lit.iter().fold(
+            (N, 0_u32, N, 0_u32),
+            |(min_x, max_x, min_y, max_y), &(x, y)| {
+                (min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y))
+            },
+        );
+        let width = bounds.1 - bounds.0 + 1;
+        let height = bounds.3 - bounds.2 + 1;
+        assert!(
+            height > width && height >= 70 && width >= 45,
+            "expected the 1.9m upright bind pose, got {width}x{height} from {bounds:?}"
         );
     }
 

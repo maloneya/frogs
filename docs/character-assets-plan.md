@@ -1,7 +1,7 @@
 # Character assets and animation plan
 
-Status: the static textured preview is implemented. A normal authoring-tool
-export is the next gate; skeletal work has not begun.
+Status: static preview, Blender compatibility and the separate bind-pose
+character path are implemented. Sampling one named animation clip is next.
 
 ## Purpose
 
@@ -87,14 +87,18 @@ Each remaining stage is a separate running change.
    harness-driven preview. A reproducible asymmetric fixture proves transforms,
    winding, UV orientation and linear colour handling. Player and horde cubes
    remain unchanged.
-2. **Next — authoring compatibility.** Check in or reproducibly generate a
-   minimal asset through the documented Blender workflow and make it cross the
-   same boundary. Support or deliberately normalize the small set of ordinary
-   export defaults needed for that path. Include texture minification suitable
-   for the pulled-out camera. Do not begin skinning in this stage.
-3. **Bind-pose character.** Add the separate hierarchical character asset,
-   validate one skin, upload joint data and draw it in its bind pose.
-4. **One clip.** Sample one named clip from continuous simulation presentation
+2. **Complete — authoring compatibility.** A reproducible
+   [Blender workflow](character-assets-authoring.md) exports the checked-in
+   training dummy through Blender's normal GLB exporter. The boundary accepts
+   its harmless scalar PBR defaults without pretending to render them, requires
+   its trilinear sampler, and builds an sRGB-correct complete mip chain. No
+   skinning is part of this stage.
+3. **Complete — bind-pose character.** A distinct `CharacterAsset` retains one
+   named node hierarchy, one rooted skin and validated inverse bind transforms.
+   The importer proves that the joint palette reproduces the authored bind pose;
+   `gfx` uploads that palette and draws the Blender-authored mannequin through a
+   dedicated skinning pipeline. Harness selection is atomic and observable.
+4. **Next — one clip.** Sample one named clip from continuous simulation presentation
    time (`tick + alpha`) and draw the resulting pose. Start with linear and step
    interpolation; reject unsupported channel forms explicitly.
 5. **Player presentation.** Add a typed, read-only extraction carrying stable

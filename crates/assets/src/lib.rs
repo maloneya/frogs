@@ -6,6 +6,14 @@
 
 use glam::{Mat3, Mat4, Vec2, Vec3};
 
+mod character;
+
+pub use character::import_character_glb;
+pub use character::{
+    CharacterAsset, CharacterNode, CharacterVertex, JointMatrix, SkinJoint, MAX_CHARACTER_NODES,
+    MAX_JOINTS,
+};
+
 /// Largest binary glTF accepted by the first asset path: eight MiB.
 ///
 /// Public so the app can reject an oversized file from metadata before reading
@@ -29,6 +37,9 @@ pub const MAX_TEXTURE_PIXELS: usize =
 
 /// Maximum decoded allocation for tightly packed RGBA8 texels.
 pub const MAX_TEXTURE_RGBA_BYTES: usize = MAX_TEXTURE_PIXELS * 4;
+
+/// Maximum allocation for the base image and every generated mip level.
+pub const MAX_TEXTURE_MIP_RGBA_BYTES: usize = (MAX_TEXTURE_RGBA_BYTES * 4).div_ceil(3);
 
 const _: () = assert!(MAX_VERTICES <= u32::MAX as usize);
 const _: () = assert!(MAX_INDICES <= u32::MAX as usize);
@@ -69,7 +80,7 @@ impl Vertex {
 pub struct BaseColorTexture {
     width: u32,
     height: u32,
-    rgba8: Vec<u8>,
+    rgba8_mip_chain: Vec<u8>,
 }
 
 impl BaseColorTexture {
@@ -88,7 +99,20 @@ impl BaseColorTexture {
     /// Tightly packed rows from top to bottom, four bytes per texel.
     #[must_use]
     pub fn rgba8(&self) -> &[u8] {
-        &self.rgba8
+        let base_len = self.width as usize * self.height as usize * 4;
+        &self.rgba8_mip_chain[..base_len]
+    }
+
+    /// Number of levels in the complete chain, including the base image.
+    #[must_use]
+    pub fn mip_level_count(&self) -> u32 {
+        u32::BITS - self.width.max(self.height).leading_zeros()
+    }
+
+    /// Consecutive tightly packed RGBA8 levels, largest to smallest.
+    #[must_use]
+    pub fn rgba8_mip_chain(&self) -> &[u8] {
+        &self.rgba8_mip_chain
     }
 }
 
@@ -176,7 +200,11 @@ impl std::error::Error for ImportError {
     }
 }
 
-fn exactly(count: usize, expected: usize, reason: &'static str) -> Result<(), ImportError> {
+pub(crate) fn exactly(
+    count: usize,
+    expected: usize,
+    reason: &'static str,
+) -> Result<(), ImportError> {
     if count == expected {
         Ok(())
     } else {
@@ -184,7 +212,7 @@ fn exactly(count: usize, expected: usize, reason: &'static str) -> Result<(), Im
     }
 }
 
-fn node_transform(node: gltf::Node<'_>) -> Result<Mat4, ImportError> {
+pub(crate) fn node_transform(node: gltf::Node<'_>) -> Result<Mat4, ImportError> {
     let transform = Mat4::from_cols_array_2d(&node.transform().matrix());
     if !transform.is_finite() {
         return Err(ImportError::Invalid("node transform must be finite"));
@@ -197,6 +225,88 @@ fn node_transform(node: gltf::Node<'_>) -> Result<Mat4, ImportError> {
         return Err(ImportError::Unsupported("node matrix must be affine"));
     }
     Ok(transform)
+}
+
+fn srgb_to_linear(byte: u8) -> f32 {
+    let encoded = f32::from(byte) / 255.0;
+    if encoded <= 0.040_45 {
+        encoded / 12.92
+    } else {
+        ((encoded + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(linear: f32) -> u8 {
+    let encoded = if linear <= 0.003_130_8 {
+        linear * 12.92
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+fn mip_chain_len(mut width: u32, mut height: u32) -> Result<usize, ImportError> {
+    let mut total = 0_usize;
+    loop {
+        let level = width as usize * height as usize * 4;
+        total = total
+            .checked_add(level)
+            .ok_or(ImportError::Capacity("texture mip bytes"))?;
+        if width == 1 && height == 1 {
+            return Ok(total);
+        }
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+    }
+}
+
+fn append_mip_levels(
+    mut width: u32,
+    mut height: u32,
+    mut rgba8: Vec<u8>,
+) -> Result<Vec<u8>, ImportError> {
+    let total = mip_chain_len(width, height)?;
+    if total > MAX_TEXTURE_MIP_RGBA_BYTES {
+        return Err(ImportError::Capacity("texture mip bytes"));
+    }
+    rgba8
+        .try_reserve_exact(total - rgba8.len())
+        .map_err(|_| ImportError::Capacity("texture mip allocation"))?;
+    let mut source_offset = 0_usize;
+
+    while width > 1 || height > 1 {
+        let next_width = (width / 2).max(1);
+        let next_height = (height / 2).max(1);
+        for y in 0..next_height {
+            let source_y_start = y * height / next_height;
+            let source_y_end = (y + 1) * height / next_height;
+            for x in 0..next_width {
+                let source_x_start = x * width / next_width;
+                let source_x_end = (x + 1) * width / next_width;
+                let mut linear_rgb = [0.0_f32; 3];
+                let mut alpha = 0.0_f32;
+                let mut samples = 0_u32;
+                for source_y in source_y_start..source_y_end {
+                    for source_x in source_x_start..source_x_end {
+                        let pixel = source_offset + ((source_y * width + source_x) * 4) as usize;
+                        for channel in 0..3 {
+                            linear_rgb[channel] += srgb_to_linear(rgba8[pixel + channel]);
+                        }
+                        alpha += f32::from(rgba8[pixel + 3]);
+                        samples += 1;
+                    }
+                }
+                let divisor = samples as f32;
+                rgba8.extend(linear_rgb.map(|channel| linear_to_srgb(channel / divisor)));
+                rgba8.push((alpha / divisor).round() as u8);
+            }
+        }
+        source_offset += (width * height * 4) as usize;
+        width = next_width;
+        height = next_height;
+    }
+    debug_assert_eq!(rgba8.len(), total);
+    Ok(rgba8)
 }
 
 fn decode_base_color_png(encoded: &[u8]) -> Result<BaseColorTexture, ImportError> {
@@ -239,10 +349,125 @@ fn decode_base_color_png(encoded: &[u8]) -> Result<BaseColorTexture, ImportError
     {
         return Err(ImportError::Unsupported("base-colour PNG must be RGBA8"));
     }
+    let rgba8_mip_chain = append_mip_levels(info.width, info.height, rgba8)?;
     Ok(BaseColorTexture {
         width: info.width,
         height: info.height,
-        rgba8,
+        rgba8_mip_chain,
+    })
+}
+
+pub(crate) struct ImportedMaterial<'a> {
+    pub(crate) base_color_factor: [f32; 4],
+    pub(crate) base_color_texture: BaseColorTexture,
+    pub(crate) image_view: gltf::buffer::View<'a>,
+}
+
+pub(crate) fn import_material<'a>(
+    primitive: &gltf::Primitive<'a>,
+    blob: &[u8],
+) -> Result<ImportedMaterial<'a>, ImportError> {
+    let material = primitive.material();
+    if material.index() != Some(0) {
+        return Err(ImportError::Invalid(
+            "the primitive must reference the sole material",
+        ));
+    }
+    if material.alpha_mode() != gltf::material::AlphaMode::Opaque
+        || material.alpha_cutoff().is_some()
+        || material.double_sided()
+        || material.normal_texture().is_some()
+        || material.occlusion_texture().is_some()
+        || material.emissive_texture().is_some()
+        || material.emissive_factor() != [0.0; 3]
+    {
+        return Err(ImportError::Unsupported(
+            "only an opaque, single-sided base-colour material is accepted",
+        ));
+    }
+    let pbr = material.pbr_metallic_roughness();
+    let pbr_scalars = [pbr.metallic_factor(), pbr.roughness_factor()];
+    if pbr_scalars
+        .iter()
+        .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+    {
+        return Err(ImportError::Invalid(
+            "metallic and roughness factors must be finite and within zero to one",
+        ));
+    }
+    if pbr.metallic_roughness_texture().is_some() {
+        return Err(ImportError::Unsupported(
+            "metallic-roughness textures are deferred",
+        ));
+    }
+    let base_color_factor = pbr.base_color_factor();
+    if base_color_factor
+        .iter()
+        .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+    {
+        return Err(ImportError::Invalid(
+            "baseColorFactor components must be finite and within zero to one",
+        ));
+    }
+    let base_color = pbr
+        .base_color_texture()
+        .ok_or(ImportError::Invalid("baseColorTexture is required"))?;
+    if base_color.tex_coord() != 0 || base_color.texture().index() != 0 {
+        return Err(ImportError::Unsupported(
+            "baseColorTexture must use texture zero and TEXCOORD_0",
+        ));
+    }
+    let texture = base_color.texture();
+    let sampler = texture.sampler();
+    if sampler.index() != Some(0)
+        || sampler.mag_filter() != Some(gltf::texture::MagFilter::Linear)
+        || sampler.min_filter() != Some(gltf::texture::MinFilter::LinearMipmapLinear)
+        || sampler.wrap_s() != gltf::texture::WrappingMode::Repeat
+        || sampler.wrap_t() != gltf::texture::WrappingMode::Repeat
+    {
+        return Err(ImportError::Unsupported(
+            "the sole sampler must use linear magnification, trilinear minification, and repeat wrapping",
+        ));
+    }
+    let image = texture.source();
+    if image.index() != 0 {
+        return Err(ImportError::Invalid("texture references the wrong image"));
+    }
+    let image_view = match image.source() {
+        gltf::image::Source::View {
+            view,
+            mime_type: "image/png",
+        } => view,
+        gltf::image::Source::View { .. } => {
+            return Err(ImportError::Unsupported(
+                "base-colour image must declare image/png",
+            ));
+        }
+        gltf::image::Source::Uri { .. } => {
+            return Err(ImportError::Unsupported(
+                "external and data URI images are rejected",
+            ));
+        }
+    };
+    if image_view.buffer().index() != 0 {
+        return Err(ImportError::Invalid(
+            "base-colour image must use the embedded buffer",
+        ));
+    }
+    let image_end = image_view
+        .offset()
+        .checked_add(image_view.length())
+        .ok_or(ImportError::Invalid("base-colour image range overflows"))?;
+    let encoded_image = blob
+        .get(image_view.offset()..image_end)
+        .ok_or(ImportError::Invalid(
+            "base-colour image exceeds the embedded buffer",
+        ))?;
+    let base_color_texture = decode_base_color_png(encoded_image)?;
+    Ok(ImportedMaterial {
+        base_color_factor,
+        base_color_texture,
+        image_view,
     })
 }
 
@@ -398,82 +623,7 @@ pub fn import_glb(bytes: &[u8]) -> Result<StaticMesh, ImportError> {
         "only POSITION, NORMAL and TEXCOORD_0 vertex attributes are accepted",
     )?;
 
-    let material = primitive.material();
-    if material.index() != Some(0) {
-        return Err(ImportError::Invalid(
-            "the primitive must reference the sole material",
-        ));
-    }
-    if material.alpha_mode() != gltf::material::AlphaMode::Opaque
-        || material.alpha_cutoff().is_some()
-        || material.double_sided()
-        || material.normal_texture().is_some()
-        || material.occlusion_texture().is_some()
-        || material.emissive_texture().is_some()
-        || material.emissive_factor() != [0.0; 3]
-    {
-        return Err(ImportError::Unsupported(
-            "only an opaque, single-sided base-colour material is accepted",
-        ));
-    }
-    let pbr = material.pbr_metallic_roughness();
-    if pbr.metallic_factor() != 1.0
-        || pbr.roughness_factor() != 1.0
-        || pbr.metallic_roughness_texture().is_some()
-    {
-        return Err(ImportError::Unsupported(
-            "metallic-roughness material properties are deferred",
-        ));
-    }
-    let base_color_factor = pbr.base_color_factor();
-    if base_color_factor
-        .iter()
-        .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
-    {
-        return Err(ImportError::Invalid(
-            "baseColorFactor components must be finite and within zero to one",
-        ));
-    }
-    let base_color = pbr
-        .base_color_texture()
-        .ok_or(ImportError::Invalid("baseColorTexture is required"))?;
-    if base_color.tex_coord() != 0 || base_color.texture().index() != 0 {
-        return Err(ImportError::Unsupported(
-            "baseColorTexture must use texture zero and TEXCOORD_0",
-        ));
-    }
-    let texture = base_color.texture();
-    let sampler = texture.sampler();
-    if sampler.index() != Some(0)
-        || sampler.mag_filter() != Some(gltf::texture::MagFilter::Linear)
-        || sampler.min_filter() != Some(gltf::texture::MinFilter::Linear)
-        || sampler.wrap_s() != gltf::texture::WrappingMode::Repeat
-        || sampler.wrap_t() != gltf::texture::WrappingMode::Repeat
-    {
-        return Err(ImportError::Unsupported(
-            "the sole sampler must use linear filtering and repeat wrapping",
-        ));
-    }
-    let image = texture.source();
-    if image.index() != 0 {
-        return Err(ImportError::Invalid("texture references the wrong image"));
-    }
-    let image_view = match image.source() {
-        gltf::image::Source::View {
-            view,
-            mime_type: "image/png",
-        } => view,
-        gltf::image::Source::View { .. } => {
-            return Err(ImportError::Unsupported(
-                "base-colour image must declare image/png",
-            ));
-        }
-        gltf::image::Source::Uri { .. } => {
-            return Err(ImportError::Unsupported(
-                "external and data URI images are rejected",
-            ));
-        }
-    };
+    let material = import_material(&primitive, blob)?;
 
     let positions = primitive
         .get(&gltf::Semantic::Positions)
@@ -491,7 +641,7 @@ pub fn import_glb(bytes: &[u8]) -> Result<StaticMesh, ImportError> {
         .into_iter()
         .map(|view| view.ok_or(ImportError::Unsupported("sparse accessors are deferred")))
         .collect::<Result<Vec<_>, _>>()?;
-    used_views.push(image_view.clone());
+    used_views.push(material.image_view.clone());
     used_views.sort_by_key(gltf::buffer::View::index);
     used_views.dedup_by_key(|view| view.index());
     exactly(
@@ -534,22 +684,6 @@ pub fn import_glb(bytes: &[u8]) -> Result<StaticMesh, ImportError> {
             "indices must be unsigned 16- or 32-bit",
         ));
     }
-    if image_view.buffer().index() != 0 {
-        return Err(ImportError::Invalid(
-            "base-colour image must use the embedded buffer",
-        ));
-    }
-    let image_end = image_view
-        .offset()
-        .checked_add(image_view.length())
-        .ok_or(ImportError::Invalid("base-colour image range overflows"))?;
-    let encoded_image = blob
-        .get(image_view.offset()..image_end)
-        .ok_or(ImportError::Invalid(
-            "base-colour image exceeds the embedded buffer",
-        ))?;
-    let base_color_texture = decode_base_color_png(encoded_image)?;
-
     let linear = Mat3::from_mat4(transform);
     let determinant = linear.determinant();
     if !determinant.is_finite() || determinant.abs() <= 1.0e-8 {
@@ -620,8 +754,8 @@ pub fn import_glb(bytes: &[u8]) -> Result<StaticMesh, ImportError> {
     Ok(StaticMesh {
         vertices,
         indices: imported_indices,
-        base_color_factor,
-        base_color_texture,
+        base_color_factor: material.base_color_factor,
+        base_color_texture: material.base_color_texture,
     })
 }
 
@@ -630,6 +764,8 @@ mod tests {
     use super::*;
 
     const FIXTURE: &[u8] = include_bytes!("../../../assets/fixtures/static-preview.glb");
+    const BLENDER_FIXTURE: &[u8] =
+        include_bytes!("../../../assets/fixtures/blender-static-preview.glb");
 
     fn mutate_json(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
         let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
@@ -683,6 +819,49 @@ mod tests {
             .vertices()
             .iter()
             .all(|vertex| (vertex.normal().length() - 1.0).abs() < 1.0e-5));
+        assert_eq!(mesh.base_color_texture().mip_level_count(), 3);
+        assert_eq!(mesh.base_color_texture().rgba8_mip_chain().len(), 84);
+    }
+
+    #[test]
+    fn imports_the_blender_authored_fixture() {
+        let mesh = import_glb(BLENDER_FIXTURE).unwrap();
+        assert_eq!((mesh.vertex_count(), mesh.index_count()), (144, 216));
+        assert_eq!(mesh.base_color_factor(), [1.0; 4]);
+        let texture = mesh.base_color_texture();
+        assert_eq!((texture.width(), texture.height()), (16, 16));
+        assert_eq!(texture.mip_level_count(), 5);
+        assert_eq!(texture.rgba8_mip_chain().len(), 1_364);
+
+        let (min_y, max_y, max_z) = mesh.vertices().iter().fold(
+            (f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY),
+            |(min_y, max_y, max_z), vertex| {
+                let position = vertex.position();
+                (
+                    min_y.min(position.y),
+                    max_y.max(position.y),
+                    max_z.max(position.z),
+                )
+            },
+        );
+        assert!(
+            (0.03..=0.05).contains(&min_y),
+            "feet are not grounded: {min_y}"
+        );
+        assert!(
+            (1.88..=1.90).contains(&max_y),
+            "metre scale changed: {max_y}"
+        );
+        assert!(max_z > 0.2, "+Z-facing asymmetry was lost: {max_z}");
+    }
+
+    #[test]
+    fn mip_generation_averages_base_colour_in_linear_space() {
+        let black = [0, 0, 0, 255];
+        let white = [255, 255, 255, 255];
+        let base = [black, white, white, black].concat();
+        let chain = append_mip_levels(2, 2, base).unwrap();
+        assert_eq!(&chain[16..], &[188, 188, 188, 255]);
     }
 
     #[test]
@@ -720,6 +899,7 @@ mod tests {
             ),
             mutate_json(FIXTURE, r#""texCoord":0"#, r#""texCoord":1"#),
             mutate_json(FIXTURE, r#""magFilter":9729"#, r#""magFilter":9728"#),
+            mutate_json(FIXTURE, r#""minFilter":9987"#, r#""minFilter":9729"#),
             mutate_json(FIXTURE, r#""image/png""#, r#""image/jpeg""#),
             mutate_json(
                 FIXTURE,

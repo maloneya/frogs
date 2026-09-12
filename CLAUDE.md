@@ -122,9 +122,16 @@ echo 'hold d 500' | nc -U /tmp/arpg.sock
 Static asset preview: `asset show <path.glb>` atomically imports, uploads and
 selects one app-global preview beside the initial camera target; `asset clear`
 removes it. `state.asset_preview` reports the selected path and mesh counts.
-It also reports the decoded base-colour texture dimensions.
+It also reports the decoded base-colour texture dimensions. Blender authoring
+and the generated mip-chain contract are documented in
+[`docs/character-assets-authoring.md`](docs/character-assets-authoring.md).
 The preview has no body and no simulation effect. See
 [`docs/character-assets-plan.md`](docs/character-assets-plan.md).
+
+Bind-pose character preview: `character show <path.glb>` atomically imports,
+uploads and selects the separate one-skin path; `character clear` removes it.
+`state.character_preview` reports its path, mesh, texture, node and joint
+counts. It is presentation-only and may coexist with the static preview.
 
 Source enablement freezes cadence and ring progress while disabled; enabling
 resumes them. Read-only `SourceState` supplies reports and scenario assertions.
@@ -193,9 +200,11 @@ crates/
          Action, ActionMask, InputState, Actions            (input.rs)
          MoveDir, Intent                                    (intent.rs)
          Report, damp
-  assets/ validated CPU meshes, base colour and .glb boundary  gltf, png, glam, bytemuck
+  assets/ validated static/skinned CPU meshes, hierarchy, base colour and .glb boundary
+                                                                  gltf, png, glam, bytemuck
   gfx/   Renderer, camera, cube, capture, shader.wgsl      core, wgpu, winit, png,
-         imported mesh GPU resources, Quad/QuadBuffer/QuadSink,
+         imported static/skinned mesh GPU resources, joint palettes,
+         Quad/QuadBuffer/QuadSink,
          Glyphs, overlay.wgsl                                  assets, fontdue
   sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace   core, glam, serde
   game/  Game, GameScene, source_control, restart snapshot  core, sim, glam, serde
@@ -208,11 +217,12 @@ crates/
   does **not** name wgpu — that is what keeps `sim` free of the graphics stack,
   so simulation tests never need a GPU. The vertex layout for `Instance` lives
   in `gfx/cube.rs` for exactly this reason.
-- `assets` — the one-way interchange boundary. It accepts a bounded, explicit
-  subset of binary glTF and returns finite CPU vertices, indices and one decoded
-  base-colour texture with node transforms already applied. glTF handles never
-  escape it. It owns no paths, scene selection, simulation meaning, window
-  state or GPU resources.
+- `assets` — the one-way interchange boundary. It accepts bounded, explicit
+  subsets of binary glTF. Static meshes return transformed CPU geometry;
+  character assets retain their named node hierarchy, one skin, inverse binds
+  and GPU-ready bind palette. Both return one decoded base-colour texture. glTF
+  handles never escape it. It owns no paths, scene selection, simulation
+  meaning, window state or GPU resources.
 - `content` decodes `GameScene` and promotes legacy engine-only files. The
   game scene wraps sim's physical definition and adds game-owned relationships;
   no physical schema is copied. App and runner share this decoder.
@@ -236,8 +246,8 @@ crates/
   or step an engine world themselves.
 - `gfx` — `lib.rs` (surface, device, depth, frame orchestration), `camera.rs`
   (isometric ortho camera, the follow rig, and the uniform), `cube.rs` (unit-cube
-  pipeline and instance buffer), `mesh.rs` (imported mesh GPU resources), and
-  `shader.wgsl`. The camera rig lives
+  pipeline and instance buffer), `mesh.rs`/`character.rs` (imported static and
+  skinned GPU resources), shared `material.rs`, and their WGSL shaders. The camera rig lives
   here rather than in `app` or `sim` because where the camera points is a
   presentation decision; it is handed a bare `Vec3`, which is exactly as
   anonymous as an `Instance`.

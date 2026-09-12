@@ -45,6 +45,10 @@ pub(crate) enum Command {
     ShowAsset(PathBuf),
     /// Remove the app-global preview selection.
     ClearAsset,
+    /// Atomically load and select one app-global bind-pose character.
+    ShowCharacter(PathBuf),
+    /// Remove the app-global character selection.
+    ClearCharacter,
     /// Reconstruct the complete playtest from a scene file.
     StartScene(PathBuf),
     /// Reuse the selected content snapshot, even if its file has since changed.
@@ -138,6 +142,11 @@ fn parse(line: &str) -> Result<Command, String> {
         && (rest.is_empty() || rest.starts_with(char::is_whitespace))
     {
         return parse_asset(rest.trim());
+    }
+    if let Some(rest) = line.trim().strip_prefix("character")
+        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        return parse_character(rest.trim());
     }
     if let Some(rest) = line.trim().strip_prefix("scene")
         && (rest.is_empty() || rest.starts_with(char::is_whitespace))
@@ -290,6 +299,17 @@ fn parse_asset(text: &str) -> Result<Command, String> {
     }
 }
 
+fn parse_character(text: &str) -> Result<Command, String> {
+    let (verb, value) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    let value = value.trim();
+    let usage = "expected: character show <path>, character clear";
+    match (verb, value) {
+        ("show", path) if !path.is_empty() => Ok(Command::ShowCharacter(path.into())),
+        ("clear", "") => Ok(Command::ClearCharacter),
+        _ => Err(usage.into()),
+    }
+}
+
 fn parse_scene(text: &str) -> Result<Command, String> {
     let (verb, value) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let value = value.trim();
@@ -385,6 +405,22 @@ mod tests {
             "asset show",
             "asset clear extra",
             "asset hide file.glb",
+        ] {
+            assert!(parse(bad).is_err(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn character_commands_are_explicit_and_preserve_paths_with_spaces() {
+        assert!(
+            matches!(parse("character show assets/my rig.glb"), Ok(Command::ShowCharacter(path)) if path == std::path::Path::new("assets/my rig.glb"))
+        );
+        assert!(matches!(parse("character clear"), Ok(Command::ClearCharacter)));
+        for bad in [
+            "character",
+            "character show",
+            "character clear extra",
+            "character hide file.glb",
         ] {
             assert!(parse(bad).is_err(), "{bad} should be rejected");
         }

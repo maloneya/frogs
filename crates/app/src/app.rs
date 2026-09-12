@@ -9,7 +9,7 @@ use winit::window::{Window, WindowId};
 use glam::Vec2;
 
 use arpg_core::{Action, Instance, InstanceBuffer, Intent, MoveDir, Report};
-use arpg_gfx::{MeshAsset, MeshPreview, OrthoCamera, QuadBuffer, Renderer};
+use arpg_gfx::{CharacterMesh, CharacterPreview, MeshAsset, MeshPreview, OrthoCamera, QuadBuffer, Renderer};
 use arpg_game::{Game, GameScene as Scene};
 use arpg_sim::{Accumulator, Alpha};
 
@@ -28,6 +28,8 @@ pub(crate) struct App {
     renderer: Option<Renderer>,
     /// App-global presentation selected independently of playable scene state.
     asset_preview: Option<AssetPreview<MeshAsset>>,
+    /// Hierarchical character presentation, also independent of simulation.
+    character_preview: Option<LoadedCharacter<CharacterMesh>>,
     camera: Option<OrthoCamera>,
     game: Game,
     /// Game ids and ticks are scoped to this playtest generation.
@@ -110,6 +112,36 @@ fn report_asset_preview<T>(preview: Option<&AssetPreview<T>>, out: &mut Report) 
     }
 }
 
+/// CPU hierarchy and GPU resources committed together after a complete load.
+struct LoadedCharacter<T> {
+    path: std::path::PathBuf,
+    asset: arpg_assets::CharacterAsset,
+    gpu: T,
+}
+
+fn report_character_preview<T>(preview: Option<&LoadedCharacter<T>>, out: &mut Report) {
+    if let Some(preview) = preview {
+        let texture = preview.asset.base_color_texture();
+        out.bool("active", true);
+        out.text("path", &preview.path.to_string_lossy());
+        out.int("vertices", preview.asset.vertex_count() as u64);
+        out.int("indices", preview.asset.index_count() as u64);
+        out.int("texture_width", u64::from(texture.width()));
+        out.int("texture_height", u64::from(texture.height()));
+        out.int("nodes", preview.asset.nodes().len() as u64);
+        out.int("joints", preview.asset.joints().len() as u64);
+    } else {
+        out.bool("active", false);
+        out.text("path", "");
+        out.int("vertices", 0);
+        out.int("indices", 0);
+        out.int("texture_width", 0);
+        out.int("texture_height", 0);
+        out.int("nodes", 0);
+        out.int("joints", 0);
+    }
+}
+
 /// World-space placement belongs to app, never to the imported mesh or sim.
 fn preview_instance() -> Instance {
     Instance::new(
@@ -120,16 +152,19 @@ fn preview_instance() -> Instance {
     )
 }
 
-/// Prepares every fallible part before replacing `slot`.
-fn replace_preview<T>(
-    slot: &mut Option<AssetPreview<T>>,
-    path: std::path::PathBuf,
-    upload: impl FnOnce(&arpg_assets::StaticMesh) -> Result<T, String>,
-) -> Result<(), String> {
+fn character_instance() -> Instance {
+    Instance::new(
+        glam::Vec3::new(3.0, 0.0, -3.0),
+        glam::Vec3::ONE,
+        glam::Vec3::ONE,
+    )
+}
+
+fn read_glb(path: &std::path::Path) -> Result<Vec<u8>, String> {
     if path.extension() != Some(std::ffi::OsStr::new("glb")) {
         return Err(format!("{}: expected a .glb file", path.display()));
     }
-    let metadata = std::fs::metadata(&path)
+    let metadata = std::fs::metadata(path)
         .map_err(|error| format!("{}: read metadata: {error}", path.display()))?;
     let bytes = usize::try_from(metadata.len())
         .map_err(|_| format!("{}: file size cannot fit this process", path.display()))?;
@@ -139,8 +174,16 @@ fn replace_preview<T>(
             path.display()
         ));
     }
-    let source = std::fs::read(&path)
-        .map_err(|error| format!("{}: read GLB: {error}", path.display()))?;
+    std::fs::read(path).map_err(|error| format!("{}: read GLB: {error}", path.display()))
+}
+
+/// Prepares every fallible part before replacing `slot`.
+fn replace_preview<T>(
+    slot: &mut Option<AssetPreview<T>>,
+    path: std::path::PathBuf,
+    upload: impl FnOnce(&arpg_assets::StaticMesh) -> Result<T, String>,
+) -> Result<(), String> {
+    let source = read_glb(&path)?;
     let mesh = arpg_assets::import_glb(&source)
         .map_err(|error| format!("{}: {error}", path.display()))?;
     let vertex_count = mesh.vertex_count();
@@ -156,6 +199,19 @@ fn replace_preview<T>(
         texture_height,
         gpu,
     });
+    Ok(())
+}
+
+fn replace_character<T>(
+    slot: &mut Option<LoadedCharacter<T>>,
+    path: std::path::PathBuf,
+    upload: impl FnOnce(&arpg_assets::CharacterAsset) -> Result<T, String>,
+) -> Result<(), String> {
+    let source = read_glb(&path)?;
+    let asset = arpg_assets::import_character_glb(&source)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let gpu = upload(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
+    *slot = Some(LoadedCharacter { path, asset, gpu });
     Ok(())
 }
 
@@ -221,6 +277,27 @@ impl App {
             preview.index_count,
             preview.texture_width,
             preview.texture_height,
+            preview.path.display()
+        ))
+    }
+
+    fn show_character(&mut self, path: std::path::PathBuf) -> Result<String, String> {
+        let Self { renderer, character_preview, .. } = self;
+        let renderer = renderer.as_ref().ok_or_else(|| "no renderer yet".to_string())?;
+        replace_character(character_preview, path, |character| {
+            renderer.upload_character(character).map_err(|error| error.to_string())
+        })?;
+        let preview = character_preview
+            .as_ref()
+            .expect("successful replacement selects a character");
+        Ok(format!(
+            "character preview vertices={} indices={} nodes={} joints={} texture={}x{} path={}",
+            preview.asset.vertex_count(),
+            preview.asset.index_count(),
+            preview.asset.nodes().len(),
+            preview.asset.joints().len(),
+            preview.asset.base_color_texture().width(),
+            preview.asset.base_color_texture().height(),
             preview.path.display()
         ))
     }
@@ -366,6 +443,14 @@ impl App {
                 },
                 Command::ClearAsset => {
                     self.asset_preview = None;
+                    "ok".to_string()
+                }
+                Command::ShowCharacter(path) => match self.show_character(path) {
+                    Ok(answer) => answer,
+                    Err(error) => format!("error: {error}"),
+                },
+                Command::ClearCharacter => {
+                    self.character_preview = None;
                     "ok".to_string()
                 }
                 Command::StartScene(path) => match self.start_scene_file(&path) {
@@ -526,6 +611,9 @@ impl App {
         out.object("ui", |ui| self.input.menu().report(ui));
         out.object("asset_preview", |asset| {
             report_asset_preview(self.asset_preview.as_ref(), asset);
+        });
+        out.object("character_preview", |character| {
+            report_character_preview(self.character_preview.as_ref(), character);
         });
 
         out.object("render", |r| {
@@ -693,7 +781,16 @@ impl App {
             .asset_preview
             .as_ref()
             .map(|preview| MeshPreview::new(&preview.gpu, preview_instance()));
-        if renderer.render(camera, self.instances.as_slice(), preview, self.quads.as_slice()) {
+        let character = self.character_preview.as_ref().map(|preview| {
+            CharacterPreview::new(&preview.gpu, &preview.asset, character_instance())
+        });
+        if renderer.render(
+            camera,
+            self.instances.as_slice(),
+            preview,
+            character,
+            self.quads.as_slice(),
+        ) {
             self.frames += 1;
 
             // The capture is written inside `render`, and only on the path that
@@ -885,6 +982,11 @@ mod tests {
             .join("../../assets/fixtures/static-preview.glb")
     }
 
+    fn character_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/fixtures/blender-bind-pose.glb")
+    }
+
     #[test]
     fn preview_replacement_is_atomic_across_import_and_upload_failure() {
         let mut slot = Some(AssetPreview {
@@ -930,6 +1032,55 @@ mod tests {
         assert_eq!(
             active.finish(),
             r#"{"active":true,"path":"assets/fixture.glb","vertices":12,"indices":18,"texture_width":2,"texture_height":4}"#
+        );
+    }
+
+    #[test]
+    fn character_replacement_is_atomic_across_import_and_upload_failure() {
+        let source = std::fs::read(character_fixture_path()).unwrap();
+        let mut slot = Some(LoadedCharacter {
+            path: "old.glb".into(),
+            asset: arpg_assets::import_character_glb(&source).unwrap(),
+            gpu: (),
+        });
+        let missing = std::env::temp_dir().join("arpg-character-that-does-not-exist.glb");
+        assert!(replace_character(&mut slot, missing, |_| Ok(())).is_err());
+        assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
+
+        assert!(
+            replace_character(&mut slot, character_fixture_path(), |_| {
+                Err("GPU refused it".into())
+            })
+            .is_err()
+        );
+        assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
+
+        replace_character(&mut slot, character_fixture_path(), |_| Ok(())).unwrap();
+        let current = slot.as_ref().unwrap();
+        assert_eq!((current.asset.vertex_count(), current.asset.index_count()), (144, 216));
+        assert_eq!((current.asset.nodes().len(), current.asset.joints().len()), (5, 3));
+    }
+
+    #[test]
+    fn character_preview_report_is_derived_from_the_committed_selection() {
+        let mut inactive = Report::default();
+        report_character_preview::<()>(None, &mut inactive);
+        assert_eq!(
+            inactive.finish(),
+            r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0,"nodes":0,"joints":0}"#
+        );
+
+        let source = std::fs::read(character_fixture_path()).unwrap();
+        let preview = LoadedCharacter {
+            path: "assets/character.glb".into(),
+            asset: arpg_assets::import_character_glb(&source).unwrap(),
+            gpu: (),
+        };
+        let mut active = Report::default();
+        report_character_preview(Some(&preview), &mut active);
+        assert_eq!(
+            active.finish(),
+            r#"{"active":true,"path":"assets/character.glb","vertices":144,"indices":216,"texture_width":16,"texture_height":16,"nodes":5,"joints":3}"#
         );
     }
 
