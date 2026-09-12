@@ -19,6 +19,11 @@ Open `basic-player.blend` to inspect or refine the source. The model faces
 Blender `-Y`, uses metres and Z-up, and the mesh object's transform is applied.
 The GLB exporter converts that to the engine's Y-up, `+Z`-forward convention.
 
-The `Weapon` bone is intentionally unweighted. Its local +Y axis points from the
-right hand toward Blender `-Y`; the app uses that animated joint transform to
-place its engine-rendered weapon.
+The sword is part of the joined mesh and is rigidly weighted to `Weapon`. Its
+local +Y axis points from the right hand toward Blender `-Y`, so the ordinary
+character skinning draw keeps the grip and blade attached through every pose.
+
+Every attack action uses frame 1 for neutral entry, frame 13 for the completed
+wind-up, frame 19 for contact/follow-through, and frame 31 for recovery to
+neutral. Keep the major striking motion between frames 13 and 19: app maps that
+authored interval to the simulation's committed active ticks.

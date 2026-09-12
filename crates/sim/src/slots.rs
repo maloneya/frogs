@@ -48,7 +48,7 @@ use crate::hash::Fnv;
 /// [`FIRST_GENERATION`] guarantees is never live — but a `Default` impl invites
 /// `EntityId::default()` as a placeholder for "no target", and an `Option` says
 /// that both more clearly and more checkably.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct EntityId {
     /// Which slot. Recycled after a despawn.
     index: u32,

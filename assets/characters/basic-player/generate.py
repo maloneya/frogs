@@ -5,8 +5,8 @@ Run from the repository root:
     blender --background --python assets/characters/basic-player/generate.py
 
 The script deliberately mirrors the engine's small character interchange
-contract: one joined mesh, one material with a packed PNG, one armature, rigid
-vertex groups, a named Weapon joint, and the eight presentation actions.
+contract: one joined mesh (including the sword), one material with a packed
+PNG, one armature, rigid vertex groups, and eight presentation actions.
 """
 
 from pathlib import Path
@@ -140,6 +140,11 @@ def build_mesh(material):
         ("LeftEye", (-0.10, -0.222, 1.76), (0.055, 0.035, 0.055), "Head", "leather"),
         ("RightEye", (0.10, -0.222, 1.76), (0.055, 0.035, 0.055), "Head", "leather"),
         ("ChestMark", (0.0, -0.205, 1.25), (0.18, 0.055, 0.18), "Spine", "metal"),
+        # The sword is ordinary skinned geometry. Its Weapon weighting preserves
+        # the full authored joint transform without a separate rigid renderer.
+        ("SwordGrip", (0.46, -0.10, 0.76), (0.11, 0.22, 0.11), "Weapon", "leather"),
+        ("SwordGuard", (0.46, -0.22, 0.76), (0.34, 0.07, 0.10), "Weapon", "metal"),
+        ("SwordBlade", (0.46, -0.61, 0.76), (0.10, 0.74, 0.065), "Weapon", "metal"),
     ]
     parts = [add_box(name, centre, size, material, bone, tile) for name, centre, size, bone, tile in specs]
     bpy.ops.object.select_all(action="DESELECT")
@@ -222,9 +227,10 @@ def add_action(armature, name, keys):
 
 
 def build_actions(armature):
-    """Create the exact role names currently resolved by player presentation."""
+    """Create role clips with shared ready/wind-up/contact/recovery edges."""
     bpy.context.scene.render.fps = 30
     armature.animation_data_create()
+    ready, windup, contact, recovered = 1, 13, 19, 31
     actions = []
     actions.append(add_action(armature, "Idle", [
         (1, {}),
@@ -237,34 +243,40 @@ def build_actions(armature):
         (16, {"Spine": (7, 0, 0), "LeftArm": (-24, 0, 0), "RightArm": (24, 0, 0), "LeftLeg": (28, 0, 0), "RightLeg": (-28, 0, 0)}),
     ]))
     actions.append(add_action(armature, "AttackBasic", [
-        (1, {"Spine": (0, 0, -10), "RightArm": (0, 0, -25), "Weapon": (0, 0, -25)}),
-        (13, {"Spine": (0, 0, 12), "RightArm": (0, 0, 38), "Weapon": (0, 0, 60)}),
-        (31, {}),
+        (ready, {}),
+        (windup, {"Spine": (0, 0, -12), "RightArm": (0, 0, -38), "Weapon": (0, 0, -45)}),
+        (contact, {"Spine": (0, 0, 18), "RightArm": (0, 0, 55), "Weapon": (0, 0, 80)}),
+        (recovered, {}),
     ]))
     actions.append(add_action(armature, "AttackThrust", [
-        (1, {"Spine": (-5, 0, 0), "RightArm": (20, 0, -10), "Weapon": (25, 0, 0)}),
-        (13, {"Spine": (12, 0, 0), "RightArm": (-22, 0, 4), "Weapon": (-20, 0, 0)}),
-        (31, {}),
+        (ready, {}),
+        (windup, {"Spine": (-8, 0, 0), "RightArm": (28, 0, -10), "Weapon": (30, 0, 0)}),
+        (contact, {"Spine": (18, 0, 0), "RightArm": (-30, 0, 4), "Weapon": (-30, 0, 0)}),
+        (recovered, {}),
     ]))
     actions.append(add_action(armature, "AttackSweep", [
-        (1, {"Spine": (0, 0, -18), "RightArm": (0, 0, -45), "Weapon": (0, 0, -50)}),
-        (16, {"Spine": (0, 0, 18), "RightArm": (0, 0, 45), "Weapon": (0, 0, 55)}),
-        (31, {}),
+        (ready, {}),
+        (windup, {"Spine": (0, -25, 0), "RightArm": (0, 0, 70)}),
+        (contact, {"Spine": (0, 25, 0)}),
+        (recovered, {}),
     ]))
     actions.append(add_action(armature, "AttackHeavySweep", [
-        (1, {"Spine": (8, 0, -28), "RightArm": (0, 0, -60), "Weapon": (0, 0, -70)}),
-        (18, {"Spine": (-8, 0, 28), "RightArm": (0, 0, 60), "Weapon": (0, 0, 75)}),
-        (31, {}),
+        (ready, {}),
+        (windup, {"Spine": (0, -35, 0), "RightArm": (0, 0, 80)}),
+        (contact, {"Spine": (0, 35, 0)}),
+        (recovered, {}),
     ]))
     actions.append(add_action(armature, "AttackCleave", [
-        (1, {"Spine": (-12, 0, 0), "RightArm": (0, 0, -105), "Weapon": (-20, 0, -30)}),
-        (14, {"Spine": (15, 0, 0), "RightArm": (0, 0, 72), "Weapon": (30, 0, 35)}),
-        (31, {}),
+        (ready, {}),
+        (windup, {"Spine": (-18, 0, 0), "RightArm": (-105, 0, -18), "Weapon": (-35, 0, 0)}),
+        (contact, {"Spine": (22, 0, 0), "RightArm": (72, 0, 18), "Weapon": (42, 0, 0)}),
+        (recovered, {}),
     ]))
     actions.append(add_action(armature, "AttackCrowdBreaker", [
-        (1, {"Spine": (-16, 0, 0), "LeftArm": (0, 0, -25), "RightArm": (0, 0, 25), "Weapon": (-25, 0, 0)}),
-        (16, {"Spine": (22, 0, 0), "LeftArm": (0, 0, 35), "RightArm": (0, 0, -35), "Weapon": (35, 0, 0)}),
-        (31, {}),
+        (ready, {}),
+        (windup, {"Spine": (-18, 0, 0), "LeftArm": (0, 0, -32), "RightArm": (0, 0, 32), "Weapon": (-30, 0, 0)}),
+        (contact, {"Spine": (30, 0, 0), "LeftArm": (0, 0, 48), "RightArm": (0, 0, -48), "Weapon": (50, 0, 0)}),
+        (recovered, {}),
     ]))
     armature.animation_data.action = actions[0]
     bpy.context.scene.frame_set(1)

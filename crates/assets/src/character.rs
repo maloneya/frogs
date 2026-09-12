@@ -173,7 +173,6 @@ impl AnimationClip {
 #[derive(Debug)]
 pub struct CharacterPose {
     locals: Vec<NodePose>,
-    blend_locals: Vec<NodePose>,
     globals: Vec<Mat4>,
     joints: Vec<JointMatrix>,
 }
@@ -340,7 +339,6 @@ impl CharacterAsset {
     pub fn bind_pose(&self) -> CharacterPose {
         let mut pose = CharacterPose {
             locals: self.nodes.iter().map(|node| node.bind_pose).collect(),
-            blend_locals: self.nodes.iter().map(|node| node.bind_pose).collect(),
             globals: vec![Mat4::IDENTITY; self.nodes.len()],
             joints: vec![JointMatrix::new(Mat4::IDENTITY); self.joints.len()],
         };
@@ -362,40 +360,8 @@ impl CharacterAsset {
         true
     }
 
-    /// Blends two sampled local poses, then rebuilds one joint palette.
-    pub fn sample_blended(
-        &self,
-        from: (ClipId, f32),
-        to: (ClipId, f32),
-        amount: f32,
-        pose: &mut CharacterPose,
-    ) -> bool {
-        let Some(from_clip) = self.clips.get(usize::from(from.0.0)) else {
-            return false;
-        };
-        let Some(to_clip) = self.clips.get(usize::from(to.0.0)) else {
-            return false;
-        };
-        self.ensure_pose_shape(pose);
-        Self::sample_locals(&self.nodes, from_clip, from.1, &mut pose.locals);
-        Self::sample_locals(&self.nodes, to_clip, to.1, &mut pose.blend_locals);
-        let amount = if amount.is_finite() {
-            amount.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        for (from, to) in pose.locals.iter_mut().zip(&pose.blend_locals) {
-            from.translation = from.translation.lerp(to.translation, amount);
-            from.rotation = from.rotation.slerp(to.rotation, amount).normalize();
-            from.scale = from.scale.lerp(to.scale, amount);
-        }
-        self.rebuild_pose(pose);
-        true
-    }
-
     fn ensure_pose_shape(&self, pose: &mut CharacterPose) {
         if pose.locals.len() != self.nodes.len()
-            || pose.blend_locals.len() != self.nodes.len()
             || pose.globals.len() != self.nodes.len()
             || pose.joints.len() != self.joints.len()
         {
@@ -1237,6 +1203,39 @@ mod tests {
     const FIXTURE: &[u8] = include_bytes!("../../../assets/fixtures/blender-bind-pose.glb");
     const STATIC_FIXTURE: &[u8] = include_bytes!("../../../assets/fixtures/static-preview.glb");
 
+    #[test]
+    fn demo_sword_is_rigid_geometry_extending_from_its_grip() {
+        let character = import_character_glb(include_bytes!(
+            "../../../assets/characters/basic-player/basic-player.glb"
+        ))
+        .unwrap();
+        let weapon = character.joint_named("Weapon").unwrap();
+        let bind = character.bind_pose();
+        let to_joint = character.joint_transform(&bind, weapon).unwrap().inverse();
+        let mut count = 0;
+        let mut near = f32::INFINITY;
+        let mut far = f32::NEG_INFINITY;
+        for vertex in character.vertices() {
+            let weight: f32 = vertex
+                .joints()
+                .into_iter()
+                .zip(vertex.weights())
+                .filter_map(|(joint, weight)| (joint == weapon.0).then_some(weight))
+                .sum();
+            if weight == 0.0 {
+                continue;
+            }
+            assert_eq!(weight, 1.0, "the sword must not deform between joints");
+            let local = to_joint.transform_point3(vertex.position());
+            near = near.min(local.y);
+            far = far.max(local.y);
+            count += 1;
+        }
+        assert!(count >= 24, "Weapon must carry geometry, not just a named bone");
+        assert!(near.abs() < 0.1, "the sword grip must meet its joint origin");
+        assert!(far - near > 0.8, "the authored sword must extend along local +Y");
+    }
+
     fn mutate_json(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
         let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
         let json = std::str::from_utf8(&bytes[20..20 + json_len]).unwrap();
@@ -1391,8 +1390,6 @@ mod tests {
                 .all(|matrix| matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-5))
         );
 
-        let run = character.clip_named("Run").unwrap();
-        assert!(character.sample_blended((idle, 0.5), (run, 0.25), 0.5, &mut pose));
         let weapon = character.joint_named("Weapon").unwrap();
         assert!(
             character

@@ -10,6 +10,7 @@ mod app;
 mod harness;
 mod hud;
 mod input;
+mod presentation;
 mod time;
 mod ui;
 

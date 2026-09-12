@@ -78,11 +78,22 @@ may contain at most 16 clips.
 
 The player presentation contract resolves `Idle`, `Run`, `AttackBasic`,
 `AttackThrust`, `AttackSweep`, `AttackHeavySweep`, `AttackCleave` and
-`AttackCrowdBreaker` once at load. It also requires an unweighted `Weapon`
-joint. Author that bone from the grip toward the blade along its local +Y axis;
-the app derives the attached weapon's position and facing from its sampled
-transform. These names are gameplay-presentation roles owned by `app`, not
-special cases in the asset importer.
+`AttackCrowdBreaker` once at load. Attack actions reserve consecutive authored
+segments for wind-up, contact and recovery; app maps those segments to the
+committed simulation phase lengths. Recovery tuning therefore cannot move the
+visible contact interval. These names and segment boundaries are
+gameplay-presentation roles owned by `app`, not special cases in the importer.
+
+All six checked-in attacks use the same 30-frame authoring contract: frame 1 is
+neutral, frame 13 is fully wound, frame 19 completes contact, and frame 31 is
+neutral again. Runtime maps startup to normalized `0.0..0.4`, active to
+`0.4..0.6`, and recovery to `0.6..1.0`; tests sample the exported weapon motion
+at those edges so moving a key pose into the wrong phase fails visibly.
+
+The playable demo sword is part of the single character mesh and is rigidly
+weighted to its `Weapon` bone. This preserves the full sampled transform through
+the existing skinning path. The importer requires named nodes, but a generic
+character GLB is not required to contain a joint called `Weapon`.
 
 The ordinary-horde contract is a smaller view of the same interchange format:
 it requires only `Idle` and `Run`. `horde show <path.glb>` selects one shared
@@ -91,8 +102,7 @@ role. The phase comes from stable entity identity rather than authored or
 stored randomness. `horde clear` restores the fallback enemy cubes.
 
 The checked-in `assets/fixtures/blender-bind-pose.glb` exercises this contract
-with a four-bone, asymmetric training dummy, the eight player actions and the
-unweighted weapon attachment joint.
+with a four-bone, asymmetric training dummy and the eight player actions.
 Regenerate it from the repository root with:
 
 ```text

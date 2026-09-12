@@ -568,9 +568,14 @@ pub fn import_glb(bytes: &[u8]) -> Result<StaticMesh, ImportError> {
     let mut node = scene.nodes().next().expect("count checked");
     let mut transform = Mat4::IDENTITY;
     let mut visited = 0_usize;
+    let node_count = document.nodes().count();
     let primitive;
 
     loop {
+        // A single-child chain cannot visit more nodes than the document owns.
+        if visited == node_count {
+            return Err(ImportError::Invalid("preview node chain contains a cycle"));
+        }
         visited += 1;
         transform *= node_transform(node.clone())?;
         if node.camera().is_some() || node.skin().is_some() {
@@ -606,7 +611,7 @@ pub fn import_glb(bytes: &[u8]) -> Result<StaticMesh, ImportError> {
     }
 
     exactly(
-        document.nodes().count(),
+        node_count,
         visited,
         "unused nodes are rejected",
     )?;
@@ -948,6 +953,13 @@ mod tests {
         let too_many_vertices = mutate_json(FIXTURE, r#""count":12"#, r#""count":262146"#);
         let error = import_glb(&too_many_vertices).unwrap_err().to_string();
         assert!(error.contains("vertex count"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn static_node_cycle_is_rejected_instead_of_hanging_import() {
+        let cycle = mutate_json(FIXTURE, r#"{"mesh":0}"#, r#"{"children":[0]}"#);
+        let error = import_glb(&cycle).unwrap_err().to_string();
+        assert!(error.contains("cycle"), "unexpected error: {error}");
     }
 
     #[test]

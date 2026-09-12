@@ -1,7 +1,8 @@
 # Character assets and animation plan
 
-Status: complete. Static and animated imports, authored player presentation and
-pose-bucketed horde presentation are implemented and verified end to end.
+Status: foundation implemented. Static and animated imports, direct authored
+player presentation and pose-bucketed horde presentation are running end to
+end; richer transitions and animation tooling remain deliberately deferred.
 
 ## Purpose
 
@@ -61,8 +62,8 @@ The first complete character path needs only:
   vertex;
 - named transform clips with basic interpolation, looping and one-shot
   playback;
-- a short locomotion/action cross-fade; and
-- named-joint lookup for a weapon attachment.
+- direct role sampling with phase-bound one-shot playback; and
+- rigidly weighted weapon geometry in the character mesh.
 
 An existing glTF parsing crate is appropriate plumbing. Writing the interchange
 parser is not an engine layer this project is trying to learn.
@@ -105,11 +106,12 @@ Each stage was delivered as a separate running change.
    palette without per-frame allocation and reaches the existing skinning draw.
    The Blender fixture's `Idle` action exercises both supported interpolation
    forms through a non-bind-pose GPU pixel test.
-5. **Complete — player presentation.** A typed, read-only extraction carries
+5. **Revised foundation — player presentation.** A typed, read-only extraction carries
    stable identity, interpolated ground transform, last-tick displacement and
    authoritative attack state. App-owned role mapping drives idle, run and six
-   profile-specific attack clips through a 100 ms cross-fade. A named,
-   non-deforming joint places a weapon cube from the sampled pose. Character
+   profile-specific attack clips directly. Each clip's wind-up, contact and
+   recovery segments follow the committed simulation phase lengths. The demo
+   weapon is ordinary mesh geometry weighted to its animated bone. Character
    selection replaces only the fallback player cubes; no asset or presentation
    state enters gameplay.
 6. **Complete — horde presentation.** A read-only, allocation-free enemy view
@@ -117,15 +119,10 @@ Each stage was delivered as a separate running change.
    displacement. App maps that view to idle or run and one of four stable phase
    offsets per role. Gfx uploads at most eight shared palettes and issues one
    instanced draw per occupied bucket; no animation state enters simulation.
+   A small app-owned table retains each live stable identity's last meaningful
+   heading so stopping does not snap it to zero.
    The harness selects this path atomically and reports its instance and draw
    counts.
-
-   On Apple M4/Metal, a 1,024-enemy release run measured 512 FPS for fallback
-   cubes and 496 FPS for the animated horde uncapped (best of eight short
-   samples), with 60+ simulation ticks/s and no skips. At 16,384 enemies the
-   existing simulation workload dominated at roughly 225 ms/frame in both
-   presentation modes; the animated path still used four pose draws and added
-   no measurable frame-time cost there.
 
 ## Deliberately deferred
 

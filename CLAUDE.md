@@ -133,10 +133,10 @@ The preview has no body and no simulation effect. See
 Animated character preview: `character show <path.glb>` atomically imports,
 uploads and selects the separate one-skin path; `character clear` removes it.
 `state.character_preview` reports its path, mesh, texture, node and joint
-counts plus its current role, clip, sample time and cross-fade. A selected
+counts plus its current role, clip and sample time. A selected
 character replaces the player's fallback cubes, maps authoritative movement
-and attack state to the authored clip catalog, and carries a weapon on the
-sampled `Weapon` joint. It is presentation-only and may coexist with the static
+and each committed attack phase to the authored clip catalog. The demo weapon
+is geometry in that skinned mesh. It is presentation-only and may coexist with the static
 preview.
 
 Animated horde preview: `horde show <path.glb>` atomically selects one shared
@@ -329,6 +329,9 @@ crates/
   `time.rs` holds `Clock`, which now only *measures*: the fixed-timestep
   accumulator lives in `sim`, next to the `Dt` it mints, so the crate that can
   read a clock cannot turn what it reads into simulation time.
+  `presentation.rs` owns asset selection, role sampling and shared horde poses;
+  its playback and heading state is private. `App` drives load, sample, reset,
+  draw and report operations, while presentation tests live beside their owner.
 
 ### Controls
 
