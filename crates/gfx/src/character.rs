@@ -8,7 +8,7 @@ use arpg_core::{Instance, MAX_INSTANCES};
 use wgpu::util::DeviceExt as _;
 
 use crate::camera::CameraBinding;
-use crate::cube::instance_layout;
+use crate::instance::instance_layout;
 use crate::material::{Material, MaterialLayout};
 use crate::mesh::MeshUploadError;
 

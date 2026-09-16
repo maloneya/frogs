@@ -9,7 +9,7 @@
 
 use glam::{Vec2, Vec3};
 
-use arpg_core::{Instance, InstanceSink, Intent, MAX_INSTANCES, Report};
+use arpg_core::{Intent, Report};
 
 mod angle;
 mod attack;
@@ -45,7 +45,7 @@ use pass::spawn::SpawnQueue;
 /// What to make, and what behaviours it should be granted. See
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
 pub use pass::spawn::Template;
-pub use presentation::{EnemyPresentation, PlayerPresentation};
+pub use presentation::{EnemyPresentation, PlayerPresentation, PropPresentation};
 use scene::Scenes;
 pub use scene::{BodyGrid, Placed, Scene, SceneError, SceneId};
 pub use slots::EntityId;
@@ -86,84 +86,24 @@ fn on_ground(p: Vec2, height: f32) -> Vec3 {
     Vec3::new(p.x, height, p.y)
 }
 
-/// Ground plane size, in tiles.
+/// Maximum non-player physical population, shared by enemies and props.
 ///
-/// Sized so the world is comfortably larger than the view. A tracking camera is
-/// meaningless otherwise: if the whole arena fits on screen there is nothing
-/// for the camera to reveal, and following just slides the floor around inside
-/// a frame that already showed everything.
-///
-/// It is also why the camera does *not* clamp itself to the world bounds. The
-/// view covers ~57x55 world units of floor, a footprint of ~40 units either
-/// side of the focus, so an arena has to be several times that before a clamp
-/// leaves the camera any room to move at all. A bigger world is the fix a
-/// camera clamp only pretends to be.
-const GROUND_TILES: usize = 128;
-const TILE: f32 = 1.5;
-
-// Tuning constants are the one thing in this file with no type protecting them.
-// They are bare numbers, and the plausible wrong edit — a negative speed, a turn
-// rate of zero, a square footprint — produces silently wrong behaviour rather
-// than an error. A const assert is the cheapest guard there is and it fails at
-// compile time, so it belongs on every one of them.
-const _: () = assert!(GROUND_TILES > 0);
-const _: () = assert!(TILE > 0.0);
-
-/// The floor's share of the instance budget.
-const GROUND_INSTANCES: usize = GROUND_TILES * GROUND_TILES;
-const _: () = assert!(GROUND_INSTANCES < MAX_INSTANCES, "the floor alone must fit the buffer");
-
-/// The player's share of the instance budget: its body and facing marker,
-/// plus the hitbox of a swing while one is in the air.
-///
-/// **Derived from the pass that decides how many discs a hitbox has**, not
-/// written down here. The swing is drawn from the same buffer as everything
-/// else, so a reservation that had to be kept in step by hand is a reservation
-/// that goes stale the first time the maximum active duration changes — silently,
-/// because overrunning the buffer truncates rather than errors.
-const PLAYER_INSTANCES: usize = 2 + pass::attack::HITBOX_SAMPLES;
-
-/// How large the horde may grow. The ground and the player are drawn from the
-/// same instance buffer in the same draw call, so the enemy budget is whatever
-/// they leave behind.
-///
-/// It lives next to the field it bounds rather than in the caller, so `World`
-/// knows its own limit. A second writer of the horde that had to remember the
-/// subtraction would silently overrun the GPU buffer — a failure with no error
-/// message, since the upload just truncates.
-const MAX_ENEMIES: usize = MAX_INSTANCES - GROUND_INSTANCES - PLAYER_INSTANCES;
+/// Preserves the former admission ceiling of 183,494 bodies. This is now an
+/// explicit simulation bound, independent of renderer buffers and hitbox length.
+/// Presentation checks its GPU capacity against this bound at compile time.
+pub const MAX_BODIES: usize = 183_494;
+const _: () = assert!(MAX_BODIES > 0);
 
 /// How large the horde starts. Big enough to read as a crowd, small enough that
 /// the brute-force passes landing next stay comfortably inside a frame.
 const DEFAULT_ENEMIES: usize = 1024;
-const _: () = assert!(DEFAULT_ENEMIES >= 1 && DEFAULT_ENEMIES <= MAX_ENEMIES);
+const _: () = assert!(DEFAULT_ENEMIES >= 1 && DEFAULT_ENEMIES <= MAX_BODIES);
 
-/// One enemy, as drawn. Uniform on purpose: a horde of identically sized bodies
-/// is what lets the broadphase be a flat uniform grid rather than a hierarchy,
-/// since every structure that beats a grid does so by adapting to size variance
-/// there is none of here.
-const ENEMY_SCALE: Vec3 = Vec3::splat(0.5);
-const _: () = assert!(ENEMY_SCALE.x > 0.0 && ENEMY_SCALE.y > 0.0 && ENEMY_SCALE.z > 0.0);
+/// Legacy report height retained independently of the rendered asset dimensions.
+const ENEMY_HALF_HEIGHT: f32 = 0.25;
 
-/// Where an enemy's centre sits so the cube rests *on* the floor rather than
-/// half sunk into it. Derived rather than written down, so the two cannot
-/// disagree after someone resizes the body.
-const ENEMY_HALF_HEIGHT: f32 = ENEMY_SCALE.y * 0.5;
-
-/// Spacing of the spawn grid, in world units.
-///
-/// Deliberately *not* `TILE`. Matching the floor's spacing made the horde tile
-/// it exactly edge-to-edge, hiding the ground and — worse — making a change in
-/// N invisible, because the horde only grew off-screen.
-///
-/// It is also wider than the body, and that is about to start mattering: once
-/// overlapping bodies push each other apart, a horde that spawns already
-/// interpenetrated resolves all of it on the first frame and detonates. The
-/// gap is the difference between a crowd and an explosion, so it is a compile
-/// error to close it rather than a comment someone might read.
+/// Spawn grid spacing in metres; wider than a body's collision diameter.
 const ENEMY_SPACING: f32 = 0.7;
-const _: () =
-    assert!(ENEMY_SPACING > ENEMY_SCALE.x, "a horde that spawns overlapped blows itself apart");
 
 /// Collision radii, in world units. **Bodies are discs, not boxes**, and that
 /// is a decision the camera pays for rather than a shortcut.
@@ -181,63 +121,23 @@ const _: () =
 /// exactly in hardware, so bodies may interpenetrate and the image stays
 /// correct — which leaves the radius as a pure feel knob, answerable to how
 /// dense the crowd should be and to nothing else.
-const ENEMY_RADIUS: f32 = ENEMY_SCALE.x * 0.5;
+const ENEMY_RADIUS: f32 = 0.25;
 
-/// Between the player's half-width (0.225) and half-depth (0.4), since one
-/// circle has to stand in for a footprint that is deliberately not square.
+/// Player collision footprint, independent of the authored mesh.
 const PLAYER_RADIUS: f32 = 0.3;
 
 const _: () = assert!(ENEMY_RADIUS > 0.0 && PLAYER_RADIUS > 0.0);
 const _: () = assert!(
     ENEMY_SPACING > 2.0 * ENEMY_RADIUS,
-    "bodies must spawn clear of each other, not merely with their cubes apart"
+    "bodies must spawn clear of each other"
 );
 
-/// The swing, in linear space. It looks far too bright written down and is not:
-/// the surface is sRGB and the hardware encodes on write. A warm orange, chosen
-/// to sit clear of both the horde's muted red and the player's blue, because a
-/// hitbox the eye has to hunt for is a hitbox nobody can time against.
-const SWING_COLOR: Vec3 = Vec3::new(0.95, 0.35, 0.06);
+/// Half the arena width, in metres. Presentation scales its ground to this extent.
+pub const ARENA_HALF: f32 = 96.0;
+const _: () = assert!(ARENA_HALF.is_finite() && ARENA_HALF > PLAYER_RADIUS);
 
-/// Where the swing is drawn, and how thick.
-///
-/// At the player's centre height, so it reads as a swing at torso level rather
-/// than a decal on the floor. The simulation has no opinion about either: the
-/// hitbox is a disc on the ground plane, and this is the presentation deciding
-/// how to show one.
-const SWING_HEIGHT: f32 = PLAYER_HALF_HEIGHT;
-const SWING_THICKNESS: f32 = 0.16;
-const _: () = assert!(SWING_THICKNESS > 0.0);
-
-/// Half the ground plane's width, in world units.
-const ARENA_HALF: f32 = GROUND_TILES as f32 * TILE * 0.5;
-const _: () = assert!(ARENA_HALF > PLAYER_SCALE.x && ARENA_HALF > PLAYER_SCALE.z);
-
-/// Deliberately taller than an enemy (0.5), so the player stays readable from
-/// inside a crowd of them. Silhouette is the cheapest legibility tool there is.
-///
-/// Also deliberately *not* square in plan: deeper along its own +Z (the facing
-/// axis) than it is wide. A square footprint rotated about the vertical axis
-/// looks almost identical at every angle, so the character would turn correctly
-/// and appear not to — the facing would be real but invisible.
-const PLAYER_SCALE: Vec3 = Vec3::new(0.45, 1.2, 0.8);
-const _: () = assert!(PLAYER_SCALE.x > 0.0 && PLAYER_SCALE.y > 0.0 && PLAYER_SCALE.z > 0.0);
-const _: () =
-    assert!(PLAYER_SCALE.x != PLAYER_SCALE.z, "a square footprint makes facing invisible");
-
-/// Where the player's centre sits so the body rests on the floor. Derived from
-/// the scale for the same reason the enemy's is: two numbers that must agree
-/// should be one number.
-const PLAYER_HALF_HEIGHT: f32 = PLAYER_SCALE.y * 0.5;
-
-/// A raised nose breaks the body's front/back symmetry. Its centre sits at
-/// the body's top, so the bright upper half stays visible when facing away.
-const PLAYER_NOSE_SCALE: Vec3 = Vec3::new(0.26, 0.24, 0.4);
-const _: () =
-    assert!(PLAYER_NOSE_SCALE.x > 0.0 && PLAYER_NOSE_SCALE.y > 0.0 && PLAYER_NOSE_SCALE.z > 0.0);
-
-/// Embed a quarter of the nose in the front face; the rest projects ahead.
-const PLAYER_NOSE_FORWARD: f32 = PLAYER_SCALE.z * 0.5 + PLAYER_NOSE_SCALE.z * 0.25;
+/// Legacy player report height, preserved independently of asset dimensions.
+const PLAYER_HALF_HEIGHT: f32 = 0.6;
 
 /// Shared body storage. Row zero is the persistent player; the remaining
 /// rows are enemies and props. `despawn` preserves the player; `clear` removes
@@ -272,7 +172,7 @@ struct Bodies {
     pos: Vec<Vec2>,
     /// Where each body was at the end of the *previous* tick.
     ///
-    /// Read only by `extract`, written only by [`crate::pass::remember`]. It is
+    /// Read only by presentation snapshots, written only by [`crate::pass::remember`]. It is
     /// simulation-owned data that exists purely for presentation, which sounds
     /// like a contradiction and is not: the alternative is `app` snapshotting a
     /// thousand positions every tick to hand back later — the same copy, done
@@ -350,7 +250,7 @@ impl Bodies {
     /// `docs/traps.md` carries that symptom; maintaining the invariant in the
     /// storage is what retires it, rather than testing each caller for it.
     fn spawn(&mut self, at: Vec2, what: Template) -> Option<EntityId> {
-        if self.len() > MAX_ENEMIES || !what.valid_at(at) {
+        if self.len() > MAX_BODIES || !what.valid_at(at) {
             return None;
         }
         let Self {
@@ -447,7 +347,7 @@ struct Player {
 }
 
 /// What exists: the horde, the player, and the bookkeeping the two seams —
-/// [`World::extract`] and [`World::trace`] — hand out.
+/// [`World::player_presentation`] and [`World::trace`] — hand out.
 pub struct World {
     bodies: Bodies,
     player: Player,
@@ -560,7 +460,7 @@ fn remove_body(
 
 impl World {
     /// How many enemies the horde currently holds. Always within
-    /// `0..=MAX_ENEMIES`.
+    /// `0..=MAX_BODIES`.
     ///
     /// Derived from the storage rather than tracked beside it: a separate
     /// counter is a second copy of the same fact, and the two drift the first
@@ -575,7 +475,7 @@ impl World {
         self.bodies.len() - 1
     }
 
-    /// Rebuilds the horde to `n` bodies, clamped to [`MAX_ENEMIES`].
+    /// Rebuilds the horde to `n` bodies, clamped to [`MAX_BODIES`].
     ///
     /// **A debug dial, not the spawn door.** `[`, `]`, and `enemies <n>` come
     /// through here; anything that makes a body during play asks, and
@@ -612,7 +512,7 @@ impl World {
         } = self;
 
         let props = bodies.len() - 1 - bodies.health.len();
-        bodies.respawn(n.min(MAX_ENEMIES - props));
+        bodies.respawn(n.min(MAX_BODIES - props));
         scenes.retain_live_bodies(&bodies.slots);
 
         // Pending requests are decisions made *before* this reset, and granting
@@ -641,7 +541,7 @@ impl World {
     /// that swap is spelled out.
     ///
     /// Returns `None` for an invalid position/template or when all non-player
-    /// bodies together fill [`MAX_ENEMIES`]. That is a
+    /// bodies together fill [`MAX_BODIES`]. That is a
     /// refusal rather than a clamp because the budget exists to stop the
     /// instance buffer overrunning, and an overrun is silent — the upload just
     /// truncates, so bodies stop being drawn with no error anywhere. A caller
@@ -948,7 +848,7 @@ impl World {
 
     /// What the simulation has done recently, oldest first.
     ///
-    /// Read-only, like [`World::extract`]: perception must never be able to
+    /// Read-only, like [`World::player_presentation`]: perception must never be able to
     /// change what it observes.
     #[must_use]
     pub fn trace(&self) -> &Trace {
@@ -1267,14 +1167,20 @@ impl World {
             })
     }
 
+    /// Immutable prop facts, excluding the player and damageable enemies.
+    pub fn prop_presentations(&self, alpha: Alpha) -> impl Iterator<Item = PropPresentation> + '_ {
+        self.bodies.slots.ids()[1..].iter().copied().enumerate().filter_map(move |(offset, id)| {
+            if self.bodies.health.get(id).is_some() { return None; }
+            let row = offset + 1;
+            let position = self.bodies.prev_pos[row].lerp(self.bodies.pos[row], alpha.get());
+            Some(PropPresentation::new(id, on_ground(position, 0.0), self.bodies.interactions.get(id)))
+        })
+    }
+
     /// Where the player *appears* this frame, and which way it appears to
     /// point: both interpolated between the last two ticks.
     ///
-    /// **One place, because three things now hang off it** — the camera's
-    /// focus, the body, and the swing's hitbox. Two of those drifting apart by
-    /// a fraction of a frame is a sword that detaches from the hand, which is
-    /// the same class of defect the shared `Hitbox` exists to prevent and just
-    /// as invisible in a screenshot.
+    /// Shared by camera and character presentation so their interpolation agrees.
     ///
     /// Through `blend_angle` rather than a plain lerp, or a facing that crosses
     /// the `±PI` seam spins the long way round for one frame.
@@ -1355,147 +1261,7 @@ impl World {
             && self.bodies.prev_pos.iter().all(|p| p.is_finite())
     }
 
-    /// **The seam.** The world describes itself in the renderer's vocabulary;
-    /// `gfx` never sees a `World`.
-    ///
-    /// Takes the sink by value, so it is single-use and cannot outlive the
-    /// frame. Everything about the buffer — that it was reset, that it is
-    /// capacity-bounded, that pushing is the only thing anyone may do to it —
-    /// is settled by the type rather than by remembering.
-    ///
-    /// `alpha` blends between the last two ticks. **This method takes `&self`,
-    /// and that is the entire enforcement of "interpolation must never reach
-    /// sim state"** — there is no `&mut` here for a blended value to be written
-    /// back through, so the rule is layer 0 rather than a paragraph someone
-    /// reads at session start.
-    pub fn extract(&self, alpha: Alpha, mut out: InstanceSink<'_>) {
-        let player = self.player_presentation(alpha);
-        self.extract_without_player(alpha, &mut out);
-        player.extract_fallback(&mut out);
-    }
 
-    /// Extracts the world while leaving the player body to an asset renderer.
-    pub fn extract_without_player(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
-        self.extract_ground(out);
-        self.extract_bodies(alpha, true, out);
-        self.extract_swing(alpha, out);
-    }
-
-    /// Extracts ground, props and attack telegraph, leaving animated bodies to
-    /// presentation-owned character renderers.
-    pub fn extract_without_characters(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
-        self.extract_ground(out);
-        self.extract_bodies(alpha, false, out);
-        self.extract_swing(alpha, out);
-    }
-
-    /// Draws the swing's hitbox — **the same value [`pass::attack`] tests
-    /// against**, not a picture of one.
-    ///
-    /// That is the whole reason the hitbox is a stored array of discs rather
-    /// than a formula each caller evaluates. A swing that draws where it does
-    /// not hit compiles, validates, and looks entirely convincing; its only
-    /// symptom is that the game feels wrong, which is the one thing this
-    /// project exists to tune. Here the renderer cannot form its own opinion —
-    /// it places discs the simulation already decided.
-    ///
-    /// Each phase draws a different thing, because each phase *is* a different
-    /// thing:
-    ///
-    /// - **Startup** draws the whole path, dim and brightening. That is not
-    ///   decoration. Startup exists so a swing can be read and stepped out of,
-    ///   and ticks with nothing on screen are ticks nobody can react to; what
-    ///   makes them readable is seeing where the sword is going.
-    /// - **Active** draws the live disc and nothing else. The rest of the path
-    ///   is the future, and drawing the future in the same pass as the present
-    ///   is how a player learns to time against the wrong thing.
-    /// - **Recovery** draws nothing, because by then the hitbox genuinely is
-    ///   gone and its absence is the honest thing to show.
-    ///
-    /// The active case is also load-bearing rather than tasteful, and this was
-    /// found by looking at it: the swing that exists today has all four of its
-    /// discs on the same point, coincident instances z-fight, and
-    /// `CompareFunction::Less` awards the tie to whichever was drawn *first*.
-    /// A dim trail drawn alongside the live disc therefore wins the depth test
-    /// and hides it — a hitbox that renders at a quarter brightness with no
-    /// error anywhere, which is exactly the class of failure a swing drawn
-    /// from its own formula would produce and nothing would catch.
-    fn extract_swing(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
-        let Some(swing) = self.player.attack.in_flight() else {
-            return;
-        };
-        let discs = swing.discs();
-
-        let (drawn, intensity) = match swing.phase() {
-            pass::attack::Phase::Startup(progress) => (discs, 0.06 + 0.22 * progress),
-            pass::attack::Phase::Active(live) => (&discs[live..=live], 1.0),
-            pass::attack::Phase::Recovery => return,
-        };
-
-        let (origin, facing) = self.drawn_player(alpha);
-
-        for disc in drawn {
-            let (centre, radius) = disc.place(origin, facing);
-
-            out.push(Instance::new(
-                on_ground(centre, SWING_HEIGHT),
-                Vec3::new(radius * 2.0, SWING_THICKNESS, radius * 2.0),
-                SWING_COLOR * intensity,
-            ));
-        }
-    }
-
-    /// The floor is not a special case — it is just more cube instances, flat
-    /// and tinted. Same mesh, same pipeline, same draw call as the horde.
-    fn extract_ground(&self, out: &mut InstanceSink<'_>) {
-        let offset = (GROUND_TILES as f32 - 1.0) * TILE * 0.5;
-
-        for z in 0..GROUND_TILES {
-            for x in 0..GROUND_TILES {
-                let checker = (x + z) % 2 == 0;
-                let shade = if checker { 0.022 } else { 0.038 };
-                out.push(Instance::new(
-                    Vec3::new(x as f32 * TILE - offset, -0.05, z as f32 * TILE - offset),
-                    Vec3::new(TILE, 0.1, TILE),
-                    Vec3::new(shade, shade * 1.05, shade * 1.25),
-                ));
-            }
-        }
-    }
-
-    /// Draws the horde from its stored positions, blended between the last two
-    /// ticks. What is drawn is what the simulation believes.
-    fn extract_bodies(&self, alpha: Alpha, include_enemies: bool, out: &mut InstanceSink<'_>) {
-        let a = alpha.get();
-
-        for (i, (&pos, &prev)) in self.bodies.pos[1..]
-            .iter()
-            .zip(&self.bodies.prev_pos[1..])
-            .enumerate()
-        {
-            // Linear-space colour, since the surface is sRGB and the hardware
-            // encodes on write. These look darker here than they will on screen.
-            let t = (i % 7) as f32 / 7.0;
-            let id = self.bodies.slots.ids()[i + 1];
-            if !include_enemies && self.bodies.health.get(id).is_some() {
-                continue;
-            }
-            let color = if self.bodies.interactions.get(id) == Some(InteractionState::Activated) {
-                Vec3::new(0.06, 0.55, 0.12)
-            } else if self.bodies.health.get(id).is_none() {
-                Vec3::new(0.04, 0.18, 0.32)
-            } else {
-                Vec3::new(0.30 + t * 0.12, 0.06 + t * 0.05, 0.05)
-            };
-
-            let drawn = prev.lerp(pos, a);
-            out.push(Instance::new(
-                on_ground(drawn, ENEMY_HALF_HEIGHT),
-                ENEMY_SCALE,
-                color,
-            ));
-        }
-    }
 }
 
 #[cfg(test)]

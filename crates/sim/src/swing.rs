@@ -10,16 +10,10 @@
 //!
 //! ## Why the hitbox is a value
 //!
-//! The generated hitbox is stored, not recomputed. That is the whole point of
-//! this module existing: [`crate::pass::attack`] tests the disc for the tick it
-//! is on, and [`crate::World::extract`] draws every disc — both *placing* discs
-//! this type already decided rather than each working out where the sword is.
-//!
-//! Two computations of one formula can disagree, and this is the worst place
-//! for them to. A swing that draws in one place and hits in another does not
-//! crash, does not fail a shape test, and looks entirely plausible in a
-//! screenshot; the only symptom is that the game feels wrong, and feel is the
-//! one thing being tuned here. Two readers of one value cannot drift.
+//! The generated hitbox is stored, not recomputed. The attack pass tests the
+//! disc for the current active tick from that committed shape. Changing tuning
+//! mid-swing cannot change where the in-flight attack hits. Future diagnostics
+//! should observe this shape rather than recreate it from animation or art.
 //!
 //! ## Why the interpolation is polar
 //!
@@ -62,7 +56,7 @@ impl Disc {
     /// Where this disc sits in the world, and how big it is.
     ///
     /// Yaw 0 faces `+Z` and positive turns toward `+X` — the convention
-    /// `Instance::with_yaw` and `shader.wgsl` share. Because the disc is stored
+    /// `Instance::with_yaw` and the asset shaders share. Because the disc is stored
     /// as an angle, honouring that convention here is one addition rather than
     /// a basis someone has to get the signs right on.
     pub(crate) fn place(self, origin: Vec2, facing: f32) -> (Vec2, f32) {

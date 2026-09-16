@@ -47,11 +47,11 @@ pub(crate) enum Command {
     ClearAsset,
     /// Atomically load and select one app-global player character.
     ShowCharacter(PathBuf),
-    /// Remove the app-global character selection.
+    /// Restore the default player asset.
     ClearCharacter,
     /// Atomically load and select one app-global horde character.
     ShowHorde(PathBuf),
-    /// Return the horde to fallback cubes.
+    /// Restore the default horde asset.
     ClearHorde,
     /// Reconstruct the complete playtest from a scene file.
     StartScene(PathBuf),

@@ -130,17 +130,28 @@ and the generated mip-chain contract are documented in
 The preview has no body and no simulation effect. See
 [`docs/character-assets-plan.md`](docs/character-assets-plan.md).
 
+Ground and static props load from `assets/world/ground.glb` and `prop.glb`.
+The ground is one textured plane; all props share one instanced mesh draw.
+Presentation derives prop tint from interaction state. `state.world_assets`
+reports both assets; render counts distinguish static meshes and characters.
+The cube renderer and attack telegraphs are removed; visual physics debugging
+will be built separately. See [`assets/world/README.md`](assets/world/README.md).
+
+Startup loads `assets/characters/basic-player/basic-player.glb` for both player
+and horde. Missing or invalid default assets fail startup; character cube
+fallbacks have been removed.
+
 Animated character preview: `character show <path.glb>` atomically imports,
-uploads and selects the separate one-skin path; `character clear` removes it.
+uploads and selects the separate one-skin path; `character clear` restores the default asset.
 `state.character_preview` reports its path, mesh, texture, node and joint
 counts plus its current role, clip and sample time. A selected
-character replaces the player's fallback cubes, maps authoritative movement
+character maps authoritative movement
 and each committed attack phase to the authored clip catalog. The demo weapon
 is geometry in that skinned mesh. It is presentation-only and may coexist with the static
 preview.
 
 Animated horde preview: `horde show <path.glb>` atomically selects one shared
-enemy mesh with `Idle` and `Run` clips; `horde clear` restores enemy cubes.
+enemy mesh with `Idle` and `Run` clips; `horde clear` restores the default asset.
 Stable entity identity assigns four reusable pose phases per role, so the horde
 remains at most eight instanced draws rather than one pose and draw per enemy.
 `state.horde_preview` reports the selection, role counts and occupied buckets;
@@ -190,7 +201,8 @@ ban on blocking the main thread, and none of that complexity is warranted here.
 
 **The rule the layout enforces: `gfx` never knows what an enemy is, and `sim`
 never knows what a key is.** Outward, the vocabulary is `Instance` — position,
-scale, colour — and `sim` describes itself in it via `extract()`. Inward, a
+scale, colour — assembled by app presentation from immutable simulation
+snapshots. Inward, a
 device becomes an `Action`, named in *screen* directions; `app` asks the camera
 to resolve those to world space and hands `game` an `Intent`. Game advances source control, then steps `sim`. Both dependencies
 run one way, and the simulation sees neither a key nor a screen.
@@ -202,8 +214,8 @@ health is, exactly as it draws an enemy without learning what an enemy is.
 
 `Quad` lives in `gfx` rather than `core`, and the difference from `Instance` is
 the point: `core`'s bar is *needed by both, beholden to neither*, and `Instance`
-meets it because `sim` must mint one without linking wgpu. Nothing that has to
-stay ignorant of the graphics stack ever mints a quad. Keeping it in `gfx` is
+keeps asset placements independent of the graphics stack. Simulation now
+exposes physical snapshots rather than minting render geometry. Keeping it in `gfx` is
 what lets `Quad::textured` be `pub(crate)` and lets the atlas's reserved white
 texel *derive* the UV that names it, instead of two crates agreeing by
 convention across a boundary no compiler spans.
@@ -216,7 +228,7 @@ crates/
          Report, damp
   assets/ validated static/skinned CPU meshes, hierarchy, clips, base colour and .glb boundary
                                                                   gltf, png, glam, bytemuck
-  gfx/   Renderer, camera, cube, capture, shader.wgsl      core, wgpu, winit, png,
+  gfx/   Renderer, camera, capture, instance      core, wgpu, winit, png,
          imported static/skinned mesh GPU resources, joint palettes,
          Quad/QuadBuffer/QuadSink,
          Glyphs, overlay.wgsl                                  assets, fontdue
@@ -230,7 +242,7 @@ crates/
 - `core` is the shared vocabulary and belongs to neither side. It deliberately
   does **not** name wgpu — that is what keeps `sim` free of the graphics stack,
   so simulation tests never need a GPU. The vertex layout for `Instance` lives
-  in `gfx/cube.rs` for exactly this reason.
+  in `gfx/instance.rs` for exactly this reason.
 - `assets` — the one-way interchange boundary. It accepts bounded, explicit
   subsets of binary glTF. Static meshes return transformed CPU geometry;
   character assets retain their named node hierarchy, one skin, inverse binds
@@ -259,8 +271,8 @@ crates/
   replacement. App and runner may import sim value types but never construct
   or step an engine world themselves.
 - `gfx` — `lib.rs` (surface, device, depth, frame orchestration), `camera.rs`
-  (isometric ortho camera, the follow rig, and the uniform), `cube.rs` (unit-cube
-  pipeline and instance buffer), `mesh.rs`/`character.rs` (imported static and
+  (isometric ortho camera, the follow rig, and the uniform), `instance.rs` (shared
+  instance layout), `mesh.rs`/`character.rs` (imported static and
   skinned GPU resources, including bounded shared-pose horde instancing), shared
   `material.rs`, and their WGSL shaders. The camera rig lives
   here rather than in `app` or `sim` because where the camera points is a
@@ -269,9 +281,9 @@ crates/
 - `sim` — `World`: what exists. `step()` is the input/sim seam and is nothing
   but an ordered list of calls into `pass/`, one module per named pass, each
   owning its tuning constants and taking the data it declares rather than
-  `&mut World`. `extract()` is the sim/render seam, `trace()` the sim/agent one;
-  both hand out shared references, which is what makes "perception cannot change
-  what it observes" a fact about the types. Its own modules:
+  `&mut World`. Presentation snapshots are the sim/render seam, `trace()` the
+  sim/agent one; both borrow the world through `&self`, making "perception cannot
+  change what it observes" a fact about the types. Its own modules:
   - `slots.rs` — `EntityId` and the map from a name to a dense row. The horde's
     arrays are contiguous, so a despawn moves rows; only a generational id
     survives that.
@@ -413,9 +425,8 @@ and the depth buffer then handles occlusion exactly, in hardware. The sprite
 approach would require re-sorting every entity by depth each frame and still
 produce popping where entities overlap.
 
-**The horde is drawn with instancing.** Fallback enemies use one cube mesh, one
-per-instance buffer of position/scale/colour and one draw call for all N bodies.
-Animated enemies use that same principle once per occupied shared-pose bucket,
+**The horde is drawn with instancing.** Animated enemies share one mesh and
+use one instanced draw per occupied shared-pose bucket,
 with a fixed ceiling of eight calls. Draw call cost is roughly independent of
 how much that call draws, so per-entity draws are the failure mode to avoid.
 (This is why raylib was rejected — its immediate-mode `DrawCube` forces exactly
@@ -464,18 +475,11 @@ Enforced, so this is a pointer and not an argument:
 - **Yaw 0 faces `+Z`, positive turns toward `+X`.** A sign flip compiles,
   validates, draws, and points every character 90° off in silence. *(pixel
   test in `gfx/src/lib.rs`, mutation-checked)*
-- **The player is deeper than it is wide** (`0.45 x 1.2 x 0.8`), or its facing
-  would be real and invisible. *(const assert)*
 - **The instance buffer is allocated at full `MAX_INSTANCES`** and only
   partially written. *(`InstanceSink`)*
 
 Enforced by nothing but this list:
 
-- **The cube has 24 vertices, not 8.** Each face needs its own normal and a
-  vertex carries one. Deduplicating to 8 corners silently destroys the shading.
-- **Cube winding is derived from a per-face orthonormal basis**, not written out
-  as a literal table. That is what guarantees correct outward winding under
-  back-face culling; a hand-written table is where inside-out faces come from.
 - **Colour literals look far too dark.** They are linear; the surface is sRGB
   and the hardware encodes on write. `0.05` on screen is `0.0039` in source. A
   `LinearRgb` newtype would move this up the ladder and is worth doing.

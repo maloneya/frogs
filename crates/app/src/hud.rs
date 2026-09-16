@@ -1,10 +1,8 @@
 //! What the overlay says, and where.
 //!
-//! The counterpart to `arpg_game::Game::extract`, one layer up. `extract` is the
-//! simulation describing itself to a renderer in world terms; this is the
-//! *app* describing a screen to the same renderer in pixels. Both hand over
-//! nothing but geometry and colour, which is what lets `gfx` draw a readout
-//! without ever learning what it reads out.
+//! The screen-space counterpart of asset presentation: app describes the world
+//! in mesh placements and a screen in quads. Both hand over geometry and colour,
+//! so gfx draws the readout without learning what it reads out.
 //!
 //! It lives in `app` for the reason everything else here does: this is the only
 //! crate that sees both sides. A health bar has to know what health is and

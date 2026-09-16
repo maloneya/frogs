@@ -1,4 +1,4 @@
-//! Turning [`Instance`]s into pixels.
+//! Turning imported meshes and [`arpg_core::Instance`] placements into pixels.
 //!
 //! Its simulation-facing vocabulary is position, scale and colour, and it has
 //! no dependency on `arpg-sim`. The separate asset boundary supplies anonymous
@@ -13,7 +13,7 @@
 mod camera;
 mod capture;
 mod character;
-mod cube;
+mod instance;
 mod material;
 mod mesh;
 mod overlay;
@@ -24,11 +24,10 @@ pub use camera::OrthoCamera;
 pub use character::{
     CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
 };
-pub use mesh::{MeshAsset, MeshPreview, MeshUploadError};
+pub use mesh::{MeshAsset, MeshBatch, MeshUploadError};
 pub use quad::{MAX_QUADS, Quad, QuadBuffer, QuadSink};
 pub use text::Glyphs;
 
-use arpg_core::Instance;
 
 use std::sync::Arc;
 
@@ -38,7 +37,6 @@ use winit::window::Window;
 use camera::CameraBinding;
 use capture::Readback;
 use character::CharacterPipeline;
-use cube::CubePipeline;
 use material::MaterialLayout;
 use mesh::MeshPipeline;
 use overlay::QuadPipeline;
@@ -72,8 +70,7 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     depth: wgpu::TextureView,
     camera: CameraBinding,
-    cubes: CubePipeline,
-    asset_preview: MeshPipeline,
+    static_meshes: MeshPipeline,
     character_preview: CharacterPipeline,
     /// The rasterised font, and the pipeline that draws what it lays out.
     ///
@@ -202,9 +199,8 @@ impl Renderer {
 
         let depth = create_depth(&device, config.width, config.height);
         let camera = CameraBinding::new(&device);
-        let cubes = CubePipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
         let material_layout = MaterialLayout::new(&device);
-        let asset_preview = MeshPipeline::new(
+        let static_meshes = MeshPipeline::new(
             &device,
             &camera.layout,
             material_layout.clone(),
@@ -230,8 +226,7 @@ impl Renderer {
             config,
             depth,
             camera,
-            cubes,
-            asset_preview,
+            static_meshes,
             character_preview,
             font,
             overlay,
@@ -279,7 +274,7 @@ impl Renderer {
         &self,
         mesh: &arpg_assets::StaticMesh,
     ) -> Result<MeshAsset, MeshUploadError> {
-        self.asset_preview
+        self.static_meshes
             .upload_mesh(&self.device, &self.queue, mesh)
     }
 
@@ -326,8 +321,8 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Draws one frame: cubes in one instanced call, plus one call per occupied
-    /// character-pose bucket.
+    /// Renders each nonempty static mesh batch and occupied character-pose bucket
+    /// in one instanced draw.
     ///
     /// Returns whether a frame was actually **presented**. Several of the
     /// recoverable surface states below skip the frame entirely, and a caller
@@ -342,8 +337,7 @@ impl Renderer {
     pub fn render(
         &mut self,
         camera: &OrthoCamera,
-        instances: &[Instance],
-        preview: Option<MeshPreview<'_>>,
+        meshes: &[MeshBatch<'_>],
         character: Option<CharacterPreview<'_>>,
         horde: Option<CharacterHorde<'_>>,
         overlay: &[Quad],
@@ -400,10 +394,7 @@ impl Renderer {
             });
 
         self.camera.upload(&self.queue, camera);
-        let count = self.cubes.upload(&self.queue, instances);
-        if let Some(preview) = preview {
-            self.asset_preview.upload(&self.queue, preview.instance);
-        }
+        self.static_meshes.upload(&self.queue, meshes);
         let character_draws = self.character_preview.upload(&self.queue, character, horde);
         let quads =
             self.overlay
@@ -452,11 +443,7 @@ impl Renderer {
                 multiview_mask: None,
             });
 
-            self.cubes.draw(&mut pass, &self.camera.bind_group, count);
-            if let Some(preview) = preview {
-                self.asset_preview
-                    .draw(&mut pass, &self.camera, preview.mesh);
-            }
+            self.static_meshes.draw_batches(&mut pass, &self.camera, meshes);
             if let Some(horde) = horde {
                 self.character_preview.draw_horde(
                     &mut pass,
@@ -508,7 +495,7 @@ impl Renderer {
 /// Headless GPU tests.
 ///
 /// These exist to close the gap Rust cannot see across: the vertex layout in
-/// `instance.rs` and the `@location` declarations in `shader.wgsl` are one
+/// `instance.rs` and the `@location` declarations in `mesh.wgsl` and `character.wgsl` are one
 /// contract maintained in two files and two languages. `cargo check` is blind
 /// to it. wgpu's validator is not — it compares them at pipeline creation and
 /// again at draw time, so the job here is simply to reach those points without
@@ -519,7 +506,7 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arpg_core::InstanceBuffer;
+    use arpg_core::Instance;
     use glam::Vec3;
 
     /// Matches the real swapchain format so the pipeline under test is the one
@@ -572,7 +559,11 @@ mod tests {
         let (device, queue) = headless_device();
 
         let camera_binding = CameraBinding::new(&device);
-        let cubes = CubePipeline::new(&device, &camera_binding.layout, TEST_FORMAT, DEPTH_FORMAT);
+        let pipeline = MeshPipeline::new(
+            &device, &camera_binding.layout, MaterialLayout::new(&device), TEST_FORMAT, DEPTH_FORMAT,
+        );
+        let asset = arpg_assets::import_glb(include_bytes!("../../../assets/world/prop.glb")).unwrap();
+        let mesh = pipeline.upload_mesh(&device, &queue, &asset).unwrap();
 
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("silhouette target"),
@@ -593,10 +584,11 @@ mod tests {
 
         camera_binding.upload(&queue, &OrthoCamera::new(N, N));
 
-        let mut buf = InstanceBuffer::default();
-        let mut sink = buf.sink();
-        sink.push(Instance::new(Vec3::ZERO, Vec3::new(0.5, 0.5, 8.0), Vec3::ONE).with_yaw(yaw));
-        let count = cubes.upload(&queue, buf.as_slice());
+        // Stretch the half-metre prop into an eight-metre bar. The convention
+        // test now exercises the production asset shader rather than a fallback.
+        let instances = [Instance::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 16.0), Vec3::ONE).with_yaw(yaw)];
+        let batches = [MeshBatch::new(&mesh, &instances)];
+        pipeline.upload(&queue, &batches);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("silhouette"),
@@ -625,7 +617,7 @@ mod tests {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            cubes.draw(&mut pass, &camera_binding.bind_group, count);
+            pipeline.draw_batches(&mut pass, &camera_binding, &batches);
         }
 
         let readback = capture::Readback::new(&device, N, N);
@@ -733,92 +725,6 @@ mod tests {
     /// Renders one frame into an offscreen texture, with every validation error
     /// captured rather than left to the default handler.
     ///
-    /// Pipeline creation catches a Rust/WGSL mismatch — a changed `Instance`
-    /// field, a stride that no longer matches, an attribute pointing at a
-    /// `@location` the shader does not declare. Actually drawing catches the
-    /// rest: buffer sizes, bind group layouts, and the depth attachment's
-    /// dimensions disagreeing with the colour attachment.
-    #[test]
-    fn a_frame_renders_without_validation_errors() {
-        let (device, queue) = headless_device();
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-
-        let camera_binding = CameraBinding::new(&device);
-        let cubes = CubePipeline::new(&device, &camera_binding.layout, TEST_FORMAT, DEPTH_FORMAT);
-
-        const W: u32 = 256;
-        const H: u32 = 128;
-
-        let color = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("test colour target"),
-                size: wgpu::Extent3d {
-                    width: W,
-                    height: H,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: TEST_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            })
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let depth = create_depth(&device, W, H);
-
-        let camera = OrthoCamera::new(W, H);
-        camera_binding.upload(&queue, &camera);
-
-        let mut buf = InstanceBuffer::default();
-        let mut sink = buf.sink();
-        for i in 0..64 {
-            sink.push(Instance::new(
-                Vec3::new(i as f32, 0.0, 0.0),
-                Vec3::ONE,
-                Vec3::new(0.3, 0.1, 0.05),
-            ));
-        }
-        let count = cubes.upload(&queue, buf.as_slice());
-        assert_eq!(count, 64, "upload should report every instance as live");
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("test frame"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("test pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            cubes.draw(&mut pass, &camera_binding.bind_group, count);
-        }
-        queue.submit(Some(encoder.finish()));
-        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll device");
-
-        if let Some(err) = pollster::block_on(scope.pop()) {
-            panic!("wgpu rejected the frame: {err}");
-        }
-    }
-
     /// The asymmetric fixture must survive import, upload, projection, culling
     /// and shading as the metre-scale +Z-facing shape that was authored.
     /// Pipeline validation alone would accept an empty or reflected picture.
@@ -862,7 +768,7 @@ mod tests {
         let mut camera = OrthoCamera::new(N, N);
         camera.zoom_by(0.125); // Clamp to a two-metre half-height.
         camera_binding.upload(&queue, &camera);
-        pipeline.upload(&queue, Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE));
+        pipeline.upload(&queue, &[MeshBatch::new(&gpu, &[Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)])]);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("asset preview silhouette"),
@@ -891,7 +797,7 @@ mod tests {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pipeline.draw(&mut pass, &camera_binding, &gpu);
+            pipeline.draw(&mut pass, &camera_binding, &gpu, 0..1);
         }
         let readback = Readback::new(&device, N, N);
         readback.record(&mut encoder, &color);
@@ -1001,6 +907,109 @@ mod tests {
             covariance < -20.0,
             "+Z asymmetry should lean up-right, got {covariance}"
         );
+    }
+
+    /// Empty batches and mixed meshes must preserve offsets and every placement.
+    #[test]
+    fn static_batches_preserve_meshes_offsets_and_all_instances() {
+        const N: u32 = 256;
+        let (device, queue) = headless_device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let camera_binding = CameraBinding::new(&device);
+        let pipeline = MeshPipeline::new(
+            &device,
+            &camera_binding.layout,
+            MaterialLayout::new(&device),
+            TEST_FORMAT,
+            DEPTH_FORMAT,
+        );
+        let ground = arpg_assets::import_glb(include_bytes!("../../../assets/world/ground.glb")).unwrap();
+        let prop = arpg_assets::import_glb(include_bytes!("../../../assets/world/prop.glb")).unwrap();
+        let ground_gpu = pipeline.upload_mesh(&device, &queue, &ground).unwrap();
+        let prop_gpu = pipeline.upload_mesh(&device, &queue, &prop).unwrap();
+
+        let color = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("static mesh batches"),
+            size: wgpu::Extent3d {
+                width: N,
+                height: N,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEST_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = create_depth(&device, N, N);
+        let mut camera = OrthoCamera::new(N, N);
+        camera.zoom_by(0.125);
+        camera_binding.upload(&queue, &camera);
+        let floor = [Instance::new(Vec3::new(-1.0, 0.0, 1.0), Vec3::splat(0.8), Vec3::X * 10.0)];
+        let props = [
+            Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::Y),
+            Instance::new(Vec3::new(1.0, 0.0, -1.0), Vec3::ONE, Vec3::Z),
+        ];
+        let batches = [
+            MeshBatch::new(&prop_gpu, &[]),
+            MeshBatch::new(&ground_gpu, &floor),
+            MeshBatch::new(&ground_gpu, &[]),
+            MeshBatch::new(&prop_gpu, &props),
+        ];
+        pipeline.upload(&queue, &batches);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("static mesh batches"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("static mesh batches"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pipeline.draw_batches(&mut pass, &camera_binding, &batches);
+        }
+        let readback = Readback::new(&device, N, N);
+        readback.record(&mut encoder, &color);
+        queue.submit(Some(encoder.finish()));
+        let rgba = readback.to_rgba(&device).expect("read static pixels");
+        if let Some(error) = pollster::block_on(scope.pop()) {
+            panic!("wgpu rejected static batches: {error}");
+        }
+
+        let mut counts = [0_usize; 3];
+        let mut x_sums = [0_usize; 3];
+        for (index, pixel) in rgba.as_chunks::<4>().0.iter().enumerate() {
+            for channel in 0..3 {
+                if pixel[channel] > 32 && pixel[(channel + 1) % 3] < 8 && pixel[(channel + 2) % 3] < 8 {
+                    counts[channel] += 1;
+                    x_sums[channel] += index % N as usize;
+                }
+            }
+        }
+        assert!(counts.iter().all(|count| *count > 60), "each mesh instance must remain visible: {counts:?}");
+        let centres: [usize; 3] = std::array::from_fn(|i| x_sums[i] / counts[i]);
+        assert!(centres[0] + 20 < centres[1] && centres[1] + 20 < centres[2], "batch offsets mixed placements: {centres:?}");
     }
 
     /// A sampled non-bind pose bucket crosses every character seam in one real draw:

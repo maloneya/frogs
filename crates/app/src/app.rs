@@ -8,7 +8,7 @@ use winit::window::{Window, WindowId};
 
 use glam::Vec2;
 
-use arpg_core::{Action, InstanceBuffer, Intent, MoveDir, Report};
+use arpg_core::{Action, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene as Scene};
 use arpg_gfx::{CharacterMesh, MeshAsset, OrthoCamera, QuadBuffer, Renderer};
 use arpg_sim::{Accumulator, Alpha};
@@ -17,7 +17,8 @@ use crate::harness::{self, Command, Request};
 use crate::hud;
 use crate::input::Controls;
 use crate::presentation::{
-    AssetPreview, LoadedCharacter, LoadedHorde, presentation_seconds, replace_character,
+    AssetPreview, LoadedCharacter, LoadedHorde, WorldAssets, default_character_path,
+    presentation_seconds, preview_instance, replace_character,
     replace_horde, replace_preview, report_asset_preview, report_character_preview,
     report_horde_preview,
 };
@@ -33,6 +34,8 @@ pub(crate) struct App {
     renderer: Option<Renderer>,
     /// App-global presentation selected independently of playable scene state.
     asset_preview: Option<AssetPreview<MeshAsset>>,
+    /// Ground and prop resources exist together once GPU initialization succeeds.
+    world_assets: Option<WorldAssets<MeshAsset>>,
     /// Hierarchical character presentation, also independent of simulation.
     character_preview: Option<LoadedCharacter<CharacterMesh>>,
     /// Shared-pose horde presentation, independent of playable scene state.
@@ -68,11 +71,7 @@ pub(crate) struct App {
     /// every frame. Counting them is what lets the reply say "your window is
     /// covered" rather than a silent `ok` — see [`App::capture_has_stalled`].
     capture_stall: u32,
-    /// Reused every frame so a steady state allocates nothing.
-    instances: InstanceBuffer,
-    /// The overlay's own staging buffer, on exactly the same terms — and
-    /// separate from `instances` because the two are drawn by different
-    /// pipelines in different spaces. Merging them would mean a sort.
+    /// Reused overlay staging buffer; reset through its bounded sink each frame.
     quads: QuadBuffer,
     input: Controls,
     clock: Clock,
@@ -259,7 +258,9 @@ impl App {
         if let Some(camera) = &mut self.camera {
             camera.snap_to(self.game.player_pos());
         }
-        self.game.extract(Alpha::ZERO, self.instances.sink());
+        if let Some(world) = &mut self.world_assets {
+            world.rebuild(self.game.prop_presentations(Alpha::ZERO));
+        }
         self.quads.sink();
         // Exclude file reading, construction, and the old run's frame remainder.
         self.clock = Clock::default();
@@ -337,18 +338,18 @@ impl App {
                     Ok(answer) => answer,
                     Err(error) => format!("error: {error}"),
                 },
-                Command::ClearCharacter => {
-                    self.character_preview = None;
-                    "ok".to_string()
-                }
+                Command::ClearCharacter => match self.show_character(default_character_path()) {
+                    Ok(_) => "ok".to_string(),
+                    Err(error) => format!("error: {error}"),
+                },
                 Command::ShowHorde(path) => match self.show_horde(path) {
                     Ok(answer) => answer,
                     Err(error) => format!("error: {error}"),
                 },
-                Command::ClearHorde => {
-                    self.horde_preview = None;
-                    "ok".to_string()
-                }
+                Command::ClearHorde => match self.show_horde(default_character_path()) {
+                    Ok(_) => "ok".to_string(),
+                    Err(error) => format!("error: {error}"),
+                },
                 Command::StartScene(path) => match self.start_scene_file(&path) {
                     Ok(()) => self.ready_reply(),
                     Err(error) => format!("error: {error}"),
@@ -520,6 +521,9 @@ impl App {
         out.object("asset_preview", |asset| {
             report_asset_preview(self.asset_preview.as_ref(), asset);
         });
+        out.object("world_assets", |out| {
+            if let Some(world) = &self.world_assets { world.report(out); }
+        });
         out.object("character_preview", |character| {
             report_character_preview(self.character_preview.as_ref(), character);
         });
@@ -539,11 +543,14 @@ impl App {
                 .horde_preview
                 .as_ref()
                 .map_or(0, |horde| horde.instance_count() as u64);
+            let static_instances = self.world_assets.as_ref().map_or(0, |world| world.instance_count() as u64)
+                + u64::from(self.asset_preview.is_some());
             r.int(
                 "instances",
-                self.instances.as_slice().len() as u64 + player_instances + horde_instances,
+                player_instances + horde_instances + static_instances,
             );
-            r.int("cube_instances", self.instances.as_slice().len() as u64);
+            r.int("static_mesh_instances", static_instances);
+            r.int("static_mesh_draws", self.world_assets.as_ref().map_or(0, |world| world.draw_count() as u64) + u64::from(self.asset_preview.is_some()));
             r.int("player_character_instances", player_instances);
             r.int("horde_character_instances", horde_instances);
             r.int(
@@ -695,28 +702,14 @@ impl App {
         if let Some(horde) = &mut self.horde_preview {
             horde.rebuild(self.game.enemy_presentations(alpha), presentation_seconds);
         }
-        let has_player_character = self.character_preview.is_some();
-        let has_horde_character = self.horde_preview.is_some();
         if let Some(character) = &mut self.character_preview {
             character.sample(player, alpha, presentation_seconds);
         }
-
-        if !has_player_character && !has_horde_character {
-            self.game.extract(alpha, self.instances.sink());
-        } else {
-            let mut sink = self.instances.sink();
-            if has_horde_character {
-                self.game.extract_without_characters(alpha, &mut sink);
-                if !has_player_character {
-                    player.extract_fallback(&mut sink);
-                }
-            } else {
-                self.game.extract_without_player(alpha, &mut sink);
-            }
-        }
+        let world_assets = self.world_assets.as_mut().expect("rendering requires world assets");
+        world_assets.rebuild(self.game.prop_presentations(alpha));
 
         // The overlay is built here rather than inside `render` for the same
-        // reason `extract` is: what a readout says is a decision this crate
+        // reason asset placements are: what a readout says is a decision this crate
         // makes, and the renderer's job stops at drawing the rectangles it is
         // handed. Scoped so the sink's borrow ends before the draw.
         {
@@ -735,7 +728,8 @@ impl App {
         // Counted only when a frame actually reached the screen. An occluded
         // window skips the draw entirely, and counting those would report
         // thousands of frames a second for drawing nothing.
-        let preview = self.asset_preview.as_ref().map(AssetPreview::draw);
+        let preview_instances = [preview_instance()];
+        let meshes = world_assets.draws(self.asset_preview.as_ref(), &preview_instances);
         let character = self
             .character_preview
             .as_ref()
@@ -743,8 +737,7 @@ impl App {
         let horde = self.horde_preview.as_ref().map(LoadedHorde::draw);
         if renderer.render(
             camera,
-            self.instances.as_slice(),
-            preview,
+            &meshes,
             character,
             horde,
             self.quads.as_slice(),
@@ -784,7 +777,10 @@ impl App {
                 self.clock.frame_ms(),
                 self.clock.fps(),
                 self.game.enemy_count(),
-                self.instances.as_slice().len(),
+                world_assets.instance_count()
+                    + usize::from(self.asset_preview.is_some())
+                    + usize::from(self.character_preview.is_some())
+                    + self.horde_preview.as_ref().map_or(0, LoadedHorde::instance_count),
                 if renderer.vsync() { "  [vsync]" } else { "  [uncapped]" },
             ));
         }
@@ -826,6 +822,16 @@ impl ApplicationHandler for App {
             window.clone(),
             display_handle,
         )));
+        self.world_assets = Some(WorldAssets::load(|mesh| {
+            self.renderer.as_ref().expect("renderer was initialized")
+                .upload_mesh(mesh).map_err(|error| error.to_string())
+        }).expect("load default world assets"));
+        // Required assets load before the first frame or harness command. Failure
+        // is explicit; an invalid asset must never silently become a cube.
+        self.show_character(default_character_path())
+            .expect("load default player character");
+        self.show_horde(default_character_path())
+            .expect("load default horde character");
         let size = window.inner_size();
 
         // Start framed on the character rather than easing in from the origin.

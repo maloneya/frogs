@@ -57,7 +57,7 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `impulse <player\|#id> <x> <z>` | momentum applied; movement starts on the next tick |
 | `seekers <n>` | how many of the bodies now chase the player |
 | `asset\|character\|horde show <path.glb>` | after that preview has imported, uploaded and replaced its prior selection |
-| `asset\|character\|horde clear` | after that preview has returned to its fallback |
+| `asset\|character\|horde clear` | after static preview removal or character/horde default restoration |
 | `spawn <x> <z> [seek]` | `queued`, not `spawned` — it lands on the next tick |
 | `source <x> <z> [flags]` | the source's name, e.g. `source s0` |
 | `source remove <id>` | takes the name as printed, `s0` |
@@ -241,7 +241,8 @@ measurement. Both ways this lies are in `docs/traps.md`, keyed by what you see.
 Also diff `.sim.tick`. It should hold ~60/s in *both* modes — that is the fixed
 timestep working, and a tick rate that follows the frame rate is a real bug.
 
-Reference, window frontmost, 17409 instances on an M4: **66/s vsync,
+Historical cube-renderer reference (before asset ground/props), window frontmost,
+17409 instances on an M4: **66/s vsync,
 ~396/s uncapped, 0 skipped** — best of eight half-second samples. The horde is
 nearly free to draw: 16385 instances (no enemies) measures within 2% of 17409,
 which is instancing working, and the 16384 ground tiles dominating either way.

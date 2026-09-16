@@ -55,7 +55,7 @@ use crate::slots::EntityId;
 use crate::trace::{Event, TraceSink};
 use crate::{Bodies, SceneId};
 #[cfg(test)]
-use crate::MAX_ENEMIES;
+use crate::MAX_BODIES;
 
 /// How many requests may be pending at once.
 ///
@@ -251,7 +251,7 @@ impl SpawnQueue {
 /// function rather than a rule two call sites are trusted to apply the same
 /// way.
 ///
-/// Returns `None` when the horde is already at [`crate::MAX_ENEMIES`] — a refusal
+/// Returns `None` when the horde is already at [`crate::MAX_BODIES`] — a refusal
 /// rather than a clamp, because the budget exists to stop the instance buffer
 /// overrunning and an overrun is silent.
 ///
@@ -336,7 +336,7 @@ mod tests {
     use super::*;
     use crate::Bodies;
 
-    /// **The refusal the instance budget exists for.** `MAX_ENEMIES` is
+    /// **The refusal the instance budget exists for.** `MAX_BODIES` is
     /// whatever the ground and the player leave of the instance buffer, and an
     /// overrun is silent — the upload truncates and bodies simply stop being
     /// drawn. So a request that arrives at a full horde has to be refused
@@ -350,8 +350,8 @@ mod tests {
     #[test]
     fn a_full_horde_refuses_what_it_cannot_hold() {
         let mut enemies = Bodies::default();
-        enemies.respawn(MAX_ENEMIES);
-        assert_eq!(enemies.len(), MAX_ENEMIES + 1, "the horde did not actually fill");
+        enemies.respawn(MAX_BODIES);
+        assert_eq!(enemies.len(), MAX_BODIES + 1, "the horde did not actually fill");
 
         let mut seekers = Members::default();
         let mut queue = SpawnQueue::default();
@@ -360,7 +360,7 @@ mod tests {
         assert!(queue.push(Vec2::ZERO, Template::BODY), "the queue refused before the horde could");
         drain(&mut queue, &mut enemies, &mut seekers, &mut Scenes::default(), trace.sink(0));
 
-        assert_eq!(enemies.len(), MAX_ENEMIES + 1, "the budget was overrun");
+        assert_eq!(enemies.len(), MAX_BODIES + 1, "the budget was overrun");
         let events: Vec<_> = trace.iter().map(|(_, e)| e).collect();
         assert_eq!(events, vec![Event::Refused { count: 1 }], "a body was lost without a word");
     }

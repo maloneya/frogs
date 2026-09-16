@@ -110,8 +110,8 @@ impl Accumulator {
     /// Presentation only. Nothing inside a pass may read this, or the frame
     /// rate is back in the simulation by the side door — and unlike `Dt`, that
     /// cannot be enforced by the type, because an `Alpha` is a perfectly
-    /// ordinary number once you have one. What enforces it is that the only
-    /// thing taking an `Alpha` is `World::extract`, which takes `&self`.
+    /// ordinary number once you have one. What enforces it is that simulation
+    /// presentation methods taking an `Alpha` borrow the world through `&self`.
     #[must_use]
     pub fn alpha(&self) -> Alpha {
         // Always in range already — `pending` removes every whole tick — so the
@@ -138,8 +138,8 @@ impl Accumulator {
 ///
 /// Unlike [`Dt`], the private constructor here is not what keeps this out of
 /// the simulation — an `Alpha` is an ordinary number once minted. What keeps it
-/// out is that the only thing that accepts one is `World::extract`, which takes
-/// `&self` and so cannot write anything.
+/// out is that simulation presentation methods accepting one take `&self`
+/// and so cannot write simulation state.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct Alpha(f32);
 

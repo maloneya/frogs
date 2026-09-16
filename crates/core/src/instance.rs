@@ -10,7 +10,7 @@ use glam::Vec3;
 /// referencing the old one — not something to do mid-frame while tuning a dial.
 pub const MAX_INSTANCES: usize = 200_000;
 
-/// Per-entity data handed to the GPU. **This is the simulation's entire
+/// Per-entity data handed to the GPU. **This is presentation's per-placement
 /// rendering vocabulary** — `gfx` knows about positions, scales and colours,
 /// and nothing whatsoever about enemies, health, or attacks. Imported mesh
 /// geometry reaches `gfx` through the separate asset boundary.
@@ -43,7 +43,7 @@ pub struct Instance {
 }
 
 // The 48-byte stride is a contract with three other places: the vertex
-// attribute array below, the `@location` slots in shader.wgsl, and the buffer
+// attribute array in gfx/instance.rs, the asset shaders' `@location` slots, and the buffer
 // capacity maths. Rust can't see into WGSL, but it can at least refuse to
 // compile if the Rust half drifts — which is the half that gets edited.
 const _: () = assert!(size_of::<Instance>() == 48);
@@ -58,7 +58,7 @@ impl Instance {
     /// The only constructor, so the reserved padding is always zeroed.
     /// Unrotated; most things in the world have no meaningful facing.
     /// `pos` is in metres; `scale` is a dimensionless mesh multiplier. For the
-    /// renderer's unit cube, its components therefore give side lengths in metres.
+    /// authored mesh, its components multiply the imported dimensions.
     pub fn new(pos: Vec3, scale: Vec3, color: Vec3) -> Self {
         Self {
             pos: pos.into(),
@@ -72,7 +72,7 @@ impl Instance {
 
     /// Turns the instance about the vertical axis.
     ///
-    /// **The convention, which `shader.wgsl` must match:** yaw `0` faces world
+    /// **The convention, which the asset shaders must match:** yaw `0` faces world
     /// `+Z`, and a positive yaw turns toward `+X` — so a direction maps to a
     /// yaw by `atan2(dir.x, dir.z)`. Rust cannot check that the WGSL agrees any
     /// more than it can check the vertex layout, so the two are written to be
@@ -87,9 +87,9 @@ impl Instance {
     /// Read-only, and that keeps the invariant above intact rather than
     /// weakening it: the fields are private so nothing can *write* garbage into
     /// the reserved slots, which a getter cannot do. What it buys is the
-    /// ability to check what actually crossed the extract seam — render
+    /// ability to check what actually crossed the presentation seam — render
     /// interpolation happens on the way into an `Instance`, so a test that
-    /// cannot read one back can only assert that `extract` was called, not that
+    /// cannot read one back can only assert that presentation ran, not that
     /// it produced the right picture.
     #[must_use]
     pub fn pos(&self) -> Vec3 {

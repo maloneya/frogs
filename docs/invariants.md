@@ -37,7 +37,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Ordinary-enemy animation stays a bounded draw workload | 0/2/3 | gfx fixes the budget at eight palette slots and uses one dynamic uniform offset per occupied instanced bucket; the nonzero-bucket headless GPU test exercises the shipping binding and draw path |
 | Stable horde phase variation needs no per-enemy pose storage or steady-frame allocation | 0/3 | app hashes generational `EntityId` into four shared phases per role and reuses eight instance vectors; dense-swap and capacity tests pin both properties |
 | A stopped animated enemy keeps its last meaningful heading without adding simulation state | 0/3 | app retains heading by stable `EntityId`, derives it from final tick displacement, and removes entries absent from each rebuild; stop and despawn tests pin the lifetime |
-| Enemy count stays within the instance budget | 0 | `enemies` is private; `set_enemy_count` clamps, `place` refuses at `MAX_ENEMIES` |
+| Physical population stays within its admission limit | 0 | `enemies` is private; `set_enemy_count` clamps, `place` refuses at `MAX_BODIES` |
 | Zoom stays in a sane range | 0 | private field; `OrthoCamera::zoom_by` clamps |
 | Aspect ratio survives a minimised window | 0 | `aspect_of` guards inside the camera |
 | `Renderer.vsync` cannot desync from the surface | 0 | private field; `toggle_vsync` is the only writer |
@@ -51,10 +51,10 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Only `gfx` can mint a textured quad | 0 | `Quad::textured` is `pub(crate)`; the atlas and the type are in one crate |
 | The overlay projects pixels the right way up | 3 | pixel test in `gfx/src/lib.rs`, mutation-checked against a flipped y |
 | A readout's text stays inside its panel | 3 | `hud` layout tests, which need no GPU |
-| No allocation or overflow at the extract seam | 0 | `InstanceSink` exposes `push` and nothing else |
+| No allocation or overflow at the instance staging seam | 0 | `InstanceSink` exposes `push` and nothing else |
 | The buffer is reset once per frame | 0 | reset lives in `InstanceBuffer::sink()` |
 | `Instance` is exactly 48 bytes | 1 | `const _: () = assert!(…)` beside the type |
-| Rust vertex layout matches `shader.wgsl` | 2 | headless pipeline + draw test in `gfx/src/lib.rs` |
+| Rust vertex layout matches the asset shaders | 2 | headless pipeline + draw test in `gfx/src/lib.rs` |
 | Public API stays deliberate | 1 | `unreachable_pub = "deny"` |
 | No dependency outside a crate's allowlist | 1/3 | `crates/{gfx,sim,game,content,scenario}/build.rs` share `build_support/dependencies.rs`; TOML parsing resolves package aliases and workspace inheritance, including target and dev sections. Build-only parsing has its own allowlist; workspace tests exercise rejection paths |
 | Shared content decoding cannot depend on graphics or the scenario runner | 1 | `crates/content/build.rs` permits runtime dependencies on game, sim, and RON; app and runner import the same decoder |
@@ -90,7 +90,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A pass cannot stamp an event with the wrong tick | 0 | `TraceSink` is bound to the tick at creation and exposes only `emit` |
 | A pass touches only what it declares | 0 | passes take declared slices and restricted sinks, not `&mut World`; the player shares body storage |
 | The trace cannot be written by anything but a pass | 0 | `Trace::sink` is `pub(crate)`; `World::trace()` hands out `&Trace` |
-| Perception cannot change what it observes | 0 | `World::trace()` returns `&Trace`, as `extract` takes `&self` |
+| Perception cannot change what it observes | 0 | `World::trace()` returns `&Trace`, and presentation snapshots take `&self` |
 | A world field cannot be unobservable | 1 | `World::report` destructures `Self`; a new field is E0027 until it is reported |
 | A redraw cannot consume a keypress | 0 | presentation reads `InputState::held`, which cannot clear; only `sample` clears, and only a tick calls it |
 | The docs cannot cite code that no longer exists | 3 | `every_identifier_the_docs_cite_exists_in_the_source`; found three real drifts on its first run |
@@ -104,7 +104,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A scenario asserting a field the runner ignores is rejected | 1 | `#[serde(deny_unknown_fields)]` — a silently-ignored assertion is worse than a refused one |
 | A checkpoint cannot change the simulation it observes | 0 | `check_state` takes `&World`, shared with final-state checks |
 | A checkpoint cannot silently go unevaluated | 3 | runner validation rejects ticks outside the budget and checkpoint traces; CLI tests cover invalid definitions and transient failures, including under `--bless` |
-| Interpolation cannot reach sim state | 0 | `World::extract` takes `&self`; there is no `&mut` to write a blended value back through |
+| Interpolation cannot reach sim state | 0 | `World::player_presentation`, `enemy_presentations` and `prop_presentations` take `&self`; there is no `&mut` to write a blended value back through |
 | `Alpha` stays in `0..=1` | 0 | private field; `Accumulator::alpha` clamps and is the only mint besides the two endpoint consts |
 | The drawn position is a blend, never the sim's own | 0 | `player_pos` and `player_pos_at` are separate methods answering separate questions |
 | Every body remembers where it was, every tick | 3 | `the_previous_tick_is_the_previous_tick`, measured in the crowd where bodies actually move |
@@ -182,13 +182,11 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Drawing the panel cannot mutate the world or consume an edit | 0 | `hud::draw` takes an `AttackStatus` snapshot and a shared `Menu`; it receives no mutable control or simulation reference |
 | Menu transitions cannot leak gameplay input | 3 | `modal_transitions_discard_edges_and_require_fresh_gameplay_presses`; native and harness input both enter `Controls::on_key` |
 | A hitbox swings where the character faces | 3 | `pass::attack` runs after `pass::face`; the yaw convention is mutation-checked |
-| A swing is drawn where it is struck | 3 | one stored `Hitbox`; `pass::attack` and `World::extract` both *place* its discs rather than computing a position, so there is no second formula to drift. `the_swing_is_drawn_where_it_strikes` |
 | A hitbox turns with the player | 3 | `Disc` is polar, so placing it is `facing + angle`. `the_hitbox_follows_the_facing`, mutation-checked against dropping the facing |
 | An arc sweeps rather than cutting its chord | 3 | angle and distance interpolate separately in `Swing::generate`; `an_arc_sweeps_rather_than_cutting_the_chord` |
 | A swing has a direction to point and a radius to hit with | 0 | private `AttackShape` fields and its atomic constructor prevent zero endpoints and non-positive radii before `Swing::new` is called |
 | A swing's hitbox cannot outlive or precede its timer | 0 | `Attack` holds one `Option<InFlight>`; there is no way to read a shape without the tick that says which part of it is live |
 | A swing leaves no gap for a body to pass through | 0 | `ResolvedAttack::try_new` rejects a complete path whose consecutive discs do not cover an enemy centre; the runtime calculation is necessary because the bound needs `atan2` and `sqrt` |
-| The instance budget reserves room for a live swing | 1 | `PLAYER_INSTANCES` derives from the maximum active duration through `pass::attack::HITBOX_SAMPLES`; `a_full_horde_still_fits_alongside_the_ground_and_the_player` |
 | Attack state reaches the determinism hash | 1 | `World::hash` destructures `Player`, and `Attack::hash` destructures itself |
 | Behaviour membership reaches the determinism hash | 1 | `World::hash` destructures `seekers`; `Members::hash` destructures itself |
 | A retired name can never be reused | 0 | `Slots::remove` retires removed slots rather than resetting generations; there is no path that restarts a generation |
@@ -223,3 +221,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | Relationships share the scene's atomic admission and complete lifetime | 3 | `invalid_relationships_leave_live_state_pending_work_and_restart_untouched`, `source_controls_are_instance_local`, and `activation_restart_eviction_and_independent_instances_share_one_lifecycle` |
 | Gameplay references, phases, and cached restart effects reach the hash | 1/3 | exhaustive record hashing and `relationship_identity_phase_and_restart_effect_participate_in_hashing` |
 | A malformed gameplay relationship or assertion cannot silently disappear | 1/3 | owning types deny unknown fields; `gameplay_content_and_relationship_assertions_fail_closed` exercises CLI rejection even while blessing |
+
+The physical ceiling is independent of render storage. App presentation has a
+compile-time capacity check for `MAX_BODIES` plus ground and static preview; the
+character buffer also fits that ceiling plus the player.

@@ -28,8 +28,8 @@ what matters here is what it left behind to build on.
 - **Fixed timestep.** `Dt` carries no number and only `Accumulator` mints one,
   so the frame rate cannot reach the simulation. `World::hash` covers every
   field, enforced by exhaustive destructuring.
-- **Render interpolation.** `Alpha` blends the last two ticks inside `extract`,
-  which takes `&self` — so interpolation cannot reach sim state.
+- **Render interpolation.** `Alpha` blends the last two ticks in presentation snapshots,
+  which take `&self` — so interpolation cannot reach sim state.
 - **Scenario runner.** RON setup, tick-indexed inputs, a tick budget,
   checkpoint and final-state assertions, exit 0 or 1. Every scenario is also replayed and hash-compared
   whether or not it asks. The `Stop` hook runs it.
@@ -224,10 +224,11 @@ change produces a reviewable diff rather than a claim about feel.
   that dies when its body dies needs a source to *have* a body, which is the
   layering `pass/source.rs` argues against; the shape it actually wants is a
   `Condition` a defeat can close.
-- `World::extract()` rebuilds the 16384 static ground tiles every frame and
-  re-uploads the whole instance buffer. Deferred with a number behind it: 17409
-  instances render in ~3ms uncapped on the M4, so a static/dynamic split is not
-  yet buying anything.
+- Ground extraction is now one imported textured plane, replacing the 16,384
+  per-frame cube placements. Static props use an instanced imported mesh;
+  cube rendering and attack telegraphs have been removed; dedicated physics
+  debug drawing remains future work. See
+  [world assets](../assets/world/README.md).
 - `Clock` smooths frame time with an EMA, which *hides* pacing variance. An
   average is the wrong instrument for the thing that matters most here; a
   frame-time histogram is the intended replacement.

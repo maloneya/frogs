@@ -50,7 +50,7 @@ impl BodyGrid {
             return Err(SceneError::Invalid("grid rows and columns must be nonzero"));
         }
         let count = columns.checked_mul(rows).ok_or(SceneError::Capacity)?;
-        if count > crate::MAX_ENEMIES {
+        if count > crate::MAX_BODIES {
             return Err(SceneError::Capacity);
         }
         if !Vec2::from(origin).is_finite() || !spacing.is_finite() || spacing <= 0.0 {
@@ -342,7 +342,7 @@ impl crate::World {
     pub fn load_scene(&mut self, scene: &Scene) -> Result<SceneId, SceneError> {
         let count = scene.validate()?;
         let available =
-            crate::MAX_ENEMIES.saturating_sub(self.body_count()).saturating_sub(self.queue.len());
+            crate::MAX_BODIES.saturating_sub(self.body_count()).saturating_sub(self.queue.len());
         if count > available {
             return Err(SceneError::Capacity);
         }
@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(world.trace().render(), trace);
         let full = Scene {
             name: "full".into(),
-            bodies: vec![Placed { pos: (1.0, 0.0), what: Template::BODY }; crate::MAX_ENEMIES],
+            bodies: vec![Placed { pos: (1.0, 0.0), what: Template::BODY }; crate::MAX_BODIES],
             sources: vec![],
             grids: Vec::new(),
         };
@@ -664,7 +664,7 @@ mod tests {
 
         for grid in [
             BodyGrid { columns: usize::MAX, rows: 2, ..valid },
-            BodyGrid { columns: crate::MAX_ENEMIES + 1, rows: 1, ..valid },
+            BodyGrid { columns: crate::MAX_BODIES + 1, rows: 1, ..valid },
         ] {
             refuse(grid, |error| *error == SceneError::Capacity);
         }
@@ -673,7 +673,7 @@ mod tests {
         // must do so from the counts rather than by expanding 131,072 bodies.
         let mut greedy = scene();
         greedy.grids =
-            vec![BodyGrid { columns: crate::MAX_ENEMIES, rows: 1, ..valid }; 2];
+            vec![BodyGrid { columns: crate::MAX_BODIES, rows: 1, ..valid }; 2];
         assert_eq!(World::empty().load_scene(&greedy), Err(SceneError::Capacity));
     }
 }

@@ -1,14 +1,18 @@
 //! Asset selection and character presentation; no write access to simulation.
 
-use arpg_core::{Instance, Report};
+use arpg_core::{Instance, InstanceBuffer, Report};
 use arpg_gfx::{
     CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
-    MeshAsset, MeshPreview,
+    MeshAsset, MeshBatch,
 };
 use arpg_sim::{
     Alpha, AttackPhase, AttackProfile, EnemyPresentation, Fnv, PlayerPresentation, TICK_HZ,
 };
 use glam::Vec3;
+
+// Ground and optional static preview add two placements to an all-prop world.
+// This also covers an all-enemy world plus the player in the character buffer.
+const _: () = assert!(arpg_sim::MAX_BODIES + 2 <= arpg_core::MAX_INSTANCES);
 
 pub(super) struct AssetPreview<T> {
     path: std::path::PathBuf,
@@ -42,8 +46,8 @@ impl<T> AssetPreview<T> {
 }
 
 impl AssetPreview<MeshAsset> {
-    pub(super) fn draw(&self) -> MeshPreview<'_> {
-        MeshPreview::new(&self.gpu, preview_instance())
+    pub(super) fn draw<'a>(&'a self, instances: &'a [Instance]) -> MeshBatch<'a> {
+        MeshBatch::new(&self.gpu, instances)
     }
 }
 
@@ -57,6 +61,67 @@ pub(super) fn report_asset_preview<T>(preview: Option<&AssetPreview<T>>, out: &m
         out.int("indices", 0);
         out.int("texture_width", 0);
         out.int("texture_height", 0);
+    }
+}
+
+/// Required static world assets and their reusable placement buffers.
+/// Both assets must import and upload before this value can exist.
+pub(super) struct WorldAssets<T> {
+    ground: AssetPreview<T>,
+    prop: AssetPreview<T>,
+    ground_instance: [Instance; 1],
+    props: InstanceBuffer,
+}
+
+impl<T> WorldAssets<T> {
+    pub(super) fn load(mut upload: impl FnMut(&arpg_assets::StaticMesh) -> Result<T, String>) -> Result<Self, String> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/world");
+        let ground = load_static(root.join("ground.glb"), &mut upload)?;
+        let prop = load_static(root.join("prop.glb"), upload)?;
+        Ok(Self {
+            ground,
+            prop,
+            ground_instance: [Instance::new(
+                Vec3::ZERO,
+                Vec3::new(arpg_sim::ARENA_HALF * 2.0, 1.0, arpg_sim::ARENA_HALF * 2.0),
+                Vec3::ONE,
+            )],
+            props: InstanceBuffer::default(),
+        })
+    }
+
+    pub(super) fn rebuild(&mut self, props: impl Iterator<Item = arpg_sim::PropPresentation>) {
+        let mut sink = self.props.sink();
+        for prop in props {
+            let tint = if prop.interaction() == Some(arpg_sim::InteractionState::Activated) {
+                Vec3::new(0.06, 0.55, 0.12)
+            } else {
+                Vec3::new(0.04, 0.18, 0.32)
+            };
+            sink.push(Instance::new(prop.ground_position(), Vec3::ONE, tint));
+        }
+    }
+
+    pub(super) fn instance_count(&self) -> usize { 1 + self.props.as_slice().len() }
+
+    pub(super) fn draw_count(&self) -> usize { 1 + usize::from(!self.props.as_slice().is_empty()) }
+
+    pub(super) fn report(&self, out: &mut Report) {
+        out.object("ground", |out| self.ground.report(out));
+        out.object("prop", |out| self.prop.report(out));
+        out.int("ground_instances", 1);
+        out.int("prop_instances", self.props.as_slice().len() as u64);
+        out.int("draws", self.draw_count() as u64);
+    }
+}
+
+impl WorldAssets<MeshAsset> {
+    pub(super) fn draws<'a>(&'a self, preview: Option<&'a AssetPreview<MeshAsset>>, preview_instances: &'a [Instance]) -> [MeshBatch<'a>; 3] {
+        [
+            self.ground.draw(&self.ground_instance),
+            self.prop.draw(self.props.as_slice()),
+            preview.map_or_else(|| self.ground.draw(&[]), |preview| preview.draw(preview_instances)),
+        ]
     }
 }
 
@@ -579,7 +644,7 @@ fn report_character_asset(
 }
 
 /// World-space placement belongs to app, never to the imported mesh or sim.
-fn preview_instance() -> Instance {
+pub(super) fn preview_instance() -> Instance {
     Instance::new(
         glam::Vec3::new(-3.0, 0.0, -3.0),
         glam::Vec3::ONE,
@@ -611,6 +676,14 @@ pub(super) fn replace_preview<T>(
     path: std::path::PathBuf,
     upload: impl FnOnce(&arpg_assets::StaticMesh) -> Result<T, String>,
 ) -> Result<(), String> {
+    *slot = Some(load_static(path, upload)?);
+    Ok(())
+}
+
+fn load_static<T>(
+    path: std::path::PathBuf,
+    upload: impl FnOnce(&arpg_assets::StaticMesh) -> Result<T, String>,
+) -> Result<AssetPreview<T>, String> {
     let source = read_glb(&path)?;
     let mesh =
         arpg_assets::import_glb(&source).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -619,15 +692,20 @@ pub(super) fn replace_preview<T>(
     let texture_width = mesh.base_color_texture().width();
     let texture_height = mesh.base_color_texture().height();
     let gpu = upload(&mesh).map_err(|error| format!("{}: {error}", path.display()))?;
-    *slot = Some(AssetPreview {
+    Ok(AssetPreview {
         path,
         vertex_count,
         index_count,
         texture_width,
         texture_height,
         gpu,
-    });
-    Ok(())
+    })
+}
+
+/// The checked-in playable asset is resolved independently of the launch directory.
+pub(super) fn default_character_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/characters/basic-player/basic-player.glb")
 }
 
 pub(super) fn replace_character<T>(

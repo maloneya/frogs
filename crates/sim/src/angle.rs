@@ -1,7 +1,7 @@
 //! Angles on the ground plane, wrapped to `-PI..=PI`.
 //!
 //! Shared rather than owned by the `face` pass, because the *drawing* of a
-//! facing needs the same seam handling the turning of one does — `extract`
+//! facing needs the same seam handling the turning of one does — presentation
 //! blends between two facings and would spin the body the long way round
 //! without it. Two copies of this logic would be two chances to fix the seam in
 //! one of them.

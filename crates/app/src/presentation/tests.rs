@@ -15,9 +15,16 @@ fn character_fixture_path() -> std::path::PathBuf {
         .join("../../assets/fixtures/blender-bind-pose.glb")
 }
 
-fn basic_player_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/characters/basic-player/basic-player.glb")
+#[test]
+fn startup_asset_supports_both_player_and_horde_roles() {
+    let mut player = None;
+    let mut horde = None;
+    let path = default_character_path();
+    assert!(path.is_absolute());
+    replace_character(&mut player, path.clone(), |_| Ok(())).unwrap();
+    replace_horde(&mut horde, path.clone(), |_| Ok(())).unwrap();
+    assert_eq!(player.unwrap().path, path);
+    assert_eq!(horde.unwrap().path, path);
 }
 
 fn loaded_character_from(path: std::path::PathBuf) -> LoadedCharacter<()> {
@@ -386,7 +393,7 @@ fn authoritative_player_facts_drive_direct_roles() {
 
 #[test]
 fn recovery_tuning_cannot_move_an_active_phase_sample() {
-    let mut character = loaded_character_from(basic_player_path());
+    let mut character = loaded_character_from(default_character_path());
     for profile in AttackProfile::ALL {
         let base = profile.resolve();
         let longer = arpg_sim::ResolvedAttack::try_new(
@@ -425,7 +432,7 @@ fn recovery_tuning_cannot_move_an_active_phase_sample() {
 
 #[test]
 fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
-    let mut character = loaded_character_from(basic_player_path());
+    let mut character = loaded_character_from(default_character_path());
     let tip = |character: &mut LoadedCharacter<()>, profile, phase, elapsed, alpha| {
         weapon_tip_at(character, profile, phase, elapsed, alpha, profile.resolve())
     };
@@ -546,4 +553,44 @@ fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
 fn character_time_is_the_continuous_tick_plus_alpha_clock() {
     assert_eq!(presentation_seconds(60, Alpha::ZERO), 1.0);
     assert_eq!(presentation_seconds(59, Alpha::ONE), 1.0);
+}
+
+#[test]
+fn world_assets_follow_prop_membership_and_authored_geometry() {
+    let mut world = WorldAssets::load(|mesh| {
+        if mesh.vertex_count() == 4 {
+            assert_eq!(mesh.index_count(), 6);
+            for vertex in mesh.vertices() {
+                assert!(vertex.position().y.abs() < 1e-6);
+                assert!((vertex.position().x.abs() - 0.5).abs() < 1e-6);
+                assert!((vertex.position().z.abs() - 0.5).abs() < 1e-6);
+            }
+            let red = mesh.base_color_texture().rgba8()[0];
+            assert!((40..=56).contains(&red), "floor colours must be encoded into sRGB, got {red}");
+        }
+        Ok(())
+    }).unwrap();
+    assert_eq!(world.ground.vertex_count, 4);
+    assert_eq!(world.ground.index_count, 6);
+    assert!(world.prop.vertex_count > 24, "the prop is authored bevelled geometry");
+    assert_eq!(world.ground_instance[0].pos(), Vec3::ZERO);
+    let mut game = Game::empty();
+    game.place(glam::Vec2::new(4.0, 0.0), arpg_sim::Template::BODY).unwrap();
+    let id = game.place(glam::Vec2::new(0.0, 1.0), arpg_sim::Template::BLOCK.interactive()).unwrap();
+    let before = game.hash();
+    world.rebuild(game.prop_presentations(Alpha::ONE));
+    assert_eq!(game.hash(), before, "presentation cannot modify gameplay");
+    assert_eq!(world.instance_count(), 2);
+    assert_eq!(world.draw_count(), 2);
+    assert_eq!(world.props.as_slice()[0].pos(), Vec3::new(0.0, 0.0, 1.0));
+    assert_eq!(game.prop_presentations(Alpha::ONE).next().unwrap().interaction(), Some(arpg_sim::InteractionState::Ready));
+    let mut accumulator = Accumulator::default();
+    game.step(accumulator.pending(arpg_sim::Dt::SECS).next().unwrap(), Intent::NONE.with_interact(true));
+    let snapshot = game.prop_presentations(Alpha::ONE).next().unwrap();
+    assert_eq!(snapshot.id(), id);
+    assert_eq!(snapshot.interaction(), Some(arpg_sim::InteractionState::Activated));
+    world.rebuild(game.prop_presentations(Alpha::ONE));
+    world.rebuild(Game::empty().prop_presentations(Alpha::ONE));
+    assert_eq!(world.instance_count(), 1, "old props must not survive a fresh world");
+    assert_eq!(world.draw_count(), 1);
 }

@@ -2,7 +2,7 @@
 //! tick history and physical output. The restart report is the explicit new
 //! game-owned state; the engine fingerprint remains unchanged by that addition.
 
-use arpg_core::{InstanceBuffer, Intent, MoveDir, Report};
+use arpg_core::{Intent, MoveDir, Report};
 use arpg_game::Game;
 use arpg_sim::{
     Accumulator, Alpha, AttackProfile, Condition, Dt, Event, Impulse, Placed,
@@ -59,8 +59,6 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
     let restart = Some((scene.name.as_str(), world.hash()));
     assert_same(&game, &world, restart);
     let mut clock = Accumulator::default();
-    let mut drawn_game = InstanceBuffer::default();
-    let mut drawn_engine = InstanceBuffer::default();
     let mut stepped = 0;
 
     // Includes frames with no tick and frames with several. Both adapters must
@@ -91,15 +89,17 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
         let before = game.hash();
         for alpha in [Alpha::ZERO, clock.alpha(), Alpha::ONE] {
             assert_eq!(game.player_pos_at(alpha), world.player_pos_at(alpha));
-            game.extract(alpha, drawn_game.sink());
-            world.extract(alpha, drawn_engine.sink());
-            let actual = drawn_game.as_slice();
-            let expected = drawn_engine.as_slice();
-            assert_eq!(actual.len(), expected.len());
-            for (actual, expected) in actual.iter().zip(expected) {
-                assert_eq!(actual.pos(), expected.pos());
-                assert_eq!(actual.yaw(), expected.yaw());
-            }
+            let actual = game.player_presentation(alpha);
+            let expected = world.player_presentation(alpha);
+            assert_eq!(actual.id(), expected.id());
+            assert_eq!(actual.ground_position(), expected.ground_position());
+            assert_eq!(actual.facing(), expected.facing());
+            assert_eq!(actual.displacement(), expected.displacement());
+            assert_eq!(actual.attack().phase, expected.attack().phase);
+            let enemies = |p: arpg_sim::EnemyPresentation| (p.id(), p.ground_position(), p.displacement());
+            assert_eq!(game.enemy_presentations(alpha).map(enemies).collect::<Vec<_>>(), world.enemy_presentations(alpha).map(enemies).collect::<Vec<_>>());
+            let props = |p: arpg_sim::PropPresentation| (p.id(), p.ground_position(), p.interaction());
+            assert_eq!(game.prop_presentations(alpha).map(props).collect::<Vec<_>>(), world.prop_presentations(alpha).map(props).collect::<Vec<_>>());
         }
         assert_eq!(game.hash(), before, "presentation must not change playable state");
     }

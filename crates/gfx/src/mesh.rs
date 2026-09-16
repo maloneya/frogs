@@ -1,10 +1,10 @@
 //! GPU resources and pipeline for validated static assets.
 
-use arpg_core::Instance;
+use arpg_core::{Instance, MAX_INSTANCES};
 use wgpu::util::DeviceExt as _;
 
 use crate::camera::CameraBinding;
-use crate::cube::instance_layout;
+use crate::instance::instance_layout;
 use crate::material::{Material, MaterialLayout};
 
 /// One uploaded static mesh.
@@ -44,12 +44,12 @@ impl MeshAsset {
         ]
         .map(|filter| device.push_error_scope(filter));
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("asset preview vertices"),
+            label: Some("static mesh vertices"),
             contents: bytemuck::cast_slice(mesh.vertices()),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("asset preview indices"),
+            label: Some("static mesh indices"),
             contents: bytemuck::cast_slice(mesh.indices()),
             usage: wgpu::BufferUsages::INDEX,
         });
@@ -59,7 +59,7 @@ impl MeshAsset {
             material_layout,
             mesh.base_color_texture(),
             mesh.base_color_factor(),
-            "asset preview base colour",
+            "static mesh base colour",
         );
         let uploaded = Self {
             vertices,
@@ -77,18 +77,22 @@ impl MeshAsset {
     }
 }
 
-/// One frame's placement of an uploaded mesh.
+/// One uploaded mesh and all its placements for this frame.
+///
+/// Each nonempty batch becomes one instanced draw. Across a frame, batches
+/// must contain at most [`MAX_INSTANCES`] placements; upload validates this
+/// before writing anything, so no geometry is silently truncated.
 #[derive(Clone, Copy)]
-pub struct MeshPreview<'a> {
+pub struct MeshBatch<'a> {
     pub(crate) mesh: &'a MeshAsset,
-    pub(crate) instance: Instance,
+    pub(crate) instances: &'a [Instance],
 }
 
-impl<'a> MeshPreview<'a> {
-    /// Pairs a GPU asset with its app-owned world transform and tint.
+impl<'a> MeshBatch<'a> {
+    /// Borrows validated GPU geometry and presentation-owned placements.
     #[must_use]
-    pub fn new(mesh: &'a MeshAsset, instance: Instance) -> Self {
-        Self { mesh, instance }
+    pub fn new(mesh: &'a MeshAsset, instances: &'a [Instance]) -> Self {
+        Self { mesh, instances }
     }
 }
 
@@ -108,12 +112,12 @@ impl MeshPipeline {
     ) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("mesh.wgsl"));
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("asset preview pipeline layout"),
+            label: Some("static mesh pipeline layout"),
             bind_group_layouts: &[Some(camera_layout), Some(material_layout.raw())],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("asset preview pipeline"),
+            label: Some("static mesh pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -150,8 +154,8 @@ impl MeshPipeline {
             cache: None,
         });
         let instance = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("asset preview instance"),
-            size: size_of::<Instance>() as wgpu::BufferAddress,
+            label: Some("static mesh instance"),
+            size: (MAX_INSTANCES * size_of::<Instance>()) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -171,8 +175,36 @@ impl MeshPipeline {
         MeshAsset::new(device, queue, &self.material_layout, mesh)
     }
 
-    pub(crate) fn upload(&self, queue: &wgpu::Queue, instance: Instance) {
-        queue.write_buffer(&self.instance, 0, bytemuck::bytes_of(&instance));
+    pub(crate) fn upload(&self, queue: &wgpu::Queue, batches: &[MeshBatch<'_>]) {
+        let count = batches.iter().try_fold(0_usize, |count, batch| {
+            count.checked_add(batch.instances.len())
+        }).expect("static mesh instance count overflow");
+        assert!(count <= MAX_INSTANCES, "static mesh batches exceed instance capacity");
+        let mut offset = 0;
+        for batch in batches {
+            if !batch.instances.is_empty() {
+                queue.write_buffer(
+                    &self.instance,
+                    (offset * size_of::<Instance>()) as wgpu::BufferAddress,
+                    bytemuck::cast_slice(batch.instances),
+                );
+                offset += batch.instances.len();
+            }
+        }
+    }
+
+    pub(crate) fn draw_batches(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        camera: &CameraBinding,
+        batches: &[MeshBatch<'_>],
+    ) {
+        let mut first = 0;
+        for batch in batches {
+            let end = first + batch.instances.len() as u32;
+            self.draw(pass, camera, batch.mesh, first..end);
+            first = end;
+        }
     }
 
     pub(crate) fn draw(
@@ -180,13 +212,17 @@ impl MeshPipeline {
         pass: &mut wgpu::RenderPass<'_>,
         camera: &CameraBinding,
         mesh: &MeshAsset,
+        instances: std::ops::Range<u32>,
     ) {
+        if instances.is_empty() {
+            return;
+        }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &camera.bind_group, &[]);
         pass.set_bind_group(1, mesh.material.bind_group(), &[]);
         pass.set_vertex_buffer(0, mesh.vertices.slice(..));
         pass.set_vertex_buffer(1, self.instance.slice(..));
         pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        pass.draw_indexed(0..mesh.index_count, 0, instances);
     }
 }

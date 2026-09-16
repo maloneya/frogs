@@ -2,12 +2,7 @@
 
 use glam::{Vec2, Vec3};
 
-use arpg_core::{Instance, InstanceSink};
-
-use crate::{
-    AttackStatus, EntityId, PLAYER_HALF_HEIGHT, PLAYER_NOSE_FORWARD, PLAYER_NOSE_SCALE,
-    PLAYER_SCALE,
-};
+use crate::{AttackStatus, EntityId, InteractionState};
 
 /// One frame's immutable view of the player.
 ///
@@ -109,24 +104,30 @@ impl PlayerPresentation {
         self.attack
     }
 
-    /// Emits the original cube body when no character asset replaces it.
-    pub fn extract_fallback(self, out: &mut InstanceSink<'_>) {
-        let forward = Vec3::new(self.facing.sin(), 0.0, self.facing.cos());
-        out.push(
-            Instance::new(
-                self.ground_position + Vec3::Y * PLAYER_SCALE.y + forward * PLAYER_NOSE_FORWARD,
-                PLAYER_NOSE_SCALE,
-                Vec3::new(0.95, 0.8, 0.4),
-            )
-            .with_yaw(self.facing),
-        );
-        out.push(
-            Instance::new(
-                self.ground_position + Vec3::Y * PLAYER_HALF_HEIGHT,
-                PLAYER_SCALE,
-                Vec3::new(0.10, 0.47, 0.88),
-            )
-            .with_yaw(self.facing),
-        );
+}
+
+/// Immutable physical facts for a non-damageable prop.
+#[derive(Clone, Copy, Debug)]
+pub struct PropPresentation {
+    id: EntityId,
+    ground_position: Vec3,
+    interaction: Option<InteractionState>,
+}
+
+impl PropPresentation {
+    pub(crate) fn new(id: EntityId, ground_position: Vec3, interaction: Option<InteractionState>) -> Self {
+        Self { id, ground_position, interaction }
     }
+
+    /// Stable identity, independent of dense storage order.
+    #[must_use]
+    pub fn id(self) -> EntityId { self.id }
+
+    /// Interpolated asset origin on the ground plane, in metres.
+    #[must_use]
+    pub fn ground_position(self) -> Vec3 { self.ground_position }
+
+    /// Authoritative interaction state; absent for non-interactable props.
+    #[must_use]
+    pub fn interaction(self) -> Option<InteractionState> { self.interaction }
 }

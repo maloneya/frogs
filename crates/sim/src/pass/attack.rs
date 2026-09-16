@@ -32,12 +32,8 @@ use crate::{
     AttackPhase, AttackProfile, AttackStatus, ENEMY_RADIUS, EntityId, RecoveryTicks, ResolvedAttack,
 };
 
-/// How many discs a hitbox is made of: one per tick of the active window.
-///
-/// Public to the crate because the instance budget depends on it — `World` has
-/// to reserve room to *draw* a swing, and a reservation that had to be kept in
-/// step by hand would overrun the GPU buffer in silence.
-pub(crate) const HITBOX_SAMPLES: usize = ResolvedAttack::MAX_ACTIVE_TICKS as usize;
+/// Maximum stored discs: one per tick of the longest accepted active window.
+const HITBOX_SAMPLES: usize = ResolvedAttack::MAX_ACTIVE_TICKS as usize;
 
 /// How many bodies one swing is expected to strike.
 ///
@@ -52,7 +48,7 @@ const EXPECTED_HITS: usize = 16;
 /// which part of it is live.** Kept as separate fields on [`Attack`] they were
 /// two things that had to agree, and nothing but convention said a caller had
 /// to check the timer before reading the shape.
-pub(crate) struct InFlight {
+struct InFlight {
     /// Ticks since the swing began. Names the tick that just ran — see
     /// [`attack`] for why it is advanced before anything reads it.
     elapsed: u32,
@@ -80,12 +76,11 @@ impl InFlight {
     /// **Each phase carries what that phase has**, rather than a bare tag
     /// beside three numbers of which two are always dead. It also means the
     /// live disc's index reaches its readers from the same place that decided
-    /// the window, so `strike` and `extract` cannot disagree about which disc
-    /// is hot — there is no second derivation to drift.
-    pub(crate) fn phase(&self) -> Phase {
+    /// the window, so hit resolution and reported attack state agree.
+    fn phase(&self) -> Phase {
         let startup = self.resolved.startup();
         if self.elapsed < startup {
-            Phase::Startup(self.elapsed as f32 / startup as f32)
+            Phase::Startup
         } else if is_active(self.elapsed, self.resolved) {
             Phase::Active((self.elapsed - startup) as usize)
         } else {
@@ -93,10 +88,7 @@ impl InFlight {
         }
     }
 
-    /// Every disc this swing occupies, in the order it occupies them.
-    pub(crate) fn discs(&self) -> &[Disc] {
-        self.hitbox.discs()
-    }
+
 }
 
 /// Where the swing has got to.
@@ -147,7 +139,7 @@ impl Attack {
         let Self { swing, profile, resolved, struck } = self;
         let phase = match swing.as_ref().map(InFlight::phase) {
             None => AttackPhase::Idle,
-            Some(Phase::Startup(_)) => AttackPhase::Startup,
+            Some(Phase::Startup) => AttackPhase::Startup,
             Some(Phase::Active(_)) => AttackPhase::Active,
             Some(Phase::Recovery) => AttackPhase::Recovery,
         };
@@ -183,13 +175,6 @@ impl Attack {
         matches!(self.swing.as_ref().map(InFlight::phase), Some(Phase::Active(_)))
     }
 
-    /// The swing in the air, for anything that needs its shape as well as its
-    /// timer. `None` when idle, which is what makes reading one without the
-    /// other impossible rather than merely discouraged.
-    pub(crate) fn in_flight(&self) -> Option<&InFlight> {
-        self.swing.as_ref()
-    }
-
     /// How many bodies the current or most recent swing struck.
     pub(crate) fn struck(&self) -> usize {
         self.struck.len()
@@ -222,10 +207,9 @@ impl Attack {
 ///
 /// The three configured phases, as a thing a caller can match on
 /// rather than three comparisons it has to get the boundaries right on.
-pub(crate) enum Phase {
-    /// Committed, and no hitbox yet. The wind-up, and how far through it, in
-    /// `0.0..1.0` — which is what lets a telegraph brighten as it commits.
-    Startup(f32),
+enum Phase {
+    /// Committed wind-up, with no live hitbox yet.
+    Startup,
     /// The hitbox exists, and this is which of its discs is live.
     Active(usize),
     /// The hitbox is gone, and no new swing may start yet.
@@ -261,8 +245,7 @@ pub(crate) struct Pose {
 /// animation rather than in advance.
 ///
 /// The hitbox itself is generated at the press and stored — see
-/// [`crate::swing`]. That is what lets `World::extract` draw the shape this
-/// pass tests rather than a second opinion about where the sword is.
+/// [`crate::swing`]. Hit resolution uses that committed shape throughout the swing.
 ///
 /// A press arriving while a swing is in progress is **dropped**, not queued.
 /// Buffering it is a real feature and a separate one — it needs an expiry and a
@@ -338,7 +321,7 @@ pub(crate) fn attack(
     // move rather than a compromise.
     let live = match swing.phase() {
         Phase::Active(sample) => Some(swing.hitbox.at(sample)),
-        Phase::Startup(_) | Phase::Recovery => None,
+        Phase::Startup | Phase::Recovery => None,
     };
 
     let resolved = swing.resolved;
@@ -403,9 +386,7 @@ fn strike(
     damage: &mut DamageSink<'_>,
     trace: &mut TraceSink<'_>,
 ) {
-    // The disc is *placed* rather than computed. `World::extract` places the
-    // same one, from the same array, which is what makes the swing draw where
-    // it hits — see `crate::swing`.
+    // Place the committed disc using the current authoritative facing.
     let (centre, radius) = disc.place(pose.pos, pose.facing);
     let contact_distance = radius + ENEMY_RADIUS;
 

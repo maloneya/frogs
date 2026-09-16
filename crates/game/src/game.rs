@@ -1,6 +1,6 @@
 use crate::scene::{GameScene, RestartError, RestartScene, SceneError, fingerprint};
 use crate::source_control::{self, ControlEvent, ControlState, SourceControls};
-use arpg_core::{InstanceSink, Intent, Report};
+use arpg_core::{Intent, Report};
 use arpg_sim::{
     Alpha, AttackProfile, AttackStatus, Dt, EntityId, Fnv, Impulse, InteractionState, Motion,
     RecoveryTicks, SceneId, Source, SourceId, Template, Trace, World,
@@ -146,27 +146,6 @@ impl Game {
                 snapshot.report(out);
             }
         });
-    }
-
-    /// Extracts interpolated instances without modifying playable state.
-    pub fn extract(&self, alpha: Alpha, out: InstanceSink<'_>) {
-        let Self {
-            world,
-            restart: _,
-            controls: _,
-            control_trace: _,
-        } = self;
-        world.extract(alpha, out);
-    }
-
-    /// Extracts everything except the fallback player cubes.
-    pub fn extract_without_player(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
-        self.world.extract_without_player(alpha, out);
-    }
-
-    /// Extracts ground, props and attack telegraph but no animated bodies.
-    pub fn extract_without_characters(&self, alpha: Alpha, out: &mut InstanceSink<'_>) {
-        self.world.extract_without_characters(alpha, out);
     }
 
     /// Installs a scene between ticks through the engine admission boundary.
@@ -363,6 +342,11 @@ impl Game {
         alpha: Alpha,
     ) -> impl Iterator<Item = arpg_sim::EnemyPresentation> + '_ {
         self.world.enemy_presentations(alpha)
+    }
+
+    /// Immutable prop facts for asset-driven presentation.
+    pub fn prop_presentations(&self, alpha: Alpha) -> impl Iterator<Item = arpg_sim::PropPresentation> + '_ {
+        self.world.prop_presentations(alpha)
     }
 
     /// Player simulation facing in radians.

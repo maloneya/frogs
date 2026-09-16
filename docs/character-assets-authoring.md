@@ -99,7 +99,11 @@ The ordinary-horde contract is a smaller view of the same interchange format:
 it requires only `Idle` and `Run`. `horde show <path.glb>` selects one shared
 mesh and material, then groups live enemies into four stable phases for each
 role. The phase comes from stable entity identity rather than authored or
-stored randomness. `horde clear` restores the fallback enemy cubes.
+stored randomness. Startup loads `assets/characters/basic-player/basic-player.glb`
+for both player and horde, using the existing horde scale and tint. Asset paths
+are resolved from the build-time repository location, independently of the launch
+directory. Missing or invalid defaults fail startup explicitly. `character clear`
+and `horde clear` restore this default asset; there is no character cube fallback.
 
 The checked-in `assets/fixtures/blender-bind-pose.glb` exercises this contract
 with a four-bone, asymmetric training dummy and the eight player actions.

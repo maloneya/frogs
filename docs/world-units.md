@@ -6,10 +6,10 @@ it does not rescale the world or change combat behaviour.
 
 ## Reading a size
 
-The renderer starts with a cube one unit across, centred on the origin. A mesh
-scale of 0.5 makes each side half a metre long. Nonuniform scale gives different
-width, height and depth. Scale itself is a multiplier; a future imported mesh
-must also have a known size before scaling tells us its final dimensions.
+Imported meshes are authored in metres. A mesh scale of 0.5 halves those
+authored dimensions; nonuniform scale adjusts each axis separately. Scale is
+a multiplier, so the mesh must have a known size before scaling tells us its
+final dimensions.
 
 World positions use the same ruler. Two positions differing only by 3 on X are
 three metres apart. X and Z describe the floor; Y describes height. The camera

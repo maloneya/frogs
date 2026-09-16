@@ -1,7 +1,7 @@
 //! The overlay pipeline: screen-space quads over the finished world.
 //!
-//! The second pipeline in the engine, and almost the opposite of the first in
-//! every choice it makes. The cube pipeline is perspective-free but still
+//! The screen-space counterpart of world rendering. Asset pipelines are
+//! perspective-free but still
 //! camera-driven, opaque, depth-tested and back-face culled. This one has no
 //! camera, blends, and is drawn strictly in submission order.
 //!
@@ -38,7 +38,7 @@ struct Screen {
 const _: () = assert!(size_of::<Screen>() == 16);
 
 /// Locations 0..2 carry `Quad`'s three `vec4`s. There is no mesh sharing the
-/// slots — unlike the cube pipeline, where instance data starts at 2 — so these
+/// slots — unlike the asset pipelines, where instance data starts at 2 — so these
 /// begin at zero.
 const ATTRS: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];

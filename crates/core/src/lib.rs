@@ -2,7 +2,7 @@
 //!
 //! Two vocabularies, in fact, and they are mirror images of each other:
 //!
-//! - [`Instance`] is what the simulation says *outward*, to the renderer —
+//! - [`Instance`] is what presentation says *outward*, to the renderer —
 //!   position, scale, colour, and nothing about what an entity is.
 //! - [`Action`] is what the device layer says *inward*, and [`Intent`] is what
 //!   that becomes once the camera has resolved screen to world. Neither names a

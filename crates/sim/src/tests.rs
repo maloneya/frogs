@@ -1,10 +1,10 @@
-//! Tests for the world itself: determinism, the extract seam, and the budget.
+//! Tests for the world itself: determinism, presentation snapshots, and the budget.
 //!
 //! Split from `lib.rs` so that file stays the shape it describes — storage, the
 //! two seams, and the schedule — rather than being mostly test code.
 
 use super::*;
-use arpg_core::{InstanceBuffer, Intent, MoveDir};
+use arpg_core::{Intent, MoveDir};
 
 /// Counts allocations made on the calling thread.
 ///
@@ -218,11 +218,18 @@ fn the_hash_localises_where_two_streams_diverge() {
     assert_ne!(straight.last(), turning.last(), "the divergence washed out");
 }
 
-/// Where every enemy was drawn. `extract` pushes ground, the horde, any live
-/// swing, then the player, so the horde starts right after the floor.
-fn drawn_enemies(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec<Vec3> {
-    world.extract(alpha, buffer.sink());
-    buffer.as_slice()[GROUND_INSTANCES..][..world.enemy_count()].iter().map(Instance::pos).collect()
+/// Consume the same allocation-free snapshots that presentation receives.
+fn observe_presentation(world: &World, alpha: Alpha) {
+    std::hint::black_box(world.player_presentation(alpha));
+    for enemy in world.enemy_presentations(alpha) { std::hint::black_box(enemy); }
+    for prop in world.prop_presentations(alpha) { std::hint::black_box(prop); }
+}
+
+/// Character presentation supplies the interpolated origin; compare body centres.
+fn drawn_enemies(world: &World, alpha: Alpha) -> Vec<Vec3> {
+    world.enemy_presentations(alpha)
+        .map(|enemy| enemy.ground_position() + Vec3::Y * ENEMY_HALF_HEIGHT)
+        .collect()
 }
 
 /// Puts the player inside the horde and walks, so the solver is displacing
@@ -245,11 +252,9 @@ fn shoving_through_the_crowd(enemies: usize) -> World {
     world
 }
 
-/// Reads the position of the last instance a sink was given — the player body,
-/// since `extract` pushes it last.
-fn drawn_player(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec3 {
-    world.extract(alpha, buffer.sink());
-    buffer.as_slice().last().expect("extract pushes at least the player").pos()
+/// Reads the player transform through the same snapshot as character rendering.
+fn drawn_player(world: &World, alpha: Alpha) -> Vec3 {
+    world.player_presentation(alpha).ground_position() + Vec3::Y * PLAYER_HALF_HEIGHT
 }
 
 /// **The gate for render interpolation.** The endpoints have to be exact,
@@ -258,7 +263,6 @@ fn drawn_player(world: &World, alpha: Alpha, buffer: &mut InstanceBuffer) -> Vec
 fn the_blend_endpoints_are_the_two_ticks_themselves() {
     let mut world = in_open_ground();
     world.set_enemy_count(4);
-    let mut buffer = InstanceBuffer::default();
 
     let before = world.player_pos();
     world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
@@ -266,12 +270,12 @@ fn the_blend_endpoints_are_the_two_ticks_themselves() {
     assert_ne!(before, after, "the tick under test did not move anything");
 
     assert_eq!(
-        drawn_player(&world, Alpha::ZERO, &mut buffer),
+        drawn_player(&world, Alpha::ZERO),
         before,
         "alpha 0 is not the previous tick"
     );
     assert_eq!(
-        drawn_player(&world, Alpha::ONE, &mut buffer),
+        drawn_player(&world, Alpha::ONE),
         after,
         "alpha 1 is not the current tick"
     );
@@ -299,19 +303,6 @@ fn player_presentation_carries_identity_transform_movement_and_attack() {
 }
 
 #[test]
-fn character_extraction_omits_exactly_the_two_fallback_instances() {
-    let world = World::empty();
-    let mut full = InstanceBuffer::default();
-    let mut character = InstanceBuffer::default();
-    world.extract(Alpha::ONE, full.sink());
-    {
-        let mut sink = character.sink();
-        world.extract_without_player(Alpha::ONE, &mut sink);
-    }
-    assert_eq!(full.as_slice().len(), character.as_slice().len() + 2);
-}
-
-#[test]
 fn horde_presentation_is_stable_derived_and_excludes_props() {
     let mut world = World::empty();
     let enemy = world.place(Vec2::new(2.0, 0.0), Template::BODY).unwrap();
@@ -325,17 +316,11 @@ fn horde_presentation_is_stable_derived_and_excludes_props() {
     assert_eq!(presentations[0].displacement(), Vec2::ZERO);
     assert!(world.is_alive(prop));
 
-    let mut full = InstanceBuffer::default();
-    let mut without_characters = InstanceBuffer::default();
-    world.extract(Alpha::ONE, full.sink());
-    {
-        let mut sink = without_characters.sink();
-        world.extract_without_characters(Alpha::ONE, &mut sink);
-    }
-    assert_eq!(
-        full.as_slice().len(),
-        without_characters.as_slice().len() + 3
-    );
+    let props: Vec<_> = world.prop_presentations(Alpha::ONE).collect();
+    assert_eq!(props.len(), 1);
+    assert_eq!(props[0].id(), prop);
+    assert_eq!(props[0].ground_position(), Vec3::new(-2.0, 0.0, 0.0));
+    assert_eq!(props[0].interaction(), None);
 }
 
 /// Between the endpoints it has to actually be *between*, and monotonic —
@@ -344,7 +329,6 @@ fn horde_presentation_is_stable_derived_and_excludes_props() {
 fn the_blend_crosses_the_gap_once_and_in_order() {
     let mut world = in_open_ground();
     world.set_enemy_count(4);
-    let mut buffer = InstanceBuffer::default();
 
     let before = world.player_pos();
     world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
@@ -365,7 +349,7 @@ fn the_blend_crosses_the_gap_once_and_in_order() {
     let mut furthest = -1.0;
 
     for alpha in sampled.chain(core::iter::once(Alpha::ONE)) {
-        let drawn = drawn_player(&world, alpha, &mut buffer);
+        let drawn = drawn_player(&world, alpha);
         let a = alpha.get();
 
         // On the segment: the two legs sum to the whole only for a point
@@ -383,7 +367,7 @@ fn the_blend_crosses_the_gap_once_and_in_order() {
 }
 
 /// **Found by mutation.** Every other blend test here reads the player,
-/// because the player is the last instance and therefore the easy one. So
+/// which used to be the last cube instance and therefore the easy one. So
 /// three separate breakages of the *horde's* interpolation — not blending
 /// it at all, blending it backwards, and never recording where it was —
 /// passed the entire suite. The horde is a thousand of the bodies on screen
@@ -391,7 +375,6 @@ fn the_blend_crosses_the_gap_once_and_in_order() {
 #[test]
 fn the_horde_is_interpolated_too() {
     let mut world = shoving_through_the_crowd(256);
-    let mut buffer = InstanceBuffer::default();
 
     let before: Vec<Vec2> = world.bodies.pos[1..].to_vec();
     world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
@@ -400,9 +383,9 @@ fn the_horde_is_interpolated_too() {
     let moved: Vec<usize> = (0..after.len()).filter(|&i| before[i] != after[i]).collect();
     assert!(!moved.is_empty(), "no body moved during the tick under test");
 
-    let at_zero = drawn_enemies(&world, Alpha::ZERO, &mut buffer);
-    let at_one = drawn_enemies(&world, Alpha::ONE, &mut buffer);
-    let at_half = drawn_enemies(&world, half(), &mut buffer);
+    let at_zero = drawn_enemies(&world, Alpha::ZERO);
+    let at_one = drawn_enemies(&world, Alpha::ONE);
+    let at_half = drawn_enemies(&world, half());
 
     for i in 0..after.len() {
         assert_eq!(at_zero[i], on_ground(before[i], ENEMY_HALF_HEIGHT), "body {i} at alpha 0");
@@ -436,10 +419,7 @@ fn an_empty_horde_is_a_legal_world() {
     let expected = 30.0 * pass::walk::PER_TICK;
     assert!((world.player_pos().x - expected).abs() < 1e-4);
 
-    // And it still draws: ground plus the player body and marker, no horde.
-    let mut buffer = InstanceBuffer::default();
-    world.extract(Alpha::ONE, buffer.sink());
-    assert_eq!(buffer.as_slice().len(), GROUND_INSTANCES + 2);
+    assert_eq!(world.enemy_presentations(Alpha::ONE).count(), 0);
 }
 
 /// **Found by mutation, and it is a real artefact.** Every other test here
@@ -455,7 +435,6 @@ fn an_empty_horde_is_a_legal_world() {
 #[test]
 fn a_respawned_horde_is_drawn_standing_still() {
     let mut world = shoving_through_the_crowd(256);
-    let mut buffer = InstanceBuffer::default();
 
     // Change the count and draw with no tick in between.
     world.set_enemy_count(64);
@@ -465,7 +444,7 @@ fn a_respawned_horde_is_drawn_standing_still() {
 
     for alpha in [Alpha::ZERO, half(), Alpha::ONE] {
         assert_eq!(
-            drawn_enemies(&world, alpha, &mut buffer),
+            drawn_enemies(&world, alpha),
             standing,
             "a horde that has not been stepped was drawn mid-move at alpha {}",
             alpha.get()
@@ -474,7 +453,7 @@ fn a_respawned_horde_is_drawn_standing_still() {
 }
 
 /// **The rule that makes interpolation safe**, checked rather than assumed:
-/// drawing must not change what the simulation believes. `extract` takes
+/// drawing must not change what the simulation believes. Presentation takes
 /// `&self`, so this cannot fail without the signature changing — which is
 /// the point, and is why the assertion is cheap enough to keep.
 #[test]
@@ -486,13 +465,12 @@ fn drawing_never_touches_sim_state() {
     }
 
     let untouched = world.hash();
-    let mut buffer = InstanceBuffer::default();
 
     for i in 0..=8 {
         let mut acc = Accumulator::default();
         acc.pending(Dt::SECS * i as f32 / 8.0);
-        world.extract(acc.alpha(), buffer.sink());
-        assert_eq!(world.hash(), untouched, "extract at {i}/8 of a tick changed the world");
+        observe_presentation(&world, acc.alpha());
+        assert_eq!(world.hash(), untouched, "presentation at {i}/8 of a tick changed the world");
     }
 }
 
@@ -543,14 +521,14 @@ fn a_body_that_did_not_move_is_drawn_where_it_is() {
     }
     assert_eq!(world.contacts(), 0, "something is touching, so this measures the solver");
 
-    let mut buffer = InstanceBuffer::default();
-    world.extract(half(), buffer.sink());
-    let blended: Vec<Vec3> = buffer.as_slice().iter().map(Instance::pos).collect();
-
-    world.extract(Alpha::ONE, buffer.sink());
-    for (i, (a, b)) in blended.iter().zip(buffer.as_slice()).enumerate() {
-        assert_eq!(*a, b.pos(), "instance {i} moved between alphas while nothing was moving");
-    }
+    assert_eq!(
+        drawn_enemies(&world, half()),
+        drawn_enemies(&world, Alpha::ONE),
+    );
+    assert_eq!(
+        drawn_player(&world, half()),
+        drawn_player(&world, Alpha::ONE),
+    );
 }
 
 /// `prev` has to be *last tick's* value, not two ticks ago and not this
@@ -695,10 +673,9 @@ fn a_steady_state_frame_allocates_nothing() {
 
     let mut world = World::default();
     world.set_enemy_count(512);
-    let mut buffer = InstanceBuffer::default();
 
     world.step(dt, Intent::new(east, false));
-    world.extract(Alpha::ONE, buffer.sink());
+    observe_presentation(&world, Alpha::ONE);
 
     let allocations = alloc_counter::allocations(|| {
         for tick in 0..60 {
@@ -711,7 +688,7 @@ fn a_steady_state_frame_allocates_nothing() {
             // Every 20 ticks is exactly the swing length, so this runs three
             // back-to-back swings rather than one and then idling.
             world.step(dt, Intent::new(east, tick % 20 == 0));
-            world.extract(Alpha::ONE, buffer.sink());
+            observe_presentation(&world, Alpha::ONE);
         }
     });
 
@@ -850,82 +827,14 @@ fn facing_stays_wrapped_while_spinning() {
     }
 }
 
-/// The whole world — floor, horde, player and a swing in the air — has to fit
-/// the one buffer they share, at the largest horde the clamp permits.
-///
-/// The swing is counted rather than driven. Stepping a full horde would put
-/// 180-odd thousand bodies through a brute-force solver, which is not a unit
-/// test; and what needs checking is the *reservation*, not the drawing. So
-/// this asserts the gap left by an idle player is exactly one swing wide,
-/// which is the same statement and costs nothing.
+/// Decoupling rendering must preserve physical admission, including bulk resets.
 #[test]
-fn a_full_horde_still_fits_alongside_the_ground_and_the_player() {
-    let mut world = World::default();
+fn the_physical_population_ceiling_is_preserved() {
+    let mut world = World::empty();
     world.set_enemy_count(usize::MAX);
-
-    let mut buf = InstanceBuffer::default();
-    world.extract(Alpha::ONE, buf.sink());
-
-    assert!(!world.player.attack.is_swinging(), "a fresh world is not mid-swing");
-    assert_eq!(buf.as_slice().len() + pass::attack::HITBOX_SAMPLES, MAX_INSTANCES);
-}
-
-/// **The property the whole design is for: the swing is drawn where it is
-/// struck.**
-///
-/// Both halves are pinned, in the two places that can see them. The scenario
-/// `the_hitbox_opens_and_shuts_on_schedule` puts a body at exactly `REACH`
-/// dead ahead and asserts it is hit; this asserts the instance that comes out
-/// of `extract` sits on that same point. A renderer that formed its own
-/// opinion about where the sword is would pass one and fail the other.
-///
-/// Facing is deliberately non-zero. At facing 0 a mirrored placement is
-/// indistinguishable from a correct one, and mirrored is exactly what a hitbox
-/// built from a hand-written basis comes out as.
-#[test]
-fn the_swing_is_drawn_where_it_strikes() {
-    let dt = tick_dt();
-    let east = MoveDir::new(Vec3::X);
-
-    let mut world = World::default();
-    world.set_enemy_count(0);
-
-    // Long enough for the turn to arrive and clamp: PLAYER_TURN_RATE covers
-    // the quarter-turn in under seven ticks. See `walk_east`.
-    for _ in 0..30 {
-        world.step(dt, Intent::new(east, false));
-    }
-
-    world.step(dt, Intent::new(MoveDir::NONE, true));
-    while !world.hitbox_is_live() {
-        world.step(dt, Intent::NONE);
-    }
-
-    let mut buf = InstanceBuffer::default();
-    world.extract(Alpha::ONE, buf.sink());
-
-    // Ground, no horde, then the swing — which during the active window is
-    // the live disc and nothing else, so there is exactly one of it.
-    assert_eq!(
-        buf.as_slice().len(),
-        GROUND_INSTANCES + 3,
-        "the active window should draw one disc, plus the player body and marker"
-    );
-    let drawn = buf.as_slice()[GROUND_INSTANCES].pos();
-
-    // Reach comes from the tuning the swing in flight committed to, not from a
-    // constant this test keeps its own copy of. The player is facing east, so
-    // the swing's local "ahead" is world +X — which only reproduces the strike
-    // point while the start sits dead ahead, so that is asserted rather than
-    // assumed.
-    let resolved = world.attack_status().swing_resolved.expect("a swing is in flight");
-    assert_eq!(resolved.start().x, 0.0, "a start offset to the side needs the full rotation here");
-    let expected = world.bodies.pos[0] + Vec2::new(resolved.start().y, 0.0);
-
-    assert!(
-        (drawn.x - expected.x).abs() < 1e-4 && (drawn.z - expected.y).abs() < 1e-4,
-        "the swing drew at {drawn:?}, but strikes at {expected:?}"
-    );
+    assert_eq!(world.enemy_count(), 183_494);
+    assert_eq!(world.body_count(), MAX_BODIES);
+    assert!(world.place(Vec2::ZERO, Template::BODY).is_none());
 }
 
 /// The count is derived from the storage, so asking for N must actually
@@ -963,9 +872,9 @@ fn the_horde_spawns_with_a_gap_between_every_body() {
     }
 
     assert!(
-        closest > ENEMY_SCALE.x,
+        closest > (2.0 * ENEMY_RADIUS),
         "spawned {closest} apart, but a body is {} wide",
-        ENEMY_SCALE.x
+        (2.0 * ENEMY_RADIUS)
     );
 }
 
@@ -1366,9 +1275,8 @@ fn velocity_is_hashed_observed_and_does_not_change_zero_tick_rendering() {
     assert!(world.apply_impulse(id, Impulse::try_from((6.0, 0.0)).unwrap()));
     assert_ne!(world.hash(), before);
     assert_eq!(world.body_pos(id), position);
-    let mut buffer = InstanceBuffer::default();
     for alpha in [Alpha::ZERO, half(), Alpha::ONE] {
-        assert_eq!(drawn_enemies(&world, alpha, &mut buffer), vec![position.unwrap()]);
+        assert_eq!(drawn_enemies(&world, alpha), vec![position.unwrap()]);
     }
     let mut report = Report::default();
     world.report(&mut report);
@@ -1411,9 +1319,9 @@ fn props_survive_enemy_resets_but_not_scene_eviction() {
 fn props_share_capacity_and_scene_admission_is_atomic() {
     let mut world = World::empty();
     let prop = world.place(Vec2::Y, Template::BLOCK).unwrap();
-    world.set_enemy_count(MAX_ENEMIES);
-    assert_eq!(world.body_count(), MAX_ENEMIES);
-    assert_eq!(world.enemy_count(), MAX_ENEMIES - 1);
+    world.set_enemy_count(MAX_BODIES);
+    assert_eq!(world.body_count(), MAX_BODIES);
+    assert_eq!(world.enemy_count(), MAX_BODIES - 1);
     assert!(world.is_alive(prop));
     let before = world.hash();
     let scene = Scene { name: "overflow".into(), bodies: vec![Placed {
