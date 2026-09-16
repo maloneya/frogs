@@ -708,6 +708,12 @@ pub(super) fn default_character_path() -> std::path::PathBuf {
         .join("../../assets/characters/basic-player/basic-player.glb")
 }
 
+/// The checked-in enemy asset is resolved independently of the launch directory.
+pub(super) fn default_horde_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/characters/basic-enemy/basic-enemy.glb")
+}
+
 pub(super) fn replace_character<T>(
     slot: &mut Option<LoadedCharacter<T>>,
     path: std::path::PathBuf,

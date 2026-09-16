@@ -134,8 +134,8 @@ Ground and static props load from `assets/world/ground.glb` and `prop.glb`.
 The ground is one textured plane; all props share one instanced mesh draw.
 Presentation derives prop tint from interaction state. `state.world_assets`
 reports both assets; render counts distinguish static meshes and characters.
-The cube renderer and attack telegraphs are removed; visual physics debugging
-will be built separately. See [`assets/world/README.md`](assets/world/README.md).
+The cube renderer and attack telegraphs are removed; collision-disc debug drawing is available via F3 or `debug collision on|off`.
+See [`docs/collision-debug.md`](docs/collision-debug.md). See [`assets/world/README.md`](assets/world/README.md).
 
 Startup loads `assets/characters/basic-player/basic-player.glb` for both player
 and horde. Missing or invalid default assets fail startup; character cube
@@ -367,7 +367,8 @@ the program, not the character, so they deliberately do *not* go through
 `Action`):
 
 `[` / `]` halve and double N · `-` / `=` zoom · `V` toggle vsync ·
-`P` screenshot (to `$ARPG_CAPTURE_DIR`, default the temp dir) · `Esc` quit
+`P` screenshot (to `$ARPG_CAPTURE_DIR`, default the temp dir) ·
+`F3` collision-disc outlines · `Esc` quit
 
 ## Structural invariants, and what actually enforces them
 

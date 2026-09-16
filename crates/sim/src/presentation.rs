@@ -131,3 +131,56 @@ impl PropPresentation {
     #[must_use]
     pub fn interaction(self) -> Option<InteractionState> { self.interaction }
 }
+
+/// Authoritative collision geometry at the last completed tick, without interpolation.
+#[derive(Clone, Copy, Debug)]
+pub struct CollisionDisc {
+    id: EntityId,
+    centre: Vec3,
+    radius: f32,
+}
+
+impl CollisionDisc {
+    pub(crate) fn new(id: EntityId, centre: Vec3, radius: f32) -> Self { Self { id, centre, radius } }
+
+    /// Stable identity of the physical body.
+    #[must_use]
+    pub fn id(self) -> EntityId { self.id }
+
+    /// Ground-plane centre used by collision detection.
+    #[must_use]
+    pub fn centre(self) -> Vec3 { self.centre }
+
+    /// Radius used by collision detection, in metres.
+    #[must_use]
+    pub fn radius(self) -> f32 { self.radius }
+}
+
+/// One committed attack sample placed at the completed tick's player pose.
+#[derive(Clone, Copy, Debug)]
+pub struct AttackDisc {
+    centre: Vec3,
+    radius: f32,
+    sample: usize,
+}
+
+impl AttackDisc {
+    /// Maximum number of samples a committed swing can contain.
+    pub const MAX_SAMPLES: usize = crate::ResolvedAttack::MAX_ACTIVE_TICKS as usize;
+
+    pub(crate) fn new(centre: Vec3, radius: f32, sample: usize) -> Self {
+        Self { centre, radius, sample }
+    }
+
+    /// Ground-plane centre in metres.
+    #[must_use]
+    pub fn centre(self) -> Vec3 { self.centre }
+
+    /// Physical hitbox radius in metres.
+    #[must_use]
+    pub fn radius(self) -> f32 { self.radius }
+
+    /// Zero-based tick within the committed active window.
+    #[must_use]
+    pub fn sample(self) -> usize { self.sample }
+}

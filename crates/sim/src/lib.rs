@@ -45,7 +45,7 @@ use pass::spawn::SpawnQueue;
 /// What to make, and what behaviours it should be granted. See
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
 pub use pass::spawn::Template;
-pub use presentation::{EnemyPresentation, PlayerPresentation, PropPresentation};
+pub use presentation::{AttackDisc, CollisionDisc, EnemyPresentation, PlayerPresentation, PropPresentation};
 use scene::Scenes;
 pub use scene::{BodyGrid, Placed, Scene, SceneError, SceneId};
 pub use slots::EntityId;
@@ -1165,6 +1165,20 @@ impl World {
                     self.bodies.pos[row] - self.bodies.prev_pos[row],
                 ))
             })
+    }
+
+    /// Committed attack geometry at the last completed tick: the startup path,
+    /// the single active sample, or no discs during idle and recovery.
+    pub fn attack_discs(&self) -> impl Iterator<Item = AttackDisc> + '_ {
+        self.player.attack.debug_discs(self.bodies.pos[0], self.player.facing)
+    }
+
+    /// Read-only collision discs at the last completed simulation tick.
+    /// Includes the player, enemies and props, regardless of physics membership.
+    pub fn collision_discs(&self) -> impl Iterator<Item = CollisionDisc> + '_ {
+        self.bodies.slots.ids().iter().copied().enumerate().map(|(row, id)| {
+            CollisionDisc::new(id, on_ground(self.bodies.pos[row], 0.0), if row == 0 { PLAYER_RADIUS } else { ENEMY_RADIUS })
+        })
     }
 
     /// Immutable prop facts, excluding the player and damageable enemies.

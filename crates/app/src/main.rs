@@ -7,6 +7,7 @@
 //! that sees both sides.
 
 mod app;
+mod collision_debug;
 mod harness;
 mod hud;
 mod input;

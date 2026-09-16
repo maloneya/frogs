@@ -100,7 +100,8 @@ it requires only `Idle` and `Run`. `horde show <path.glb>` selects one shared
 mesh and material, then groups live enemies into four stable phases for each
 role. The phase comes from stable entity identity rather than authored or
 stored randomness. Startup loads `assets/characters/basic-player/basic-player.glb`
-for both player and horde, using the existing horde scale and tint. Asset paths
+for the player and `assets/characters/basic-enemy/basic-enemy.glb` for the horde,
+using the existing role scales and tints. Asset paths
 are resolved from the build-time repository location, independently of the launch
 directory. Missing or invalid defaults fail startup explicitly. `character clear`
 and `horde clear` restore this default asset; there is no character cube fallback.
@@ -113,7 +114,8 @@ Regenerate it from the repository root with:
 blender --background --python assets/fixtures/generate-blender-bind-pose.py
 ```
 
-The playable low-poly example and its editable Blender source live in
+The playable low-poly examples and their editable Blender sources live in
 [`assets/characters/basic-player`](../assets/characters/basic-player/README.md).
-Its generator produces both checked-in artifacts and the GLB is byte-stable
-across regeneration.
+The dedicated horde asset lives in
+[`assets/characters/basic-enemy`](../assets/characters/basic-enemy/README.md).
+Each generator produces its checked-in `.blend` and `.glb` artifacts.

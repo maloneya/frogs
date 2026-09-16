@@ -18,7 +18,7 @@ use crate::hud;
 use crate::input::Controls;
 use crate::presentation::{
     AssetPreview, LoadedCharacter, LoadedHorde, WorldAssets, default_character_path,
-    presentation_seconds, preview_instance, replace_character,
+    default_horde_path, presentation_seconds, preview_instance, replace_character,
     replace_horde, replace_preview, report_asset_preview, report_character_preview,
     report_horde_preview,
 };
@@ -42,6 +42,7 @@ pub(crate) struct App {
     horde_preview: Option<LoadedHorde<CharacterMesh>>,
     camera: Option<OrthoCamera>,
     game: Game,
+    collision_debug: crate::collision_debug::CollisionDebug,
     /// Game ids and ticks are scoped to this playtest generation.
     run_id: u64,
     /// Numbers the screenshots, so repeated captures do not overwrite.
@@ -261,6 +262,7 @@ impl App {
         if let Some(world) = &mut self.world_assets {
             world.rebuild(self.game.prop_presentations(Alpha::ZERO));
         }
+        self.collision_debug.rebuild(&self.game);
         self.quads.sink();
         // Exclude file reading, construction, and the old run's frame remainder.
         self.clock = Clock::default();
@@ -283,6 +285,7 @@ impl App {
     /// The two sets must stay disjoint; `BINDINGS` is the list to check against.
     fn on_debug_key(&mut self, key: KeyCode) {
         match key {
+            KeyCode::F3 => self.collision_debug.set_enabled(!self.collision_debug.enabled(), &self.game),
             // Doubling rather than stepping: the interesting range spans three
             // orders of magnitude, and the knee is easier to find by bisection
             // than by walking. Both directions clamp inside `set_enemy_count`.
@@ -346,7 +349,7 @@ impl App {
                     Ok(answer) => answer,
                     Err(error) => format!("error: {error}"),
                 },
-                Command::ClearHorde => match self.show_horde(default_character_path()) {
+                Command::ClearHorde => match self.show_horde(default_horde_path()) {
                     Ok(_) => "ok".to_string(),
                     Err(error) => format!("error: {error}"),
                 },
@@ -477,6 +480,10 @@ impl App {
                     self.game.set_seeker_count(n);
                     format!("seekers {}", self.game.seeker_count())
                 }
+                Command::SetCollisionDebug(on) => {
+                    self.collision_debug.set_enabled(on, &self.game);
+                    format!("debug collision {}", if on { "on" } else { "off" })
+                }
                 Command::SetVsync(on) => match self.renderer.as_mut() {
                     Some(renderer) => {
                         if renderer.vsync() != on {
@@ -531,6 +538,7 @@ impl App {
             report_horde_preview(self.horde_preview.as_ref(), horde);
         });
 
+        out.object("collision_debug", |out| self.collision_debug.report(out));
         out.object("render", |r| {
             let target = self
                 .camera
@@ -547,8 +555,10 @@ impl App {
                 + u64::from(self.asset_preview.is_some());
             r.int(
                 "instances",
-                player_instances + horde_instances + static_instances,
+                player_instances + horde_instances + static_instances + self.collision_debug.drawings().len() as u64,
             );
+            r.int("debug_disc_instances", self.collision_debug.drawings().len() as u64);
+            r.int("debug_draws", u64::from(!self.collision_debug.drawings().is_empty()));
             r.int("static_mesh_instances", static_instances);
             r.int("static_mesh_draws", self.world_assets.as_ref().map_or(0, |world| world.draw_count() as u64) + u64::from(self.asset_preview.is_some()));
             r.int("player_character_instances", player_instances);
@@ -707,6 +717,7 @@ impl App {
         }
         let world_assets = self.world_assets.as_mut().expect("rendering requires world assets");
         world_assets.rebuild(self.game.prop_presentations(alpha));
+        self.collision_debug.rebuild(&self.game);
 
         // The overlay is built here rather than inside `render` for the same
         // reason asset placements are: what a readout says is a decision this crate
@@ -741,6 +752,7 @@ impl App {
             character,
             horde,
             self.quads.as_slice(),
+            self.collision_debug.drawings(),
         ) {
             self.frames += 1;
 
@@ -778,6 +790,7 @@ impl App {
                 self.clock.fps(),
                 self.game.enemy_count(),
                 world_assets.instance_count()
+                    + self.collision_debug.drawings().len()
                     + usize::from(self.asset_preview.is_some())
                     + usize::from(self.character_preview.is_some())
                     + self.horde_preview.as_ref().map_or(0, LoadedHorde::instance_count),
@@ -830,7 +843,7 @@ impl ApplicationHandler for App {
         // is explicit; an invalid asset must never silently become a cube.
         self.show_character(default_character_path())
             .expect("load default player character");
-        self.show_horde(default_character_path())
+        self.show_horde(default_horde_path())
             .expect("load default horde character");
         let size = window.inner_size();
 
@@ -933,6 +946,19 @@ impl ApplicationHandler for App {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn f3_toggles_collision_drawing_without_simulation_input() {
+        let mut app = App { game: Game::empty(), ..Default::default() };
+        let before = app.game.hash();
+        app.on_debug_key(KeyCode::F3);
+        assert!(app.collision_debug.enabled());
+        assert_eq!(app.collision_debug.drawings().len(), 1);
+        app.on_debug_key(KeyCode::F3);
+        assert!(!app.collision_debug.enabled());
+        assert!(app.collision_debug.drawings().is_empty());
+        assert_eq!(app.game.hash(), before);
+    }
+
     use super::*;
 
     fn pair() -> Scene {

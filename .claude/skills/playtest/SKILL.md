@@ -62,6 +62,7 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | `source <x> <z> [flags]` | the source's name, e.g. `source s0` |
 | `source remove <id>` | takes the name as printed, `s0` |
 | `vsync on\|off` | resulting state |
+| `debug collision on\|off` | toggle read-only collision-disc outlines; state reports the sampled geometry |
 | `quit` | then exits |
 
 Keys come from `BINDINGS` in `crates/app/src/input.rs`, so whatever is bound is

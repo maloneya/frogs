@@ -114,6 +114,8 @@ pub(crate) enum Command {
         id: SourceId,
         enabled: bool,
     },
+    /// Toggle read-only collision-disc outlines.
+    SetCollisionDebug(bool),
     SetVsync(bool),
     Quit,
 }
@@ -308,6 +310,16 @@ fn parse(line: &str) -> Result<Command, String> {
         }
         "enemies" => Command::SetEnemies(number(arg)? as usize),
         "seekers" => Command::SetSeekers(number(arg)? as usize),
+        "debug" => {
+            if arg != Some("collision") { return Err("expected: debug collision on|off".into()); }
+            let enabled = match it.next() {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err("expected: debug collision on|off".into()),
+            };
+            if it.next().is_some() { return Err("expected: debug collision on|off".into()); }
+            Command::SetCollisionDebug(enabled)
+        }
         "vsync" => Command::SetVsync(matches!(arg, Some("on") | Some("1"))),
         "quit" => Command::Quit,
         "" => return Err("empty command".into()),
@@ -435,6 +447,15 @@ fn serve(stream: UnixStream, tx: &Sender<Request>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn collision_debug_requires_an_explicit_valid_setting() {
+        assert!(matches!(super::parse("debug collision on"), Ok(super::Command::SetCollisionDebug(true))));
+        assert!(matches!(super::parse("debug collision off"), Ok(super::Command::SetCollisionDebug(false))));
+        for invalid in ["debug", "debug collision", "debug collision yes", "debug collision on extra", "debug contacts on"] {
+            assert!(super::parse(invalid).is_err());
+        }
+    }
+
     use super::*;
 
     #[test]

@@ -16,15 +16,17 @@ fn character_fixture_path() -> std::path::PathBuf {
 }
 
 #[test]
-fn startup_asset_supports_both_player_and_horde_roles() {
+fn startup_assets_support_their_presentation_roles() {
     let mut player = None;
     let mut horde = None;
-    let path = default_character_path();
-    assert!(path.is_absolute());
-    replace_character(&mut player, path.clone(), |_| Ok(())).unwrap();
-    replace_horde(&mut horde, path.clone(), |_| Ok(())).unwrap();
-    assert_eq!(player.unwrap().path, path);
-    assert_eq!(horde.unwrap().path, path);
+    let player_path = default_character_path();
+    let horde_path = default_horde_path();
+    assert!(player_path.is_absolute());
+    assert!(horde_path.is_absolute());
+    replace_character(&mut player, player_path.clone(), |_| Ok(())).unwrap();
+    replace_horde(&mut horde, horde_path.clone(), |_| Ok(())).unwrap();
+    assert_eq!(player.unwrap().path, player_path);
+    assert_eq!(horde.unwrap().path, horde_path);
 }
 
 fn loaded_character_from(path: std::path::PathBuf) -> LoadedCharacter<()> {

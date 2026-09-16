@@ -156,6 +156,22 @@ impl Attack {
         }
     }
 
+    /// Observe the stored path during startup, or the exact live sample during active.
+    pub(crate) fn debug_discs(&self, origin: Vec2, facing: f32) -> impl Iterator<Item = crate::AttackDisc> + '_ {
+        let (discs, first) = match self.swing.as_ref() {
+            Some(swing) => match swing.phase() {
+                Phase::Startup => (swing.hitbox.discs(), 0),
+                Phase::Active(sample) => (&swing.hitbox.discs()[sample..=sample], sample),
+                Phase::Recovery => (&[][..], 0),
+            },
+            None => (&[][..], 0),
+        };
+        discs.iter().enumerate().map(move |(offset, disc)| {
+            let (centre, radius) = disc.place(origin, facing);
+            crate::AttackDisc::new(crate::on_ground(centre, 0.0), radius, first + offset)
+        })
+    }
+
     pub(crate) fn set_profile(&mut self, profile: AttackProfile) -> bool {
         let resolved = profile.resolve();
         let changed = self.profile != profile || self.resolved != resolved;

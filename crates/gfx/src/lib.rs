@@ -14,6 +14,7 @@ mod camera;
 mod capture;
 mod character;
 mod instance;
+mod debug;
 mod material;
 mod mesh;
 mod overlay;
@@ -21,6 +22,7 @@ mod quad;
 mod text;
 
 pub use camera::OrthoCamera;
+pub use debug::DebugDisc;
 pub use character::{
     CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
 };
@@ -71,6 +73,7 @@ pub struct Renderer {
     depth: wgpu::TextureView,
     camera: CameraBinding,
     static_meshes: MeshPipeline,
+    debug: debug::DebugPipeline,
     character_preview: CharacterPipeline,
     /// The rasterised font, and the pipeline that draws what it lays out.
     ///
@@ -214,6 +217,7 @@ impl Renderer {
             config.format,
             DEPTH_FORMAT,
         );
+        let debug = debug::DebugPipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
         let font = text::Font::new(&device, &queue);
         let overlay = QuadPipeline::new(&device, &font, config.format, DEPTH_FORMAT);
 
@@ -227,6 +231,7 @@ impl Renderer {
             depth,
             camera,
             static_meshes,
+            debug,
             character_preview,
             font,
             overlay,
@@ -341,6 +346,7 @@ impl Renderer {
         character: Option<CharacterPreview<'_>>,
         horde: Option<CharacterHorde<'_>>,
         overlay: &[Quad],
+        debug_discs: &[DebugDisc],
     ) -> bool {
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU
@@ -395,6 +401,7 @@ impl Renderer {
 
         self.camera.upload(&self.queue, camera);
         self.static_meshes.upload(&self.queue, meshes);
+        let debug_count = self.debug.upload(&self.queue, debug_discs);
         let character_draws = self.character_preview.upload(&self.queue, character, horde);
         let quads =
             self.overlay
@@ -464,6 +471,7 @@ impl Renderer {
             // After the world and inside the same pass. The overlay neither
             // reads nor writes depth, so joining the pass costs nothing and
             // saves storing and reloading the whole frame between two of them.
+            self.debug.draw(&mut pass, &self.camera, debug_count);
             self.overlay.draw(&mut pass, quads);
         }
 

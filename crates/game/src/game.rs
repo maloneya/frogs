@@ -344,6 +344,16 @@ impl Game {
         self.world.enemy_presentations(alpha)
     }
 
+    /// Read-only committed attack geometry at the completed tick's player pose.
+    pub fn attack_discs(&self) -> impl Iterator<Item = arpg_sim::AttackDisc> + '_ {
+        self.world.attack_discs()
+    }
+
+    /// Authoritative collision geometry, without presentation interpolation.
+    pub fn collision_discs(&self) -> impl Iterator<Item = arpg_sim::CollisionDisc> + '_ {
+        self.world.collision_discs()
+    }
+
     /// Immutable prop facts for asset-driven presentation.
     pub fn prop_presentations(&self, alpha: Alpha) -> impl Iterator<Item = arpg_sim::PropPresentation> + '_ {
         self.world.prop_presentations(alpha)
