@@ -1,152 +1,50 @@
 # Traps
 
-Keyed by **observable symptom**. Grep this before diagnosing something
-surprising; append after any symptom that cost more than ten minutes.
+Search by observable symptom before diagnosing. Add an entry after a misleading
+failure costs more than ten minutes: cause, check, fix and date. When a failure
+recurs, enforce its prevention at the owner or in a regression test. Remove
+advice that the new safeguard makes unnecessary; retain operational limitations.
 
-An entry here sits at layer 4 of the invariant ladder in `CLAUDE.md` — the
-weakest tier there is. That is deliberate but temporary. **An entry that fires
-three times is telling you it belongs at layer 0–3.** Promote it to a const
-assert, a `build.rs` guard, a `#[must_use]`, a private field or a test, then
-delete the entry and note the promotion. A trap file that only ever grows is a
-file nobody reads.
+## Screenshot times out or the image is black
 
-The second use of this file is pre-execution checks: once a class of failure
-recurs, stop looking it up and make it a validation that runs before the work.
+**Cause:** capture depends on a presented surface. A fully covered window or a
+sleeping display may stop presentation. An unfocused but visible window can work.
+**Check:** compare rendered frame counts across a harness wait.
+**Fix:** uncover the game and wake the display; use the harness capture command.
+The capture owner rejects overlapping requests and reports write failures or a
+four-second timeout. Capture is not independent of window visibility.
 
-Format: `## symptom:` / cause / check / fix / promoted-to, dated.
+## Frame rate is absurd, zero, or faster for a heavier scene
 
----
+**Cause:** occlusion can skip draws; display sleep can stop presentation;
+macOS can throttle a background window intermittently.
+**Check:** compare rendered frames, skipped frames and simulation ticks over the
+same interval. Repeat with the window visible and frontmost. A small gap between
+vsync and uncapped rates can also mean a real workload bottleneck.
+**Fix:** follow the [measurement procedure](../.claude/skills/playtest/SKILL.md).
+Report conditions and sample variation. Use the scenario runner's step-time
+budget to isolate simulation cost from presentation cost.
 
-## symptom: `shot` reports success but the PNG is missing, or the image is black
+## Injected keys do nothing or reach another application
 
-*2026-01 — cost several hours across two sessions*
+**Cause:** OS key injection depends on focus and permissions.
+**Fix:** drive the game through `ARPG_HARNESS`; it uses the real binding table
+without OS input delivery. Capture still has the visibility restriction above.
 
-**Cause.** The window was fully occluded. An occluded surface hands back no
-texture, the draw is skipped, and capture — recorded between drawing a frame and
-presenting it — never runs. Unfocused is fine; *covered* is not.
+## A position streaks for one frame, especially uncapped
 
-**Check.** Diff `frames` across a `wait`. Flat means nothing is presenting, and
-no screenshot will work until the window is uncovered.
+**Cause:** a frame can run zero simulation ticks. A position changed between
+ticks may be drawn using an old previous-position snapshot.
+**Check:** compare interpolation endpoints before another tick runs.
+**Fix:** position replacement must update both snapshots at the owning boundary.
+`Bodies::spawn` already does this. Velocity-only changes must not rewrite them.
+Test a new position-changing operation with no intervening tick.
 
-**Fix.** Uncover the window. Do **not** switch to the `screencapture` utility or
-any desktop screenshot tool; see the OS-automation entry below.
+## Bodies jump to an arena corner
 
-**Partly promoted.** `Capture::expire` abandons a pending request after four
-seconds of wall time, independently of skipped-frame rate. `FrameOutcome`
-separates presentation from PNG-write success, and a busy capture slot rejects
-new requests without replacing the original path. Fully removing the occlusion
-limitation means capturing an offscreen render target — roadmap chunk 6.
-
----
-
-## symptom: a frame rate that is absurd, flat, or backwards
-
-*Observed at 12,467 fps; at 0; and at 1024 enemies rendering faster than none.*
-
-**Cause.** Three ways the window stops presenting at its real rate, and only the
-first one shows up in `skipped`:
-
-| What you see | What it is |
-|---|---|
-| Thousands of fps, `skipped` rising | Occluded. No texture, no draw, and the loop counts every spin. |
-| `frames/s=0`, ticks still 60 | The display is asleep. |
-| Wild variance, `skipped` at 0 | Not frontmost. macOS throttles *intermittently*. |
-
-**Check.** Diff `skipped` first — a rising count is occlusion. Otherwise compare
-present modes: if uncapped is not several times vsync, the number is not a
-measurement. A result that is *backwards* rather than merely noisy — a heavier
-scene measuring faster — is the tell for the third case.
-
-**Fix.** **Take the best of several short samples, never one long one.** Twelve
-consecutive one-second samples of an unchanged scene ranged from 63 to 331
-frames/s. Averaging is worse than useless because the noise is one-sided:
-throttling only removes frames, so the maximum is the only estimator a throttled
-second cannot drag down. Best-of-eight gave a stable 66/s vsync and 396/s
-uncapped, against a single sample's 127/s minutes earlier on the same build.
-
-Never trust `frame_ms` alone — it is an EMA and cannot tell a steady 60Hz from a
-mixture averaging to it.
-
-**Partly promoted, 2026-09.** The headless half exists —
-`budget.max_mean_step_micros` asserts mean time inside `World::step` with no
-window and no GPU. Presentation cost is still an EMA, and the frame-time
-histogram is still what this entry waits on.
-
----
-
-## symptom: injected keys do nothing, or land in a different application
-
-**Cause.** Driving the game through the OS — synthetic keystrokes via
-`osascript`, screenshots via `screencapture` — instead of through
-`ARPG_HARNESS`. OS automation needs the window frontmost, the display awake and
-accessibility permission, and when any of those is false it does not fail: keys
-go to whatever *is* focused and images come back black. Both look exactly like
-the game being broken.
-
-**Fix.** Use the harness socket. Everything in the `playtest` skill works on an
-unfocused window buried behind others.
-
-**Promoted.** The `playtest` skill description names this explicitly so the
-wrong tool is not reached for in the first place. The harness itself cannot be
-bypassed accidentally — without `ARPG_HARNESS` there is no socket at all.
-
----
-
-## symptom: a visual glitch that only happens uncapped, or only for one frame
-
-*2026-09 — found by mutation testing, before it was ever seen.*
-
-**Cause.** Under the fixed timestep a frame runs **zero** ticks whenever it is
-shorter than 16.7ms, which uncapped is most of them. Anything that changes world
-state *outside* `step` — `enemies <n>`, `[`, `]`, and later spawning, teleports
-and scenario setup — is therefore drawn before any tick has run, with
-`prev` still holding the old values. Every body streaks from where it was to
-where it now is, for one frame.
-
-Under vsync at 60Hz nearly every frame runs exactly one tick, so the same bug is
-invisible. That asymmetry is the tell.
-
-**Check.** Does the glitch survive `V`? If it appears uncapped and not under
-vsync, look for state written outside a tick rather than at the renderer.
-
-**Fix.** Whatever writes state outside `step` must set `prev` to match, the way
-`Bodies::spawn` does. A test asserts the drawn positions are identical at
-alpha 0, 0.5 and 1 with no tick in between — that is the shape to copy.
-
-**Partly promoted, 2026-09.** This entry used to ask for exactly one thing: a
-spawn that maintains `prev` as an invariant of the storage, so the class is
-removed rather than tested for one caller at a time. That now exists. Every
-body enters the world through `Bodies::spawn`, which seeds `prev_pos` to the
-spawn point; `World::place` and the bulk `respawn` both go through it,
-and there is no other door in.
-
-**Player promoted too, 2026-09.** The player now shares body storage. Impulses
-change velocity without changing either position snapshot, and a zero-tick
-render test checks this. The trap remains relevant to future teleports and
-non-positional state written outside the schedule.
-
----
-
-## symptom: the whole horde teleports to one corner of the arena
-
-*2026-09 — found by mutation testing while building the crowd solver.*
-
-**Cause.** A position went NaN in the solver, and `pass::contain` laundered it.
-Clamping does not propagate a NaN: `f32::max` returns whichever operand is *not*
-NaN, so a poisoned body is silently replaced with the arena limit. Every NaN
-body lands on the same corner, and by the end of the tick every position is
-finite again and looks perfectly legal.
-
-The symptom therefore points at the wall and at the arena bounds, which is the
-one place the bug is not. The fault is upstream — a normalise of a zero-length
-difference, which is two bodies at exactly the same point.
-
-**Check.** The `finite` field in `state`, and — much more directly — run it in a
-debug build. A release build has no assertions and will happily show you the
-corner.
-
-**Promoted.** `pass::contain` now asserts every position is finite *before* it
-clamps, and the message names the likely cause. The failure is loud, and at the
-point the poison arrives rather than where it lands. The scenario runner also
-checks finiteness unconditionally at the end of every run, as a backstop for a
-position written where `contain` cannot reach it.
+**Cause:** non-finite solver output may be hidden by clamping arithmetic.
+**Check:** run a debug build; containment checks finiteness before clamping.
+Inspect coincident-body normalization upstream of containment.
+**Safeguard:** contact handles coincident bodies; containment has debug assertions;
+the scenario runner checks final finiteness in all builds. Debug assertions are
+absent in release, and a final check cannot detect poison already hidden earlier.

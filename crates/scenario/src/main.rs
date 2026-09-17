@@ -10,13 +10,9 @@
 //! `game` with no GPU, no window and no wall-clock pacing — which lets it be the
 //! gate on *every* change rather than something run occasionally.
 //!
-//! **Why this exists rather than a careful look at the numbers.** Driving the
-//! real game and reading `player_pos 3.183` back off the socket puts the
-//! comparison inside the agent's head, where it cannot fail visibly and cannot
-//! be re-run tomorrow. Writing the same prediction here costs the same
-//! keystrokes and turns it into a process that exits nonzero. The `Stop` hook
-//! runs this when a turn ends and blocks on failure, so a scenario that stops
-//! passing stops the work.
+//! Assertions make predictions repeatable and produce a nonzero exit on failure.
+//! Run this gate explicitly unless the current tool environment has already run
+//! it; Claude Code's Stop hook is one such environment.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

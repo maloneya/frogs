@@ -3,8 +3,8 @@
 Open F2, select `activate_horde.ron`, and press Enter. Press E beside the blue
 block: it turns green once and starts a capped source of seekers. Restart
 current restores Ready. See [the playtest](source-control-playtest.md).
-The block uses the existing 0.5 m cube and circular collision footprint; larger
-boxes and door-shaped collision are later work.
+The block uses the [plinth asset](../assets/world/README.md) and a circular
+collision footprint; visible geometry does not define its physical shape.
 
 The pieces are deliberately separate:
 

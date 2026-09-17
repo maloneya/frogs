@@ -1,16 +1,7 @@
-//! Every identifier the documentation names must exist in the source.
+//! Checks backticked snake-case citations against names in repository source.
 //!
-//! `docs/invariants.md` opens by admitting it is "a snapshot, not the source of
-//! truth" and that "an entry here can silently disagree with the code". This is
-//! what stops the cheapest kind of disagreement: a doc naming a test or a helper
-//! that was renamed out from under it. Nothing fails when that happens — the
-//! docs simply describe a program that no longer exists.
-//!
-//! **What this cannot check.** It verifies that a cited name *exists*, not that
-//! the claim about it is *true*. A row asserting "`follow` is the only writer"
-//! of the camera target while `snap_to` also writes it names two real functions
-//! and is still wrong. Semantic claims stay a reading job. This catches renames
-//! and deletions, which is the bulk of real drift and all of the silent kind.
+//! This catches some renamed or deleted identifiers. It does not resolve Rust
+//! paths, check Markdown links, or prove that a prose claim about a name is true.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,14 +17,8 @@ const SOURCES: &[&str] = &["crates", "scenarios", ".claude/settings.json", "Carg
 /// Snake-case words that are prose, or another language's vocabulary, rather
 /// than something this repository defines.
 ///
-/// **Empty, and that was checked rather than assumed.** It was first written
-/// with three entries — `half_life`, `opt_level`, `rerun_if_changed` — guessed
-/// at before running anything. Removing them changed nothing: every one was a
-/// hole punched for a problem that did not exist.
-///
-/// Every entry here is such a hole, so a name belongs on this list only when it
-/// is genuinely not ours *and* the check has actually flagged it — never
-/// because adding it is easier than fixing the citation.
+/// Add an exception only after the check flags vocabulary that is not ours;
+/// fix stale repository citations rather than excluding them.
 const NOT_OURS: &[&str] = &[];
 
 #[test]

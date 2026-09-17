@@ -24,11 +24,9 @@ separate responsibility to cancel work owned by the evicted scene.
 
 `World::source_state` and `Game::source_state` return a copy of `SourceState`:
 enabled, countdown, and accepted emission count. The same stored type supplies
-the state report and scenario assertions. Reports add a `source_states` object
+the state report and scenario assertions. Reports expose a `source_states` object
 keyed by source ID; the existing `sources` field remains the live count.
-All three state fields participate in the deterministic hash. Hash values for
-worlds containing sources therefore change; default emission timing and traces
-remain unchanged.
+All three state fields participate in the deterministic hash.
 
 Sources in additive scene instances retain independent state. Eviction retires
 their IDs for the current run. Restart restores authored enablement, a ready

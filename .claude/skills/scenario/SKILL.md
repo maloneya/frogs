@@ -1,322 +1,121 @@
 ---
 name: scenario
-description: Write, run and update arpg scenarios — the headless, exit-code-gated tests that drive the sim with a scripted input stream and assert at checkpoints, over final state and over the trace. Use whenever verifying a change to simulation behaviour, adding a regression test for a bug, updating golden traces, or asking whether a change is done. Prefer this over driving the game through the ARPG_HARNESS socket for anything that can be checked without a GPU or a window.
+description: Write, run and update headless scenarios for simulation and gameplay behaviour, regressions, timing assertions and golden traces. Use live playtesting for rendering and device integration.
 ---
 
 # Scenarios
 
-A scenario is the unit of verification in this repo. Setup, an input stream
-measured in ticks, assertions at checkpoints, over final state and over the trace, a tick
-budget. It runs headless through `Game::step` — no GPU, no window, microseconds per
-run — and it exits 0 or 1.
-
-The harness socket (`playtest` skill) stays useful for the interactive and
-visual cases, where a real window is the point. It is not the completion gate —
-rule 4 in `CLAUDE.md` says why.
+Scenarios drive `Game::step` without a GPU, window or wall-clock pacing. They
+assert checkpoints, final state and optional golden traces. Every run also
+replays and compares Game hashes tick by tick. Repeatability alone does not
+prove the intended behaviour, so explicit predictions are required.
 
 ```sh
-. "$HOME/.cargo/env" && cargo run --quiet -p scenario -- scenarios/
-echo $?          # 0 or 1 — this is the gate
+. "$HOME/.cargo/env"
+cargo run --quiet -p scenario -- scenarios/
 ```
 
-The `Stop` hook runs this when a turn ends and blocks on failure.
+Run the full scenario gate after the focused case, then the other
+[repository checks](../../../CLAUDE.md#checks-and-commands). Hooks are specific to
+Claude Code; other agents must run the commands explicitly.
 
-## Shape
+## Start from the owning definitions
+
+Read [Spec and Expect](../../../crates/scenario/src/spec.rs) for supported
+commands and assertions, and use a relevant checked-in scenario as a starting
+point. Sim/game types own the values those commands consume. Unknown fields
+are rejected; do not invent syntax or duplicate an owning schema in the runner.
+
+A minimal movement example:
 
 ```ron
-// scenarios/walk_east.ron
 (
-    description: "One sentence on what this would catch.",
+    description: "Walking east covers the expected distance.",
     setup: (enemies: 0),
-    // Inputs are indexed in ticks, never milliseconds. Wall clock has no
-    // meaning here: the whole run is a loop over Game::step. Spans apply in
-    // order, so a later one overrides an earlier one where they overlap.
-    inputs: [
-        (at: 0, ticks: 30, dir: (1.0, 0.0)),
-    ],
+    inputs: [(at: 0, ticks: 30, dir: (1.0, 0.0))],
     budget: (ticks: 30),
     expect: (
         player_pos: (x: 4.5, z: 0.0, tol: 0.001),
-        facing:     (value: 1.5708, tol: 0.0001),
-        contacts:   0,
+        facing: (value: 1.5708, tol: 0.0001),
+        contacts: 0,
     ),
 )
 ```
 
-**`dir` is world space, not screen space.** The game maps screen-right onto the
-world diagonal `(+X, -Z)/√2`, but that mapping belongs to the camera — it
-depends on the camera's *angle*, which is a presentation decision that may still
-change. A scenario asserts what the simulation does, so it speaks the
-simulation's axes and survives the view rotating. `(1, 1)` is normalised on the
-way in, so a diagonal moves at full speed rather than √2 times it.
+`dir` is world space, with ground coordinates `(x, z)`. Screen-direction mapping
+belongs to app/camera. Start with zero enemies unless the crowd is the subject;
+otherwise contact can change a movement prediction. Place bodies deliberately
+through setup actions or a scene rather than depending on the default grid.
 
-**`enemies: 0` is the useful default.** The horde spawns centred on the origin
-and so does the player, so *any* horde puts the two in contact on tick zero —
-and a prediction about movement then becomes a prediction about the contact
-solver, which cannot be made by hand. Spawn a horde when the horde is the
-subject.
+Read tuning at its owner before calculating an expectation: movement in
+[walk](../../../crates/sim/src/pass/walk.rs), turning in
+[face](../../../crates/sim/src/pass/face.rs), bounds in
+[World](../../../crates/sim/src/lib.rs). In the example, distance is speed times
+fixed tick duration times thirty. Explain that calculation to the user when it
+helps them understand the behaviour. Keep float tolerances smaller than the
+one-tick error the assertion should detect.
 
-## Putting bodies where you want them
+## Time and identity
 
-A horde count lays N bodies in a grid nobody wrote down, so predictions about
-them cannot be made by hand. Three ways to place one deliberately, and they are
-different tools:
+Inputs and commands use zero-based ticks. A checkpoint at `at: 0` observes the
+first completed step, not untouched setup. Checkpoints must be below the tick
+budget. A failure remains a failure even if final state recovers or `--bless`
+is supplied.
 
-```ron
-setup: (
-    // Before tick zero. `Seek` is granted separately from placing, because a
-    // body is a body and what makes it an enemy is the list of things it does.
-    actions: [ Place((10.0, 0.0)), Seek(0) ],
+Use intermediate checkpoints on both sides of a transition. See
+[attack timing](../../../scenarios/the_hitbox_opens_and_shuts_on_schedule.ron).
+Golden traces belong in final `expect.trace`, never a checkpoint. Pointwise
+trace-assertion syntax is not supported.
 
-    // Something that asks for spawns while the run is going. Four axes:
-    // cadence, gate, placement, template. A source starts *ready*, so its
-    // first body lands on the first tick its gate is open.
-    sources: [
-        (pos: (30.0, 0.0), radius: 3.0, every: 10, when: PlayerWithin(20.0), seeks: true),
-    ],
-),
-// One body, asked for mid-run, through the same queue a source uses.
-spawns: [ (at: 10, pos: (10.0, 0.0), seeks: true) ],
-// A source removed partway. It does not fire on the tick it is removed on.
-remove_sources: [ (at: 15, source: 0) ],
-```
+Body assertions refer to placement order via `nth`; the runner resolves stable
+identities so removals do not redirect an assertion to a swapped row. Scene
+indices refer to load order. Read [scene semantics](../../../docs/scene-playtests.md)
+when combining setup and timeline loads. Missing targets and unreachable
+commands must fail rather than silently disappear.
 
-`when` is `Always` (the default), `FewerThan(n)` or `PlayerWithin(r)`; a
-`radius` of zero puts every body on the one point, which stacks them on purpose.
-Bodies that appear mid-run continue the placement numbering `actions` starts, in
-the order they were granted, so `bodies: [(nth: 1, ...)]` can name one.
+## Composition examples
 
-Sources default to enabled; `enabled: false` authors a dormant one. Use
-`source_switches: [(at: 2, source: 0, enabled: true)]` to change it before that
-tick's removals and source evaluation. Disabling freezes countdown and ring
-progress; enabling resumes them and still respects the source's condition.
-Switches, removals, and assertions index `setup.sources` by default. An optional
-`scene` load index selects that instance's original source bindings instead.
-Load indices count setup first, then timeline loads in ascending tick order;
-loads on the same tick retain file order.
-Unknown indices, unreachable ticks, and switches to removed sources fail.
+- [Physical motion](../../../scenarios/an_impulse_moves_and_damps.ron):
+  `impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))]` submits momentum;
+  `Player` targets the player. Assert carried velocity and later displacement.
+  Powered walking and seeking are separate from carried velocity.
+- [Source enablement](../../../docs/source-enablement.md): switches run before
+  source evaluation; assertions consume the engine-owned `SourceState`.
+- [Source control](../../../docs/source-control.md): complete inline scenes use
+  `Gameplay(...)`; legacy physical scenes use `Inline(...)`. Assert activation
+  on N and permitted emission on N+1, as well as one-shot consumption and lifetime.
+- [Scene authoring](../create-scene/SKILL.md): load the playable file through
+  `File(...)` so the tested content is the content the user plays.
 
-Both checkpoints and final expectations accept exact engine-owned `SourceState`:
-`source_states: [(source: 0, state: Some((enabled: true, countdown: 3, emitted: 1)))]`.
-Use `state: None` for a removed setup source. Do not create a second copy of
-these state fields in the runner. See `docs/source-enablement.md` and
-`scenarios/source_enablement_freezes_cadence.ron` for timing examples.
+For a new rule, assert its own result and an interaction with an existing rule.
+For a regression, demonstrate the failure before fixing it where practical.
+Rejection, stale IDs, eviction and restart need checks when the change touches
+those boundaries. Restart is tested through public Game lifecycle tests; the
+scenario timeline does not offer a restart command.
 
-## What can be asserted today
+## Golden traces and performance
 
-`player_pos` and `player_velocity` (as `(x, z)` with a radius tolerance), `facing` (radians,
-`(value, tol)`), `contacts`, `crowd_contacts`, `struck`, `hitbox`,
-`enemy_count`, `seekers`, `sources`, and `bodies` — a list of `(nth:, pos:,
-velocity:, health:, seeking:, alive:)` predictions about individually placed
-bodies. Every one is optional. The tick budget is always checked — the run must
-take exactly that many ticks.
-
-Attack selection uses sim's authored identity rather than replaying debug-menu
-input. Commands look like `attack_profiles: [(at: 0, profile: Slam)]`;
-`attack_profile` asserts the next swing and `swing_profile` the in-flight copy.
-Assert resolved geometry and force through the bodies hit, their hit ticks, and
-their resulting velocities rather than copying attack fields into this schema.
-
-Plus `trace: "name.trace"`, a checked-in golden file the run's trace must match
-exactly — see below. Checkpoints assert intermediate state; the golden trace
-asserts the event sequence across the run. Final state alone cannot see a
-hitbox opening early or a source firing on the wrong tick.
-
-## Checkpoints
-
-Use the same state assertions as final `expect`, evaluated immediately after a
-named zero-based tick completes:
-
-```ron
-checkpoints: [
-    (at: 5, expect: (hitbox: false, struck: 0)),
-    (at: 6, expect: (hitbox: true, struck: 1)),
-    (at: 12, expect: (hitbox: false, struck: 1)),
-],
-budget: (ticks: 30),
-expect: (hitbox: false, trace: "the_hitbox_opens_and_shuts_on_schedule.trace"),
-```
-
-`at: 0` observes the first completed step, not setup. `at: 6` observes seven
-completed steps, including tick 6's inputs, spawns and all simulation passes.
-Every checkpoint must be below `budget.ticks`; unreachable checkpoints are
-errors. They may be listed in any order, and multiple entries at one tick all
-run. A failure names the checkpoint's file index, tick and field, preserving
-the observed value even if the state later recovers. `--bless` cannot erase it.
-
-Golden traces describe the whole run and belong only in the final
-`expect.trace`; a checkpoint containing `trace` is rejected. Assertions read
-the live world through a shared reference, outside the step timer, without
-retaining world snapshots.
-
-See `scenarios/the_hitbox_opens_and_shuts_on_schedule.ron` for a worked example
-checking impulse, movement and damping at successive ticks in one run.
-
-Not yet: pointwise trace assertions (`(tick: 417, event: "hitbox.active")`;
-golden files cover the same ground for now), anything about the image (chunk 6),
-or placing the *player* anywhere but the origin.
-
-## Every scenario is also a replay test
-
-The runner runs each scenario **twice** and compares `Game::hash()` tick by
-tick, whether or not the scenario asks. A divergence reports the tick it
-happened on:
-
-```
-FAIL  shoving_diagonally_jostles_the_crowd
-        replay
-          expected: two runs identical every tick
-          actual:   diverged at tick 1
-```
-
-This is free — a whole run is microseconds — and it means determinism is checked
-by every scenario anyone writes for any other reason, which is the only way a
-property that subtle stays checked at all.
-
-## Predict first, then assert
-
-Work the expected value out from the constants before running anything. A match
-is evidence; a mismatch tells you which of the two is wrong. Running first and
-pasting in whatever came out produces a file that asserts the current behaviour
-is the current behaviour, which will pass forever and catch nothing.
-
-Re-read the constants rather than trusting any list of them — they are tuning
-knobs and they move. `PLAYER_SPEED`, `PLAYER_TURN_RATE` and `ARENA_HALF` are in
-`crates/sim/src/lib.rs`; the camera half-lives are in `crates/gfx/src/camera.rs`
-and are presentation, so they must not appear in a scenario assertion.
-
-Yaw is `atan2(dir.x, dir.z)`, so walking `(1, 0)` ends up facing `PI/2 ≈
-1.5708`. Walking is `PLAYER_SPEED * Dt::SECS` = **0.15 units per tick**, which
-is the number to do arithmetic in.
-
-Two worked examples, because the arithmetic is the part people skip:
-
-- 30 ticks at `(1, 0)` is `30 * 0.15 = 4.5` along +X. Facing has to cover
-  `PI/2 = 1.5708` at `PLAYER_TURN_RATE` 14 rad/s, which is `14/60 = 0.2333` per
-  tick, so it arrives on tick 7 and clamps.
-- Walking into the wall stops at `ARENA_HALF - PLAYER_RADIUS = 96.0 - 0.3 =
-  **95.7**`, not 96.0. It is the *body* that stops. A scenario asserting 96.0
-  would be asserting that the player stands halfway inside the wall.
-
-Under a fixed timestep the result is exact, so tolerances exist for float
-accumulation, not for timing slop. A tolerance wide enough to hide a one-tick
-error is not a tolerance — and one tick is 0.15, so a tolerance anywhere near
-that is the assertion switched off. `tol: 0.0` is legitimate and used.
-
-## Asserting over the trace
-
-Today this is done with a **golden file** (below). Pointwise assertions —
-`(tick: 417, event: "hitbox.active")` — are not implemented; writing one into a
-scenario is refused by `deny_unknown_fields` rather than silently ignored, which
-is deliberate.
-
-Final state cannot see timing. Anything with a window — attack startup, an
-active hitbox, hitstop, a buffered input — is asserted against the event stream:
-
-```ron
-trace: [
-    (tick: 417, event: "hitbox.active"),
-    (tick: 418, event: "hit", entity: 93),
-    (tick: 429, event: "hitbox.inactive"),
-]
-```
-
-Assert the *ticks*, not merely that the events occurred in order. A hitbox live
-for thirteen frames instead of twelve produces the same ordered sequence and a
-different game.
-
-Also assert the negative where it is the point: a hit landing one tick outside
-the window must **not** register.
-
-## Golden traces
-
-For behaviour too broad to enumerate, check in the whole trace and diff against
-it. A tuning change then produces a reviewable diff instead of a claim.
-
-Regenerate deliberately, never reflexively:
+Set `expect.trace` to a trace filename relative to the scenario. The runner
+clears setup events before recording the run and refuses truncated trace
+comparison. To regenerate a deliberately changed expectation:
 
 ```sh
-cargo run --quiet -p scenario -- scenarios/knockback.ron --bless
+cargo run --quiet -p scenario -- scenarios/the_hitbox_opens_and_shuts_on_schedule.ron --bless
 ```
 
-A golden trace records the **run**, not the setup: the runner clears the trace
-after building the world, so a golden file is not coupled to `DEFAULT_ENEMIES`
-or anything else about construction.
+Read the diff against the predicted event ticks, identities and negative cases.
+Do not bless an unexplained difference. A final state can look correct despite
+an extra hit or an early spawn; that is why the event sequence matters.
 
-If the ring buffer wrapped, the runner refuses to compare rather than blessing a
-truncated file. Shorten the scenario instead.
+`budget.max_mean_step_micros` measures Game stepping, excluding setup, hashing
+and assertions. Use release for performance conclusions. It measures mean step
+cost, not worst-tick latency or render performance.
 
-**Read the diff before committing it.** A blessed golden file that nobody looked
-at is a test that has been deleted without anyone noticing. If the diff is
-larger than the change should produce, that is the finding.
+Replay divergence suggests nondeterministic input, ordering, randomness or
+presentation feedback. Use the first divergent tick to investigate; repeated
+runs can miss nondeterminism, so passing replay is evidence rather than a proof
+for every possible execution.
 
-## Determinism failures
-
-A determinism failure does not show up as a scenario that passes
-*intermittently* — the replay check runs both passes back to back, so it fails
-the same way every time. When it does, the sim has picked up a source of
-nondeterminism and that is the bug, not the scenario. The runner's own note
-lists the suspects: a wall clock, a bare `f32` where a `Dt` belongs, iteration
-over a hash-ordered container, unseeded randomness, or presentation state
-feeding back into sim state.
-
-The reported tick is the useful part. "Diverged at tick 1" and "diverged at tick
-340" are different bugs.
-
-## Adding a scenario for a bug
-
-Before fixing it, write the scenario that reproduces it and watch it fail.
-Afterwards, append an entry to `docs/traps.md` if the symptom was misleading
-rather than obvious — and note there that the scenario is now the enforcement,
-which is a promotion off layer 4.
-
-## What scenarios cannot tell you
-
-- **Feel.** They prove the impulse was 4.1 at tick 418. Whether 4.1 is right is
-  the owner's call, at the keyboard, under vsync.
-- **Rendering.** Anything about the image needs the GPU path — the yaw pixel
-  test is the existing pattern, and offscreen capture (roadmap chunk 6) is what
-  will make image checks available to a scenario at all.
-- **Input latency and OS event delivery.** Scenarios inject at the action layer.
-
-
-## Physical motion
-
-`impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))]` applies momentum
-before tick zero. `target: Player` uses the same physical interface. `value`
-is sim's validated `Impulse`, so nonfinite values are rejected on parsing.
-Missing or dead targets fail the scenario rather than silently dropping it.
-
-Assert `velocity: (x:, z:, tol:)` on a body, or `player_velocity` in `expect`.
-These are carried velocities, excluding powered walk/seek displacement.
-A source attack applies its impulse after integration, so its first displacement
-occurs on the following tick. The hit and impulse events pin this boundary.
-
-A budget may also set `max_mean_step_micros`. Timing surrounds `Game::step`
-only, outside simulation, and excludes hashing and verification. `sim` is
-optimized even in the debug scenario runner; validate performance in release
-as well. This is a mean budget, not a worst-tick latency guarantee.
-
-## Gameplay source control
-
-Complete game scenes use `Gameplay((engine: (...), source_controls: [...]))`
-inline, or `File(...)` with the same game-owned schema. Existing `Inline(...)`
-physical scenes and legacy files remain supported. Local control indices name
-explicit authored bodies and sources; all references validate before install.
-
-Assert the game-owned type directly, at checkpoints or final state:
-`controls: [(scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 3, emitted: 1)))))]`.
-`state: None` means that authored connection's scene has been evicted; an
-unknown authored scene/control index is rejected. Pending, Started, and
-Orphaned are the mechanic's own phases, not a runner copy.
-
-`despawns: [(at: 3, body: 0)]` retires a resolved placed identity before the
-tick. Source removal can select a scene:
-`remove_sources: [(at: 3, scene: 0, source: 0)]`. Removed bindings never shift
-to another source. Missing command targets and unreachable ticks fail.
-
-Activation on N is consumed before the engine step on N+1. Assert both ticks.
-The complete golden trace includes engine events followed by a labelled
-gameplay-transition stream; each preserves its own order. There is no claimed
-cross-stream order between equal-tick external commands and gameplay.
-See `scenarios/activation_starts_a_source_once.ron` and `docs/source-control.md`.
+Scenarios cannot judge combat feel, rendering, OS input delivery or real input
+latency. Use the [playtest skill](../playtest/SKILL.md) for live checks and report
+those results separately from durable behaviour assertions.

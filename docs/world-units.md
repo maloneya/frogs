@@ -1,8 +1,7 @@
 # World units
 
 The engine's unit contract lives in the [core crate documentation](../crates/core/src/lib.rs).
-One world unit means one metre. This assigns a meaning to the existing numbers;
-it does not rescale the world or change combat behaviour.
+One world unit means one metre.
 
 ## Reading a size
 

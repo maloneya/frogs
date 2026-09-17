@@ -218,9 +218,8 @@ impl Bodies {
     ///
     /// Respawns the whole horde rather than appending to it, so the layout
     /// stays a function of N alone: halving it re-centres what is left rather
-    /// than deleting a corner. Bodies that persist across a count change is the
-    /// better model, and it belongs to the real spawner (roadmap chunk 7)
-    /// rather than to a debug dial.
+    /// than deleting a corner. Gameplay spawns through sources and the spawn
+    /// queue; this operation is the bulk debug dial.
     fn respawn(&mut self, n: usize) {
         // `clear` keeps the allocations, so doubling N repeatedly grows the
         // buffers a few times rather than reallocating on every press.
@@ -1002,12 +1001,10 @@ impl World {
     /// instrument: `sim` is claimed to be a pure function of (state, inputs),
     /// and this is the thing that can exit nonzero when it stops being one.
     ///
-    /// **Every field of `World` must be fed to this**, and the destructuring is
-    /// what makes that a compile error rather than a rule someone remembers.
-    /// Add a field and this stops building until it is hashed; leave it out and
-    /// the replay gate reports a blind spot as agreement, because the failure
-    /// mode of an incomplete hash is silence rather than noise. That is layer 1
-    /// of the ladder in `CLAUDE.md`, where prose would have been layer 4.
+    /// Exhaustive destructuring forces an explicit decision when a field is
+    /// added. It cannot prove that the bound value reaches the hash; tests must
+    /// check that changing each relevant field changes the fingerprint. Omitting
+    /// state could make replay report agreement despite different worlds.
     ///
     /// `contacts` goes in even though it is derived from the positions, and for
     /// a specific reason: a broadphase that finds a different number of pairs

@@ -5,20 +5,19 @@ relaunching the game. A scene describes disposable content; a playtest owns the
 world and player. Restarting constructs a fresh world, then calls the same
 scene instantiation door that additive loading uses.
 
-The app and scenario runner now own a `Game`, which wraps the engine world.
+The app and scenario runner own a `Game`, which wraps the engine world.
 They step and observe it through the same entry point. Game owns the cached
 restart description and atomically replaces the complete run on start/restart.
 Game-owned relationships and engine resources share one eviction boundary. Additive loads
 and eviction preserve the restart choice, even if its live instance is removed.
 Run-scoped identity rules stay the same.
 
-The `sim` report keeps its physical fields and adds `restart.available`, plus
+The `sim` report includes `restart.available`, plus
 `restart.name` and `restart.initial_hash` when a snapshot is selected. The latter
 is the hexadecimal fingerprint of the snapshot's initial engine and gameplay state, computed
 once when the snapshot is validated. It is immutable, so it cannot drift from
-the description. The existing `sim_hash` and ready-reply hash now cover both the
-active engine, gameplay relationships, and the restart effect. Their values intentionally change at this
-migration; gameplay timing and event traces do not. `Game::engine_hash` remains
+the description. The `sim_hash` and ready-reply hash cover the
+active engine, gameplay relationships, and the restart effect. `Game::engine_hash` remains
 available for comparing engine state independently of the restart choice.
 
 ## Driving it
@@ -110,45 +109,7 @@ Enter confirms and closes; F1/Esc cancels. R highlights Cleave. Fresh starts and
 restore Cleave. Separate regression scenarios assert each attack's timing,
 reach, hit order, impulse, and subsequent movement.
 
-The small mechanism fixtures live inline in `scenarios/`; they are not picker
-entries. The former stationary-grid and spawn-flood stress scenes have been
-removed from the playable catalog.
-
-### Historical simulation measurement
-
-#### Measured simulation limit, 2026-09-10
-
-Release build on the development machine, no game window running. Each entry
-is the best of three twelve-tick means measured **inside `World::step`** by the
-scenario runner, using stationary grid populations. Loading, hashing, replay
-comparison, and rendering are outside that timer.
-
-| Enemies | Best mean tick | Share of 16.67 ms |
-|---:|---:|---:|
-| 1,024 | 0.15 ms | 1% |
-| 4,096 | 2.21 ms | 13% |
-| 8,192 | 8.84 ms | 53% |
-| 10,240 | 13.84 ms | 83% |
-| 11,264 | 16.84 ms | 101% |
-| 12,288 | 19.87 ms | 119% |
-| 16,384 | 35.50 ms | 213% |
-| 32,768 | 142.56 ms | 855% |
-
-The measured 60 Hz simulation boundary is between 10,240 and 11,264 bodies
-for this workload. Rendering and a concentrated seeking crowd need additional
-time, so this is an upper bound on a comfortable playable population, not an
-FPS guarantee or a worst-tick measurement. Doubling population from 8,192 to
-16,384 costs almost four times as much: the existing pair loop tests
-`N * (N - 1) / 2` pairs even when there are no overlaps. A spatial broadphase
-is the next system needed to change that growth rate.
-
-To repeat the measurement with the existing runner, create a temporary
-scenario outside `scenarios/` with `setup: (enemies: N)`, twelve budget ticks,
-and `max_mean_step_micros: 0.001`. The deliberately impossible budget reports
-the measured mean as a failure. Run three times with
-`cargo run --release -p scenario -- /path/to/probe.ron` and take the lowest
-reported mean. Confirm the only failure is the timing probe. Keep these probes
-outside the correctness gate; change the budget to 16,666.67 to test 60 Hz.
+Mechanism fixtures live inline in `scenarios/`; they are not picker entries.
 
 ### Scene format
 
@@ -237,9 +198,8 @@ execution share this order. Placed body numbering includes authored bodies,
 then ordinary setup actions, then later loads and emissions in execution order.
 `scene_count` and existing body/source assertions inspect the result.
 
-Step-time budgets now measure `Game::step`, including its call to the existing
-engine schedule. Setup, hashing, and assertions remain outside the timer. The
-historical measurements above predate this wrapper and measured `World::step`.
+Step-time budgets measure `Game::step`, including the engine schedule. Setup,
+hashing, and assertions remain outside the timer.
 
 The lifecycle scenario asserts surviving identities and positions, source
 descendants, reload, and load-then-evict before a source's first tick. Unit tests

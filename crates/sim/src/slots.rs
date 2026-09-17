@@ -37,12 +37,9 @@ use crate::hash::Fnv;
 
 /// A stable name for a body, valid until that body is despawned.
 ///
-/// Fields are private and there is no public constructor, so the only way to
-/// obtain one is from [`Slots::insert`]. That is deliberate and sits at layer 0
-/// of the ladder in `CLAUDE.md`: an id that could be built from two integers
-/// could be built from the *wrong* two integers, and a forged id that happened
-/// to match a live slot would read as a valid reference to a body its holder
-/// never saw.
+/// Fields are private and there is no public constructor. [`Slots::insert`]
+/// supplies IDs, preventing callers from forging a pair of integers that could
+/// accidentally identify a live body.
 ///
 /// Deliberately **not** `Default`. A zeroed id would carry generation 0, which
 /// [`FIRST_GENERATION`] guarantees is never live — but a `Default` impl invites

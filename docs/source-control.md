@@ -47,6 +47,10 @@ A source may have only one controller. One body can start several distinct
 sources. Invalid references, duplicate source ownership, and invalid physical
 content are rejected before installation changes the active game.
 
+References are numeric indices: reordering valid authored entries can silently
+change a connection. Review those references when editing lists; admission can
+check capability and existence, but cannot infer the author's intended target.
+
 Loading the same description twice resolves independent runtime connections.
 After engine admission succeeds, validated indices resolve against that
 instance's bodies and sources, without consulting the trace. Restart restores
@@ -56,8 +60,7 @@ Additive loads, endpoint removal, and eviction cannot edit that snapshot.
 The content loader accepts both this wrapped form and existing engine-only
 files. Both schemas reject unknown fields. Inline scenarios use `Gameplay(...)`
 for the complete form and retain `Inline(...)` for legacy physical content.
-Dependency allowlists now admit game → serde and content → game so owning
-types can supply their own authored definitions.
+Owning types supply their authored definitions to the shared decoder.
 
 ## Observing and verifying
 

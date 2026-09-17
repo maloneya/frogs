@@ -46,8 +46,7 @@ const _: () = assert!(MAX_TICKS_PER_FRAME >= 1, "a frame that can run no ticks f
 /// variable timestep but still lets one be carried around once minted. A unit
 /// struct makes the wrong value unrepresentable instead: there is exactly one
 /// duration a `Dt` can mean, so passing the wrong one is not a mistake that can
-/// be written down. That is layer 0 of the ladder in `CLAUDE.md` rather than
-/// layer 1, and it costs nothing.
+/// be written down.
 ///
 /// What it is, then, is a *token* proving its holder is inside a fixed step.
 /// Only [`Accumulator::pending`] mints one — the field is private to this

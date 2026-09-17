@@ -1,123 +1,55 @@
 ---
 name: add-sim-pass
-description: Add or change a simulation behaviour in the arpg sim — movement, steering, separation, collision, attack state machines, timed hitboxes, knockback, hitstop, spawning. Use whenever a change would otherwise mean editing the body of World::step or adding a stage to the frame loop. Covers the pass contract, where constants and their asserts live, ordering rules, what must be traced, and the scenario required before the change counts as done.
+description: Add or change simulation passes, including movement, contact, attacks and spawning. Use when changing World::step or the behaviour it schedules; gameplay relationships belong in game.
 ---
 
-# Adding a simulation pass
+# Add or change a simulation pass
 
-A behaviour is a **named pass** in the sim schedule. It is not a block of code
-appended to `World::step`, and it is not a stage added to the frame loop in
-`app`.
+Read [repository rules](../../../CLAUDE.md), the owning pass and its neighbours
+in [the schedule](../../../crates/sim/src/pass/mod.rs). Explain what rule changes,
+why it runs at that point, and an observable consequence for play.
 
-The reason is not tidiness. A pass written into `step()` carries its ordering in
-control flow, where nothing can read it, assert on it, or stop the next edit from
-getting it wrong. A pass that takes `&mut World` can touch anything, so "this
-pass only reads positions" is a claim rather than a fact. Both problems are
-avoidable at layer 0–1 for free.
+## Access and composition
 
-## The contract
+A pass takes only the slices and capabilities it needs. Use the current pass
+signatures as examples; do not pass an unrestricted mutable World or Game.
+For example, attack reads positions and submits momentum through `ImpulseSink`;
+physics integrates it later. This allows other producers to use the same motion
+rules and lets contacts propagate an attack's consequences.
 
-**Take the data, not the world.** A pass declares what it touches in its
-signature and gets exactly that; the borrow checker then enforces the
-declaration at layer 0, with no test needed. The passes in
-`crates/sim/src/pass/` are the worked examples — copy their shape:
+Keep mechanic logic in its module. Add only wiring to `World::step`, and update
+the schedule explanation with the reason for the ordering. State which tick's
+facts the pass reads and when its effects become visible. The schedule prose
+is not mechanically synchronized with the call order; verify both.
 
-```rust
-pub(crate) fn contain(player: &mut Vec2, horde: &mut [Vec2], mut trace: TraceSink<'_>) { … }
-```
+Use `Dt` when a pass needs time, never an arbitrary frame duration. Keep tuning
+beside its owner, with range validation at the shared entry point. Use const
+assertions for static bounds and validated types for runtime values.
 
-Not `fn contain(world: &mut World)`.
+Structural edits must respect row lifetimes: spawn draining precedes row readers,
+and defeated-body removal follows them. Retain stable entity IDs across removals,
+not dense indices. New membership or state must participate in cleanup, scene
+lifetime, restart, reporting and hashing.
 
-The player shares body storage and physical membership with the horde. Its
-facing and attack state remain separate. Producers of motion take an
-`ImpulseSink`; they cannot reach physical storage or write positions.
+## Observation
 
-**Take `Dt`, never `f32`.** `Dt` carries no number at all and can only have come
-from `Accumulator::pending`, so a variable timestep is not something a caller
-can express.
+Expose read-only state for assertions. Emit typed transitions through `TraceSink`
+when timing or history matters; the sink supplies the tick. Gameplay must never
+read the diagnostic trace to decide what happens next.
 
-**Register, do not inline.** `World::step` is a list of calls into `pass/` and
-contains no logic. If your change adds logic to `step`, it is in the wrong
-place. `pass/mod.rs` documents the order and why each adjacency is what it is;
-a new pass adds its reason there.
+Aggregate repetitive contacts per tick; preserve individual events when identity
+matters, such as damage or removal. Trace externally driven state changes too.
+Exhaustive report/hash destructuring prompts an update when storage changes,
+but tests must verify that the new data actually reaches those outputs.
 
-**Own your constants, with their asserts.** A constant describing a *behaviour*
-— speed, turn rate, mass ratio — lives in the pass module beside the code that
-reads it, each with a `const _: () = assert!(…)` covering its valid range. A
-constant describing an *entity* — radius, scale, spacing — stays with the
-storage. The plausible wrong edit should fail to compile.
+## Verification and teaching
 
-**Be a pure function of its inputs.** No wall clock, no `Instant`, no unseeded
-randomness, no iteration over a hash-ordered container. Where a pass must break
-a tie, derive it deterministically; `escape_direction`'s golden angle is the
-pattern to copy.
+Use the [scenario skill](../scenario/SKILL.md). Predict the isolated behaviour
+and a relevant interaction with another system. Assert tick boundaries and the
+negative case where a result must not occur. For a horde-scaling pass, include a
+step-time budget and validate performance in release.
 
-## Before writing it
-
-Read the passes either side of where yours will sit. Ordering in a fixed-step
-sim is semantic: integrating before resolving separation and resolving after
-give different games, and both compile.
-
-Say in one or two sentences what the pass does and why it belongs at that point
-in the order. That sentence is the thing worth reviewing; the code usually is
-not.
-
-## What the pass must emit
-
-Any state transition that a scenario will need to assert on is a trace event,
-tick-stamped, emitted by the pass:
-
-```
-412 attack.startup
-417 hitbox.active
-418 hit e=93 impulse=(4.1,-4.1) hp=7
-419 hitstop 4
-```
-
-This matters most for exactly the behaviours this skill covers. A mistimed
-hitbox, a knockback applied on the wrong frame and a hitstop that never releases
-all produce no crash, no compiler error and no failing unit test. A `state`
-snapshot read afterward cannot see a three-frame error inside a twelve-frame
-window. The trace can.
-
-`state` is derived now, so a *world field* becomes observable by existing. An
-**event** is for something that happened, which a field cannot represent.
-
-Add a variant to `sim::trace::Event` with a `Display` arm, take a
-`TraceSink<'_>` in your signature, and `emit`. The sink already knows the tick,
-so an event cannot be stamped with the wrong one.
-
-**Summarise per tick; do not emit per body.** `separate` reports
-`contacts count=37`, not thirty-seven events. A pass emitting per body fills the
-ring buffer in seconds and pushes out the rare events the trace exists for.
-
-**Trace anything that changes state outside a tick**, as `set_enemy_count` does.
-Between-tick writes are the hardest to account for afterwards, and uncapped most
-frames run zero ticks — so they are also the most likely to be drawn before
-anything has run.
-
-## Done means
-
-1. `cargo clippy --workspace --all-targets -- -D warnings` clean. (The
-   `PostToolUse` hook runs this for you after every edit *and* every Bash call.)
-2. `cargo test --workspace` clean.
-3. **A scenario asserts the new behaviour and the runner exits 0.** See the
-   `scenario` skill.
-4. If the pass has a cost that scales with the horde, it carries a perf
-   assertion in that scenario.
-
-Point 3 is the one that is easy to skip and is the whole point — rule 4 in
-`CLAUDE.md` says why. The runner exists; there is no version of this step that
-consists of reading `state` and being satisfied.
-
-Two things it gives you free, so do not hand-roll them: every scenario is
-replayed and hash-compared per tick, and a scenario naming a golden trace turns
-a timing change into a reviewable diff. Add `trace: "name.trace"` to `expect`,
-run once with `--bless`, then **read the file before committing it**.
-
-## Feel is not in scope here
-
-A scenario proves the knockback impulse was 4.1 at tick 418. It cannot say
-whether 4.1 *feels* right. That is the owner's call, at the keyboard, under
-vsync. State the effect you expect, change the constant, measure it, and put the
-number in the commit message.
+Run all [repository checks](../../../CLAUDE.md#checks-and-commands). Review golden
+trace changes against the intended rule before blessing them. Explain the
+result in terms of cause and effect, what the checks prove, and any remaining
+feel judgement for the user to try in a live playtest.

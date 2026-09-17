@@ -16,7 +16,7 @@ accepted and baked once at import.
 The material must be opaque and have **Backface Culling** enabled. Use one UV
 map and the default repeat-wrapped Image Texture node connected to Principled
 BSDF Base Color. Scalar Metallic and Roughness values are accepted but
-deliberately normalized away: this checkpoint renders a lit base colour, not
+deliberately normalized away: the renderer uses lit base colour, not
 PBR surface response. Normal, occlusion, emissive and metallic-roughness
 textures remain unsupported and are rejected.
 
@@ -83,7 +83,7 @@ committed simulation phase lengths. Recovery tuning therefore cannot move the
 visible contact interval. These names and segment boundaries are
 gameplay-presentation roles owned by `app`, not special cases in the importer.
 
-All six checked-in attacks use the same 30-frame authoring contract: frame 1 is
+The playable player attacks use the same 30-frame authoring contract: frame 1 is
 neutral, frame 13 is fully wound, frame 19 completes contact, and frame 31 is
 neutral again. Runtime maps startup to normalized `0.0..0.4`, active to
 `0.4..0.6`, and recovery to `0.6..1.0`; tests sample the exported weapon motion
@@ -103,10 +103,11 @@ for the player and `assets/characters/basic-enemy/basic-enemy.glb` for the horde
 using the existing role scales and tints. Asset paths
 are resolved from the build-time repository location, independently of the launch
 directory. Missing or invalid defaults fail startup explicitly. `character clear`
-and `horde clear` restore this default asset; there is no character cube fallback.
+and `horde clear` restore their respective default assets; there is no character cube fallback.
 
 The checked-in `assets/fixtures/blender-bind-pose.glb` exercises this contract
-with a four-bone, asymmetric training dummy and the eight player actions.
+with a four-bone, asymmetric training dummy and the required player clip names.
+Its diagnostic motion is distinct from the playable player's attack authoring.
 Regenerate it from the repository root with:
 
 ```text

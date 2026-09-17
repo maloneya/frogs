@@ -1,489 +1,134 @@
-# CLAUDE.md
+# Working on arpg
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Repository guidance for coding agents. This is a from-scratch action-RPG engine
+and a learning project for a novice game developer, focused on combat against
+large crowds. Understanding the systems matters alongside getting them running.
 
-## What this project is
+## Design priorities
 
-A from-scratch action-RPG engine, built as a **learning project**. The goal is
-understanding engine-level technology, not shipping a game. Specifically: making
-combat against a large horde of enemies *feel* right.
+- **Simulation first.** Build consistent rules that compose. Players should be
+  able to discover interactions we did not script individually. An attack asks
+  the shared physics system for an impulse; contacts carry that motion onward.
+  Put shared mechanisms below their producers and test their combinations.
+- **Teach through the work.** Explain the relevant concept in plain language,
+  connect the design to an observable gameplay effect, and name the tradeoff.
+  Use a small example when helpful. Distinguish verified behaviour from a feel
+  judgement for the user to make. Avoid unexplained jargon and long lectures.
+- **Small running changes.** Build one system at a time. Do not scaffold future
+  mechanics or generalize without a concrete need.
+- **First principles.** Hand-write the engine layers being studied: simulation
+  loop, entity storage, spatial partitioning, renderer. Crates for math and
+  plumbing are fine; an off-the-shelf engine or ECS is not.
 
-This framing changes how to work here:
+[Design rationale](docs/agent-principles.md) explains how these priorities fit.
 
-- **Simulation and systems first.** Build behaviour by composing systems.
-  Shared physical interaction belongs below attacks and other producers.
-- **Agent-first engine.** A system must be drivable, observable and assertable
-  through the engine's own interfaces, independently of the feature using it.
-- **Explain, don't just deliver.** Concise natural-language reasoning about why
-  a design is what it is matters more than the code being finished.
-- **Small chunks.** Build one system at a time and get it running before moving
-  on. Do not scaffold several subsystems at once, and do not one-shot features.
-- **First principles.** Engine layers get hand-written — the sim loop, entity
-  storage, spatial partitioning, the renderer. Reach for a crate for math and
-  plumbing, not for the layers being studied. In particular, do not introduce a
-  game engine or an off-the-shelf ECS (Bevy, hecs, legion); writing those is the
-  point.
+## Rules while editing
 
-## How work is finished here
+1. **Enforce at the owner.** Assume a caller or future agent will forget a rule.
+   Prefer private fields, narrow capabilities and validated constructors, then
+   compile-time checks, runtime validation and tests. Prose is the last defence.
+   Enforce at the shared entry point, including file and harness input. Explain
+   why a weaker safeguard is necessary. See [enforcement](docs/invariants.md).
+2. **Keep one definition.** The owning system defines types, validation and
+   tuning. Content, UI, reports and harness consume that vocabulary. Derive
+   facts from authoritative state; do not maintain a second copy by convention.
+3. **Keep execution deterministic.** Simulation and gameplay depend only on
+   state and ordered inputs: no wall clock, unseeded randomness or hash-ordered
+   iteration. Presentation may interpolate, smooth and animate but cannot write
+   back into simulation. Replay is scoped to one binary on one machine.
+4. **Declare access and order.** Behaviour belongs in named passes with the
+   slices or restricted interfaces they need, never unrestricted mutable World
+   or Game access. Step methods wire passes; they do not contain mechanic logic.
+   State when a pass reads, when its effects land, and who owns structural edits.
+5. **Make systems independently testable.** Provide typed driving operations,
+   read-only observations and transition traces through engine/game interfaces.
+   Gameplay reads authoritative state, never the diagnostic trace ring.
+6. **Close the lifecycle.** New state needs explicit spawn, removal, scene
+   eviction, restart, hash and report handling. Use stable identities across
+   dense-row moves. Validate complete loads before mutation; rejected input must
+   preserve live state and accepted pending work.
+7. **Verify outcomes.** A simulation or gameplay behaviour change requires a
+   passing scenario through Game, with predictions made before observing output.
+   Check intermediate ticks and interactions with existing systems. Test refused
+   input and stale identities where relevant. Never weaken a gate or bless a
+   trace merely to make a change pass.
+8. **Diagnose from evidence.** Search [traps](docs/traps.md) before investigating
+   a symptom. After a misleading failure costs over ten minutes, record its
+   symptom, cause and check; replace recurring advice with executable safeguards.
 
-Five streams shape every change here. The rationale, current state and open
-work for each is in [`docs/agent-principles.md`](docs/agent-principles.md);
-what follows are the rules that apply *while editing*.
+## Ownership
 
-1. **Sim layer** — `sim` is a pure function of (state, inputs). No wall clock,
-   no unseeded randomness, no iteration over hash-ordered containers. The
-   invariant binds simulation only: presentation (interpolation, smoothing,
-   particles, audio) is exempt, and must never feed back into sim state.
-2. **Hooks** — a new behaviour is a named pass in the sim schedule, taking the
-   slices it declares. Do not add one by editing the body of `World::step`.
-   See the `add-sim-pass` skill.
-3. **Perception** — anything an agent must observe is a trace event or a
-   *derived* `state` field. Never a hand-maintained format string.
-4. **Scenarios** — a change to sim behaviour is not done until a scenario
-   asserts it and the scenario runner exits 0. See the `scenario` skill.
-5. **Traps** — before diagnosing a symptom, grep
-   [`docs/traps.md`](docs/traps.md). After losing more than ten minutes to
-   one, append an entry.
+The engine protects shared simulation mechanisms; gameplay owns the rules and
+relationships of a mechanic. Both are deterministic and need invariants. This
+engine serves one game; hypothetical reuse is not a reason to add abstraction.
+Existing combat tuning still lives beside engine validation in sim; read the
+owner before moving it. New gameplay relationships belong in game.
 
-Rule 4 is the stopping condition, not a suggestion. **A change verified by
-reading numbers off `state` and judging them correct yourself is unfinished
-work** — that is the agent grading its own homework, and it is the one failure
-mode none of the machinery above can catch. Predicting a value and then
-asserting it in a scenario is the same act, made durable and checkable.
+| Crate | Responsibility |
+|---|---|
+| core | Small shared vocabulary, independent of graphics and gameplay relationships |
+| sim | Physical world, identity, capabilities, validated operations and pass schedule |
+| game | Playable state, mechanic relationships, orchestration and complete scene lifetime |
+| content | Decode authored definitions supplied by sim and game |
+| assets | Validate bounded GLB input into CPU assets, independent of gameplay and GPU resources |
+| gfx | Rendering, camera and GPU resources; receives anonymous geometry |
+| app | Devices, UI, presentation and harness; maps actions to world-space intent |
+| scenario | Headless driving and assertions through the same Game used by app |
 
-The `Stop` hook in `.claude/settings.json` enforces this: when a turn ends it
-runs the test suite, `cargo doc` (which is what makes the rustdoc lint wall
-bite — see `Cargo.toml`), **and the scenario runner**, and blocks on the first
-failure. All three are live, so rule 4 is enforced by a process exiting nonzero
-rather than by this paragraph.
+Game privately owns World. App and scenario use Game for construction, stepping
+and lifecycle; engine tests may drive World directly. Dependency allowlists in
+crate build scripts enforce permitted edges. One world unit is one metre;
+see [world units](docs/world-units.md).
 
-### Engine and game, and where the line falls
+Native macOS / Apple M4 / Metal is the target. Cross-platform and wasm support
+are out of scope. Preserve these presentation contracts when editing: colours
+are linear with sRGB output, camera smoothing uses elapsed-time half-lives,
+horde animation shares bounded pose buckets, redraw is continuous, and depth
+is discarded after the pass because nothing reads it. Read the relevant owner
+and its tests before changing these choices.
 
-**The test is not reuse.** This engine is not trying to be general — it exists
-to make one game, and "could another game use this?" would push `contact.rs`
-and `pass/separate.rs` toward configurability nothing needs.
+## Checks and commands
 
-The test that matters is what an invariant governs: **the engine protects
-shared simulation mechanisms; gameplay owns the rules and relationships of a
-particular mechanic.** Gameplay has invariants too, such as an encounter awarding
-a reward only once. Both belong in deterministic execution and both need strong
-enforcement. [`docs/invariants.md`](docs/invariants.md) records current safeguards.
-
-The new `game` crate isolates gameplay from the engine. Existing combat still
-keeps validation and tuning together within files during this staged migration.
-`crates/sim/src/pass/seek.rs` is engine: it carries the assert that a chaser
-must be slower than the player, without which kiting stops existing. The `3.5`
-that assert bounds is game. Same in `attack.rs` — that a swing's timings are
-non-zero and bounded is engine; the `6`, `6` and `10` that `AttackProfile::Cleave`
-resolves to are game. The engine half sits in two different mechanisms, which is
-worth knowing before editing either: `ResolvedAttack::try_new` bounds startup and
-active, while recovery is bounded by the `RecoveryTicks` newtype, so the panel,
-the scenario format and serde all cross one validator rather than three.
-
-The rule that follows, and the one to apply while editing: **each definition
-lives exactly once, beside the system that owns its meaning.** `Template`,
-`Condition`, `Placement`, `Source` and `SourceSpec` remain in `sim`; gameplay relationship definitions belong in `game`. The scenario `.ron` format
-and the `ARPG_HARNESS` command
-parser *derive* from those types rather than restating them. A second
-hand-written copy of an axis is the failure this rule exists to prevent, and it
-fails in the direction nothing reports — not by breaking a build, but by
-leaving a new capability unreachable from outside.
-
-## Commands
+Rust may need `. "$HOME/.cargo/env"` before commands. Run these checks before
+finishing a change; report any failure or check you could not run:
 
 ```sh
-cargo run                 # debug build, run (default-members points at crates/app)
-cargo run --release       # for any performance measurement — debug numbers are meaningless
-RUST_LOG=info cargo run   # adapter selection + wgpu diagnostics
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace    # includes a headless GPU test; needs a real adapter
-
-cargo run --quiet -p scenario -- scenarios/   # the gate: exits 0 or 1, no GPU, no window
+cargo test --workspace
+cargo doc --workspace --lib --bins --no-deps --document-private-items
+cargo run --quiet -p scenario -- scenarios/
 ```
 
-### Driving the game from a shell
+Workspace tests include GPU tests and require a real adapter. Scenarios need no
+GPU or window. Use `#[expect(lint, reason = "…")]` for a justified exception,
+never `#[allow]`. Do not relax lint or dependency policies to get a build through.
 
-`ARPG_HARNESS` opens a unix socket that plays the game: real keys through the
-real binding table, screenshots the app takes of itself, simulation state as
-JSON, and the event trace. Unset, none of it exists — no socket, no thread, no
-way in.
+Claude Code hooks in [.claude/settings.json](.claude/settings.json) run some of
+these checks automatically. Other agents and shells must run them explicitly;
+the presence of that file does not prove a check ran. Rustdoc needs its own
+command; passing clippy and tests does not validate documentation links.
+
+`cargo run` launches the app. Use `cargo run --release` for performance work.
+Drive live checks through `ARPG_HARNESS`, not OS key injection or desktop capture:
 
 ```sh
 ARPG_HARNESS=/tmp/arpg.sock cargo run --release
-echo 'hold d 500' | nc -U /tmp/arpg.sock
+echo 'state' | nc -U /tmp/arpg.sock
 ```
 
-`press`/`release`/`tap`/`hold <key> <ms>` · `wait <ms>` · `shot <path>` ·
-`state` · `trace since <tick>` · `enemies <n>` · `seekers <n>` ·
-`spawn <x> <z> [seek]` ·
-`source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>] [disabled]` ·
-`source remove|enable|disable <id>` · `impulse <player|#id> <x> <z>` ·
-`asset|character|horde show <path.glb>` · `asset|character|horde clear` ·
-`vsync on|off` · `quit`
+## Task guides
 
-Static asset preview: `asset show <path.glb>` atomically imports, uploads and
-selects one app-global preview beside the initial camera target; `asset clear`
-removes it. `state.asset_preview` reports the selected path and mesh counts.
-It also reports the decoded base-colour texture dimensions. Blender authoring
-and the generated mip-chain contract are documented in
-[`docs/character-assets-authoring.md`](docs/character-assets-authoring.md).
-The preview has no body and no simulation effect. See
-[`docs/character-assets-plan.md`](docs/character-assets-plan.md).
+Read only the guides relevant to the work:
 
-Ground and static props load from `assets/world/ground.glb` and `prop.glb`.
-The ground is one textured plane; all props share one instanced mesh draw.
-Presentation derives prop tint from interaction state. `state.world_assets`
-reports both assets; render counts distinguish static meshes and characters.
-The cube renderer and attack telegraphs are removed; collision-disc debug drawing is available via F3 or `debug collision on|off`.
-See [`docs/collision-debug.md`](docs/collision-debug.md). See [`assets/world/README.md`](assets/world/README.md).
+- [Add or change a sim pass](.claude/skills/add-sim-pass/SKILL.md)
+- [Write and run scenarios](.claude/skills/scenario/SKILL.md)
+- [Live playtesting, capture and performance](.claude/skills/playtest/SKILL.md)
+- [Author a scene](.claude/skills/create-scene/SKILL.md) and [scene lifecycle](docs/scene-playtests.md)
+- [Author Blender assets](.claude/skills/author-blender-asset/SKILL.md) and [asset contract](docs/character-assets-authoring.md)
+- [Interaction](docs/interaction.md), [source enablement](docs/source-enablement.md), [source control](docs/source-control.md)
+- [Collision debug view](docs/collision-debug.md) and [attack effects](docs/attack-effects.md)
 
-Startup loads `assets/characters/basic-player/basic-player.glb` for both player
-and horde. Missing or invalid default assets fail startup; character cube
-fallbacks have been removed.
-
-Animated character preview: `character show <path.glb>` atomically imports,
-uploads and selects the separate one-skin path; `character clear` restores the default asset.
-`state.character_preview` reports its path, mesh, texture, node and joint
-counts plus its current role, clip and sample time. A selected
-character maps authoritative movement
-and each committed attack phase to the authored clip catalog. The demo weapon
-is geometry in that skinned mesh. It is presentation-only and may coexist with the static
-preview.
-
-Animated horde preview: `horde show <path.glb>` atomically selects one shared
-enemy mesh with `Idle` and `Run` clips; `horde clear` restores the default asset.
-Stable entity identity assigns four reusable pose phases per role, so the horde
-remains at most eight instanced draws rather than one pose and draw per enemy.
-`state.horde_preview` reports the selection, role counts and occupied buckets;
-`state.render.horde_pose_draws` reports the draw workload. Like player
-animation, this path is presentation-only and cannot write into simulation.
-
-Source enablement freezes cadence and ring progress while disabled; enabling
-resumes them. Read-only `SourceState` supplies reports and scenario assertions.
-See [source enablement](docs/source-enablement.md) for timing and lifetime rules.
-
-Scene playtests: `scene start <path>` starts fresh from a file; `scene restart`
-repeats the selected snapshot; `scene add <path>` / `scene evict <id>` exercise
-additive content; `scene list` reports live instances. See
-[`docs/scene-playtests.md`](docs/scene-playtests.md) for completion semantics,
-run-scoped identities and the shared scenario-file path.
-
-For authoring playtest configurations, use the
-[`create-scene` skill](.claude/skills/create-scene/SKILL.md).
-
-Every command replies, and the reply means the effect has **landed** — `hold`
-answers after the key comes back up, `shot` after the file is on disk. So a test
-is a sequence of commands, not a sequence of sleeps and hopes. Key names are a
-column of `BINDINGS`, so binding a key makes it drivable in the same edit.
-
-**The `playtest` skill is the rest of this** — measuring throughput without
-being lied to, what a screenshot needs, and why driving the game through the OS
-instead fails silently. Do not reproduce it here.
-
-Rust was installed via rustup with `--no-modify-path`, so `~/.cargo/bin` is
-**not** on PATH by default. Prefix commands with `. "$HOME/.cargo/env" &&`, or
-add it to the shell profile.
-
-`[profile.dev.package."*"] opt-level = 3` optimises dependencies while leaving
-our crates in debug. Graphics crates are unusably slow otherwise.
-
-## Architecture
-
-**One world unit is one metre.** The shared unit contract lives in the
-crate documentation of `crates/core/src/lib.rs`; see
-[`docs/world-units.md`](docs/world-units.md) for how it applies to sizes,
-collisions, attacks and authoring. Spatial values in scenes, harness commands
-and state reports follow the same convention.
-
-Native macOS only (Apple M4 / Metal). Cross-platform and wasm support are
-explicit non-goals — a lot of wgpu example code exists to satisfy the browser's
-ban on blocking the main thread, and none of that complexity is warranted here.
-
-**The rule the layout enforces: `gfx` never knows what an enemy is, and `sim`
-never knows what a key is.** Outward, the vocabulary is `Instance` — position,
-scale, colour — assembled by app presentation from immutable simulation
-snapshots. Inward, a
-device becomes an `Action`, named in *screen* directions; `app` asks the camera
-to resolve those to world space and hands `game` an `Intent`. Game advances source control, then steps `sim`. Both dependencies
-run one way, and the simulation sees neither a key nor a screen.
-
-The overlay is that same rule applied one layer up. `Quad` is a rectangle in
-pixels with a patch of atlas and a colour, and `app` describes a screen in it
-via `hud::draw` — so the renderer draws a health bar without learning what
-health is, exactly as it draws an enemy without learning what an enemy is.
-
-`Quad` lives in `gfx` rather than `core`, and the difference from `Instance` is
-the point: `core`'s bar is *needed by both, beholden to neither*, and `Instance`
-keeps asset placements independent of the graphics stack. Simulation now
-exposes physical snapshots rather than minting render geometry. Keeping it in `gfx` is
-what lets `Quad::textured` be `pub(crate)` and lets the atlas's reserved white
-texel *derive* the UV that names it, instead of two crates agreeing by
-convention across a boundary no compiler spans.
-
-```
-crates/
-  core/  Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES   glam, bytemuck
-         Action, ActionMask, InputState, Actions            (input.rs)
-         MoveDir, Intent                                    (intent.rs)
-         Report, damp
-  assets/ validated static/skinned CPU meshes, hierarchy, clips, base colour and .glb boundary
-                                                                  gltf, png, glam, bytemuck
-  gfx/   Renderer, camera, capture, instance      core, wgpu, winit, png,
-         imported static/skinned mesh GPU resources, joint palettes,
-         Quad/QuadBuffer/QuadSink,
-         Glyphs, overlay.wgsl                                  assets, fontdue
-  sim/   World, pass/ schedule, Dt/Alpha/Accumulator, trace   core, glam, serde
-  game/  Game, GameScene, source_control, restart snapshot  core, sim, glam, serde
-  content/  load_scene, parse_template: shared RON decoding  game, sim, ron  (no gfx)
-  app/   App, Controls + BINDINGS, Clock, harness, hud, ui  core, gfx, game, sim, content, winit
-  scenario/  headless binary: run a .ron, assert, exit 0/1  core, game, sim, content, ron, serde
-```
-
-- `core` is the shared vocabulary and belongs to neither side. It deliberately
-  does **not** name wgpu — that is what keeps `sim` free of the graphics stack,
-  so simulation tests never need a GPU. The vertex layout for `Instance` lives
-  in `gfx/instance.rs` for exactly this reason.
-- `assets` — the one-way interchange boundary. It accepts bounded, explicit
-  subsets of binary glTF. Static meshes return transformed CPU geometry;
-  character assets retain their named node hierarchy, one skin, inverse binds
-  and a bounded sampled clip catalog. Both return one decoded base-colour
-  texture. glTF handles never escape it. It owns no paths, scene selection,
-  simulation meaning, window state or GPU resources.
-- `content` decodes `GameScene` and promotes legacy engine-only files. The
-  game scene wraps sim's physical definition and adds game-owned relationships;
-  no physical schema is copied. App and runner share this decoder.
-- `game` privately owns World, resolved source-control records, and the
-  immutable restart snapshot. `Game::step` runs the source-control pass before
-  the engine schedule: interaction on N permits source emission on N+1.
-  The pass receives only `InteractionView`, `SourceEnablement`, its own
-  records, and a gameplay trace sink. It cannot move or damage bodies.
-  `GameScene` validates authored references before physical installation,
-  resolves them per instance, and evicts relationships with their engine
-  resources. Start/restart atomically replace all of this state.
-  `Game::hash` includes live relationships and the complete cached restart
-  effect; `Game::engine_hash` remains the physical fingerprint. Reports expose
-  source-control phases beside the engine's authoritative source state.
-  Engine and gameplay diagnostics use separate typed trace streams; neither
-  drives gameplay. App and runner display/check both.
-  See [source control](docs/source-control.md) and
-  [the architecture plan](docs/gameplay-architecture-plan.md).
-  The app owns device, camera, capture, and run-id cleanup after successful
-  replacement. App and runner may import sim value types but never construct
-  or step an engine world themselves.
-- `gfx` — `lib.rs` (surface, device, depth, frame orchestration), `camera.rs`
-  (isometric ortho camera, the follow rig, and the uniform), `instance.rs` (shared
-  instance layout), `mesh.rs`/`character.rs` (imported static and
-  skinned GPU resources, including bounded shared-pose horde instancing), shared
-  `material.rs`, and their WGSL shaders. The camera rig lives
-  here rather than in `app` or `sim` because where the camera points is a
-  presentation decision; it is handed a bare `Vec3`, which is exactly as
-  anonymous as an `Instance`.
-- `sim` — `World`: what exists. `step()` is the input/sim seam and is nothing
-  but an ordered list of calls into `pass/`, one module per named pass, each
-  owning its tuning constants and taking the data it declares rather than
-  `&mut World`. Presentation snapshots are the sim/render seam, `trace()` the
-  sim/agent one; both borrow the world through `&self`, making "perception cannot
-  change what it observes" a fact about the types. Its own modules:
-  - `slots.rs` — `EntityId` and the map from a name to a dense row. The horde's
-    arrays are contiguous, so a despawn moves rows; only a generational id
-    survives that.
-  - `members.rs` — which entities have a given behaviour. A behaviour is its own
-    membership plus a pass that walks it, so adding one touches no existing type
-    and costs what it uses rather than what the horde costs.
-  - `contact.rs` — whether two bodies touch, and along what line. It stops
-    there, because separation, a hitbox and a trigger are three answers to that
-    one question. Which answer a caller is allowed to give is visible in its
-    signature; `pass/attack.rs` argues that at the definition site.
-  - `pass/` — one module per named pass: `source`, `spawn`, `remember`, `walk`,
-    `seek`, `motion::integrate`, `separate`, `contain`, `motion::settle`,
-    `face`, `attack`, `interact`, `health::remove_defeated`, in that order. The first
-    two are *decide* and *perform*, split on purpose: `source` works out which
-    sources fire and may only push onto the spawn queue — it is handed no
-    storage, so the code that decides new bodies exist cannot make one — and
-    `spawn` is the only pass that adds to *what exists*. The horde's length is
-    then constant until the final defeat pass, so no ordinary pass has to
-    defend against a row moving underneath it; defeat removes bodies only after
-    every row-reading pass has finished. `pass/mod.rs` is the readable copy of
-    that order and must agree with the body of `World::step`.
-  - `pass/source.rs` — who asks for spawns, and when. A source is **not** a kind
-    of body: it is what makes bodies, so hanging it off one of its own products
-    inverts the layering and breaks as soon as the thing made is not a body. It
-    is four independent axes — cadence, condition, placement, template — rather
-    than one enum of every useful combination. `SourceSpec` is the only written
-    form of one, and `Source` is reachable from a file only through it — so the
-    axes have one definition rather than a runtime copy and a file copy.
-  - `pass/health.rs` — how much killing a body takes, and the one pass that
-    removes one. Sparse membership now excludes static props; damage resolves
-    stable identity rather than assuming every non-player row has health.
-    `DamageSink` can subtract a point and reach nothing else.
-  - `pass/motion.rs` — sparse physical membership, mass, carried velocity and
-    validated impulses. Collision response exchanges momentum; damping settles
-    it. Powered walk/seek displacement remains independent. The player shares
-    body storage with the horde; its row survives enemy resets and despawns.
-- The **overlay** is the second pipeline, and almost the inverse of the first:
-  no camera, alpha blended, drawn in submission order rather than depth order.
-  It joins the world's render pass instead of opening its own — declaring a
-  depth state to match, then never writing depth and always passing the test —
-  because a second pass would store and reload the whole frame on a tiled GPU
-  for nothing. `gfx/text.rs` rasterises printable ASCII into one atlas with
-  `fontdue` and keeps the metrics; `gfx/quad.rs` draws it. Texel `(0, 0)` of
-  that atlas is reserved opaque white, which is what lets `Quad::solid` share
-  the pipeline: a bar is a quad whose UVs collapse onto it. One draw call for
-  text and flat colour together, forever.
-  - `Glyphs` is the metrics table **without** the texture, and the split is what
-    makes an overlay's layout assertable with no GPU: `hud::draw` is a pure
-    function, so "what would be on screen" is a list of rectangles a test reads.
-- `app` — the wiring layer, and the only crate that sees both sides. `input.rs`
-  holds `BINDINGS`, the one place a `KeyCode` becomes an `Action`. GPU state
-  is built in `resumed`, not `main`, because winit models surface loss as
-  suspend/resume. `about_to_wait` requests a redraw every time the queue drains,
-  converting winit's event-driven default into a continuous game loop.
-  `time.rs` holds `Clock`, which now only *measures*: the fixed-timestep
-  accumulator lives in `sim`, next to the `Dt` it mints, so the crate that can
-  read a clock cannot turn what it reads into simulation time.
-  `presentation.rs` owns asset selection, role sampling and shared horde poses;
-  its playback and heading state is private. `App` drives load, sample, reset,
-  draw and report operations, while presentation tests live beside their owner.
-
-### Controls
-
-Game actions (rebindable, go through `Action`):
-
-`WASD` / arrows move the player · `space` swings · `E` interacts with a nearby object
-
-Static props and the activation playtest: [`docs/interaction.md`](docs/interaction.md).
-
-`F1` opens the attack profile panel · W/S or arrows highlight Cleave or Slam ·
-Enter selects and closes · `R` highlights Cleave · `F1` / `Esc` cancel. The panel captures gameplay input while the world keeps
-running. Confirmed selections apply to the next swing and last for the current run.
-
-`F2` opens the scene picker · W/S or Up/Down navigate · Enter starts fresh and closes · F2/Esc
-close. Restart current reuses its cached snapshot; file choices reread disk.
-See [`docs/scene-playtests.md`](docs/scene-playtests.md).
-
-Debug commands (fixed, handled straight from the event callback — they act on
-the program, not the character, so they deliberately do *not* go through
-`Action`):
-
-`[` / `]` halve and double N · `-` / `=` zoom · `V` toggle vsync ·
-`P` screenshot (to `$ARPG_CAPTURE_DIR`, default the temp dir) ·
-`F3` collision-disc outlines · `Esc` quit
-
-## Structural invariants, and what actually enforces them
-
-The organising idea: **an invariant belongs to the type that owns the data,
-enforced at the only door into it** — not to the caller that happens to write it
-today. Prose in this file is the weakest form of enforcement, because it is read
-at session start and then not again while editing. Prefer, in order:
-
-| | Layer | Mechanism | Can it be quietly bypassed? |
-|---|---|---|---|
-| 0 | Unrepresentable | crate graph, module privacy, private fields | No — needs a visible `pub`/manifest diff |
-| 1 | Won't compile | newtypes, `[workspace.lints]`, const asserts, `build.rs` guards | Only via a loud `#[expect(reason = "…")]` |
-| 2 | Won't validate | wgpu pipeline validation, headless | No — it is the driver's rule, not ours |
-| 3 | Won't pass | unit tests | Yes, by editing the test |
-| 4 | Won't go unnoticed | this file | Yes |
-
-**When adding an invariant, put it as high up that table as it will go, and say
-why if it cannot go higher.** What is in place today:
-
-The inventory of what is enforced today lives in
-[`docs/invariants.md`](docs/invariants.md). It is deliberately *not* here: it is
-long, it duplicates enforcement that already exists in the code, and a second
-table is a table that can silently disagree with the first — the exact failure
-`BINDINGS` was restructured to avoid. Read it when auditing; do not treat it as
-authoritative over the code.
-
-The lint wall applies at **write** time, not just at build time: the
-`PostToolUse` hook in `.claude/settings.json` runs clippy after every
-file-editing tool **and after every Bash call**, and blocks on failure. The Bash
-matcher is load-bearing rather than belt-and-braces — an agent editing through a
-shell heredoc produces no `file_path`, so a hook keyed only on Edit/Write never
-fires and the gate degrades to "remember to run clippy", which the table above
-rates as the weakest layer there is.
-
-**Escape hatch:** `#[expect(lint, reason = "…")]`, never `#[allow]`. `expect`
-stops compiling once the violation it covers disappears, so a suppression cannot
-go stale unnoticed and each one carries a written reason.
-
-**Crate dependencies are allowlists**, in `crates/{gfx,sim,game,content,scenario}/build.rs`,
-checked by the shared `build_support/dependencies.rs`. It parses TOML and resolves
-package aliases and workspace inheritance across runtime, dev, and target
-sections. Build-time manifest parsing has a separate allowlist and never widens
-runtime dependencies. Two things about them are tempting to get wrong, so both
-are argued at the definition site: splitting into crates does *not* make
-`gfx → sim` a Cargo cycle — they are siblings, and Cargo accepts that edge — so
-the guards are doing work nothing else does. And a denylist would fail open:
-naming `wgpu` and `winit` catches the mistakes someone already imagined and lets
-`bevy` walk straight in.
-
-### Decisions already made, and why
-
-**Isometric will be true 3D under an orthographic camera**, not sorted 2D
-sprites. Orthographic projection at 45° yaw and ~35.26° elevation *is* isometric,
-and the depth buffer then handles occlusion exactly, in hardware. The sprite
-approach would require re-sorting every entity by depth each frame and still
-produce popping where entities overlap.
-
-**The horde is drawn with instancing.** Animated enemies share one mesh and
-use one instanced draw per occupied shared-pose bucket,
-with a fixed ceiling of eight calls. Draw call cost is roughly independent of
-how much that call draws, so per-entity draws are the failure mode to avoid.
-(This is why raylib was rejected — its immediate-mode `DrawCube` forces exactly
-that.)
-
-**Vsync (`PresentMode::AutoVsync`) is the default, with a toggle.** Frame pacing
-is the foundation every feel mechanic is measured against: hitstop is "freeze for
-N frames", so erratic frame times make identical hits feel different.
-
-But vsync *quantises* frame time to multiples of the refresh interval — under it
-a 4ms renderer and a 16ms renderer look identical, and cost appears as a cliff to
-33.3ms rather than a climb. `V` switches to `Immediate` (supported on this
-Metal surface) for measurement. Measure uncapped; tune feel under vsync.
-
-**Colours are specified in linear space.** The surface is `Bgra8UnormSrgb`, so
-the hardware encodes on write. Passing the sRGB value you want yields something
-roughly five times too bright.
-
-**The camera smooths by half-life, not by a per-frame lerp.** A per-frame lerp
-keeps 90% of the error *per frame* rather than per second, so the camera is
-thousands of times tighter at 144Hz than at 60Hz — and pressing `V` would then
-change how the game feels, corrupting the measurement `V` exists to take.
-`2^(-dt/half_life)` composes exactly under subdivision. The arithmetic is in
-`core::damp` and `gfx/camera.rs`.
-
-**The camera leads the character, and the lead is smoothed separately.** A rigid
-offset whips the camera two lead-lengths across the screen the instant you
-reverse. The lead is in world units rather than screen ones, so it reveals the
-same distance in every direction.
-
-### Deliberate choices that look like smells
-
-Do not "clean up" these without understanding why they are there — each is
-load-bearing, and several compile fine while producing wrong output.
-
-**Where a mechanism enforces one, only the mechanism is named here**: the
-argument lives at the definition site, which is where someone about to change it
-is already looking. The unenforced ones keep their full reasoning, because for
-those this paragraph *is* the enforcement — which is exactly why they are the
-ones worth reading twice.
-
-Enforced, so this is a pointer and not an argument:
-
-- **`Instance` carries `yaw` plus two `_pad` floats.** Reserved headroom, not
-  waste. *(private fields + size assert; see `core/instance.rs`)*
-- **Yaw 0 faces `+Z`, positive turns toward `+X`.** A sign flip compiles,
-  validates, draws, and points every character 90° off in silence. *(pixel
-  test in `gfx/src/lib.rs`, mutation-checked)*
-- **The instance buffer is allocated at full `MAX_INSTANCES`** and only
-  partially written. *(`InstanceSink`)*
-
-Enforced by nothing but this list:
-
-- **Colour literals look far too dark.** They are linear; the surface is sRGB
-  and the hardware encodes on write. `0.05` on screen is `0.0039` in source. A
-  `LinearRgb` newtype would move this up the ladder and is worth doing.
-- **`about_to_wait` requests a redraw unconditionally.** This is what makes the
-  loop continuous rather than event-driven. It is not a busy-wait bug.
-- **Depth uses `StoreOp::Discard`.** Nothing reads depth after the pass; storing
-  it would waste real bandwidth on a tiled GPU.
+Keep documentation beside its subject. Explain non-obvious constraints near the
+code that enforces them; task guides explain how to use them. Link rather than
+copying schemas, tuning catalogs or test inventories. Remove obsolete guidance
+when behaviour changes; keep completed implementation history in version control.

@@ -29,8 +29,7 @@ scene file and asserts:
   identity stays dead, and the control remains activated.
 
 The refill scenario removes an enemy directly to pin the gate's timing.
-Combat damage and defeat have separate engine scenarios; the live test below
-also exercised their composition with this scene.
+Combat damage and defeat have separate engine scenarios.
 
 ## Live verification — 2026-09-11
 
@@ -42,20 +41,3 @@ the green control and the first approaching enemy.
 ![Dormant control and empty arena](playtests/source-control/dormant.png)
 
 ![Activated control and approaching seeker](playtests/source-control/activated.png)
-
-The live trace recorded activation on tick 1242 and emissions on ticks 1243,
-1288, 1333, 1378, 1423, 1468, 1513, and 1558: first emission on N+1, then
-exactly 45 ticks apart. Another E press produced no second activation.
-The source stopped at eight enemies.
-
-WASD movement and twelve Basic swings produced damage, six defeats, and six
-replacement emissions. At the end, eight enemies were present and the source
-had emitted fourteen in total. Both F2's cached restart and the harness's
-`scene restart` advanced the run identity and restored Pending control state,
-disabled/ready source state, zero emissions, and an empty arena. The restarted
-capture showed the control blue again.
-
-Clippy, workspace tests including the GPU test, rustdoc, and all 60 scenarios
-passed. Rustdoc retains its existing private-link warnings. This verifies the
-mechanic and visible feedback; whether eight enemies and this cadence make a
-satisfying fight remains a human playtest question.
