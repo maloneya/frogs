@@ -31,10 +31,11 @@ no screenshot will work until the window is uncovered.
 **Fix.** Uncover the window. Do **not** switch to the `screencapture` utility or
 any desktop screenshot tool; see the OS-automation entry below.
 
-**Partly promoted.** `capture_has_stalled` now waits a few seconds of skipped
-frames and replies with an error naming occlusion, so the failure is loud rather
-than a silent `ok`. Fully promoting it means moving capture off the swapchain to
-an offscreen render target — roadmap chunk 6.
+**Partly promoted.** `Capture::expire` abandons a pending request after four
+seconds of wall time, independently of skipped-frame rate. `FrameOutcome`
+separates presentation from PNG-write success, and a busy capture slot rejects
+new requests without replacing the original path. Fully removing the occlusion
+limitation means capturing an offscreen render target — roadmap chunk 6.
 
 ---
 

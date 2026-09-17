@@ -47,10 +47,10 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 | Command | Replies |
 |---|---|
 | `press <key>` / `release <key>` | immediately |
-| `tap <key>` | immediately; key is held for exactly one frame |
+| `tap <key>` | immediately; key is released next event-loop turn, with action edges latched until a tick |
 | `hold <key> <ms>` | **after the key comes back up** |
-| `wait <ms>` | after that much game time |
-| `shot <path>` | **after the PNG is on disk**, or an error if no frame presented |
+| `wait <ms>` | after that much wall-clock time |
+| `shot <path>` | **after the PNG write finishes**, or an error on write failure, a busy capture slot, or a four-second timeout |
 | `state` | one line of numbers (below) |
 | `trace since <tick>` | every event from that tick on, plus a `# n event(s)` count |
 | `enemies <n>` | clamped count, **and the seeker count**, which a respawn resets to 0 |

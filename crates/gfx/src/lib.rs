@@ -91,12 +91,19 @@ pub struct Renderer {
     /// A direct write would desync the two: the HUD would claim one thing while
     /// the surface did another, with no reconfigure to make it true.
     vsync: bool,
-    /// Set by [`Renderer::request_capture`], consumed by the next `render`.
-    ///
-    /// Deferred rather than done on the spot because the only moment the frame
-    /// exists as a copyable texture is between drawing it and presenting it,
-    /// and that moment is inside `render`.
-    pending_capture: Option<std::path::PathBuf>,
+}
+
+/// Whether rendering presented a frame, and the outcome of a requested PNG write.
+/// A capture failure does not turn a presented frame into a skipped frame.
+#[must_use = "frame counts and capture replies must follow the render outcome"]
+pub enum FrameOutcome {
+    /// No frame was presented; the caller may retry its capture request.
+    Skipped,
+    /// A frame was presented, with a result only when capture was requested.
+    Presented {
+        /// The synchronous readback and PNG write result.
+        capture: Option<Result<(), String>>,
+    },
 }
 
 /// The depth buffer must match the colour attachment's dimensions exactly, so
@@ -242,7 +249,6 @@ impl Renderer {
             overlay,
             uncapped,
             vsync: true,
-            pending_capture: None,
         }
     }
 
@@ -257,26 +263,6 @@ impl Renderer {
         self.config.height = height.max(1);
         self.surface.configure(&self.device, &self.config);
         self.depth = create_depth(&self.device, self.config.width, self.config.height);
-    }
-
-    /// Asks for the next rendered frame to be written to `path` as a PNG.
-    ///
-    /// The app screenshotting itself, rather than something outside screenshotting
-    /// the window: no display has to be awake, no window focused, no permission
-    /// granted, and the framing is exactly the surface rather than a rectangle
-    /// guessed from outside.
-    pub fn request_capture(&mut self, path: std::path::PathBuf) {
-        self.pending_capture = Some(path);
-    }
-
-    /// Abandons a capture that is never going to happen.
-    ///
-    /// A request survives until a frame actually presents, which is the right
-    /// behaviour when the next frame is merely late and the wrong one when
-    /// there is no next frame — an occluded window would otherwise write the
-    /// file minutes later, after whoever asked had been told it failed.
-    pub fn cancel_capture(&mut self) {
-        self.pending_capture = None;
     }
 
     /// Uploads one already validated CPU mesh without performing file I/O.
@@ -334,16 +320,9 @@ impl Renderer {
     /// Renders each nonempty static mesh batch and occupied character-pose bucket
     /// in one instanced draw.
     ///
-    /// Returns whether a frame was actually **presented**. Several of the
-    /// recoverable surface states below skip the frame entirely, and a caller
-    /// counting frames has to be able to tell those apart — a loop spinning
-    /// freely because the window is occluded otherwise reports a spectacular
-    /// frame rate for drawing nothing at all.
-    ///
-    /// `must_use` because a `bool` nobody reads is not an invariant. Without it
-    /// this is a note in a doc comment, which is the weakest enforcement there
-    /// is — and miscounting frames is precisely the bug it exists to prevent.
-    #[must_use = "a skipped frame must not be counted as a rendered one"]
+    /// Distinguishes skipped frames from presentation, including capture errors.
+    /// `capture_path` requests a synchronous PNG write of this frame. On a
+    /// skipped frame no write is attempted; the caller owns retry and timeout.
     #[expect(clippy::too_many_arguments, reason = "independent presentation streams share one world render pass")]
     pub fn render(
         &mut self,
@@ -354,7 +333,8 @@ impl Renderer {
         overlay: &[Quad],
         debug_discs: &[DebugDisc],
         effects: &[EffectVertex],
-    ) -> bool {
+        capture_path: Option<&std::path::Path>,
+    ) -> FrameOutcome {
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU
         // dropped the surface. Each wants a slightly different response, and
@@ -367,12 +347,12 @@ impl Renderer {
             CurrentSurfaceTexture::Suboptimal(frame) => {
                 drop(frame);
                 self.reconfigure();
-                return false;
+                return FrameOutcome::Skipped;
             }
 
             CurrentSurfaceTexture::Outdated => {
                 self.reconfigure();
-                return false;
+                return FrameOutcome::Skipped;
             }
 
             // The surface itself is gone and has to be recreated from scratch.
@@ -382,12 +362,14 @@ impl Renderer {
                     .create_surface(self.window.clone())
                     .expect("recreate surface");
                 self.reconfigure();
-                return false;
+                return FrameOutcome::Skipped;
             }
 
             // Transient: the compositor isn't ready or we're hidden. Drop the
             // frame; we'll be asked again immediately.
-            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return false,
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => {
+                return FrameOutcome::Skipped;
+            }
 
             CurrentSurfaceTexture::Validation => {
                 unreachable!("no error scope registered, so validation errors panic instead")
@@ -486,7 +468,7 @@ impl Renderer {
 
         // The frame is a copyable texture only between drawing and presenting,
         // so the copy is recorded into this same encoder.
-        let capture = self.pending_capture.take().map(|path| {
+        let capture = capture_path.map(|path| {
             let readback = Readback::new(&self.device, self.config.width, self.config.height);
             readback.record(&mut encoder, &frame.texture);
             (readback, path)
@@ -494,18 +476,15 @@ impl Renderer {
 
         self.queue.submit(Some(encoder.finish()));
 
-        if let Some((readback, path)) = capture {
-            match readback.write_png(&self.device, &path) {
-                Ok(()) => log::info!("captured frame to {}", path.display()),
-                Err(e) => log::error!("capture failed: {e}"),
-            }
-        }
+        let capture = capture.map(|(readback, path)| {
+            readback.write_png(&self.device, path).map_err(|error| error.to_string())
+        });
 
         // Tells winit we're about to present, so it can time its own bookkeeping
         // against the flip instead of guessing.
         self.window.pre_present_notify();
         self.queue.present(frame);
-        true
+        FrameOutcome::Presented { capture }
     }
 }
 

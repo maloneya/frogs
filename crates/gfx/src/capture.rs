@@ -128,7 +128,10 @@ impl Readback {
             png::Encoder::new(std::io::BufWriter::new(file), self.width, self.height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header()?.write_image_data(&rgba)?;
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(&rgba)?;
+        // Drop ignores final-chunk and flush errors; success must include both.
+        writer.finish()?;
         Ok(())
     }
 }

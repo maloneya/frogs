@@ -64,11 +64,11 @@ pub(crate) enum Command {
     /// Hold a key down until told otherwise.
     Press(KeyCode),
     Release(KeyCode),
-    /// Down now, up on the next frame — one clean press, whatever the frame rate.
+    /// Down now, up on the next event-loop turn; action edges wait for a tick.
     Tap(KeyCode),
     /// Down now, up after this many milliseconds; the reply waits for the release.
     Hold(KeyCode, u64),
-    /// Reply after this many milliseconds of the game's own time.
+    /// Reply after this many milliseconds of wall-clock time.
     Wait(u64),
     /// Write the next rendered frame to a PNG; the reply waits for the file.
     Shot(PathBuf),

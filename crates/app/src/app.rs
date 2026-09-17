@@ -1,3 +1,10 @@
+//! Native lifecycle, playtest replacement and the simulation-to-render frame loop.
+
+mod capture;
+mod control;
+#[cfg(test)]
+mod tests;
+
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -8,26 +15,24 @@ use winit::window::{Window, WindowId};
 
 use glam::Vec2;
 
-use arpg_core::{Action, Intent, MoveDir, Report};
+use arpg_core::{Action, Intent, MoveDir};
 use arpg_game::{Game, GameScene as Scene};
-use arpg_gfx::{CharacterMesh, MeshAsset, OrthoCamera, QuadBuffer, Renderer};
+use arpg_gfx::{CharacterMesh, FrameOutcome, MeshAsset, OrthoCamera, QuadBuffer, Renderer};
 use arpg_sim::{Accumulator, Alpha};
 
-use crate::harness::{self, Command, Request};
+use crate::harness::{self, Request};
 use crate::hud;
 use crate::input::Controls;
 use crate::presentation::{
     AssetPreview, LoadedCharacter, LoadedHorde, WorldAssets, default_character_path,
     default_horde_path, presentation_seconds, preview_instance, replace_character,
-    replace_horde, replace_preview, report_asset_preview, report_character_preview,
-    report_horde_preview,
+    replace_horde, replace_preview,
 };
 use crate::time::Clock;
 use crate::ui::{MenuRequest, SceneChoice};
 
-/// Owns everything and wires it together. Deliberately the only place that
-/// knows about all the subsystems at once — `gfx` and `game` stay ignorant of
-/// each other, and this is where they meet.
+/// Owns the native app and connects gameplay to presentation.
+/// `gfx` and `game` have no dependency on each other.
 #[derive(Default)]
 pub(crate) struct App {
     window: Option<Arc<Window>>,
@@ -46,7 +51,7 @@ pub(crate) struct App {
     attack_effects: crate::attack_effects::AttackEffects,
     /// Game ids and ticks are scoped to this playtest generation.
     run_id: u64,
-    /// Numbers the screenshots, so repeated captures do not overwrite.
+    /// Numbers keyboard screenshots within this process; paths may exist from an earlier run.
     captures: u32,
     /// Frames skipped because the surface had none to give — occluded,
     /// resized behind our back, or lost. Reported alongside `frames` so a
@@ -57,22 +62,13 @@ pub(crate) struct App {
     /// Reported by the harness so throughput can be *counted* over a known
     /// interval rather than inferred from `Clock`'s smoothed average — which is
     /// an EMA, and so cannot distinguish a steady 60Hz from a mixture that
-    /// averages to it. It is also the only way to notice the app being throttled
-    /// while it sits in the background.
+    /// averages to it. Compare counts over wall time to detect background throttling.
     frames: u64,
     /// Present only when `ARPG_HARNESS` asked for a control socket.
     harness: Option<std::sync::mpsc::Receiver<Request>>,
     /// Keys to release, and replies to send, once their deadline passes.
     scheduled: Vec<Deferred>,
-    /// Replies owed to callers waiting on a frame to be captured.
-    awaiting_frame: Vec<std::sync::mpsc::Sender<String>>,
-    /// Frames skipped since the oldest pending screenshot was asked for.
-    ///
-    /// A capture is recorded between drawing a frame and presenting it, so a
-    /// frame that is never drawn never captures, and an occluded window skips
-    /// every frame. Counting them is what lets the reply say "your window is
-    /// covered" rather than a silent `ok` — see [`App::capture_has_stalled`].
-    capture_stall: u32,
+    capture: capture::Capture,
     /// Reused overlay staging buffer; reset through its bounded sink each frame.
     quads: QuadBuffer,
     input: Controls,
@@ -80,9 +76,8 @@ pub(crate) struct App {
     /// Turns the frame's elapsed seconds into whole simulation ticks.
     ///
     /// Owned by `app` because the frame loop is here, but defined in `sim`,
-    /// which is the only thing that may mint a `Dt`. That split is the point:
-    /// this crate measures wall clock and is structurally unable to hand any of
-    /// it to the simulation.
+    /// which alone mints `Dt`. The app supplies elapsed seconds to the
+    /// accumulator; `Game::step` accepts only the resulting fixed-duration ticks.
     accumulator: Accumulator,
 }
 
@@ -184,7 +179,7 @@ impl App {
     }
 
     /// Both native keys and harness keys execute menu requests at this same
-    /// between-tick boundary. No file I/O or game replacement happens in draw.
+    /// between-tick boundary. No file I/O or game replacement happens in HUD drawing.
     fn handle_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
         let consumed = self.input.on_key(key, pressed, repeat, self.game.attack_status().profile);
         match self.input.menu_mut().take_request() {
@@ -233,7 +228,7 @@ impl App {
     fn finish_playtest_start(&mut self, run_id: u64, old_profile: arpg_sim::AttackProfile) {
         // Old delayed key releases must not lift a new run's presses. Pending
         // callers receive a cancellation rather than a success for another run.
-        for deferred in std::mem::take(&mut self.scheduled) {
+        for deferred in self.scheduled.drain(..) {
             if let Some(key) = deferred.release {
                 self.input.on_key(key, false, false, old_profile);
             }
@@ -241,13 +236,7 @@ impl App {
                 let _ = reply.send("error: cancelled by playtest restart".into());
             }
         }
-        for reply in self.awaiting_frame.drain(..) {
-            let _ = reply.send("error: cancelled by playtest restart".into());
-        }
-        if let Some(renderer) = &mut self.renderer {
-            renderer.cancel_capture();
-        }
-        self.capture_stall = 0;
+        self.capture.finish(Err("cancelled by playtest restart".into()));
         self.attack_effects.clear();
         self.input.restart();
         self.run_id = run_id;
@@ -274,17 +263,10 @@ impl App {
         format!("ready run={} tick=0 hash={:016x}", self.run_id, self.game.hash())
     }
 
-    /// Debug and meta commands, kept deliberately apart from the action layer.
-    ///
-    /// These are not things the *character* does — they are things done to the
-    /// running program, and the difference is not cosmetic. Game actions are
-    /// sampled as state once per tick, need rebinding, and will one day come
-    /// from a gamepad or a replay. These are one-shot, fire straight from the
-    /// event callback, and are meaningless to a simulation. Funnelling them
-    /// through `Action` would put "toggle vsync" in the vocabulary the horde's
-    /// AI speaks.
-    ///
-    /// The two sets must stay disjoint; `BINDINGS` is the list to check against.
+    /// One-shot debug shortcuts bypass the tick-sampled gameplay action layer.
+    /// Menu handling must get first refusal, especially for Escape. Vsync,
+    /// screenshots and exit are handled in `window_event`; these edit the
+    /// world or camera. Debug keys must remain disjoint from game bindings.
     fn on_debug_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::F3 => self.collision_debug.set_enabled(!self.collision_debug.enabled(), &self.game),
@@ -313,344 +295,6 @@ impl App {
             }
             _ => {}
         }
-    }
-
-    /// Applies whatever the control socket has sent since the last frame.
-    ///
-    /// Runs before input is sampled, so an injected key takes effect on the
-    /// very frame it arrives rather than the one after.
-    fn drain_harness(&mut self) -> bool {
-        // Collected up front so the receiver borrow ends before the loop needs
-        // the rest of `self`.
-        let Some(rx) = &self.harness else {
-            return false;
-        };
-        let requests: Vec<Request> = rx.try_iter().collect();
-        let mut quit = false;
-
-        for Request { command, reply } in requests {
-            let now = std::time::Instant::now();
-            let answer = match command {
-                Command::ShowAsset(path) => match self.show_asset(path) {
-                    Ok(answer) => answer,
-                    Err(error) => format!("error: {error}"),
-                },
-                Command::ClearAsset => {
-                    self.asset_preview = None;
-                    "ok".to_string()
-                }
-                Command::ShowCharacter(path) => match self.show_character(path) {
-                    Ok(answer) => answer,
-                    Err(error) => format!("error: {error}"),
-                },
-                Command::ClearCharacter => match self.show_character(default_character_path()) {
-                    Ok(_) => "ok".to_string(),
-                    Err(error) => format!("error: {error}"),
-                },
-                Command::ShowHorde(path) => match self.show_horde(path) {
-                    Ok(answer) => answer,
-                    Err(error) => format!("error: {error}"),
-                },
-                Command::ClearHorde => match self.show_horde(default_horde_path()) {
-                    Ok(_) => "ok".to_string(),
-                    Err(error) => format!("error: {error}"),
-                },
-                Command::StartScene(path) => match self.start_scene_file(&path) {
-                    Ok(()) => self.ready_reply(),
-                    Err(error) => format!("error: {error}"),
-                },
-                Command::RestartScene => match self.restart_playtest() {
-                    Ok(()) => self.ready_reply(),
-                    Err(error) => format!("error: {error}"),
-                },
-                Command::AddScene(path) => match read_scene(&path).and_then(|scene| {
-                    self.game.load_scene(&scene).map_err(|error| error.to_string())
-                }) {
-                    Ok(id) => {
-                        format!("ready run={} scene={id} tick={}", self.run_id, self.game.tick())
-                    }
-                    Err(error) => format!("error: {error}"),
-                },
-                Command::EvictScene(id) => {
-                    if self.game.evict_scene(id) {
-                        format!("evicted run={} scene={id}", self.run_id)
-                    } else {
-                        format!("error: no live scene {id} in run {}", self.run_id)
-                    }
-                }
-                Command::ListScenes => {
-                    let mut out = Report::default();
-                    out.int("run_id", self.run_id);
-                    for (id, name) in self.game.scene_instances() {
-                        out.text(&id.to_string(), name);
-                    }
-                    out.finish()
-                }
-                Command::Press(key) => {
-                    self.handle_key(key, true, false);
-                    "ok".to_string()
-                }
-                Command::Release(key) => {
-                    self.handle_key(key, false, false);
-                    "ok".to_string()
-                }
-                Command::Tap(key) => {
-                    self.handle_key(key, true, false);
-                    self.scheduled.push(Deferred {
-                        due: now,
-                        release: Some(key),
-                        reply: None,
-                    });
-                    "ok".to_string()
-                }
-                Command::Hold(key, ms) => {
-                    self.handle_key(key, true, false);
-                    let due = now + std::time::Duration::from_millis(ms);
-                    self.scheduled.push(Deferred {
-                        due,
-                        release: Some(key),
-                        reply: Some(reply),
-                    });
-                    continue; // replies once the key comes back up
-                }
-                Command::Wait(ms) => {
-                    let due = now + std::time::Duration::from_millis(ms);
-                    self.scheduled.push(Deferred {
-                        due,
-                        release: None,
-                        reply: Some(reply),
-                    });
-                    continue;
-                }
-                Command::Shot(path) => {
-                    if let Some(renderer) = self.renderer.as_mut() {
-                        renderer.request_capture(path);
-                    }
-                    self.awaiting_frame.push(reply);
-                    continue; // replies once the file exists
-                }
-                Command::State => self.report_state(),
-                Command::Impulse { target, value } => match self.game.body_named(&target) {
-                    Some(id) if self.game.apply_impulse(id, value) => {
-                        format!("impulse applied to {id}")
-                    }
-                    _ => format!("error: no physical body {target}"),
-                },
-                Command::TraceSince(tick) => self.report_trace(tick),
-                Command::SetEnemies(n) => {
-                    self.game.set_enemy_count(n);
-                    // Respawning retires every name, so it revokes every
-                    // behaviour with them. Said in the reply rather than left
-                    // to be discovered, because "I set the horde and the
-                    // chasing stopped" is otherwise a puzzle.
-                    format!(
-                        "enemies {} seekers {}",
-                        self.game.enemy_count(),
-                        self.game.seeker_count()
-                    )
-                }
-                Command::Spawn { x, z, what } => {
-                    // The reply says *queued*, not spawned, because that is what
-                    // happened: the body appears when the next tick runs. A
-                    // reply claiming otherwise would make a `state` taken
-                    // immediately afterwards look like a bug.
-                    if self.game.request_spawn(Vec2::new(x, z), what) {
-                        format!("queued at ({x}, {z}) seeks={}", what.seeks())
-                    } else {
-                        "error: spawn queue full".to_string()
-                    }
-                }
-                Command::Source(spec) => {
-                    // The conversion is where `Placement::around` and the
-                    // cadence clamp are applied, so the socket cannot reach a
-                    // source that skipped either.
-                    let id = self.game.add_source(spec.into());
-                    format!("source {id}")
-                }
-                Command::SetSourceEnabled { id, enabled } => {
-                    if self.game.set_source_enabled(id, enabled) {
-                        format!("source {id} enabled={enabled}")
-                    } else {
-                        format!("error: no live source {id}")
-                    }
-                }
-                Command::RemoveSource(id) => match self.game.remove_source(id) {
-                    true => format!("removed {id}"),
-                    false => format!("error: no live source {id}"),
-                },
-                Command::SetSeekers(n) => {
-                    self.game.set_seeker_count(n);
-                    format!("seekers {}", self.game.seeker_count())
-                }
-                Command::SetCollisionDebug(on) => {
-                    self.collision_debug.set_enabled(on, &self.game);
-                    format!("debug collision {}", if on { "on" } else { "off" })
-                }
-                Command::SetVsync(on) => match self.renderer.as_mut() {
-                    Some(renderer) => {
-                        if renderer.vsync() != on {
-                            renderer.toggle_vsync();
-                        }
-                        format!("vsync {}", renderer.vsync())
-                    }
-                    None => "error: no renderer yet".to_string(),
-                },
-                Command::Quit => {
-                    quit = true;
-                    "ok".to_string()
-                }
-            };
-            let _ = reply.send(answer);
-        }
-        quit
-    }
-
-    /// Everything worth knowing about the running program, as JSON.
-    ///
-    /// **Derived, not hand-written.** The simulation's half comes from
-    /// `Game::report`, which destructures `Game` exhaustively — so a field
-    /// added to the game fails to compile until it is observable. What is left
-    /// here is the part `sim` genuinely cannot know: how the frame went, what
-    /// the camera is doing, whether the renderer is presenting.
-    ///
-    /// JSON rather than a positional line, because the consumer is usually a
-    /// program: `jq -r .sim.tick` does not care what order the fields are in or
-    /// how many were added since it was written.
-    fn report_state(&self) -> String {
-        let mut out = Report::default();
-
-        out.int("run_id", self.run_id);
-        out.text(
-            "selected_scene",
-            self.game.selected_scene_name().unwrap_or(""),
-        );
-        out.text("sim_hash", &format!("{:016x}", self.game.hash()));
-        out.object("sim", |sim| self.game.report(sim));
-        out.object("ui", |ui| self.input.menu().report(ui));
-        out.object("asset_preview", |asset| {
-            report_asset_preview(self.asset_preview.as_ref(), asset);
-        });
-        out.object("world_assets", |out| {
-            if let Some(world) = &self.world_assets { world.report(out); }
-        });
-        out.object("character_preview", |character| {
-            report_character_preview(self.character_preview.as_ref(), character);
-        });
-        out.object("horde_preview", |horde| {
-            report_horde_preview(self.horde_preview.as_ref(), horde);
-        });
-
-        out.object("attack_effects", |out| self.attack_effects.report(out));
-        out.object("collision_debug", |out| self.collision_debug.report(out));
-        out.object("render", |r| {
-            let target = self
-                .camera
-                .as_ref()
-                .map(OrthoCamera::target)
-                .unwrap_or_default();
-            r.vec3("camera_target", target);
-            let player_instances = u64::from(self.character_preview.is_some());
-            let horde_instances = self
-                .horde_preview
-                .as_ref()
-                .map_or(0, |horde| horde.instance_count() as u64);
-            let static_instances = self.world_assets.as_ref().map_or(0, |world| world.instance_count() as u64)
-                + u64::from(self.asset_preview.is_some());
-            r.int(
-                "instances",
-                player_instances + horde_instances + static_instances + self.collision_debug.drawings().len() as u64,
-            );
-            r.int("effect_vertices", self.attack_effects.vertices().len() as u64);
-            r.int("effect_draws", u64::from(!self.attack_effects.vertices().is_empty()));
-            r.int("debug_disc_instances", self.collision_debug.drawings().len() as u64);
-            r.int("debug_draws", u64::from(!self.collision_debug.drawings().is_empty()));
-            r.int("static_mesh_instances", static_instances);
-            r.int("static_mesh_draws", self.world_assets.as_ref().map_or(0, |world| world.draw_count() as u64) + u64::from(self.asset_preview.is_some()));
-            r.int("player_character_instances", player_instances);
-            r.int("horde_character_instances", horde_instances);
-            r.int(
-                "horde_pose_draws",
-                self.horde_preview
-                    .as_ref()
-                    .map_or(0, |horde| horde.occupied_buckets() as u64),
-            );
-            r.int("frames", self.frames);
-            r.int("skipped", self.skipped);
-            r.num("frame_ms", self.clock.frame_ms());
-            r.bool("vsync", self.renderer.as_ref().is_some_and(Renderer::vsync));
-        });
-
-        out.finish()
-    }
-
-    /// Every trace event from `tick` onward, one per line.
-    ///
-    /// Same rendering as a scenario's golden trace file, because it is the same
-    /// function — a second formatter would be a second thing to keep in step,
-    /// and the whole point is that what you read here is what a scenario can
-    /// assert on.
-    fn report_trace(&self, tick: u64) -> String {
-        let mut out = format!("# run {}\n", self.run_id);
-        let dropped = self.game.trace_dropped();
-        if dropped > 0 {
-            out.push_str(&format!("# {dropped} event(s) dropped; the buffer wrapped\n"));
-        }
-        let events = self.game.render_trace_since(tick);
-        out.push_str(&events);
-        out.push_str(&format!("# {} event(s)", self.game.trace().since(tick).count() + self.game.control_trace().since(tick).count()));
-        out
-    }
-
-    /// Counts one skipped frame against any pending screenshot, and reports
-    /// whether the wait should be abandoned.
-    ///
-    /// Waiting forever would be honest and useless: the caller blocks on a
-    /// socket read with no idea why. Giving up after a bounded run of skipped
-    /// frames keeps the harness's promise — every command replies, and the
-    /// reply is true — while making the one condition that breaks screenshots
-    /// name itself.
-    ///
-    /// Split from the abandoning itself so the rule is a plain function over a
-    /// counter. The condition it fires on is one this environment cannot
-    /// produce on demand, and an untested error path is one that has never run.
-    fn capture_has_stalled(waiting: bool, stall: &mut u32) -> bool {
-        /// Frames of nothing before a screenshot is declared impossible. Only
-        /// has to exceed what a healthy run produces, and a healthy run
-        /// captures on the very next frame.
-        const STALLED_FRAMES: u32 = 240;
-
-        if !waiting {
-            *stall = 0;
-            return false;
-        }
-
-        *stall += 1;
-        if *stall < STALLED_FRAMES {
-            return false;
-        }
-
-        *stall = 0;
-        true
-    }
-
-    /// Fires the releases and replies whose deadline has passed.
-    fn service_schedule(&mut self) {
-        let now = std::time::Instant::now();
-        let mut still_pending = Vec::new();
-
-        for deferred in std::mem::take(&mut self.scheduled) {
-            if now < deferred.due {
-                still_pending.push(deferred);
-                continue;
-            }
-            if let Some(key) = deferred.release {
-                self.input.on_key(key, false, false, self.game.attack_status().profile);
-            }
-            if let Some(reply) = deferred.reply {
-                let _ = reply.send("ok".to_string());
-            }
-        }
-        self.scheduled = still_pending;
     }
 
     /// One frame: measure it, run whatever ticks it bought, then draw.
@@ -700,7 +344,7 @@ impl App {
             self.attack_effects.observe(&self.game);
         }
 
-        // How far this frame falls between the tick just run and the next one.
+        // Blend the previous and current snapshots using the fractional tick remainder.
         // Everything below draws; nothing below simulates.
         let alpha = self.accumulator.alpha();
         self.attack_effects.rebuild(self.game.tick(), alpha);
@@ -743,9 +387,8 @@ impl App {
             );
         }
 
-        // Counted only when a frame actually reached the screen. An occluded
-        // window skips the draw entirely, and counting those would report
-        // thousands of frames a second for drawing nothing.
+        // Count presentation, not redraw attempts: occluded surfaces can skip
+        // thousands of attempts a second without producing any frames.
         let preview_instances = [preview_instance()];
         let meshes = world_assets.draws(self.asset_preview.as_ref(), &preview_instances);
         let character = self
@@ -753,7 +396,7 @@ impl App {
             .as_ref()
             .map(|preview| preview.draw(player));
         let horde = self.horde_preview.as_ref().map(LoadedHorde::draw);
-        if renderer.render(
+        match renderer.render(
             camera,
             &meshes,
             character,
@@ -761,32 +404,15 @@ impl App {
             self.quads.as_slice(),
             self.collision_debug.drawings(),
             self.attack_effects.vertices(),
+            self.capture.path(),
         ) {
-            self.frames += 1;
-
-            // The capture is written inside `render`, and only on the path that
-            // presents — so this is the first moment the file is known to exist,
-            // and the only place `ok` is honest.
-            self.capture_stall = 0;
-            for reply in std::mem::take(&mut self.awaiting_frame) {
-                let _ = reply.send("ok".to_string());
-            }
-        } else {
-            self.skipped += 1;
-
-            let waiting = !self.awaiting_frame.is_empty();
-            if Self::capture_has_stalled(waiting, &mut self.capture_stall) {
-                // Drop the request too, so it cannot fire minutes later and
-                // write a file after the caller was told it failed.
-                renderer.cancel_capture();
-                for reply in std::mem::take(&mut self.awaiting_frame) {
-                    let _ = reply.send(
-                        "error: no frame was presented, so nothing could be \
-                         captured — the window is occluded or minimised"
-                            .to_string(),
-                    );
+            FrameOutcome::Presented { capture } => {
+                self.frames += 1;
+                if let Some(result) = capture {
+                    self.capture.finish(result);
                 }
             }
+            FrameOutcome::Skipped => self.skipped += 1,
         }
 
         if self.clock.hud_due()
@@ -820,10 +446,8 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    /// Window and GPU creation belongs here rather than in `main`, because on
-    /// mobile platforms the surface is destroyed and rebuilt as the app moves
-    /// in and out of the foreground. winit models that as suspend/resume, and
-    /// guarantees `resumed` fires before any window event on every platform.
+    /// Initialize once when winit makes the event loop active. This native-only
+    /// app keeps its window and GPU resources across redundant resume events.
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.renderer.is_some() {
             return; // Can fire more than once; only build GPU state the first time.
@@ -855,16 +479,15 @@ impl ApplicationHandler for App {
             .expect("load default horde character");
         let size = window.inner_size();
 
-        // Start framed on the character rather than easing in from the origin.
-        // Harmless today, since both begin there — but the moment anything
-        // spawns the player elsewhere, the first thing the player would see is
-        // the camera flying across the game to catch up.
+        // Start framed on the character without a camera fly-in.
         let mut camera = OrthoCamera::new(size.width, size.height);
         camera.snap_to(self.game.player_pos());
 
         self.camera = Some(camera);
         self.window = Some(window);
         self.harness = harness::start();
+        // GPU and asset loading are startup work, not elapsed play time.
+        self.clock = Clock::default();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -910,7 +533,7 @@ impl ApplicationHandler for App {
                         KeyCode::KeyP => {
                             let path = capture_dir().join(format!("arpg-{:04}.png", self.captures));
                             self.captures += 1;
-                            self.renderer.as_mut().expect("initialized").request_capture(path);
+                            self.capture.request(path, None, std::time::Instant::now());
                         }
                         _ => self.on_debug_key(key),
                     }
@@ -928,18 +551,13 @@ impl ApplicationHandler for App {
         }
     }
 
-    /// winit is event-driven by default: with nothing happening, it sleeps. A
-    /// game is the opposite — it must produce a frame whether or not anyone
-    /// touched the keyboard. Requesting a redraw every time the event queue
-    /// drains is what turns this into a continuous loop.
+    /// Polling alone does not request frames. Keep requesting redraws when
+    /// the event queue drains, even when there has been no input.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // The control socket is drained here rather than inside the redraw,
-        // because this is the one point in the loop where nothing else is
-        // borrowed out of `self` — and it runs immediately before the frame,
-        // so an injected key takes effect on the very next one.
-        //
-        // Expiries are serviced *first*, so a key pressed by this pass survives
-        // until the next one and is therefore held for exactly one frame.
+        // Release expired keys before accepting new requests. A new tap stays
+        // down until the next event-loop turn; its action edge remains latched
+        // until a simulation tick samples it, even across zero-tick redraws.
+        self.capture.expire(std::time::Instant::now());
         self.service_schedule();
         if self.drain_harness() {
             event_loop.exit();
@@ -949,276 +567,5 @@ impl ApplicationHandler for App {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn f3_toggles_collision_drawing_without_simulation_input() {
-        let mut app = App { game: Game::empty(), ..Default::default() };
-        let before = app.game.hash();
-        app.on_debug_key(KeyCode::F3);
-        assert!(app.collision_debug.enabled());
-        assert_eq!(app.collision_debug.drawings().len(), 1);
-        app.on_debug_key(KeyCode::F3);
-        assert!(!app.collision_debug.enabled());
-        assert!(app.collision_debug.drawings().is_empty());
-        assert_eq!(app.game.hash(), before);
-    }
-
-    use super::*;
-
-    fn pair() -> Scene {
-        arpg_sim::Scene {
-            name: "pair".into(),
-            bodies: vec![arpg_sim::Placed {
-                pos: (20.0, 0.0),
-                what: arpg_sim::Template::BODY,
-            }],
-            grids: vec![],
-            sources: vec![],
-        }
-        .into()
-    }
-
-    fn tap(app: &mut App, key: KeyCode) {
-        app.handle_key(key, true, false);
-        app.handle_key(key, false, false);
-    }
-
-    #[test]
-    fn picker_uses_the_fresh_start_boundary_and_survives_bad_files() {
-        let directory = std::env::temp_dir().join(format!("arpg-picker-{}", std::process::id()));
-        std::fs::create_dir_all(directory.join("directory.ron")).unwrap();
-        let path = directory.join("a scene.ron");
-        std::fs::write(&path, "(name: \"first\", bodies: [(pos: (20.0, 0.0))])").unwrap();
-        std::fs::write(directory.join("b.ron"), "broken RON").unwrap();
-        std::fs::write(directory.join("ignored.txt"), "ignored").unwrap();
-        let paths = scene_catalog(&directory).unwrap();
-        assert_eq!(paths, vec![path.clone(), directory.join("b.ron")]);
-        assert!(scene_catalog(&directory.join("missing")).is_err());
-
-        let mut app = App::default();
-        app.start_playtest(pair()).unwrap();
-        tap(&mut app, KeyCode::F2);
-        app.input.menu_mut().set_catalog(Ok(paths.clone()));
-        tap(&mut app, KeyCode::KeyS);
-        tap(&mut app, KeyCode::KeyS);
-        tap(&mut app, KeyCode::Enter);
-        let initial = app.game.hash();
-        let direct = Game::from_scene(&arpg_content::load_scene(&path).unwrap()).unwrap();
-        assert_eq!(
-            initial,
-            direct.hash(),
-            "picker and file loader produce identical tick-zero worlds"
-        );
-        assert_eq!(app.run_id, 2);
-        assert!(!app.input.menu().open());
-        assert_eq!(app.input.sample().move_axis(), Vec2::ZERO);
-        std::fs::write(&path, "(name: \"changed\")").unwrap();
-        tap(&mut app, KeyCode::F2);
-        tap(&mut app, KeyCode::Enter); // Cached restart remains independent of disk.
-        assert_eq!(app.game.hash(), initial);
-        assert_eq!(app.run_id, 3);
-
-        tap(&mut app, KeyCode::F2);
-        app.input.menu_mut().set_catalog(Ok(paths.clone()));
-        for _ in 0..3 {
-            tap(&mut app, KeyCode::KeyS);
-        }
-        tap(&mut app, KeyCode::Enter);
-        assert!(app.input.menu().picker().error().unwrap().contains("b.ron"));
-        assert!(app.input.menu().open());
-        assert_eq!(app.game.hash(), initial);
-        assert_eq!(app.run_id, 3);
-        std::fs::remove_file(&path).unwrap();
-        tap(&mut app, KeyCode::KeyW);
-        tap(&mut app, KeyCode::Enter); // A file disappearing after discovery is safe too.
-        assert!(app.input.menu().picker().error().is_some());
-        assert_eq!(app.game.hash(), initial);
-
-        std::fs::write(&path, "(name: \"changed\")").unwrap();
-        tap(&mut app, KeyCode::Enter); // Retry reads the repaired file.
-        assert_ne!(app.game.hash(), initial);
-        assert_eq!(app.run_id, 4);
-        assert!(!app.input.menu().open());
-        tap(&mut app, KeyCode::F2);
-        tap(&mut app, KeyCode::KeyS);
-        tap(&mut app, KeyCode::Enter);
-        assert_eq!(app.game.hash(), Game::from_scene(&Scene::boot()).unwrap().hash());
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn exhausted_run_ids_preserve_the_game_input_and_pending_capture() {
-        let mut app = App::default();
-        app.start_playtest(pair()).unwrap();
-        app.run_id = u64::MAX;
-        let profile = app.game.attack_status().profile;
-        app.input.on_key(KeyCode::KeyW, true, false, profile);
-        let (reply, response) = std::sync::mpsc::channel();
-        app.awaiting_frame.push(reply);
-        let before = app.game.hash();
-        let held = app.input.held().move_axis();
-
-        assert!(app.start_playtest(Scene::boot()).is_err());
-        assert!(app.restart_playtest().is_err());
-        assert_eq!(app.game.hash(), before);
-        assert_eq!(app.game.selected_scene_name(), Some("pair"));
-        assert_eq!(app.run_id, u64::MAX);
-        assert_eq!(app.input.held().move_axis(), held);
-        assert_eq!(app.awaiting_frame.len(), 1);
-        assert!(matches!(response.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
-    }
-
-    #[test]
-    fn restart_resets_the_complete_playtest_boundary() {
-        let mut app = App::default();
-        app.start_playtest(pair()).unwrap();
-        let initial = app.game.hash();
-        let profile = app.game.attack_status().profile;
-        app.input.on_key(KeyCode::KeyW, true, false, profile);
-        app.input.on_key(KeyCode::Space, true, false, profile);
-        for dt in app.accumulator.pending(arpg_sim::Dt::SECS) {
-            app.game.step(dt, Intent::new(MoveDir::new(glam::Vec3::X), true));
-        }
-        for dt in app.accumulator.pending(arpg_sim::Dt::SECS * 8.0) {
-            app.game.step(dt, Intent::NONE);
-            app.attack_effects.observe(&app.game);
-        }
-        app.attack_effects.rebuild(app.game.tick(), Alpha::ZERO);
-        assert!(!app.attack_effects.vertices().is_empty());
-        app.game.set_attack_recovery(arpg_sim::RecoveryTicks::try_from(1).unwrap());
-        assert!(app.game.apply_impulse(
-            app.game.player_id(),
-            arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()
-        ));
-        assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
-        app.input.on_key(KeyCode::F1, true, false, profile);
-        app.input.on_key(KeyCode::ArrowRight, true, false, profile);
-        app.input.on_key(KeyCode::Enter, true, false, profile);
-        assert!(app.input.menu().pending().is_some());
-        let mut camera = OrthoCamera::new(1280, 720);
-        camera.snap_to(glam::Vec3::new(40.0, 0.0, 40.0));
-        app.camera = Some(camera);
-        assert_eq!(app.accumulator.pending(arpg_sim::Dt::SECS * 0.5).count(), 0);
-
-        app.restart_playtest().unwrap();
-        assert!(app.attack_effects.vertices().is_empty());
-        assert_eq!(app.run_id, 2);
-        assert_eq!(app.game.hash(), initial, "all simulation state returns to the baseline");
-        assert_eq!(app.game.tick(), 0);
-        assert_eq!(app.accumulator.alpha().get(), 0.0);
-        assert_eq!(app.camera.as_ref().unwrap().target(), glam::Vec3::ZERO);
-        assert!(!app.input.menu().open());
-        assert!(app.input.take_profile().is_none());
-        assert_eq!(app.input.sample().move_axis(), Vec2::ZERO);
-        app.input.on_key(KeyCode::KeyW, true, false, profile);
-        assert_eq!(app.input.sample().move_axis(), Vec2::ZERO, "held native keys require release");
-        app.input.on_key(KeyCode::KeyW, false, false, profile);
-        app.input.on_key(KeyCode::KeyW, true, false, profile);
-        assert_ne!(app.input.sample().move_axis(), Vec2::ZERO);
-    }
-
-    #[test]
-    fn restart_cancels_old_delayed_actions_and_capture_replies() {
-        let mut app = App::default();
-        let (reply, response) = std::sync::mpsc::channel();
-        let (shot_reply, shot_response) = std::sync::mpsc::channel();
-        app.input.on_key(KeyCode::KeyD, true, false, app.game.attack_status().profile);
-        app.scheduled.push(Deferred {
-            due: std::time::Instant::now() + std::time::Duration::from_secs(60),
-            release: Some(KeyCode::KeyD),
-            reply: Some(reply),
-        });
-        app.awaiting_frame.push(shot_reply);
-        app.start_playtest(pair()).unwrap();
-        assert!(response.try_recv().unwrap().contains("cancelled"));
-        assert!(shot_response.try_recv().unwrap().contains("cancelled"));
-        assert!(app.scheduled.is_empty());
-        app.input.on_key(KeyCode::KeyD, true, false, app.game.attack_status().profile);
-        app.service_schedule();
-        assert_ne!(
-            app.input.sample().move_axis(),
-            Vec2::ZERO,
-            "new presses survive cancelled old releases"
-        );
-    }
-
-    #[test]
-    fn rejected_replacement_preserves_the_current_playtest() {
-        let mut app = App::default();
-        app.start_playtest(pair()).unwrap();
-        app.input.on_key(KeyCode::KeyW, true, false, app.game.attack_status().profile);
-        let before = app.report_state();
-        let trace = app.game.trace().render();
-        let mut bad = pair();
-        bad.engine.bodies[0].pos.0 = f32::INFINITY;
-        assert!(app.start_playtest(bad).is_err());
-        assert_eq!(app.report_state(), before);
-        assert_eq!(app.game.trace().render(), trace);
-        assert_ne!(app.input.sample().move_axis(), Vec2::ZERO);
-    }
-
-    #[test]
-    fn harness_start_reads_content_but_restart_reuses_the_snapshot() {
-        let mut app = App::default();
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.harness = Some(rx);
-        let mut command = |command| {
-            let (reply, response) = std::sync::mpsc::channel();
-            tx.send(Request { command, reply }).unwrap();
-            assert!(!app.drain_harness());
-            (response.try_recv().unwrap(), app.game.hash(), app.run_id)
-        };
-        let path =
-            std::env::temp_dir().join(format!("arpg-scene-snapshot-{}.ron", std::process::id()));
-        std::fs::write(&path, "(name: \"first\", bodies: [(pos: (20.0, 0.0))])").unwrap();
-        let (reply, first, _) = command(Command::StartScene(path.clone()));
-        assert!(reply.contains("ready run=1 tick=0"), "{reply}");
-        std::fs::write(&path, "(name: \"second\")").unwrap();
-        let (_, restarted, run) = command(Command::RestartScene);
-        assert_eq!(first, restarted);
-        assert_eq!(run, 2);
-        let (_, reloaded, run) = command(Command::StartScene(path.clone()));
-        assert_ne!(first, reloaded);
-        assert_eq!(run, 3);
-        std::fs::remove_file(&path).unwrap();
-        let (reply, unchanged, run) = command(Command::StartScene(path));
-        assert!(reply.starts_with("error:"));
-        assert_eq!(unchanged, reloaded);
-        assert_eq!(run, 3);
-    }
-
-    /// A screenshot that cannot be taken has to *say so*. A reply sent whether
-    /// or not the frame was drawn turns "your window is covered" into "your
-    /// change did nothing" — the worst failure available to a harness whose
-    /// whole contract is that a reply means the effect landed.
-    #[test]
-    fn a_screenshot_gives_up_only_after_a_long_run_of_skipped_frames() {
-        let mut stall = 0;
-
-        // A hiccup is not a stall; the wait has to survive one.
-        assert!(!App::capture_has_stalled(true, &mut stall));
-        assert!(!App::capture_has_stalled(true, &mut stall));
-
-        let gave_up = (0..10_000).any(|_| App::capture_has_stalled(true, &mut stall));
-        assert!(gave_up, "waited forever instead of reporting the failure");
-    }
-
-    /// With nothing pending there is nothing to give up on, and the count must
-    /// not carry over — otherwise a long occluded stretch would fail the next
-    /// screenshot the instant it was asked for.
-    #[test]
-    fn skipped_frames_with_no_screenshot_pending_do_not_accumulate() {
-        let mut stall = 0;
-
-        for _ in 0..10_000 {
-            assert!(!App::capture_has_stalled(false, &mut stall));
-        }
-        assert_eq!(stall, 0);
-
-        assert!(!App::capture_has_stalled(true, &mut stall), "a fresh request must not fail");
     }
 }

@@ -125,7 +125,7 @@ that rule fires on every edit. The inventory below only matters when auditing.
 | A skipped frame is never counted as a rendered one | 1 | `Renderer::render` is `#[must_use]`, so ignoring the result is a denied warning |
 | Readback rows respect the copy alignment | 3 | `padded_bytes_per_row`; unit test in `gfx/capture.rs` |
 | A malformed harness command is reported, not ignored | 3 | `parse` returns `Result`; unit test in `app/harness.rs` |
-| A screenshot that never happened is not reported as `ok` | 3 | `capture_has_stalled`; unit tests in `app/app.rs` |
+| A screenshot that never happened is not reported as `ok` | 0/3 | `FrameOutcome` separates presentation from PNG-write success; `Capture` owns one destination, reply and deadline. Tests in `app/capture.rs` cover overlap, write failure and wall-clock timeout |
 | A body's position cannot leave the ground plane | 0 | positions are `Vec2`; `on_ground` is the only lift |
 | An `EntityId` cannot be forged | 0 | private fields, no public constructor; `Slots::insert` is the only mint |
 | A retired name cannot resolve to the body that took its row | 3 | generation bumped in `Slots::remove`; `a_despawned_name_stays_dead`, mutation-checked |
