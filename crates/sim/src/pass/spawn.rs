@@ -214,14 +214,6 @@ impl SpawnQueue {
         self.pending.len()
     }
 
-    /// Forgets everything pending. For a wholesale reset of the horde, where a
-    /// request decided before the reset would otherwise land a body a tick
-    /// after it.
-    pub(crate) fn clear(&mut self) {
-        self.pending.clear();
-        self.refused = 0;
-    }
-
     pub(crate) fn cancel_scene(&mut self, owner: SceneId) {
         self.pending.retain(|request| request.owner != Some(owner));
     }
@@ -350,7 +342,9 @@ mod tests {
     #[test]
     fn a_full_horde_refuses_what_it_cannot_hold() {
         let mut enemies = Bodies::default();
-        enemies.respawn(MAX_BODIES);
+        for _ in 0..MAX_BODIES {
+            enemies.spawn(Vec2::ZERO, Template::BODY).unwrap();
+        }
         assert_eq!(enemies.len(), MAX_BODIES + 1, "the horde did not actually fill");
 
         let mut seekers = Members::default();

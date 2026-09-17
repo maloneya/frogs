@@ -125,13 +125,6 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
             failures.push(Failure::new("despawns", "a reachable tick".into(), command.at.to_string()));
         }
     }
-    if !scenario.setup.scenes.is_empty() && scenario.setup.enemies != 0 {
-        failures.push(Failure::new(
-            "setup",
-            "scenes or a legacy enemy grid".into(),
-            "both specified".into(),
-        ));
-    }
     for command in &scenario.scenes {
         if command.at >= scenario.budget.ticks {
             failures.push(Failure::new(
@@ -186,19 +179,12 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
 /// scenario makes is about the code path the game runs, and a runner that
 /// stepped the game by some other route would be testing a different program.
 pub(crate) fn run(scenario: &Scenario) -> Run {
-    let mut game = if scenario.setup.scenes.is_empty() {
-        let mut game = Game::default();
-        game.set_enemy_count(scenario.setup.enemies);
-        game
-    } else {
-        Game::empty()
-    };
+    let mut game = Game::empty();
     let mut instances = Vec::new();
     let mut installed_sources = Vec::new();
     let mut command_failures = Vec::new();
 
-    // Setup actions come after the horde grid, so a scenario can put a body at
-    // a known spot inside a crowd as well as in an empty arena.
+    // Setup actions follow authored scene construction.
     //
     // Applied strictly in order. A `Place` after a `Despawn` reuses the freed
     // slot, which is the only way a retired name can come back — so the order

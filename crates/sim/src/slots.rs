@@ -153,6 +153,11 @@ impl Slots {
     pub(crate) fn insert(&mut self) -> EntityId {
         let dense = self.dense.len() as u32;
 
+        // Reserve retirement storage while constructing bodies. Defeat can then
+        // return every live slot without allocating during a simulation tick.
+        if self.free.capacity() < self.slots.len() + 1 {
+            self.free.reserve(self.slots.len() + 1 - self.free.len());
+        }
         let index = match self.free.pop() {
             Some(index) => {
                 // Reused. The generation was already bumped on the way out, so
@@ -199,7 +204,7 @@ impl Slots {
 
     /// Marks a slot vacant, bumps past its occupant, and offers it for reuse.
     ///
-    /// The only removal path calls this, including during a whole-horde reset.
+    /// Every body removal calls this.
     /// The slot table survives: resetting generations would resurrect stale ids.
     fn retire(&mut self, index: u32) {
         let slot = &mut self.slots[index as usize];

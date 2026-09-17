@@ -57,9 +57,8 @@ instance's bodies and sources, without consulting the trace. Restart restores
 the complete cached description, Pending phases, and authored disabled sources.
 Additive loads, endpoint removal, and eviction cannot edit that snapshot.
 
-The content loader accepts both this wrapped form and existing engine-only
-files. Both schemas reject unknown fields. Inline scenarios use `Gameplay(...)`
-for the complete form and retain `Inline(...)` for legacy physical content.
+The content loader accepts this complete `GameScene` form and rejects unknown
+fields. Inline scenarios use `Inline(...)` with the same definition.
 Owning types supply their authored definitions to the shared decoder.
 
 ## Observing and verifying

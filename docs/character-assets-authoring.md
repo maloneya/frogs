@@ -1,14 +1,14 @@
 # Character asset authoring
 
 The asset boundary accepts two deliberately small Blender-to-GLB paths: a baked
-static preview and a one-skin character with a bounded transform-clip catalog.
+static world mesh and a one-skin character with a bounded transform-clip catalog.
 Neither is a general scene loader.
 
 ## Blender convention
 
 Author in metres using Blender's native Z-up coordinates, with the character
 facing Blender `-Y`. Blender's exporter converts that to the runtime contract:
-Y up and `+Z` forward. Keep the preview as one mesh object, one material and one
+Y up and `+Z` forward. Keep each static asset as one mesh object, one material and one
 embedded RGBA PNG base-colour texture. Apply object transforms when they are
 part of the mesh; ordinary parent node translation, rotation and scale are also
 accepted and baked once at import.

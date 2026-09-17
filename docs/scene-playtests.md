@@ -115,24 +115,27 @@ Mechanism fixtures live inline in `scenarios/`; they are not picker entries.
 
 ```ron
 (
-    name: "Small encounter",
-    bodies: [
-        (pos: (0.0, 4.0)),
-        (pos: (4.0, 4.0), what: (seeks: true)),
-    ],
-    grids: [
-        (origin: (-6.0, 8.0), columns: 8, rows: 4, spacing: 0.7,
-         what: (seeks: true)),
-    ],
-    sources: [
-        (pos: (12.0, 0.0), radius: 3.0, every: 60,
-         when: FewerThan(12), what: (seeks: true)),
-    ],
+    engine: (
+        name: "Small encounter",
+        bodies: [
+            (pos: (0.0, 4.0)),
+            (pos: (4.0, 4.0), what: (seeks: true)),
+        ],
+        grids: [
+            (origin: (-6.0, 8.0), columns: 8, rows: 4, spacing: 0.7,
+             what: (seeks: true)),
+        ],
+        sources: [
+            (pos: (12.0, 0.0), radius: 3.0, every: 60,
+             when: FewerThan(12), what: (seeks: true)),
+        ],
+    )
 )
 ```
 
 Coordinates are world `(x, z)`. `Scene`, `Placed`, `BodyGrid`, `Template`, and
-`SourceSpec` live in sim; the content library reads those types directly.
+`SourceSpec` live in sim; `GameScene` wraps them under `engine` and adds
+gameplay relationships. The content library reads `GameScene` directly.
 Source population conditions still count the whole world's enemies, not just
 their scene.
 
@@ -151,7 +154,7 @@ expanded. A 128x128 horde can be described with one grid entry rather than
 16,384 individual placements.
 
 ```text
-scene file -> content library -> Scene description
+scene file -> content library -> GameScene description
                                      |
                     Game prepares the complete lifecycle operation
                                      |
@@ -186,7 +189,7 @@ The scenario runner accepts `setup.scenes` and timed `scenes` operations:
 ```ron
 setup: (scenes: [File("../scenes/seekers.ron")]),
 scenes: [
-    (at: 2, action: Load(Inline((name: "another", bodies: [])))),
+    (at: 2, action: Load(Inline((engine: (name: "another", bodies: []))))),
     (at: 4, action: Evict(1)),
 ],
 ```
@@ -203,7 +206,7 @@ hashing, and assertions remain outside the timer.
 
 The lifecycle scenario asserts surviving identities and positions, source
 descendants, reload, and load-then-evict before a source's first tick. Unit tests
-cover capacity refusal, stale queued ownership, slot reuse, bulk reset, hashing,
+cover capacity refusal, stale queued ownership, slot reuse, hashing,
 and the app's complete restart boundary. CLI tests reject bad or unreachable
 commands even with blessing enabled. Runtime placement tracking requires an
 untruncated trace; a batch that overflows it fails explicitly rather than
@@ -226,10 +229,9 @@ will need to revisit that storage assumption.
 
 ## Gameplay scene composition
 
-New gameplay scenes wrap physical content in `GameScene.engine` and add
-`source_controls`. Legacy engine-only files still decode unchanged. Inline
-scenario references use `Gameplay(...)` for complete game scenes and retain
-`Inline(...)` for legacy physical scenes. File references support both forms.
+All scenes wrap physical content in `GameScene.engine` and optionally add
+`source_controls`. Inline scenario references use `Inline(...)` with the same
+complete `GameScene` definition as file references.
 See [source control](source-control.md) for validation and lifecycle rules;
 `scenes/activate_horde.ron` is the playable connected scene; minimal fixtures
 are inline in the regression scenarios.

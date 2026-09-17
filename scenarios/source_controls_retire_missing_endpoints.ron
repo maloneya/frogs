@@ -1,13 +1,13 @@
 (
     description: "Removing an activated body or its source before the next tick retires the connection; recycled body storage cannot activate the old relationship.",
-    setup: (scenes: [Gameplay((
+    setup: (scenes: [Inline((
     engine: (
         name: "Source control",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
         sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
     ),
     source_controls: [(body: 0, source: 0)],
-)), Gameplay((
+)), Inline((
     engine: (
         name: "Source control",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],

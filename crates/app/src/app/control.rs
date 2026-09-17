@@ -3,7 +3,7 @@
 use super::{App, Deferred, read_scene};
 use crate::harness::{Command, Request};
 use crate::presentation::{default_character_path, default_horde_path};
-use crate::presentation::{report_asset_preview, report_character_preview, report_horde_preview};
+use crate::presentation::{report_character_preview, report_horde_preview};
 use arpg_core::Report;
 use arpg_gfx::{OrthoCamera, Renderer};
 use glam::Vec2;
@@ -24,14 +24,6 @@ impl App {
         for Request { command, reply } in requests {
             let now = std::time::Instant::now();
             let answer = match command {
-                Command::ShowAsset(path) => match self.show_asset(path) {
-                    Ok(answer) => answer,
-                    Err(error) => format!("error: {error}"),
-                },
-                Command::ClearAsset => {
-                    self.asset_preview = None;
-                    "ok".to_string()
-                }
                 Command::ShowCharacter(path) => match self.show_character(path) {
                     Ok(answer) => answer,
                     Err(error) => format!("error: {error}"),
@@ -126,18 +118,6 @@ impl App {
                     _ => format!("error: no physical body {target}"),
                 },
                 Command::TraceSince(tick) => self.report_trace(tick),
-                Command::SetEnemies(n) => {
-                    self.game.set_enemy_count(n);
-                    // Respawning retires enemy identities and their behaviours;
-                    // props and the player survive. Said in the reply rather than left
-                    // to be discovered, because "I set the horde and the
-                    // chasing stopped" is otherwise a puzzle.
-                    format!(
-                        "enemies {} seekers {}",
-                        self.game.enemy_count(),
-                        self.game.seeker_count()
-                    )
-                }
                 Command::Spawn { x, z, what } => {
                     // The reply says *queued*, not spawned, because that is what
                     // happened: the body appears when the next tick runs. A
@@ -167,10 +147,6 @@ impl App {
                     true => format!("removed {id}"),
                     false => format!("error: no live source {id}"),
                 },
-                Command::SetSeekers(n) => {
-                    self.game.set_seeker_count(n);
-                    format!("seekers {}", self.game.seeker_count())
-                }
                 Command::SetCollisionDebug(on) => {
                     self.collision_debug.set_enabled(on, &self.game);
                     format!("debug collision {}", if on { "on" } else { "off" })
@@ -216,9 +192,6 @@ impl App {
         out.text("sim_hash", &format!("{:016x}", self.game.hash()));
         out.object("sim", |sim| self.game.report(sim));
         out.object("ui", |ui| self.input.menu().report(ui));
-        out.object("asset_preview", |asset| {
-            report_asset_preview(self.asset_preview.as_ref(), asset);
-        });
         out.object("world_assets", |out| {
             if let Some(world) = &self.world_assets {
                 world.report(out);
@@ -248,8 +221,7 @@ impl App {
             let static_instances = self
                 .world_assets
                 .as_ref()
-                .map_or(0, |world| world.instance_count() as u64)
-                + u64::from(self.asset_preview.is_some());
+                .map_or(0, |world| world.instance_count() as u64);
             r.int(
                 "instances",
                 player_instances
@@ -278,8 +250,7 @@ impl App {
                 "static_mesh_draws",
                 self.world_assets
                     .as_ref()
-                    .map_or(0, |world| world.draw_count() as u64)
-                    + u64::from(self.asset_preview.is_some()),
+                    .map_or(0, |world| world.draw_count() as u64),
             );
             r.int("player_character_instances", player_instances);
             r.int("horde_character_instances", horde_instances);

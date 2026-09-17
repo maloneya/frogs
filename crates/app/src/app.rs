@@ -24,9 +24,9 @@ use crate::harness::{self, Request};
 use crate::hud;
 use crate::input::Controls;
 use crate::presentation::{
-    AssetPreview, LoadedCharacter, LoadedHorde, WorldAssets, default_character_path,
-    default_horde_path, presentation_seconds, preview_instance, replace_character,
-    replace_horde, replace_preview,
+    LoadedCharacter, LoadedHorde, WorldAssets, default_character_path,
+    default_horde_path, presentation_seconds, replace_character,
+    replace_horde,
 };
 use crate::time::Clock;
 use crate::ui::{MenuRequest, SceneChoice};
@@ -37,8 +37,6 @@ use crate::ui::{MenuRequest, SceneChoice};
 pub(crate) struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
-    /// App-global presentation selected independently of playable scene state.
-    asset_preview: Option<AssetPreview<MeshAsset>>,
     /// Ground and prop resources exist together once GPU initialization succeeds.
     world_assets: Option<WorldAssets<MeshAsset>>,
     /// Hierarchical character presentation, also independent of simulation.
@@ -126,18 +124,6 @@ fn scene_catalog(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>,
 }
 
 impl App {
-    fn show_asset(&mut self, path: std::path::PathBuf) -> Result<String, String> {
-        let Self { renderer, asset_preview, .. } = self;
-        let renderer = renderer.as_ref().ok_or_else(|| "no renderer yet".to_string())?;
-        replace_preview(asset_preview, path, |mesh| {
-            renderer.upload_mesh(mesh).map_err(|error| error.to_string())
-        })?;
-        Ok(asset_preview
-            .as_ref()
-            .expect("successful replacement selects a preview")
-            .summary())
-    }
-
     fn show_character(&mut self, path: std::path::PathBuf) -> Result<String, String> {
         let Self {
             renderer,
@@ -270,19 +256,6 @@ impl App {
     fn on_debug_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::F3 => self.collision_debug.set_enabled(!self.collision_debug.enabled(), &self.game),
-            // Doubling rather than stepping: the interesting range spans three
-            // orders of magnitude, and the knee is easier to find by bisection
-            // than by walking. Both directions clamp inside `set_enemy_count`.
-            KeyCode::BracketRight => {
-                // `max(1)` because doubling zero is zero: the horde can now
-                // be emptied, and without this `]` could not refill it.
-                self.game.set_enemy_count((self.game.enemy_count() * 2).max(1));
-                log::info!("N = {}", self.game.enemy_count());
-            }
-            KeyCode::BracketLeft => {
-                self.game.set_enemy_count(self.game.enemy_count() / 2);
-                log::info!("N = {}", self.game.enemy_count());
-            }
             KeyCode::Equal => {
                 if let Some(c) = &mut self.camera {
                     c.zoom_by(1.0 / ZOOM_STEP);
@@ -389,8 +362,7 @@ impl App {
 
         // Count presentation, not redraw attempts: occluded surfaces can skip
         // thousands of attempts a second without producing any frames.
-        let preview_instances = [preview_instance()];
-        let meshes = world_assets.draws(self.asset_preview.as_ref(), &preview_instances);
+        let meshes = world_assets.draws();
         let character = self
             .character_preview
             .as_ref()
@@ -425,7 +397,6 @@ impl App {
                 self.game.enemy_count(),
                 world_assets.instance_count()
                     + self.collision_debug.drawings().len()
-                    + usize::from(self.asset_preview.is_some())
                     + usize::from(self.character_preview.is_some())
                     + self.horde_preview.as_ref().map_or(0, LoadedHorde::instance_count),
                 if renderer.vsync() { "  [vsync]" } else { "  [uncapped]" },

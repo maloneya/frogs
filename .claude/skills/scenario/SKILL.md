@@ -31,7 +31,6 @@ A minimal movement example:
 ```ron
 (
     description: "Walking east covers the expected distance.",
-    setup: (enemies: 0),
     inputs: [(at: 0, ticks: 30, dir: (1.0, 0.0))],
     budget: (ticks: 30),
     expect: (
@@ -82,7 +81,7 @@ commands must fail rather than silently disappear.
 - [Source enablement](../../../docs/source-enablement.md): switches run before
   source evaluation; assertions consume the engine-owned `SourceState`.
 - [Source control](../../../docs/source-control.md): complete inline scenes use
-  `Gameplay(...)`; legacy physical scenes use `Inline(...)`. Assert activation
+  `Inline(...)` with the same `GameScene` definition as scene files. Assert activation
   on N and permitted emission on N+1, as well as one-shot consumption and lifetime.
 - [Scene authoring](../create-scene/SKILL.md): load the playable file through
   `File(...)` so the tested content is the content the user plays.

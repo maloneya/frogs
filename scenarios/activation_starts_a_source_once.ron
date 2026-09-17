@@ -1,6 +1,6 @@
 (
     description: "Activation on tick 2 permits the first emission on tick 3; repeated interaction cannot re-enable a source later paused by an external command.",
-    setup: (scenes: [Gameplay((
+    setup: (scenes: [Inline((
     engine: (
         name: "Source control",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],

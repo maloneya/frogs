@@ -40,18 +40,16 @@ body lands on a later tick. The game continues stepping between commands.
 |---|---|
 | Input | `press`, `release`, `tap`, `hold <key> <ms>` |
 | Observe | `state`, `trace since <tick>`, `wait <ms>`, `shot <path>` |
-| Bulk population | `enemies <n>`, then `seekers <n>` if desired |
-| Place or push | `spawn <x> <z> [seek]`, `impulse <player\|#id> <x> <z>` |
-| Sources | `source <x> <z> [flags]`, `source remove\|enable\|disable <id>` |
+| Place or push | `spawn (pos: (<x>, <z>), what: (seeks: true))`, `impulse <player\|#id> <x> <z>` |
+| Sources | `source (pos: (<x>, <z>), every: <ticks>)`, `source remove\|enable\|disable <id>` |
 | Scenes | `scene start <path>`, `scene restart`, `scene add <path>`, `scene evict <id>`, `scene list` |
-| Assets | `asset\|character\|horde show <path.glb>`, `asset\|character\|horde clear` |
+| Assets | `character\|horde show <path.glb>`, `character\|horde clear` |
 | Presentation | `vsync on\|off`, `debug collision on\|off` |
 | Exit | `quit` |
 
-The command parser is in [harness](../../../crates/app/src/harness.rs). Source
-flags include cadence, placement, conditions and initial enablement; see
-[source enablement](../../../docs/source-enablement.md). `template` consumes the
-remaining text as the owning RON type, so place other flags before it.
+The command parser is in [harness](../../../crates/app/src/harness.rs). Spawn and source payloads decode the simulation-owned `Placed` and `SourceSpec`
+RON descriptions, including templates, cadence and conditions; see
+[source enablement](../../../docs/source-enablement.md).
 
 Key names come from [BINDINGS](../../../crates/app/src/input.rs); an unknown key
 reply lists them. `tap space` swings and `tap e` interacts. F1 opens the attack
@@ -60,9 +58,9 @@ Escape cancels. While a menu is open it captures gameplay input; the world keeps
 running. Use explicit harness commands for debug operations instead of trying
 to inject native debug keys.
 
-`enemies` resets enemy identities and behaviours; props survive. Apply `seekers`
-afterwards to make the new horde chase. Scene restart restores the cached
-snapshot; starting the file again rereads it. Discard old IDs after a new run.
+Choose population size and seeking in authored scene bodies or grids, then start
+that scene for a fresh trial. Scene restart restores the cached snapshot;
+starting the file again rereads it. Discard old IDs after a new run.
 See [scene playtests](../../../docs/scene-playtests.md).
 
 ## Observe and predict

@@ -125,12 +125,6 @@ impl Members {
         self.index(id).is_some()
     }
 
-    /// Revokes the behaviour from everybody.
-    pub(crate) fn clear(&mut self) {
-        self.sparse.clear();
-        self.dense.clear();
-    }
-
     /// Feeds membership into the world hash.
     ///
     /// Exhaustively destructured, as every hash in this crate is — but `sparse`

@@ -6,7 +6,7 @@
 // asserting that the player stands halfway inside the wall.
 (
     description: "Walking into the wall stops at the body's edge and stays finite, rather than escaping or drifting.",
-    setup: (enemies: 0),
+    setup: (),
     inputs: [
         (at: 0, ticks: 1200, dir: (1.0, 0.0)),
     ],

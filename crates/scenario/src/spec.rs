@@ -163,14 +163,7 @@ pub(crate) struct Setup {
     /// Real authored content, instantiated through the same door as the game.
     #[serde(default)]
     pub(crate) scenes: Vec<SceneRef>,
-    /// Zero is the useful default, not an edge case: the horde spawns centred
-    /// on the origin and so does the player, so any horde at all puts the two
-    /// in contact on tick zero — and a prediction about movement then becomes a
-    /// prediction about the contact solver, which cannot be made by hand.
-    #[serde(default)]
-    pub(crate) enemies: usize,
-
-    /// Bodies placed and removed, in order, after the horde grid is laid out.
+    /// Bodies placed and removed, in order, after authored scenes load.
     ///
     /// **This is what makes a scenario able to say anything precise.** A horde
     /// count puts N bodies in a grid whose positions nobody wrote down, so the
@@ -480,28 +473,26 @@ pub(crate) struct ImpulseAt {
     pub(crate) value: Impulse,
 }
 
-/// Test orchestration refers to the simulation's content type directly.
+/// Test orchestration uses the same complete gameplay content as scene files.
 #[derive(Debug, Deserialize)]
 pub(crate) enum SceneRef {
-    Inline(arpg_sim::Scene),
-    Gameplay(arpg_game::GameScene),
+    Inline(arpg_game::GameScene),
     File(std::path::PathBuf),
 }
 
 impl SceneRef {
     pub(crate) fn resolve(&mut self, base: &std::path::Path) -> Result<(), arpg_content::LoadError> {
         match self {
-            Self::File(path) => *self = Self::Gameplay(arpg_content::load_scene(&base.join(path))?),
-            Self::Inline(scene) => *self = Self::Gameplay(scene.clone().into()),
-            Self::Gameplay(_) => {}
+            Self::File(path) => *self = Self::Inline(arpg_content::load_scene(&base.join(path))?),
+            Self::Inline(_) => {}
         }
         Ok(())
     }
 
     pub(crate) fn content(&self) -> &arpg_game::GameScene {
         match self {
-            Self::Gameplay(scene) => scene,
-            Self::File(_) | Self::Inline(_) => panic!("scene references must resolve before validation and replay"),
+            Self::Inline(scene) => scene,
+            Self::File(_) => panic!("scene references must resolve before validation and replay"),
         }
     }
 }

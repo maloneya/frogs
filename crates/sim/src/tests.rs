@@ -66,14 +66,22 @@ fn tick_dt() -> Dt {
     Accumulator::default().pending(Dt::SECS).next().expect("one tick's worth buys one tick")
 }
 
+/// Ordinary construction for tests needing a crowd of a particular size.
+fn world_with_enemies(count: usize) -> World {
+    let mut world = World::empty();
+    for position in grid_positions(count) {
+        world.place(position, Template::BODY).expect("test crowd fits");
+    }
+    world
+}
+
 /// Steps a fresh world `ticks` times and returns the hash after each one.
 ///
 /// The sequence, not the final value: two runs that end up in the same
 /// place having taken different routes are still a divergence, and a final
 /// -state comparison calls them equal.
 fn hash_sequence(enemies: usize, ticks: usize, dir_at: impl Fn(u64) -> MoveDir) -> Vec<u64> {
-    let mut world = World::default();
-    world.set_enemy_count(enemies);
+    let mut world = world_with_enemies(enemies);
 
     let mut acc = Accumulator::default();
     let mut seq = Vec::with_capacity(ticks);
@@ -96,8 +104,7 @@ fn hash_sequence(enemies: usize, ticks: usize, dir_at: impl Fn(u64) -> MoveDir) 
 /// *movement* has to get out of the crowd first, or it is really asking
 /// about the solver.
 fn in_open_ground() -> World {
-    let mut world = World::default();
-    world.set_enemy_count(1);
+    let mut world = world_with_enemies(1);
 
     // The lone body spawns on top of the player. Two seconds east at
     // `PLAYER_SPEED` clears it by 18 units.
@@ -123,8 +130,7 @@ fn frame_rate_cannot_change_the_simulation() {
     // of a tick rounds. Capped by `MAX_TICKS_PER_FRAME`, so 8 would silently
     // measure the stall path instead.
     let at = |ticks_per_frame: usize| {
-        let mut world = World::default();
-        world.set_enemy_count(64);
+        let mut world = world_with_enemies(64);
 
         let mut acc = Accumulator::default();
         let mut seq = Vec::new();
@@ -148,25 +154,6 @@ fn frame_rate_cannot_change_the_simulation() {
         let diverged = reference.iter().zip(&other).position(|(a, b)| a != b);
         assert_eq!(diverged, None, "{n} ticks per frame diverged at tick {diverged:?}");
     }
-}
-
-/// A wholesale respawn retires every name, so any behaviour still attached
-/// to one would be attached to whoever inherits it. Asserted rather than
-/// left to the ordering comment in `set_enemy_count`, because the failure —
-/// a body nobody asked to chase, chasing — is silent.
-#[test]
-fn a_respawn_revokes_every_behaviour() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
-
-    let id = world.place(Vec2::new(3.0, 0.0), Template::BODY).expect("room for one body");
-    assert!(world.add_seek(id));
-    assert_eq!(world.seeker_count(), 1);
-
-    world.set_enemy_count(4);
-
-    assert_eq!(world.seeker_count(), 0, "a behaviour survived the respawn that retired its name");
-    assert!(!world.is_alive(id), "the old name outlived the horde it belonged to");
 }
 
 /// **The sensitivity check, and it is not optional.** A `hash()` that
@@ -208,8 +195,7 @@ fn drawn_enemies(world: &World, alpha: Alpha) -> Vec<Vec3> {
 /// every body sits still and a broken blend is indistinguishable from a
 /// working one.
 fn shoving_through_the_crowd(enemies: usize) -> World {
-    let mut world = World::default();
-    world.set_enemy_count(enemies);
+    let mut world = world_with_enemies(enemies);
 
     // Only a few ticks: at `PLAYER_SPEED` the player clears a small horde
     // in well under a second, and then contacts drop to zero and this
@@ -232,7 +218,6 @@ fn drawn_player(world: &World, alpha: Alpha) -> Vec3 {
 #[test]
 fn the_blend_endpoints_are_the_two_ticks_themselves() {
     let mut world = in_open_ground();
-    world.set_enemy_count(4);
 
     let before = world.player_pos();
     world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
@@ -256,6 +241,8 @@ fn the_blend_endpoints_are_the_two_ticks_themselves() {
 fn player_presentation_carries_identity_transform_movement_and_attack() {
     let mut world = World::empty();
     let id = world.player_id();
+    assert!(!world.despawn_body(id), "the player cannot be removed as an enemy");
+    assert!(!world.add_seek(id), "the player cannot gain enemy seeking");
     world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), true));
 
     let player = world.player_presentation(Alpha::ONE);
@@ -298,7 +285,6 @@ fn horde_presentation_is_stable_derived_and_excludes_props() {
 #[test]
 fn the_blend_crosses_the_gap_once_and_in_order() {
     let mut world = in_open_ground();
-    world.set_enemy_count(4);
 
     let before = world.player_pos();
     world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
@@ -376,8 +362,7 @@ fn the_horde_is_interpolated_too() {
 /// movement without predicting the solver too.
 #[test]
 fn an_empty_horde_is_a_legal_world() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
+    let mut world = World::empty();
     assert_eq!(world.enemy_count(), 0);
 
     for _ in 0..30 {
@@ -392,22 +377,10 @@ fn an_empty_horde_is_a_legal_world() {
     assert_eq!(world.enemy_presentations(Alpha::ONE).count(), 0);
 }
 
-/// **Found by mutation, and it is a real artefact.** Every other test here
-/// steps immediately after changing the horde, and `step` overwrites `prev`
-/// — so a respawn that leaves a stale `prev` behind is invisible to all of
-/// them.
-///
-/// It is visible on screen, though, and the fixed timestep is what makes it
-/// so: uncapped at ~300fps most frames run **zero** ticks, so a frame is
-/// drawn between `set_enemy_count` and the next `step` most of the time.
-/// With a stale `prev` the whole horde streaks in from wherever the old one
-/// stood — pressing `]` would flicker a thousand bodies across the arena.
+/// Newly placed bodies must render standing still before their first tick.
 #[test]
-fn a_respawned_horde_is_drawn_standing_still() {
-    let mut world = shoving_through_the_crowd(256);
-
-    // Change the count and draw with no tick in between.
-    world.set_enemy_count(64);
+fn a_new_horde_is_drawn_standing_still() {
+    let world = world_with_enemies(64);
 
     let standing: Vec<Vec3> =
         world.bodies.pos[1..].iter().map(|&p| on_ground(p, ENEMY_HALF_HEIGHT)).collect();
@@ -428,8 +401,7 @@ fn a_respawned_horde_is_drawn_standing_still() {
 /// the point, and is why the assertion is cheap enough to keep.
 #[test]
 fn drawing_never_touches_sim_state() {
-    let mut world = World::default();
-    world.set_enemy_count(64);
+    let mut world = world_with_enemies(64);
     for _ in 0..10 {
         world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
     }
@@ -482,8 +454,7 @@ fn half() -> Alpha {
 /// called for *every* body, every tick, buys.
 #[test]
 fn a_body_that_did_not_move_is_drawn_where_it_is() {
-    let mut world = in_open_ground();
-    world.set_enemy_count(16);
+    let mut world = world_with_enemies(16);
 
     // Out in the open, standing still: nothing moves at all.
     for _ in 0..5 {
@@ -585,10 +556,8 @@ fn every_configured_and_committed_attack_profile_reaches_the_hash() {
             "configured {profile} omitted from replay state"
         );
 
-        let mut changed = World::default();
-        let mut normal = World::default();
-        changed.set_enemy_count(0);
-        normal.set_enemy_count(0);
+        let mut changed = World::empty();
+        let mut normal = World::empty();
         changed.set_attack_profile(profile);
         let press = Intent::new(arpg_core::MoveDir::NONE, true);
         changed.step(tick_dt(), press);
@@ -610,8 +579,7 @@ fn every_configured_and_committed_attack_profile_reaches_the_hash() {
 /// enemies do anything on their own.
 #[test]
 fn the_horde_is_part_of_what_a_replay_compares() {
-    let mut world = World::default();
-    world.set_enemy_count(64);
+    let mut world = world_with_enemies(64);
 
     // Stand still. Only the solver moves anything, so any change in the
     // hash from here is the horde's.
@@ -642,8 +610,7 @@ fn a_steady_state_frame_allocates_nothing() {
     let dt = tick_dt();
 
     for profile in AttackProfile::ALL {
-        let mut world = World::default();
-        world.set_enemy_count(512);
+        let mut world = world_with_enemies(512);
         world.set_attack_profile(profile);
         let attack = profile.resolve();
         let duration = attack.startup() + attack.active() + attack.recovery().get();
@@ -713,11 +680,13 @@ fn facing_stays_wrapped_while_spinning() {
     }
 }
 
-/// Decoupling rendering must preserve physical admission, including bulk resets.
+/// Decoupling rendering must preserve physical admission, through ordinary placement.
 #[test]
 fn the_physical_population_ceiling_is_preserved() {
     let mut world = World::empty();
-    world.set_enemy_count(usize::MAX);
+    for _ in 0..MAX_BODIES {
+        world.place(Vec2::ZERO, Template::BODY).unwrap();
+    }
     assert_eq!(world.enemy_count(), 183_494);
     assert_eq!(world.body_count(), MAX_BODIES);
     assert!(world.place(Vec2::ZERO, Template::BODY).is_none());
@@ -731,7 +700,7 @@ fn the_horde_holds_exactly_the_requested_count() {
     assert_eq!(world.enemy_count(), DEFAULT_ENEMIES);
 
     for n in [1, 17, 512, 1024, 4096] {
-        world.set_enemy_count(n);
+        world = world_with_enemies(n);
         assert_eq!(world.enemy_count(), n);
         assert_eq!(world.bodies.pos[1..].len(), n);
     }
@@ -746,8 +715,7 @@ fn the_horde_holds_exactly_the_requested_count() {
 /// that looks like a physics bug and is a spawning bug.
 #[test]
 fn the_horde_spawns_with_a_gap_between_every_body() {
-    let mut world = World::default();
-    world.set_enemy_count(1024);
+    let world = world_with_enemies(1024);
 
     let pos = &world.bodies.pos[1..];
     let mut closest = f32::MAX;
@@ -773,21 +741,19 @@ fn the_horde_spawns_with_a_gap_between_every_body() {
 /// the grid is always square.
 #[test]
 fn the_horde_is_centred_on_the_origin() {
-    let mut world = World::default();
-
     let centroid_at = |world: &World| {
         let pos = &world.bodies.pos[1..];
         pos.iter().fold(Vec2::ZERO, |acc, &p| acc + p) / pos.len() as f32
     };
 
     for n in [1, 4, 1024] {
-        world.set_enemy_count(n);
+        let world = world_with_enemies(n);
         let c = centroid_at(&world);
         assert!(c.length() < 1e-3, "square N={n} should be exactly centred, got {c}");
     }
 
     for n in [17, 500, 4095] {
-        world.set_enemy_count(n);
+        let world = world_with_enemies(n);
         let c = centroid_at(&world);
         assert!(c.length() < ENEMY_SPACING, "ragged N={n} drifted {c}, more than one row");
     }
@@ -862,8 +828,7 @@ fn the_contact_count_tracks_whether_anything_is_touching() {
 /// because something shoved them.
 #[test]
 fn nothing_is_pushed_out_of_the_arena() {
-    let mut world = World::default();
-    world.set_enemy_count(256);
+    let mut world = world_with_enemies(256);
 
     for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
         for _ in 0..600 {
@@ -886,8 +851,7 @@ fn nothing_is_pushed_out_of_the_arena() {
 /// assertion a tick later, and nothing else here would notice.
 #[test]
 fn a_request_becomes_a_body_on_the_next_tick_and_not_before() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
+    let mut world = World::empty();
 
     assert!(world.request_spawn(Vec2::new(3.0, 0.0), Template::BODY));
     assert_eq!(world.enemy_count(), 0, "the request was granted without a tick running");
@@ -903,8 +867,7 @@ fn a_request_becomes_a_body_on_the_next_tick_and_not_before() {
 fn a_full_queue_refuses_out_loud() {
     use crate::pass::spawn::QUEUE_CAPACITY;
 
-    let mut world = World::default();
-    world.set_enemy_count(0);
+    let mut world = World::empty();
     world.clear_trace();
 
     for i in 0..QUEUE_CAPACITY {
@@ -926,21 +889,6 @@ fn a_full_queue_refuses_out_loud() {
     assert_eq!(refusals, vec![1], "the dropped request left no trace of itself");
 }
 
-/// A wholesale respawn is a reset, and a request decided before it must not
-/// land a body after it. The dial rebuilds the horde's size; a queue that
-/// survived it would put that size back out of date one tick later.
-#[test]
-fn resetting_the_horde_forgets_what_was_pending() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
-
-    assert!(world.request_spawn(Vec2::new(3.0, 0.0), Template::BODY));
-    world.set_enemy_count(4);
-    world.step(tick_dt(), Intent::NONE);
-
-    assert_eq!(world.enemy_count(), 4, "a request from before the reset was granted after it");
-}
-
 /// **Ready-and-waiting.** A source whose cadence has come round but whose
 /// condition is shut does not lose its turn: it fires on the first tick the
 /// condition opens, not on the next multiple of the cadence after it.
@@ -950,8 +898,7 @@ fn resetting_the_horde_forgets_what_was_pending() {
 /// to any test that only counts bodies at the end of a run.
 #[test]
 fn a_held_back_source_fires_the_instant_its_condition_opens() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
+    let mut world = World::empty();
 
     let far = Vec2::new(30.0, 0.0);
     world.add_source(
@@ -981,8 +928,7 @@ fn a_held_back_source_fires_the_instant_its_condition_opens() {
 /// needs them.
 #[test]
 fn a_population_condition_fills_to_its_number_and_stops() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
+    let mut world = World::empty();
     world.add_source(
         Source::new(
             Placement::Ring {
@@ -1018,8 +964,7 @@ fn a_population_condition_fills_to_its_number_and_stops() {
 /// and it is worth a test rather than a comment.
 #[test]
 fn a_removed_source_stops_and_its_name_stays_dead() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
+    let mut world = World::empty();
 
     let id = world.add_source(Source::new(
         Placement::At(Vec2::new(30.0, 0.0)),
@@ -1050,8 +995,7 @@ fn a_removed_source_stops_and_its_name_stays_dead() {
 /// solver's response to that is to blow the pile apart.
 #[test]
 fn a_ring_does_not_stack_what_it_makes() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
+    let mut world = World::empty();
     world.add_source(Source::new(
         Placement::Ring {
             centre: Vec2::new(30.0, 0.0),
@@ -1079,8 +1023,7 @@ fn a_ring_does_not_stack_what_it_makes() {
 /// Physical and health payloads follow identity through their row changes.
 #[test]
 fn despawning_preserves_a_swapped_survivors_payloads() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
+    let mut world = World::empty();
     let a = world.place(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
     let b = world.place(Vec2::new(20.0, 0.0), Template::BODY).unwrap();
     let impulse = Impulse::try_from((6.0, 0.0)).unwrap();
@@ -1101,24 +1044,8 @@ fn despawning_preserves_a_swapped_survivors_payloads() {
 }
 
 #[test]
-fn a_horde_reset_preserves_the_players_body_and_carried_motion() {
-    let mut world = World::default();
-    let player = world.player_id();
-    assert!(world.apply_impulse(player, Impulse::try_from((6.0, 0.0)).unwrap()));
-    for count in [0, 8, 1, 100] {
-        world.set_enemy_count(count);
-        assert_eq!(world.player_id(), player);
-        assert!(!world.despawn_body(player));
-        assert!(!world.add_seek(player));
-        assert_eq!(world.motion(player).unwrap().velocity(), Vec2::new(0.3, 0.0));
-        assert_eq!(world.enemy_count(), count);
-    }
-}
-
-#[test]
 fn velocity_is_hashed_observed_and_does_not_change_zero_tick_rendering() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
+    let mut world = World::empty();
     let id = world.place(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
     let before = world.hash();
     let position = world.body_pos(id);
@@ -1134,10 +1061,9 @@ fn velocity_is_hashed_observed_and_does_not_change_zero_tick_rendering() {
     assert!(report.contains("\"velocity\":[6.0000,0.0000,0.0000]"), "{report}");
 }
 
-/// Props retain both identity and activation through the enemy debug dial;
-/// eviction revokes membership, including before the slot is recycled.
+/// Eviction revokes prop membership, including before the slot is recycled.
 #[test]
-fn props_survive_enemy_resets_but_not_scene_eviction() {
+fn scene_eviction_revokes_prop_activation() {
     let scene = Scene { name: "prop".into(), bodies: vec![Placed {
         pos: (0.0, 1.0), what: Template::BLOCK.interactive(),
     }], ..Scene::default() };
@@ -1146,10 +1072,7 @@ fn props_survive_enemy_resets_but_not_scene_eviction() {
     let id = world.bodies.slots.ids()[1];
     assert!(!world.add_seek(id));
     world.step(tick_dt(), Intent::NONE.with_interact(true));
-    world.set_enemy_count(2);
-    world.set_seeker_count(3);
-    assert_eq!(world.seeker_count(), 2);
-    world.set_enemy_count(0);
+
     assert_eq!(world.interaction_state(id), Some(InteractionState::Activated));
     assert_eq!(world.body_count(), 1);
     assert!(world.evict_scene(owner));
@@ -1169,7 +1092,9 @@ fn props_survive_enemy_resets_but_not_scene_eviction() {
 fn props_share_capacity_and_scene_admission_is_atomic() {
     let mut world = World::empty();
     let prop = world.place(Vec2::Y, Template::BLOCK).unwrap();
-    world.set_enemy_count(MAX_BODIES);
+    for _ in 0..MAX_BODIES - 1 {
+        world.place(Vec2::ZERO, Template::BODY).unwrap();
+    }
     assert_eq!(world.body_count(), MAX_BODIES);
     assert_eq!(world.enemy_count(), MAX_BODIES - 1);
     assert!(world.is_alive(prop));

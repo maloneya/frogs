@@ -30,7 +30,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use winit::keyboard::KeyCode;
 
-use arpg_sim::{Condition, SourceId, SourceSpec, Template};
+use arpg_sim::{SourceId, SourceSpec, Template};
 
 use crate::input::{key_named, key_names};
 
@@ -41,10 +41,6 @@ pub(crate) struct Request {
 }
 
 pub(crate) enum Command {
-    /// Atomically load and select one app-global static preview.
-    ShowAsset(PathBuf),
-    /// Remove the app-global preview selection.
-    ClearAsset,
     /// Atomically load and select one app-global player character.
     ShowCharacter(PathBuf),
     /// Restore the default player asset.
@@ -86,8 +82,6 @@ pub(crate) enum Command {
         target: String,
         value: arpg_sim::Impulse,
     },
-    SetEnemies(usize),
-    SetSeekers(usize),
     /// Ask for one body at a world-space `(x, z)`, and what to grant it.
     ///
     /// Goes through the spawn queue rather than placing directly — the same
@@ -98,16 +92,7 @@ pub(crate) enum Command {
         z: f32,
         what: Template,
     },
-    /// Add something that asks for spawns, or remove one by name.
-    ///
-    /// The flags after the position are **named, not positional**, because a
-    /// source is four independent choices and a column nobody can read is how
-    /// three of them end up unused.
-    ///
-    /// Carries the simulation's own [`SourceSpec`] rather than a copy of its
-    /// fields. That copy was the third definition of the same four axes — after
-    /// the type itself and the scenario format — and each one had to be taught
-    /// separately about an axis the others already had.
+    /// Add a source decoded from the simulation-owned content description.
     Source(SourceSpec),
     RemoveSource(SourceId),
     SetSourceEnabled {
@@ -127,10 +112,6 @@ pub(crate) enum Command {
 /// The names come from `BINDINGS` itself rather than a table kept here, so a
 /// newly bound key is drivable immediately and this file cannot fall behind the
 /// game it drives.
-///
-/// Meta commands are deliberately *not* keys. Simulating `[` to halve the horde
-/// would be pantomime; `enemies 512` says what it means and cannot drift from
-/// whatever key happens to be bound to it today.
 fn key(arg: Option<&str>) -> Result<KeyCode, String> {
     let name = arg.ok_or_else(|| "expected a key name".to_string())?;
     key_named(name).ok_or_else(|| {
@@ -141,17 +122,7 @@ fn key(arg: Option<&str>) -> Result<KeyCode, String> {
     })
 }
 
-/// Named once, because it is quoted from four error paths and a usage message
-/// that disagrees with the parser is worse than none.
-const USAGE: &str = "expected: source <x> <z> [seek] [every <n>] [ring <r>] [near <r>] [fewer <n>] [disabled], \
-     or source remove|enable|disable <id>";
-
 fn parse(line: &str) -> Result<Command, String> {
-    if let Some(rest) = line.trim().strip_prefix("asset")
-        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
-    {
-        return parse_asset(rest.trim());
-    }
     if let Some(rest) = line.trim().strip_prefix("character")
         && (rest.is_empty() || rest.starts_with(char::is_whitespace))
     {
@@ -194,109 +165,26 @@ fn parse(line: &str) -> Result<Command, String> {
             _ => return Err("expected: trace since <tick>".into()),
         },
         "spawn" => {
-            let coord = |arg: Option<&str>| {
-                arg.ok_or_else(|| {
-                    "expected: spawn <x> <z> [seek | template (<fields>)]".to_string()
-                })
-                .and_then(|v| v.parse::<f32>().map_err(|e| e.to_string()))
-            };
-            let x = coord(arg)?;
-            let z = coord(it.next())?;
-            // Behaviours are named, not positional, so the next one is another
-            // word here rather than another column nobody can read.
-            let what = match it.next() {
-                Some("seek") if it.next().is_none() => Template::BODY.seeking(),
-                Some("template") => arpg_content::parse_template(&it.collect::<Vec<_>>().join(" "))
-                    .map_err(|error| error.to_string())?,
-                None => Template::BODY,
-                Some(other) => {
-                    return Err(format!(
-                        "unknown spawn option {other:?}; use template (<fields>)"
-                    ));
-                }
-            };
-            Command::Spawn { x, z, what }
+            let placed = arpg_content::parse_placement(line.trim()["spawn".len()..].trim())
+                .map_err(|error| error.to_string())?;
+            Command::Spawn { x: placed.pos.0, z: placed.pos.1, what: placed.what }
         }
         "source" => {
-            if matches!(arg, Some("enable" | "disable")) {
-                let id = it
-                    .next()
-                    .and_then(SourceId::parse)
-                    .ok_or_else(|| USAGE.to_string())?;
+            if matches!(arg, Some("remove" | "enable" | "disable")) {
+                let usage = "expected: source remove|enable|disable <id>";
+                let id = it.next().and_then(SourceId::parse).ok_or(usage)?;
                 if it.next().is_some() {
-                    return Err(USAGE.to_string());
+                    return Err(usage.into());
                 }
-                return Ok(Command::SetSourceEnabled {
-                    id,
-                    enabled: arg == Some("enable"),
-                });
-            }
-            if arg == Some("remove") {
-                // Named in the form the trace prints — `s0`, not `0` — so an id
-                // read out of `trace since` can be handed straight back.
-                let name = it.next().unwrap_or("");
-                let id = SourceId::parse(name)
-                    .ok_or_else(|| format!("expected a source name like s0, got {name:?}"))?;
-                return Ok(Command::RemoveSource(id));
-            }
-
-            // Both failures quote the usage: `source bogus` otherwise replies
-            // "invalid float literal", which is true and tells nobody what to
-            // type instead.
-            let coord = |arg: Option<&str>| {
-                arg.ok_or_else(|| USAGE.to_string())
-                    .and_then(|v| v.parse::<f32>().map_err(|e| format!("{e}; {USAGE}")))
-            };
-            let x = coord(arg)?;
-            let z = coord(it.next())?;
-
-            let (mut every, mut radius, mut what) = (1, 0.0, Template::BODY);
-            let mut enabled = true;
-            let (mut near, mut fewer) = (None, None);
-
-            // Flags in any order, each either a word or a word and a number.
-            // An unknown one is an error rather than a shrug: a typo that
-            // silently produced a source with no gate would look exactly like
-            // the gate not working.
-            while let Some(flag) = it.next() {
-                match flag {
-                    "seek" => what = what.seeking(),
-                    "template" => {
-                        what = arpg_content::parse_template(
-                            &it.by_ref().collect::<Vec<_>>().join(" "),
-                        )
-                        .map_err(|error| error.to_string())?;
-                    }
-                    "disabled" => enabled = false,
-                    "every" => every = number(it.next())? as u32,
-                    "ring" => radius = coord(it.next())?,
-                    "near" => near = Some(coord(it.next())?),
-                    "fewer" => fewer = Some(number(it.next())? as usize),
-                    other => return Err(format!("unknown source flag {other:?}; {USAGE}")),
+                if arg == Some("remove") {
+                    Command::RemoveSource(id)
+                } else {
+                    Command::SetSourceEnabled { id, enabled: arg == Some("enable") }
                 }
+            } else {
+                Command::Source(arpg_content::parse_source(line.trim()["source".len()..].trim())
+                    .map_err(|error| error.to_string())?)
             }
-
-            // One gate, never two combined into something nobody wrote.
-            // `near` beats `fewer` when both are given, and a flag repeated
-            // takes its later value.
-            let when = match (near, fewer) {
-                (Some(radius), _) => Condition::PlayerWithin(radius),
-                (None, Some(n)) => Condition::FewerThan(n),
-                (None, None) => Condition::Always,
-            };
-
-            // Filled in field by field on purpose. `SourceSpec` is the one
-            // definition of a source's axes, so an axis added there stops this
-            // file compiling until somebody has decided which flag fills it —
-            // which is the only check a text protocol can get for free.
-            Command::Source(SourceSpec {
-                enabled,
-                pos: (x, z),
-                radius,
-                every,
-                when,
-                what,
-            })
         }
         "impulse" => {
             let usage = "expected: impulse <player|#id> <x> <z>";
@@ -308,8 +196,6 @@ fn parse(line: &str) -> Result<Command, String> {
             }
             Command::Impulse { target, value }
         }
-        "enemies" => Command::SetEnemies(number(arg)? as usize),
-        "seekers" => Command::SetSeekers(number(arg)? as usize),
         "debug" => {
             if arg != Some("collision") { return Err("expected: debug collision on|off".into()); }
             let enabled = match it.next() {
@@ -325,10 +211,6 @@ fn parse(line: &str) -> Result<Command, String> {
         "" => return Err("empty command".into()),
         other => return Err(format!("unknown command {other:?}")),
     })
-}
-
-fn parse_asset(text: &str) -> Result<Command, String> {
-    parse_selection(text, "asset", Command::ShowAsset, Command::ClearAsset)
 }
 
 fn parse_character(text: &str) -> Result<Command, String> {
@@ -459,22 +341,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn asset_commands_are_explicit_and_preserve_paths_with_spaces() {
-        assert!(
-            matches!(parse("asset show assets/my mesh.glb"), Ok(Command::ShowAsset(path)) if path == std::path::Path::new("assets/my mesh.glb"))
-        );
-        assert!(matches!(parse("asset clear"), Ok(Command::ClearAsset)));
-        for bad in [
-            "asset",
-            "asset show",
-            "asset clear extra",
-            "asset hide file.glb",
-        ] {
-            assert!(parse(bad).is_err(), "{bad} should be rejected");
-        }
-    }
-
-    #[test]
     fn character_commands_are_explicit_and_preserve_paths_with_spaces() {
         assert!(
             matches!(parse("character show assets/my rig.glb"), Ok(Command::ShowCharacter(path)) if path == std::path::Path::new("assets/my rig.glb"))
@@ -537,69 +403,53 @@ mod tests {
         assert!(matches!(parse("vsync off"), Ok(Command::SetVsync(false))));
     }
 
-    /// The parser fills [`SourceSpec`] — the simulation's own description of a
-    /// source — rather than a copy of its fields, so the mapping from flags to
-    /// axes is the whole of what is left to get wrong here, and this is where
-    /// it is checked.
     #[test]
-    fn source_flags_fill_the_simulations_own_description() {
-        let Ok(Command::Source(spec)) = parse("source 30 -4 seek every 10 ring 3 fewer 8") else {
-            panic!("should parse");
-        };
+    fn source_commands_use_authored_content_and_strict_identity_operations() {
+        let Ok(Command::Source(spec)) = parse(
+            "source (pos: (30.0, -4.0), every: 10, radius: 3.0, when: FewerThan(8), what: (seeks: true), enabled: false)"
+        ) else { panic!("source description must parse") };
         assert_eq!(spec.pos, (30.0, -4.0));
         assert_eq!(spec.radius, 3.0);
         assert_eq!(spec.every, 10);
-        assert_eq!(spec.when, Condition::FewerThan(8));
+        assert_eq!(spec.when, arpg_sim::Condition::FewerThan(8));
         assert!(spec.what.seeks());
-
-        // One gate rather than both: `near` wins whichever order they arrive in.
-        for line in ["source 0 0 fewer 8 near 5", "source 0 0 near 5 fewer 8"] {
-            let Ok(Command::Source(spec)) = parse(line) else { panic!("should parse") };
-            assert_eq!(spec.when, Condition::PlayerWithin(5.0), "{line:?}");
-        }
-
-        // No flags at all is a plain body, every tick, on the point itself.
-        let Ok(Command::Source(spec)) = parse("source 1 2") else { panic!("should parse") };
-        assert_eq!((spec.radius, spec.every), (0.0, 1));
-        assert_eq!(spec.when, Condition::Always);
-        assert!(!spec.what.seeks());
-        assert!(spec.enabled);
-    }
-
-    #[test]
-    fn source_enablement_is_explicit_and_rejects_malformed_commands() {
-        let Ok(Command::Source(spec)) = parse("source 30 0 disabled every 4 template (seeks: true)") else {
-            panic!("dormant source must parse");
-        };
         assert!(!spec.enabled);
-        assert_eq!(spec.every, 4);
-        assert!(spec.what.seeks());
         for (verb, expected) in [("enable", true), ("disable", false)] {
             let Ok(Command::SetSourceEnabled { id, enabled }) = parse(&format!("source {verb} s3")) else {
                 panic!("enablement command must parse");
             };
             assert_eq!(id, SourceId::parse("s3").unwrap());
             assert_eq!(enabled, expected);
+        }
+        assert!(matches!(parse("source remove s3"), Ok(Command::RemoveSource(_))));
+        for verb in ["enable", "disable", "remove"] {
             for suffix in ["", "c0", "s3 extra", "s-1"] {
                 assert!(parse(&format!("source {verb} {suffix}")).is_err());
             }
         }
+        for bad in [
+            "source 30 -4 seek every 10", "source (pos: (0.0, 0.0), near: 3.0)",
+            "source (pos: (0.0, 0.0), every: 4294967296)",
+            "source (pos: (0.0, 0.0), every: 2, every: 3)",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
     }
 
-    /// `spawn` names a [`Template`] for the same reason: a behaviour added to
-    /// the template is drivable from the socket without touching this file.
     #[test]
-    fn spawn_names_a_template_rather_than_a_bare_flag() {
-        let Ok(Command::Spawn { x, z, what }) = parse("spawn 5 -5 seek") else {
-            panic!("should parse");
-        };
+    fn spawn_commands_use_the_authored_placement_schema() {
+        let Ok(Command::Spawn { x, z, what }) = parse(
+            "spawn (pos: (5.0, -5.0), what: (fixed: true, interactable: true))"
+        ) else { panic!("placement must parse") };
         assert_eq!((x, z), (5.0, -5.0));
-        assert!(what.seeks());
-
-        let Ok(Command::Spawn { what, .. }) = parse("spawn 5 -5") else {
-            panic!("should parse");
+        assert_eq!(what, Template::BLOCK.interactive());
+        let Ok(Command::Spawn { what, .. }) = parse("spawn (pos: (0.0, 2.0))") else {
+            panic!("default template must parse");
         };
-        assert!(!what.seeks());
+        assert_eq!(what, Template::BODY);
+        for bad in ["spawn 0 2 seek", "spawn (pos: (0.0, 2.0), what: (interactble: true))", "enemies 3", "seekers 3", "asset show mesh.glb"] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
     }
 
     /// A malformed command must come back as an error the caller can read, not
@@ -618,21 +468,5 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad:?} should not parse");
         }
-    }
-    #[test]
-    fn harness_templates_use_the_sim_schema() {
-        let Ok(Command::Spawn { what, .. }) =
-            parse("spawn 0 2 template (fixed: true, interactable: true)")
-        else {
-            panic!("sim template must parse");
-        };
-        assert_eq!(what, Template::BLOCK.interactive());
-        let Ok(Command::Source(spec)) =
-            parse("source 0 2 every 60 template (fixed: true, interactable: true)")
-        else {
-            panic!("source template must parse");
-        };
-        assert_eq!(spec.what, what);
-        assert!(parse("spawn 0 2 template (interactble: true)").is_err());
     }
 }

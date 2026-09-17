@@ -6,7 +6,7 @@
 // covers 1.5708 rad in 6.7 ticks — so by tick 30 it has arrived and clamped.
 (
     description: "Walking one direction for 30 ticks travels exactly 30 ticks' worth, and the body ends up facing it.",
-    setup: (enemies: 0),
+    setup: (),
     inputs: [
         (at: 0, ticks: 30, dir: (1.0, 0.0)),
     ],

@@ -37,15 +37,14 @@ countdown, and zero emissions from the cached scene. IDs are scoped to a run.
 The harness accepts:
 
 ```text
-source 20 0 every 4 ring 2 disabled
+source (pos: (20.0, 0.0), every: 4, radius: 2.0, enabled: false)
 source enable s0
 source disable s0
 state
 ```
 
-The optional disabled flag must precede a template, because template parsing
-consumes the rest of the command. Scene and scenario sources use the same
-`SourceSpec` field, `enabled: false`.
+Harness, scene and scenario sources use the same `SourceSpec` description,
+including `enabled: false`.
 
 Scenario switches run before removals and source evaluation on their named
 zero-based tick. Both switches and state assertions index `setup.sources`,

@@ -1,13 +1,13 @@
 (
     description: "Loading the same connection twice creates independent relationships; eviction between activation and its consumption cancels only that instance.",
-    setup: (scenes: [Gameplay((
+    setup: (scenes: [Inline((
     engine: (
         name: "Source control",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
         sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
     ),
     source_controls: [(body: 0, source: 0)],
-)), Gameplay((
+)), Inline((
     engine: (
         name: "Source control",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
@@ -19,7 +19,7 @@
     scenes: [
         (at: 3, action: Evict(1)),
         (at: 4, action: Evict(0)),
-        (at: 5, action: Load(Gameplay((
+        (at: 5, action: Load(Inline((
     engine: (
         name: "Source control",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],

@@ -1,6 +1,6 @@
 ---
 name: author-blender-asset
-description: Create, revise, regenerate, or diagnose Blender-authored assets for arpg using source-controlled bpy generators, headless Blender, GLB contract tests, deterministic visual evidence, and the in-game preview path. Use for .blend/.glb work under assets/; not for generic Blender scenes or importer-only Rust changes.
+description: Create, revise, regenerate, or diagnose Blender-authored assets for arpg using source-controlled bpy generators, headless Blender, GLB contract tests, deterministic visual evidence, and the in-game rendering path. Use for .blend/.glb work under assets/; not for generic Blender scenes or importer-only Rust changes.
 ---
 
 # Author Blender assets for arpg
@@ -14,7 +14,7 @@ state is never the only copy of accepted work.
 Identify whether the target is a static mesh, player character, ordinary horde
 character, or world asset. Read the owning contract before editing:
 
-- For static previews and skinned characters, read
+- For static meshes and skinned characters, read
   [character asset authoring](../../../docs/character-assets-authoring.md).
 - Read the target directory's README and generator, if present.
 - Read the relevant importer and its tests in `crates/assets` when the request
@@ -85,9 +85,11 @@ Validation has three distinct jobs; none substitutes for another:
    three-quarter views for geometry. For player attacks also inspect the
    authored phase edges—currently frames 1, 13, 19, and 31. Keep diagnostic
    renders temporary unless the user asks to retain them.
-3. Use the [playtest skill](../playtest/SKILL.md) to load the GLB through
-   `asset show`, `character show`, or `horde show`, capture the game's own
-   screenshot, and inspect the result at the real camera, shading, scale, and
+3. Use the [playtest skill](../playtest/SKILL.md) to load characters through
+   `character show` or `horde show`. For static world assets, regenerate the
+   corresponding [ground or prop asset](../../../assets/world/README.md), restart
+   the app, and load a scene containing the relevant placements. Capture the
+   game's own screenshot and inspect the real camera, shading, scale, and
    animation mapping. This is the final visual truth.
 
 If an installed Khronos glTF Validator is available, run it as a complementary

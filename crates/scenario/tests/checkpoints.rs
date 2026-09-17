@@ -12,8 +12,8 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 fn out_of_order_loads_cannot_validate_absence_against_a_different_scene() {
     let fixture = Fixture::new(r#"(
         scenes: [
-            (at: 1, action: Load(Inline((name: "source", sources: [(pos: (20.0, 0.0))])))),
-            (at: 0, action: Load(Inline((name: "empty")))),
+            (at: 1, action: Load(Inline((engine: (name: "source", sources: [(pos: (20.0, 0.0))]))))),
+            (at: 0, action: Load(Inline((engine: (name: "empty"))))),
         ],
         budget: (ticks: 2),
         expect: (source_states: [(scene: 0, source: 0, state: None)]),
@@ -74,7 +74,7 @@ fn scene_batches_cannot_bind_identities_from_a_truncated_trace() {
     // asking the quadratic crowd solver to simulate a large coincident crowd.
     let bodies = "(pos: (20.0, 0.0)),".repeat(17_000);
     let fixture = Fixture::new(&format!(
-        "(scenes: [(at: 0, action: Load(Inline((name: \"large\", bodies: [{bodies}])))),
+        "(scenes: [(at: 0, action: Load(Inline((engine: (name: \"large\", bodies: [{bodies}]))))),
                     (at: 0, action: Evict(0))], budget: (ticks: 1))"
     ));
     let (output, text) = fixture.run(&[]);
@@ -86,11 +86,11 @@ fn scene_batches_cannot_bind_identities_from_a_truncated_trace() {
 fn scene_commands_and_content_fail_loudly_even_when_blessing() {
     for source in [
         r#"(setup: (scenes: [File("missing.ron")]), budget: (ticks: 1))"#,
-        r#"(setup: (scenes: [Inline((name: "bad", bodies: [(pos: (NaN, 0.0))]))]), budget: (ticks: 1))"#,
-        r#"(setup: (enemies: 1, scenes: [Inline((name: "mixed"))]), budget: (ticks: 1))"#,
-        r#"(scenes: [(at: 1, action: Load(Inline((name: "late"))))], budget: (ticks: 1))"#,
+        r#"(setup: (scenes: [Inline((engine: (name: "bad", bodies: [(pos: (NaN, 0.0))])))]), budget: (ticks: 1))"#,
+        r#"(setup: (enemies: 1), budget: (ticks: 1))"#,
+        r#"(scenes: [(at: 1, action: Load(Inline((engine: (name: "late")))))], budget: (ticks: 1))"#,
         r#"(scenes: [(at: 0, action: Evict(0))], budget: (ticks: 1))"#,
-        r#"(setup: (scenes: [Inline((name: "typo", bodys: []))]), budget: (ticks: 1))"#,
+        r#"(setup: (scenes: [Inline((engine: (name: "typo", bodys: [])))]), budget: (ticks: 1))"#,
     ] {
         let fixture = Fixture::new(source);
         for flags in [&[][..], &["--bless"][..]] {
@@ -290,7 +290,7 @@ fn gameplay_content_and_relationship_assertions_fail_closed() {
         "[(body: 0, soruce: 0)]",
     ] {
         let fixture = Fixture::new(&format!(
-            "(setup: (scenes: [Gameplay(({scene}, source_controls: {connection}))]), budget: (ticks: 2))"
+            "(setup: (scenes: [Inline(({scene}, source_controls: {connection}))]), budget: (ticks: 2))"
         ));
         for flags in [&[][..], &["--bless"][..]] {
             let (output, text) = fixture.run(flags);
@@ -306,7 +306,7 @@ fn gameplay_content_and_relationship_assertions_fail_closed() {
         "checkpoints: [(at: 0, expect: (controls: [(scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 0, emitted: 1)))))]))], interactions: [0]",
     ] {
         let fixture = Fixture::new(&format!(
-            "(setup: (scenes: [Gameplay(({scene}, source_controls: [(body: 0, source: 0)]))]), budget: (ticks: 2), {fields})"
+            "(setup: (scenes: [Inline(({scene}, source_controls: [(body: 0, source: 0)]))]), budget: (ticks: 2), {fields})"
         ));
         for flags in [&[][..], &["--bless"][..]] {
             let (output, text) = fixture.run(flags);

@@ -3,7 +3,7 @@
 // drift, a solver that pushes a body it should have left alone.
 (
     description: "A second of no input leaves the world exactly where it started.",
-    setup: (enemies: 0),
+    setup: (),
     budget: (ticks: 60),
     expect: (
         player_pos: (x: 0.0, z: 0.0, tol: 0.0),

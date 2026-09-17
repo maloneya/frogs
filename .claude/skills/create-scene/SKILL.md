@@ -33,7 +33,8 @@ at their definition when calculating a prediction.
 For gameplay relationships, also read [source control](../../../docs/source-control.md)
 and the owning definitions in `crates/game/src/scene.rs` and
 `crates/game/src/source_control.rs`. A complete `GameScene` wraps physical fields
-under `engine` and adds `source_controls`; legacy physical files stay valid.
+under `engine` and optionally adds `source_controls`. Every scene file uses
+this complete definition.
 Do not duplicate the engine schema to add a gameplay relationship.
 
 Author a regular arrangement as a `grids` entry rather than as generated

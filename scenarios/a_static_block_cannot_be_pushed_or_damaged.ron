@@ -1,8 +1,8 @@
 (
     description: "A prop blocks walking, ignores impulses and sword hits, and does not count as an enemy.",
-    setup: (scenes: [Inline((name: "Static block", bodies: [
+    setup: (scenes: [Inline((engine: (name: "Static block", bodies: [
         (pos: (0.0, 2.0), what: (fixed: true)),
-    ]))]),
+    ])))]),
     inputs: [(at: 0, ticks: 40, dir: (0.0, 1.0))],
     attacks: [25],
     impulses: [(at: 0, target: Placed(0), value: (0.0, 100.0))],

@@ -5,11 +5,6 @@ use arpg_core::{Intent, MoveDir};
 use arpg_game::Game;
 use arpg_sim::Accumulator;
 
-fn fixture_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/fixtures/static-preview.glb")
-}
-
 fn character_fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/fixtures/blender-bind-pose.glb")
@@ -76,54 +71,6 @@ fn loaded_horde(path: &str) -> LoadedHorde<()> {
     let asset = arpg_assets::import_character_glb(&source).unwrap();
     let clips = HordeClips::resolve(&asset).unwrap();
     LoadedHorde::new(path.into(), asset, clips, ())
-}
-
-#[test]
-fn preview_replacement_is_atomic_across_import_and_upload_failure() {
-    let mut slot = Some(AssetPreview {
-        path: "old.glb".into(),
-        vertex_count: 3,
-        index_count: 3,
-        texture_width: 1,
-        texture_height: 1,
-        gpu: (),
-    });
-    let missing = std::env::temp_dir().join("arpg-preview-that-does-not-exist.glb");
-    assert!(replace_preview(&mut slot, missing, |_| Ok(())).is_err());
-    assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
-
-    assert!(replace_preview(&mut slot, fixture_path(), |_| Err("GPU refused it".into())).is_err());
-    assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
-
-    replace_preview(&mut slot, fixture_path(), |_| Ok(())).unwrap();
-    let current = slot.as_ref().unwrap();
-    assert_eq!((current.vertex_count, current.index_count), (12, 12));
-    assert_eq!((current.texture_width, current.texture_height), (4, 4));
-}
-
-#[test]
-fn asset_preview_report_is_derived_from_the_committed_selection() {
-    let mut inactive = Report::default();
-    report_asset_preview::<()>(None, &mut inactive);
-    assert_eq!(
-        inactive.finish(),
-        r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0}"#
-    );
-
-    let preview = AssetPreview {
-        path: "assets/fixture.glb".into(),
-        vertex_count: 12,
-        index_count: 18,
-        texture_width: 2,
-        texture_height: 4,
-        gpu: (),
-    };
-    let mut active = Report::default();
-    report_asset_preview(Some(&preview), &mut active);
-    assert_eq!(
-        active.finish(),
-        r#"{"active":true,"path":"assets/fixture.glb","vertices":12,"indices":18,"texture_width":2,"texture_height":4}"#
-    );
 }
 
 #[test]
@@ -201,7 +148,9 @@ fn horde_replacement_is_atomic_and_its_report_is_derived() {
 
     replace_horde(&mut slot, character_fixture_path(), |_| Ok(())).unwrap();
     let mut game = Game::empty();
-    game.set_enemy_count(32);
+    for index in 0..32 {
+        game.place(glam::Vec2::new(4.0 + index as f32, 4.0), arpg_sim::Template::BODY).unwrap();
+    }
     let current = slot.as_mut().unwrap();
     current.rebuild(game.enemy_presentations(Alpha::ONE), 0.25);
     assert_eq!(current.instance_count(), 32);
@@ -223,7 +172,9 @@ fn horde_replacement_is_atomic_and_its_report_is_derived() {
 fn stable_identity_selects_bounded_reused_horde_pose_buckets() {
     let mut horde = loaded_horde("horde.glb");
     let mut game = Game::empty();
-    game.set_enemy_count(32);
+    for index in 0..32 {
+        game.place(glam::Vec2::new(4.0 + index as f32, 4.0), arpg_sim::Template::BODY).unwrap();
+    }
     let enemies: Vec<_> = game.enemy_presentations(Alpha::ONE).collect();
     let removed = enemies[0].id();
     let survivor = enemies[1];
@@ -254,7 +205,10 @@ fn stable_identity_selects_bounded_reused_horde_pose_buckets() {
         survivor_bucket
     );
 
-    game.set_seeker_count(31);
+    let survivors: Vec<_> = game.enemy_presentations(Alpha::ONE).map(|enemy| enemy.id()).collect();
+    for id in survivors {
+        assert!(game.add_seek(id));
+    }
     let dt = Accumulator::default()
         .pending(arpg_sim::Dt::SECS)
         .next()
@@ -280,8 +234,8 @@ fn stable_identity_selects_bounded_reused_horde_pose_buckets() {
 fn stopped_horde_members_keep_heading_and_dead_identities_are_forgotten() {
     let mut horde = loaded_horde("horde.glb");
     let mut game = Game::empty();
-    game.set_enemy_count(1);
-    game.set_seeker_count(1);
+    let id = game.place(glam::Vec2::new(4.0, 4.0), arpg_sim::Template::BODY).unwrap();
+    assert!(game.apply_impulse(id, arpg_sim::Impulse::try_from((1.0, 0.0)).unwrap()));
     let dt = Accumulator::default()
         .pending(arpg_sim::Dt::SECS)
         .next()
@@ -297,8 +251,11 @@ fn stopped_horde_members_keep_heading_and_dead_identities_are_forgotten() {
         .yaw();
     assert_ne!(moving_yaw, 0.0);
 
-    game.set_seeker_count(0);
-    game.step(dt, Intent::default());
+    // Carried motion decays to rest without changing this body's identity.
+    for _ in 0..100 {
+        game.step(dt, Intent::default());
+    }
+    assert_eq!(game.enemy_presentations(Alpha::ONE).next().unwrap().displacement(), glam::Vec2::ZERO);
     horde.rebuild(game.enemy_presentations(Alpha::ONE), 0.1);
     let stopped_yaw = horde
         .buckets
@@ -319,8 +276,8 @@ fn stopped_horde_members_keep_heading_and_dead_identities_are_forgotten() {
 fn resetting_horde_presentation_cannot_reuse_a_previous_runs_heading() {
     let mut horde = loaded_horde("horde.glb");
     let mut old = Game::empty();
-    old.set_enemy_count(1);
-    old.set_seeker_count(1);
+    let id = old.place(glam::Vec2::new(4.0, 4.0), arpg_sim::Template::BODY).unwrap();
+    assert!(old.add_seek(id));
     let dt = Accumulator::default()
         .pending(arpg_sim::Dt::SECS)
         .next()
@@ -331,7 +288,7 @@ fn resetting_horde_presentation_cannot_reuse_a_previous_runs_heading() {
     assert_ne!(horde.headings[&old_id].yaw, 0.0);
 
     let mut fresh = Game::empty();
-    fresh.set_enemy_count(1);
+    fresh.place(glam::Vec2::new(4.0, 4.0), arpg_sim::Template::BODY).unwrap();
     assert_eq!(
         fresh.enemy_presentations(Alpha::ONE).next().unwrap().id(),
         old_id

@@ -31,7 +31,7 @@ fn assert_same(game: &Game, world: &World, restart: Option<(&str, u64)>) {
 }
 
 #[test]
-fn construction_preserves_existing_identity_history() {
+fn construction_matches_the_engine_scene_loading_path() {
     assert_same(&Game::default(), &World::default(), None);
     assert_same(&Game::empty(), &World::empty(), None);
     let scene = Scene::boot();

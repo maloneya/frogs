@@ -85,15 +85,7 @@ pub enum Event {
         /// Number of bodies that stopped.
         count: usize,
     },
-    /// The horde was rebuilt. Not part of a tick — spawning happens outside the
-    /// schedule, which is exactly why it is worth recording.
-    Spawned {
-        /// How many bodies the horde now holds.
-        count: usize,
-    },
-    /// One body was deliberately placed. Distinct from `Spawned`, which is the
-    /// whole horde being rebuilt: this is rare and individually interesting,
-    /// so it names *which* body rather than how many.
+    /// One body was deliberately placed.
     Placed {
         /// The body's new name.
         id: EntityId,
@@ -218,7 +210,6 @@ impl fmt::Display for Event {
             }
             Self::Momentum { pairs } => write!(f, "momentum pairs={pairs}"),
             Self::Rested { count } => write!(f, "rested count={count}"),
-            Self::Spawned { count } => write!(f, "spawned count={count}"),
             Self::Placed { id } => write!(f, "placed id={id}"),
             Self::SourceAdded { id } => write!(f, "source added id={id}"),
             Self::SourceRemoved { id } => write!(f, "source removed id={id}"),
@@ -271,10 +262,8 @@ impl<E: Copy + fmt::Display> Trace<E> {
     ///
     /// For the seam between *setting a world up* and *running it*. A scenario's
     /// golden trace should describe the run; without this it also describes
-    /// `World::default()` building a horde the scenario immediately replaces,
-    /// which couples every golden file in the repository to `DEFAULT_ENEMIES`.
-    /// An unrelated edit would then break all of them at once, and a gate that
-    /// cries wolf is a gate somebody switches off.
+    /// authored setup placements. Clearing at this boundary keeps the trace
+    /// focused on transitions during the scenario's scheduled ticks.
     pub fn clear(&mut self) {
         self.events.clear();
         self.next = 0;
@@ -419,10 +408,10 @@ mod tests {
     #[test]
     fn the_rendered_format_is_tick_then_event() {
         let mut trace = Trace::default();
-        trace.sink(0).emit(Event::Spawned { count: 64 });
+        trace.sink(0).emit(Event::Refused { count: 64 });
         trace.sink(3).emit(Event::Contacts { count: 2 });
         trace.sink(3).emit(Event::Clamped { count: 1 });
 
-        assert_eq!(trace.render(), "0 spawned count=64\n3 contacts count=2\n3 clamped count=1\n");
+        assert_eq!(trace.render(), "0 refused count=64\n3 contacts count=2\n3 clamped count=1\n");
     }
 }

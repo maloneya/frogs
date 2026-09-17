@@ -94,7 +94,7 @@ fn picker_uses_the_fresh_start_boundary_and_survives_bad_files() {
     let directory = std::env::temp_dir().join(format!("arpg-picker-{}", std::process::id()));
     std::fs::create_dir_all(directory.join("directory.ron")).unwrap();
     let path = directory.join("a scene.ron");
-    std::fs::write(&path, "(name: \"first\", bodies: [(pos: (20.0, 0.0))])").unwrap();
+    std::fs::write(&path, "(engine: (name: \"first\", bodies: [(pos: (20.0, 0.0))]))").unwrap();
     std::fs::write(directory.join("b.ron"), "broken RON").unwrap();
     std::fs::write(directory.join("ignored.txt"), "ignored").unwrap();
     let paths = scene_catalog(&directory).unwrap();
@@ -118,7 +118,7 @@ fn picker_uses_the_fresh_start_boundary_and_survives_bad_files() {
     assert_eq!(app.run_id, 2);
     assert!(!app.input.menu().open());
     assert_eq!(app.input.sample().move_axis(), Vec2::ZERO);
-    std::fs::write(&path, "(name: \"changed\")").unwrap();
+    std::fs::write(&path, "(engine: (name: \"changed\"))").unwrap();
     tap(&mut app, KeyCode::F2);
     tap(&mut app, KeyCode::Enter); // Cached restart remains independent of disk.
     assert_eq!(app.game.hash(), initial);
@@ -140,7 +140,7 @@ fn picker_uses_the_fresh_start_boundary_and_survives_bad_files() {
     assert!(app.input.menu().picker().error().is_some());
     assert_eq!(app.game.hash(), initial);
 
-    std::fs::write(&path, "(name: \"changed\")").unwrap();
+    std::fs::write(&path, "(engine: (name: \"changed\"))").unwrap();
     tap(&mut app, KeyCode::Enter); // Retry reads the repaired file.
     assert_ne!(app.game.hash(), initial);
     assert_eq!(app.run_id, 4);
@@ -299,10 +299,10 @@ fn harness_start_reads_content_but_restart_reuses_the_snapshot() {
         (response.try_recv().unwrap(), app.game.hash(), app.run_id)
     };
     let path = std::env::temp_dir().join(format!("arpg-scene-snapshot-{}.ron", std::process::id()));
-    std::fs::write(&path, "(name: \"first\", bodies: [(pos: (20.0, 0.0))])").unwrap();
+    std::fs::write(&path, "(engine: (name: \"first\", bodies: [(pos: (20.0, 0.0))]))").unwrap();
     let (reply, first, _) = command(Command::StartScene(path.clone()));
     assert!(reply.contains("ready run=1 tick=0"), "{reply}");
-    std::fs::write(&path, "(name: \"second\")").unwrap();
+    std::fs::write(&path, "(engine: (name: \"second\"))").unwrap();
     let (_, restarted, run) = command(Command::RestartScene);
     assert_eq!(first, restarted);
     assert_eq!(run, 2);

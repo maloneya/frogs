@@ -197,7 +197,7 @@ impl Default for Bodies {
     }
 }
 
-/// The debug grid and the authored boot scene share one placement formula.
+/// Placement formula for the authored boot scene.
 fn grid_positions(n: usize) -> impl Iterator<Item = Vec2> {
     let side = (n as f32).sqrt().ceil().max(1.0) as usize;
     let offset = (side as f32 - 1.0) * ENEMY_SPACING * 0.5;
@@ -212,31 +212,6 @@ fn grid_positions(n: usize) -> impl Iterator<Item = Vec2> {
 impl Bodies {
     fn len(&self) -> usize {
         self.pos.len()
-    }
-
-    /// Lays `n` enemies out in a square grid centred on the origin.
-    ///
-    /// Respawns the whole horde rather than appending to it, so the layout
-    /// stays a function of N alone: halving it re-centres what is left rather
-    /// than deleting a corner. Gameplay spawns through sources and the spawn
-    /// queue; this operation is the bulk debug dial.
-    fn respawn(&mut self, n: usize) {
-        // `clear` keeps the allocations, so doubling N repeatedly grows the
-        // buffers a few times rather than reallocating on every press.
-        self.clear();
-        self.pos.reserve(n);
-        self.prev_pos.reserve(n);
-
-        for position in grid_positions(n) {
-            self.spawn(position, Template::BODY).expect("the debug count was clamped to capacity");
-        }
-    }
-
-    /// Removes enemies through ordinary despawn; props retain their identities.
-    fn clear(&mut self) {
-        while let Some(&id) = self.health.ids().last() {
-            self.despawn(id);
-        }
     }
 
     /// Puts one body at a chosen place and returns its name.
@@ -301,7 +276,7 @@ impl Bodies {
     ///
     /// Dense arrays swap-remove the row returned by `Slots`; sparse capabilities
     /// revoke the identity. Exhaustive destructuring makes adding a body field
-    /// require a cleanup decision here, including for bulk enemy resets.
+    /// require a cleanup decision here for every removal.
     fn despawn(&mut self, id: EntityId) -> bool {
         let Self {
             physics,
@@ -413,9 +388,7 @@ pub struct World {
 
 impl Default for World {
     fn default() -> Self {
-        let mut world = Self::empty();
-        world.set_enemy_count(DEFAULT_ENEMIES);
-        world
+        Self::from_scene(&Scene::boot()).expect("the built-in scene is valid")
     }
 }
 
@@ -474,65 +447,6 @@ impl World {
         self.bodies.len() - 1
     }
 
-    /// Rebuilds the horde to `n` bodies, clamped to [`MAX_BODIES`].
-    ///
-    /// **A debug dial, not the spawn door.** `[`, `]`, and `enemies <n>` come
-    /// through here; anything that makes a body during play asks, and
-    /// [`World::place`] grants. The clamp lives on both because they are
-    /// different operations — a wholesale resize versus a refusal — and a
-    /// spawner that inherited this one would still have to decide what a full
-    /// horde means for a single request.
-    ///
-    /// **Zero is allowed.** An empty arena is a state this game reaches by
-    /// playing it well, not an error. It is also what makes the simplest
-    /// scenarios writable: the horde and the player both spawn centred on the
-    /// origin, so *any* horde puts the two in contact on tick zero, and a
-    /// prediction about plain movement becomes a prediction about the solver.
-    pub fn set_enemy_count(&mut self, n: usize) {
-        // **Exhaustive, for the reason `hash` and `report` are.** This is one of
-        // the two doors where a behaviour set must be considered, so a new field
-        // stops the crate compiling until someone has decided here whether a
-        // wholesale respawn should revoke it.
-        // `sources` is deliberately untouched. This dial resizes the *horde*,
-        // and a source is not a body: clearing the level's sources because
-        // somebody asked for a different number of enemies would be a debug
-        // key deleting content.
-        let Self {
-            bodies,
-            seekers,
-            queue,
-            trace,
-            tick,
-            sources: _,
-            scenes,
-            player: _,
-            contacts: _,
-            crowd_contacts: _,
-        } = self;
-
-        let props = bodies.len() - 1 - bodies.health.len();
-        bodies.respawn(n.min(MAX_BODIES - props));
-        scenes.retain_live_bodies(&bodies.slots);
-
-        // Pending requests are decisions made *before* this reset, and granting
-        // them afterwards would put bodies in an arena that was just rebuilt to
-        // hold a stated number. The dial is a reset; this is part of resetting.
-        queue.clear();
-
-        // Every name the horde had is now retired, so a set that survived would
-        // hold only ids that resolve to nothing. Cleared anyway, because the
-        // alternative is a set that grows by the size of the old horde on every
-        // respawn and costs every pass that walks it.
-        seekers.clear();
-
-        // Traced because it happens *outside* the schedule. State that changes
-        // between ticks is the hardest kind to account for later, so it is
-        // exactly what the trace is for. Stamped with the tick it precedes.
-        trace.sink(*tick).emit(Event::Spawned {
-            count: bodies.health.len(),
-        });
-    }
-
     /// Places one body at a chosen spot and returns its name.
     ///
     /// `at` is a **ground-plane** position: `x` is world X and `y` is world Z,
@@ -559,12 +473,6 @@ impl World {
     /// neither runs while the schedule does. Everything else asks — see
     /// [`World::request_spawn`].
     pub fn place(&mut self, at: Vec2, what: Template) -> Option<EntityId> {
-        // Traced for the same reason `set_enemy_count` is: it happens *outside*
-        // the schedule, and state that changes between ticks is the hardest kind
-        // to account for when reading a trace later. The event is emitted by
-        // `pass::spawn::place`, so both doors record it identically. The bulk
-        // path does not come through here — `respawn` writes the storage
-        // directly.
         let mut trace = self.trace.sink(self.tick);
         pass::spawn::place(&mut self.bodies, &mut self.seekers, at, what, &mut trace)
     }
@@ -641,7 +549,7 @@ impl World {
     /// mistake, and it is exactly what [`EntityId`]'s generation makes safe to
     /// ask about.
     pub fn despawn_body(&mut self, id: EntityId) -> bool {
-        // Exhaustive for the same reason as `set_enemy_count`: the other door a
+        // Exhaustive for the same reason as scene eviction: the other door a
         // new behaviour has to be considered at. A line per behaviour rather
         // than a registry is deliberate — a list of sets to sweep would be a
         // second hand-maintained record of which behaviours exist.
@@ -696,21 +604,6 @@ impl World {
     #[must_use]
     pub fn is_seeker(&self, id: EntityId) -> bool {
         self.seekers.contains(id)
-    }
-
-    /// Makes the first `n` bodies chase, and the rest not.
-    ///
-    /// **A debug dial, and shaped like one.** It exists so the behaviour can be
-    /// turned on in the running game without a rebuild, the way
-    /// [`World::set_enemy_count`] can. It is not how a real spawner should work
-    /// — that will grant behaviours per body as it places them, from something
-    /// describing what *kind* of enemy this is — and the giveaway is "the first
-    /// n", which is a fact about storage order rather than about the game.
-    pub fn set_seeker_count(&mut self, n: usize) {
-        self.seekers.clear();
-        for id in self.bodies.health.ids().iter().take(n) {
-            self.seekers.add(*id);
-        }
     }
 
     /// Whether the hitbox exists right now.

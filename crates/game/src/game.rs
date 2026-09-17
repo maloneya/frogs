@@ -26,7 +26,7 @@ pub struct Game {
 }
 
 impl Default for Game {
-    /// Preserves the engine's default horde, including its identity history.
+    /// Constructs the built-in horde through ordinary scene loading.
     fn default() -> Self {
         Self {
             world: World::default(),
@@ -191,16 +191,6 @@ impl Game {
     #[must_use]
     pub fn scene_bodies(&self, id: SceneId) -> Option<&[EntityId]> {
         self.world.scene_bodies(id)
-    }
-
-    /// Applies the existing debug population reset, preserving props and sources.
-    pub fn set_enemy_count(&mut self, n: usize) {
-        self.world.set_enemy_count(n);
-    }
-
-    /// Sets debug seeker membership through the engine capability boundary.
-    pub fn set_seeker_count(&mut self, n: usize) {
-        self.world.set_seeker_count(n);
     }
 
     /// Places a validated body between ticks; None means placement was refused.

@@ -31,13 +31,12 @@ lint helps only when its command actually runs.
 | Complete game lifecycle | [Game](../crates/game/src/lib.rs), [game scenes](../crates/game/src/scene.rs), public lifecycle tests |
 | Replay, checkpoints and rejected assertions | [scenario execution](../crates/scenario/src/run.rs), [scenario schema](../crates/scenario/src/spec.rs), CLI tests and [scenarios](../scenarios) |
 | Asset admission and rendering contracts | [assets](../crates/assets/src/lib.rs), [gfx](../crates/gfx/src/lib.rs), importer and GPU tests |
-| Documentation citations | [identifier check](../crates/scenario/tests/docs_cite_real_code.rs) and the required rustdoc command |
+| Rust API documentation links | Required rustdoc command with broken intra-doc links denied |
 
 Exhaustive destructuring forces an edit when fields are added; it does not prove
 the author hashed, reported or cleaned up each field correctly. Inspect the
-implementation and its tests. Similarly, the documentation identifier check
-only searches for cited names; it cannot prove a semantic claim or resolve every
-Markdown link.
+implementation and its tests. Rustdoc checks Rust API links; prose claims and ordinary Markdown links still
+need review.
 
 When adding state, follow it through creation, mutation, removal, scene eviction,
 restart, observation and hashing. Exercise rejection and identity reuse where

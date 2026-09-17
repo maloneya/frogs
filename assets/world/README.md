@@ -17,12 +17,11 @@ blender --background --python assets/world/generate.py
 ```
 
 The script is the editable source. It applies transforms and exports selected
-geometry through Blender's GLB exporter, using the same validated import path
-as the static preview. Runtime paths resolve from the build-time repository
-location. Missing or invalid required assets fail startup explicitly.
+geometry through Blender's GLB exporter. The validated static-mesh importer
+loads both assets. Runtime paths resolve from the build-time repository location. Missing or invalid required assets fail startup explicitly.
 
 `state.world_assets` exposes imported paths, geometry/texture counts and live
 prop placements. `state.render.static_mesh_instances` and `static_mesh_draws`
-include ground, props, and any optional static preview.
+include ground and props.
 [Attack effects](../../docs/attack-effects.md) show committed attack reach;
 [collision debug drawing](../../docs/collision-debug.md) exposes physical shapes.

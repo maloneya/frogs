@@ -10,11 +10,11 @@ use arpg_sim::{
 };
 use glam::Vec3;
 
-// Ground and optional static preview add two placements to an all-prop world.
+// Ground adds one placement to an all-prop world.
 // This also covers an all-enemy world plus the player in the character buffer.
-const _: () = assert!(arpg_sim::MAX_BODIES + 2 <= arpg_core::MAX_INSTANCES);
+const _: () = assert!(arpg_sim::MAX_BODIES < arpg_core::MAX_INSTANCES);
 
-pub(super) struct AssetPreview<T> {
+struct LoadedMesh<T> {
     path: std::path::PathBuf,
     vertex_count: usize,
     index_count: usize,
@@ -23,18 +23,7 @@ pub(super) struct AssetPreview<T> {
     gpu: T,
 }
 
-impl<T> AssetPreview<T> {
-    pub(super) fn summary(&self) -> String {
-        format!(
-            "asset preview vertices={} indices={} texture={}x{} path={}",
-            self.vertex_count,
-            self.index_count,
-            self.texture_width,
-            self.texture_height,
-            self.path.display()
-        )
-    }
-
+impl<T> LoadedMesh<T> {
     fn report(&self, out: &mut Report) {
         out.bool("active", true);
         out.text("path", &self.path.to_string_lossy());
@@ -45,30 +34,17 @@ impl<T> AssetPreview<T> {
     }
 }
 
-impl AssetPreview<MeshAsset> {
-    pub(super) fn draw<'a>(&'a self, instances: &'a [Instance]) -> MeshBatch<'a> {
+impl LoadedMesh<MeshAsset> {
+    fn draw<'a>(&'a self, instances: &'a [Instance]) -> MeshBatch<'a> {
         MeshBatch::new(&self.gpu, instances)
-    }
-}
-
-pub(super) fn report_asset_preview<T>(preview: Option<&AssetPreview<T>>, out: &mut Report) {
-    if let Some(preview) = preview {
-        preview.report(out);
-    } else {
-        out.bool("active", false);
-        out.text("path", "");
-        out.int("vertices", 0);
-        out.int("indices", 0);
-        out.int("texture_width", 0);
-        out.int("texture_height", 0);
     }
 }
 
 /// Required static world assets and their reusable placement buffers.
 /// Both assets must import and upload before this value can exist.
 pub(super) struct WorldAssets<T> {
-    ground: AssetPreview<T>,
-    prop: AssetPreview<T>,
+    ground: LoadedMesh<T>,
+    prop: LoadedMesh<T>,
     ground_instance: [Instance; 1],
     props: InstanceBuffer,
 }
@@ -116,11 +92,10 @@ impl<T> WorldAssets<T> {
 }
 
 impl WorldAssets<MeshAsset> {
-    pub(super) fn draws<'a>(&'a self, preview: Option<&'a AssetPreview<MeshAsset>>, preview_instances: &'a [Instance]) -> [MeshBatch<'a>; 3] {
+    pub(super) fn draws(&self) -> [MeshBatch<'_>; 2] {
         [
             self.ground.draw(&self.ground_instance),
             self.prop.draw(self.props.as_slice()),
-            preview.map_or_else(|| self.ground.draw(&[]), |preview| preview.draw(preview_instances)),
         ]
     }
 }
@@ -635,16 +610,6 @@ fn report_character_asset(
     );
 }
 
-/// World-space placement belongs to app, never to the imported mesh or sim.
-pub(super) fn preview_instance() -> Instance {
-    Instance::new(
-        glam::Vec3::new(-3.0, 0.0, -3.0),
-        glam::Vec3::ONE,
-        // White preserves the asset's authored base colour and factor.
-        glam::Vec3::ONE,
-    )
-}
-
 fn read_glb(path: &std::path::Path) -> Result<Vec<u8>, String> {
     if path.extension() != Some(std::ffi::OsStr::new("glb")) {
         return Err(format!("{}: expected a .glb file", path.display()));
@@ -655,27 +620,17 @@ fn read_glb(path: &std::path::Path) -> Result<Vec<u8>, String> {
         .map_err(|_| format!("{}: file size cannot fit this process", path.display()))?;
     if bytes > arpg_assets::MAX_GLB_BYTES {
         return Err(format!(
-            "{}: GLB exceeds preview capacity: file bytes",
+            "{}: GLB exceeds asset capacity: file bytes",
             path.display()
         ));
     }
     std::fs::read(path).map_err(|error| format!("{}: read GLB: {error}", path.display()))
 }
 
-/// Prepares every fallible part before replacing `slot`.
-pub(super) fn replace_preview<T>(
-    slot: &mut Option<AssetPreview<T>>,
-    path: std::path::PathBuf,
-    upload: impl FnOnce(&arpg_assets::StaticMesh) -> Result<T, String>,
-) -> Result<(), String> {
-    *slot = Some(load_static(path, upload)?);
-    Ok(())
-}
-
 fn load_static<T>(
     path: std::path::PathBuf,
     upload: impl FnOnce(&arpg_assets::StaticMesh) -> Result<T, String>,
-) -> Result<AssetPreview<T>, String> {
+) -> Result<LoadedMesh<T>, String> {
     let source = read_glb(&path)?;
     let mesh =
         arpg_assets::import_glb(&source).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -684,7 +639,7 @@ fn load_static<T>(
     let texture_width = mesh.base_color_texture().width();
     let texture_height = mesh.base_color_texture().height();
     let gpu = upload(&mesh).map_err(|error| format!("{}: {error}", path.display()))?;
-    Ok(AssetPreview {
+    Ok(LoadedMesh {
         path,
         vertex_count,
         index_count,

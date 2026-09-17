@@ -154,9 +154,8 @@ pub struct InstanceSink<'a> {
 }
 
 impl InstanceSink<'_> {
-    /// Silently drops anything past capacity. The budget is enforced upstream
-    /// by `World::set_enemy_count`; this is the backstop for whatever emits
-    /// instances next, which will not know that budget exists.
+    /// Silently drops anything past capacity. Simulation admission enforces
+    /// its body budget; this is the backstop for presentation producers.
     pub fn push(&mut self, instance: Instance) {
         if self.remaining == 0 {
             return;

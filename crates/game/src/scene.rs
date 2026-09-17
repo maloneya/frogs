@@ -6,7 +6,6 @@ use serde::Deserialize;
 use crate::source_control::{SourceControlSpec, SourceControls};
 
 /// Authored gameplay wraps the engine definition without copying its fields.
-/// Legacy engine-only files are promoted by the content loader.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GameScene {

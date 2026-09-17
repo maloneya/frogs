@@ -1,9 +1,9 @@
 (
     description: "Source and control indices follow actual load order: setup first, then tick order, with file order breaking ties. Removal retains original bindings.",
-    setup: (scenes: [Inline((name: "setup"))]),
+    setup: (scenes: [Inline((engine: (name: "setup")))]),
     scenes: [
-        (at: 3, action: Load(Inline((name: "late")))),
-        (at: 0, action: Load(Gameplay((
+        (at: 3, action: Load(Inline((engine: (name: "late"))))),
+        (at: 0, action: Load(Inline((
     engine: (
         name: "Source control",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
@@ -11,8 +11,8 @@
     ),
     source_controls: [(body: 0, source: 0)],
 )))),
-        (at: 0, action: Load(Inline((name: "external source",
-            sources: [(pos: (-20.0, 0.0), enabled: false)])))),
+        (at: 0, action: Load(Inline((engine: (name: "external source",
+            sources: [(pos: (-20.0, 0.0), enabled: false)]))))),
         (at: 3, action: Evict(1)),
     ],
     interactions: [0],

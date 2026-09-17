@@ -260,14 +260,6 @@ impl Scenes {
         }
     }
 
-    /// Prunes retired enemy identities once after a bulk reset. Surviving
-    /// props retain ownership; new debug enemies are deliberately unowned.
-    pub(crate) fn retain_live_bodies(&mut self, slots: &crate::Slots) {
-        for scene in &mut self.live {
-            scene.bodies.retain(|id| slots.contains(*id));
-        }
-    }
-
     fn take(&mut self, id: SceneId) -> Option<Resident> {
         let row = self.live.iter().position(|scene| scene.id == id)?;
         Some(self.live.remove(row))
@@ -476,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn recycled_body_slot_and_bulk_reset_do_not_leave_ownership() {
+    fn recycled_body_slot_does_not_leave_ownership() {
         let mut world = World::empty();
         let a = world.load_scene(&scene()).unwrap();
         let old = world.scene_bodies(a).unwrap()[0];
@@ -485,11 +477,7 @@ mod tests {
         assert_eq!(world.scene_bodies(a).unwrap().len(), 0);
         world.evict_scene(a);
         assert!(world.is_alive(survivor));
-        let b = world.load_scene(&scene()).unwrap();
-        world.set_enemy_count(2);
-        assert!(world.scene_bodies(b).unwrap().is_empty());
-        world.evict_scene(b);
-        assert_eq!(world.enemy_count(), 2);
+
     }
 
     #[test]

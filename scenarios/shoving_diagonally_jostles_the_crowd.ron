@@ -12,7 +12,7 @@
 // an axis you can travel along and see nothing.
 (
     description: "Shoved across its own grid the horde compresses, where shoved along it, it does not.",
-    setup: (enemies: 64),
+    setup: (scenes: [Inline((engine: (name: "shoving_diagonally_jostles_the_crowd", grids: [(origin: (-2.45, -2.45), columns: 8, rows: 8, spacing: 0.7)])))]),
     inputs: [
         // Normalised on the way in, so this is a full-speed diagonal rather
         // than root-two times the speed.
