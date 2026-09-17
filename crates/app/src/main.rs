@@ -8,6 +8,7 @@
 
 mod app;
 mod collision_debug;
+mod attack_effects;
 mod harness;
 mod hud;
 mod input;

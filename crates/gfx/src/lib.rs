@@ -15,6 +15,7 @@ mod capture;
 mod character;
 mod instance;
 mod debug;
+mod effect;
 mod material;
 mod mesh;
 mod overlay;
@@ -23,6 +24,7 @@ mod text;
 
 pub use camera::OrthoCamera;
 pub use debug::DebugDisc;
+pub use effect::{EffectVertex, MAX_EFFECT_VERTICES};
 pub use character::{
     CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
 };
@@ -74,6 +76,7 @@ pub struct Renderer {
     camera: CameraBinding,
     static_meshes: MeshPipeline,
     debug: debug::DebugPipeline,
+    effects: effect::EffectPipeline,
     character_preview: CharacterPipeline,
     /// The rasterised font, and the pipeline that draws what it lays out.
     ///
@@ -217,6 +220,7 @@ impl Renderer {
             config.format,
             DEPTH_FORMAT,
         );
+        let effects = effect::EffectPipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
         let debug = debug::DebugPipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
         let font = text::Font::new(&device, &queue);
         let overlay = QuadPipeline::new(&device, &font, config.format, DEPTH_FORMAT);
@@ -232,6 +236,7 @@ impl Renderer {
             camera,
             static_meshes,
             debug,
+            effects,
             character_preview,
             font,
             overlay,
@@ -339,6 +344,7 @@ impl Renderer {
     /// this is a note in a doc comment, which is the weakest enforcement there
     /// is — and miscounting frames is precisely the bug it exists to prevent.
     #[must_use = "a skipped frame must not be counted as a rendered one"]
+    #[expect(clippy::too_many_arguments, reason = "independent presentation streams share one world render pass")]
     pub fn render(
         &mut self,
         camera: &OrthoCamera,
@@ -347,6 +353,7 @@ impl Renderer {
         horde: Option<CharacterHorde<'_>>,
         overlay: &[Quad],
         debug_discs: &[DebugDisc],
+        effects: &[EffectVertex],
     ) -> bool {
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU
@@ -401,6 +408,7 @@ impl Renderer {
 
         self.camera.upload(&self.queue, camera);
         self.static_meshes.upload(&self.queue, meshes);
+        let effect_count = self.effects.upload(&self.queue, effects);
         let debug_count = self.debug.upload(&self.queue, debug_discs);
         let character_draws = self.character_preview.upload(&self.queue, character, horde);
         let quads =
@@ -471,6 +479,7 @@ impl Renderer {
             // After the world and inside the same pass. The overlay neither
             // reads nor writes depth, so joining the pass costs nothing and
             // saves storing and reloading the whole frame between two of them.
+            self.effects.draw(&mut pass, &self.camera, effect_count);
             self.debug.draw(&mut pass, &self.camera, debug_count);
             self.overlay.draw(&mut pass, quads);
         }

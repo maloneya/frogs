@@ -43,6 +43,7 @@ pub(crate) struct App {
     camera: Option<OrthoCamera>,
     game: Game,
     collision_debug: crate::collision_debug::CollisionDebug,
+    attack_effects: crate::attack_effects::AttackEffects,
     /// Game ids and ticks are scoped to this playtest generation.
     run_id: u64,
     /// Numbers the screenshots, so repeated captures do not overwrite.
@@ -247,6 +248,7 @@ impl App {
             renderer.cancel_capture();
         }
         self.capture_stall = 0;
+        self.attack_effects.clear();
         self.input.restart();
         self.run_id = run_id;
         self.accumulator = Accumulator::default();
@@ -538,6 +540,7 @@ impl App {
             report_horde_preview(self.horde_preview.as_ref(), horde);
         });
 
+        out.object("attack_effects", |out| self.attack_effects.report(out));
         out.object("collision_debug", |out| self.collision_debug.report(out));
         out.object("render", |r| {
             let target = self
@@ -557,6 +560,8 @@ impl App {
                 "instances",
                 player_instances + horde_instances + static_instances + self.collision_debug.drawings().len() as u64,
             );
+            r.int("effect_vertices", self.attack_effects.vertices().len() as u64);
+            r.int("effect_draws", u64::from(!self.attack_effects.vertices().is_empty()));
             r.int("debug_disc_instances", self.collision_debug.drawings().len() as u64);
             r.int("debug_draws", u64::from(!self.collision_debug.drawings().is_empty()));
             r.int("static_mesh_instances", static_instances);
@@ -692,11 +697,13 @@ impl App {
                 )
                 .with_interact(intent.just_pressed(Action::Interact)),
             );
+            self.attack_effects.observe(&self.game);
         }
 
         // How far this frame falls between the tick just run and the next one.
         // Everything below draws; nothing below simulates.
         let alpha = self.accumulator.alpha();
+        self.attack_effects.rebuild(self.game.tick(), alpha);
         let player = self.game.player_presentation(alpha);
         let presentation_seconds = presentation_seconds(self.game.tick(), alpha);
 
@@ -753,6 +760,7 @@ impl App {
             horde,
             self.quads.as_slice(),
             self.collision_debug.drawings(),
+            self.attack_effects.vertices(),
         ) {
             self.frames += 1;
 
@@ -1075,6 +1083,12 @@ mod tests {
         for dt in app.accumulator.pending(arpg_sim::Dt::SECS) {
             app.game.step(dt, Intent::new(MoveDir::new(glam::Vec3::X), true));
         }
+        for dt in app.accumulator.pending(arpg_sim::Dt::SECS * 8.0) {
+            app.game.step(dt, Intent::NONE);
+            app.attack_effects.observe(&app.game);
+        }
+        app.attack_effects.rebuild(app.game.tick(), Alpha::ZERO);
+        assert!(!app.attack_effects.vertices().is_empty());
         app.game.set_attack_recovery(arpg_sim::RecoveryTicks::try_from(1).unwrap());
         assert!(app.game.apply_impulse(
             app.game.player_id(),
@@ -1091,6 +1105,7 @@ mod tests {
         assert_eq!(app.accumulator.pending(arpg_sim::Dt::SECS * 0.5).count(), 0);
 
         app.restart_playtest().unwrap();
+        assert!(app.attack_effects.vertices().is_empty());
         assert_eq!(app.run_id, 2);
         assert_eq!(app.game.hash(), initial, "all simulation state returns to the baseline");
         assert_eq!(app.game.tick(), 0);
