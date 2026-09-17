@@ -163,7 +163,7 @@ tick, whether or not the scenario asks. A divergence reports the tick it
 happened on:
 
 ```
-FAIL  the_horde_stays_deterministic
+FAIL  shoving_diagonally_jostles_the_crowd
         replay
           expected: two runs identical every tick
           actual:   diverged at tick 1

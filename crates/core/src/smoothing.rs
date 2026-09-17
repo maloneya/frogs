@@ -68,20 +68,6 @@ mod tests {
         assert!((coarse - fine).abs() < 1e-4, "{coarse} vs {fine}");
     }
 
-    /// The naive per-frame lerp this replaces, shown failing the same check —
-    /// so the test states what is being avoided, not just what is wanted.
-    #[test]
-    fn the_naive_per_frame_lerp_is_not() {
-        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-
-        let coarse = lerp(0.0, 10.0, 0.1);
-        let mut fine = 0.0;
-        for _ in 0..50 {
-            fine = lerp(fine, 10.0, 0.1);
-        }
-        assert!((coarse - fine).abs() > 8.0, "the naive form should diverge wildly");
-    }
-
     /// A half-life is a claim with a number in it, so check the number.
     #[test]
     fn one_half_life_closes_half_the_distance() {

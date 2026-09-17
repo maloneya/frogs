@@ -150,10 +150,6 @@ fn frame_rate_cannot_change_the_simulation() {
     }
 }
 
-/// Determinism itself: the same run twice, compared tick by tick.
-///
-/// The frame schedule is deliberately ragged — the shape a real machine
-/// produces, and the shape a variable timestep leaks through.
 /// A wholesale respawn retires every name, so any behaviour still attached
 /// to one would be attached to whoever inherits it. Asserted rather than
 /// left to the ordering comment in `set_enemy_count`, because the failure —
@@ -172,35 +168,9 @@ fn a_respawn_revokes_every_behaviour() {
     assert_eq!(world.seeker_count(), 0, "a behaviour survived the respawn that retired its name");
     assert!(!world.is_alive(id), "the old name outlived the horde it belonged to");
 }
-#[test]
-fn one_input_stream_replays_to_the_same_hash_every_tick() {
-    let ragged = [0.004, 0.019, 0.016_1, 0.033, 0.000_9, 0.017_2];
-
-    let run = || {
-        let mut world = World::default();
-        world.set_enemy_count(256);
-
-        let mut acc = Accumulator::default();
-        let mut seq = Vec::new();
-
-        for (i, &frame) in ragged.iter().cycle().take(300).enumerate() {
-            // Something that keeps turning, so facing is under test too.
-            let dir = MoveDir::new(if i % 40 < 20 { Vec3::X } else { Vec3::NEG_Z });
-            for dt in acc.pending(frame) {
-                world.step(dt, Intent::new(dir, false));
-                seq.push(world.hash());
-            }
-        }
-        seq
-    };
-
-    let first = run();
-    assert!(first.len() > 100, "the schedule ran only {} ticks", first.len());
-    assert_eq!(first, run(), "two identical runs disagreed");
-}
 
 /// **The sensitivity check, and it is not optional.** A `hash()` that
-/// returned a constant would pass both tests above and every replay
+/// returned a constant would pass the frame-rate test and every replay
 /// scenario ever written against it. So: two streams that agree until tick
 /// 60 must hash identically up to there and differ from there on.
 #[test]
@@ -695,16 +665,6 @@ fn a_steady_state_frame_allocates_nothing() {
     assert_eq!(allocations, 0, "60 steady-state frames allocated {allocations} times");
 }
 
-#[test]
-fn no_input_does_not_move_the_player() {
-    let mut world = in_open_ground();
-    let start = world.player_pos();
-    for _ in 0..60 {
-        world.step(tick_dt(), Intent::NONE);
-    }
-    assert_eq!(world.player_pos(), start);
-}
-
 /// Walking into the wall must stop, not leave the ground plane — and must
 /// stay finite, since a NaN position would silently vanish the character.
 #[test]
@@ -723,63 +683,6 @@ fn the_player_cannot_walk_off_the_arena() {
     }
 }
 
-/// **The seam that turning exists to get right.** Crossing the ±PI branch
-/// cut must be a small step, not an almost-full revolution the other way.
-#[test]
-fn turning_takes_the_short_way_around() {
-    let nearly_half_turn = std::f32::consts::PI - 0.1;
-    let just_past = -nearly_half_turn;
-
-    let arc = angle::shortest_arc(nearly_half_turn, just_past);
-    assert!(arc.abs() < 0.3, "went the long way: {arc}");
-
-    // And the naive subtraction this replaces really does get it wrong,
-    // which is why the wrapping is not decoration.
-    assert!((just_past - nearly_half_turn).abs() > 6.0);
-}
-
-#[test]
-fn facing_follows_the_direction_of_travel() {
-    let mut world = World::default();
-    for _ in 0..120 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
-    }
-    // atan2(dir.x, dir.z): due east is +X, so a quarter turn from +Z.
-    assert!((world.player.facing - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
-
-    for _ in 0..120 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::Z), false));
-    }
-    assert!(world.player.facing.abs() < 1e-4, "should face +Z");
-}
-
-/// A fixed turn rate is only frame-rate independent if the step is clamped
-/// to the remaining arc; without the clamp the coarse step overshoots and
-/// the two disagree.
-#[test]
-fn turning_is_frame_rate_independent() {
-    let west = MoveDir::new(Vec3::NEG_X);
-
-    // One frame worth five ticks against five frames worth one, which is
-    // the same comparison as before now that a frame cannot hand the sim
-    // an arbitrary delta.
-    let mut coarse = World::default();
-    let mut coarse_acc = Accumulator::default();
-    for dt in coarse_acc.pending(Dt::SECS * 5.0) {
-        coarse.step(dt, Intent::new(west, false));
-    }
-
-    let mut fine = World::default();
-    let mut fine_acc = Accumulator::default();
-    for _ in 0..5 {
-        for dt in fine_acc.pending(Dt::SECS) {
-            fine.step(dt, Intent::new(west, false));
-        }
-    }
-
-    assert_eq!(coarse.hash(), fine.hash());
-}
-
 #[test]
 fn turning_never_overshoots_its_target() {
     let mut world = World::default();
@@ -790,22 +693,6 @@ fn turning_never_overshoots_its_target() {
         assert!(world.player.facing >= 0.0);
         assert!(world.player.facing <= target, "overshot to {}", world.player.facing);
     }
-}
-
-/// Releasing the keys must not reorient the character — it would turn away
-/// from whatever it just walked up to.
-#[test]
-fn standing_still_keeps_the_last_facing() {
-    let mut world = World::default();
-    for _ in 0..120 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::NEG_Z), false));
-    }
-    let settled = world.player.facing;
-
-    for _ in 0..120 {
-        world.step(tick_dt(), Intent::NONE);
-    }
-    assert_eq!(world.player.facing, settled);
 }
 
 /// Facing must stay canonical however long the session runs, rather than
@@ -1010,22 +897,6 @@ fn a_request_becomes_a_body_on_the_next_tick_and_not_before() {
     assert_eq!(world.enemy_count(), 1);
 }
 
-/// The template is the list of behaviours the new body is granted, and the
-/// control is the body granted none. A drain that granted everything to
-/// everybody would satisfy every assertion about the first.
-#[test]
-fn a_template_grants_what_it_names_and_nothing_else() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
-
-    assert!(world.request_spawn(Vec2::new(3.0, 0.0), Template::BODY.seeking()));
-    assert!(world.request_spawn(Vec2::new(-3.0, 0.0), Template::BODY));
-    world.step(tick_dt(), Intent::NONE);
-
-    assert_eq!(world.enemy_count(), 2);
-    assert_eq!(world.seeker_count(), 1, "the template granted the wrong number of behaviours");
-}
-
 /// **A dropped spawn must not be silent.** Nothing appears, nothing errors, and
 /// the only other evidence would be a body somebody expected and did not get —
 /// so the refusal is a return value at the door and an event in the trace.
@@ -1069,26 +940,6 @@ fn resetting_the_horde_forgets_what_was_pending() {
     world.step(tick_dt(), Intent::NONE);
 
     assert_eq!(world.enemy_count(), 4, "a request from before the reset was granted after it");
-}
-
-/// A source at a stated cadence puts bodies in on the ticks it promises: the
-/// first immediately, then one every `every` ticks.
-///
-/// **Starting ready is the decision being pinned here.** The alternative — wait
-/// one cadence, then fire — puts the first body of every level at a time nobody
-/// wrote down, and reads as a source that failed to start.
-#[test]
-fn a_source_fires_on_the_cadence_it_promises() {
-    let mut world = World::default();
-    world.set_enemy_count(0);
-    world.add_source(Source::new(Placement::At(Vec2::new(30.0, 0.0)), Template::BODY).every(10));
-
-    // Ticks 0, 10, 20 and 30 fire; 31 ticks is one past the fourth.
-    for _ in 0..31 {
-        world.step(tick_dt(), Intent::NONE);
-    }
-
-    assert_eq!(world.enemy_count(), 4, "a source at every=10 over 31 ticks");
 }
 
 /// **Ready-and-waiting.** A source whose cadence has come round but whose

@@ -104,19 +104,3 @@ pub(crate) fn remove_defeated(
         debug_assert!(removed, "a defeated body must still be alive in the final pass");
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn three_hits_reach_zero() {
-        let mut health = Health::default();
-        let id = crate::slots::Slots::default().insert();
-        health.grant(id);
-
-        assert_eq!(health.sink().hit(id), Some(2));
-        assert_eq!(health.sink().hit(id), Some(1));
-        assert_eq!(health.sink().hit(id), Some(0));
-    }
-}

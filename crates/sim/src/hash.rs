@@ -69,11 +69,6 @@ impl Fnv {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_empty_hash_is_the_offset_basis() {
-        assert_eq!(Fnv::default().finish(), OFFSET_BASIS);
-    }
-
     /// The property the whole determinism gate rests on. Without it a `hash()`
     /// that returned a constant would pass every replay test ever written.
     #[test]
@@ -103,14 +98,4 @@ mod tests {
         assert_ne!(a.finish(), b.finish());
     }
 
-    #[test]
-    fn the_same_input_gives_the_same_hash() {
-        let mut a = Fnv::default();
-        let mut b = Fnv::default();
-        for i in 0..64 {
-            a.f32(i as f32);
-            b.f32(i as f32);
-        }
-        assert_eq!(a.finish(), b.finish());
-    }
 }

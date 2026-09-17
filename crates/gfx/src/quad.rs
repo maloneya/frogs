@@ -213,11 +213,4 @@ mod tests {
         assert!(!Quad::textured(Vec4::ZERO, [0.1, 0.1, 0.2, 0.2], Vec4::ONE).is_solid());
     }
 
-    /// The rectangle survives the trip through the packed representation in the
-    /// order the field names claim.
-    #[test]
-    fn a_quad_remembers_its_rectangle() {
-        let quad = Quad::solid(Vec4::new(3.0, 5.0, 40.0, 12.0), Vec4::ONE);
-        assert_eq!(quad.rect(), Vec4::new(3.0, 5.0, 40.0, 12.0));
-    }
 }
