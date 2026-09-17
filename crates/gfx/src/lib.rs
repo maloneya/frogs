@@ -445,7 +445,7 @@ impl Renderer {
                 self.character_preview.draw_horde(
                     &mut pass,
                     &self.camera,
-                    horde.mesh,
+                    horde.mesh(),
                     &character_draws.horde,
                 );
             }
@@ -453,7 +453,7 @@ impl Renderer {
                 self.character_preview.draw_player(
                     &mut pass,
                     &self.camera,
-                    character.mesh,
+                    character.mesh(),
                     character_draws.player,
                 );
             }

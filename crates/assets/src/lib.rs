@@ -11,7 +11,7 @@ mod character;
 
 pub use character::import_character_glb;
 pub use character::{
-    AnimationClip, CharacterAsset, CharacterPose, CharacterVertex, ClipId, JointId, JointMatrix,
+    AnimationClip, CharacterAsset, CharacterAssetId, CharacterPose, CharacterVertex, ClipId, JointId, JointMatrix,
     MAX_JOINTS,
 };
 

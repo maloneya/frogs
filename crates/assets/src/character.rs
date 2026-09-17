@@ -1,6 +1,7 @@
 //! Hierarchical, skinned character assets kept separate from baked static meshes.
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
+use std::sync::Arc;
 
 use super::{
     BaseColorTexture, ImportError, MAX_GLB_BYTES, MAX_INDICES, MAX_VERTICES, exactly,
@@ -172,9 +173,26 @@ impl AnimationClip {
 /// Reusable CPU scratch and GPU-ready matrices for one sampled character pose.
 #[derive(Debug)]
 pub struct CharacterPose {
+    asset_id: CharacterAssetId,
     locals: Vec<NodePose>,
     globals: Vec<Mat4>,
     joints: Vec<JointMatrix>,
+}
+
+/// Identity of one imported character, retained by its poses and uploaded mesh.
+///
+/// Separate imports have separate identities, even for identical bytes. Keeping
+/// the token alive prevents an unloaded asset's identity from being reused while
+/// a pose or GPU mesh still refers to it. This is presentation-only state.
+#[derive(Clone, Debug)]
+pub struct CharacterAssetId(Arc<()>);
+
+impl CharacterAssetId {
+    /// Whether this pose was created by the same imported character.
+    #[must_use]
+    pub fn owns(&self, pose: &CharacterPose) -> bool {
+        Arc::ptr_eq(&self.0, &pose.asset_id.0)
+    }
 }
 
 impl CharacterPose {
@@ -238,6 +256,7 @@ impl JointMatrix {
 /// One validated character mesh, material, node hierarchy and skin.
 #[derive(Debug)]
 pub struct CharacterAsset {
+    asset_id: CharacterAssetId,
     vertices: Vec<CharacterVertex>,
     indices: Vec<u32>,
     base_color_factor: [f32; 4],
@@ -249,6 +268,12 @@ pub struct CharacterAsset {
 }
 
 impl CharacterAsset {
+    /// Retains this import's identity for resources derived from it.
+    #[must_use]
+    pub fn asset_id(&self) -> CharacterAssetId {
+        self.asset_id.clone()
+    }
+
     /// Skinned vertices in the renderer's fixed character layout.
     #[must_use]
     pub fn vertices(&self) -> &[CharacterVertex] {
@@ -330,6 +355,9 @@ impl CharacterAsset {
     /// Sampled asset-local transform of one joint.
     #[must_use]
     pub fn joint_transform(&self, pose: &CharacterPose, joint: JointId) -> Option<Mat4> {
+        if !self.asset_id.owns(pose) {
+            return None;
+        }
         let joint = self.joints.get(usize::from(joint.0))?;
         pose.globals.get(joint.node()).copied()
     }
@@ -338,6 +366,7 @@ impl CharacterAsset {
     #[must_use]
     pub fn bind_pose(&self) -> CharacterPose {
         let mut pose = CharacterPose {
+            asset_id: self.asset_id(),
             locals: self.nodes.iter().map(|node| node.bind_pose).collect(),
             globals: vec![Mat4::IDENTITY; self.nodes.len()],
             joints: vec![JointMatrix::new(Mat4::IDENTITY); self.joints.len()],
@@ -348,25 +377,19 @@ impl CharacterAsset {
 
     /// Samples one clip at a bounded time and rebuilds `pose`.
     ///
-    /// A matching-size pose reuses its allocations; other shapes are replaced.
-    /// Non-finite time selects the clip start.
+    /// Reuses the pose's allocations. Returns false without changing the pose
+    /// for an invalid clip or a pose belonging to another import, even if its
+    /// skeleton has the same dimensions. Non-finite time selects the clip start.
     pub fn sample(&self, clip: ClipId, seconds: f32, pose: &mut CharacterPose) -> bool {
+        if !self.asset_id.owns(pose) {
+            return false;
+        }
         let Some(clip) = self.clips.get(usize::from(clip.0)) else {
             return false;
         };
-        self.ensure_pose_shape(pose);
         Self::sample_locals(&self.nodes, clip, seconds, &mut pose.locals);
         self.rebuild_pose(pose);
         true
-    }
-
-    fn ensure_pose_shape(&self, pose: &mut CharacterPose) {
-        if pose.locals.len() != self.nodes.len()
-            || pose.globals.len() != self.nodes.len()
-            || pose.joints.len() != self.joints.len()
-        {
-            *pose = self.bind_pose();
-        }
     }
 
     fn sample_locals(
@@ -1173,6 +1196,7 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
     }
 
     Ok(CharacterAsset {
+        asset_id: CharacterAssetId(Arc::new(())),
         vertices,
         indices: imported_indices,
         base_color_factor: material.base_color_factor,
@@ -1202,6 +1226,26 @@ mod tests {
 
     const FIXTURE: &[u8] = include_bytes!("../../../assets/fixtures/blender-bind-pose.glb");
     const STATIC_FIXTURE: &[u8] = include_bytes!("../../../assets/fixtures/static-preview.glb");
+
+    #[test]
+    fn foreign_pose_is_rejected_even_with_identical_skeleton_dimensions() {
+        let owner = import_character_glb(FIXTURE).unwrap();
+        let other = import_character_glb(FIXTURE).unwrap();
+        let mut pose = owner.bind_pose();
+        let idle = owner.clip_named("Idle").unwrap();
+        assert!(owner.sample(idle, 0.5, &mut pose));
+        let before = bytemuck::cast_slice::<_, u8>(pose.joint_matrices()).to_vec();
+        assert!(!other.sample(other.clip_named("Idle").unwrap(), 0.0, &mut pose));
+        assert_eq!(bytemuck::cast_slice::<_, u8>(pose.joint_matrices()), before);
+        assert!(owner.asset_id().owns(&pose));
+        assert!(!other.asset_id().owns(&pose));
+        assert!(other.joint_transform(&pose, other.joint_named("Weapon").unwrap()).is_none());
+        assert!(owner.sample(idle, 0.0, &mut pose));
+
+        let identity = owner.asset_id();
+        drop(owner);
+        assert!(identity.owns(&pose), "identity survives the source asset");
+    }
 
     #[test]
     fn demo_sword_is_rigid_geometry_extending_from_its_grip() {

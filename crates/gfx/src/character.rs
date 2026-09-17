@@ -12,6 +12,46 @@ use crate::instance::instance_layout;
 use crate::material::{Material, MaterialLayout};
 use crate::mesh::MeshUploadError;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn draw_descriptions_reject_foreign_poses_before_upload() {
+        let fixture = include_bytes!("../../../assets/fixtures/blender-bind-pose.glb");
+        let asset = arpg_assets::import_character_glb(fixture).unwrap();
+        let other = arpg_assets::import_character_glb(fixture).unwrap();
+        let pose = asset.bind_pose();
+        let foreign = other.bind_pose();
+        assert_eq!(pose.joint_matrices().len(), foreign.joint_matrices().len());
+        let (device, queue) = crate::tests::headless_device();
+        let mesh = CharacterMesh::new(&device, &queue, &MaterialLayout::new(&device), &asset)
+            .unwrap();
+        // The mesh and pose retain their association after the CPU asset is gone.
+        drop(asset);
+        let instance = Instance::new(glam::Vec3::ZERO, glam::Vec3::ONE, glam::Vec3::ONE);
+        let _valid = CharacterPreview::new(&mesh, &pose, instance);
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            CharacterPreview::new(&mesh, &foreign, instance)
+        })).is_err());
+
+        let instances = [instance];
+        let valid_bucket = CharacterBucket::new(&pose, &instances);
+        let _valid = CharacterHorde::new(&mesh, [valid_bucket; MAX_HORDE_POSE_BUCKETS]);
+        // Every bucket is checked, even one that happens to be empty this frame.
+        for index in 0..MAX_HORDE_POSE_BUCKETS {
+            for placements in [&instances[..], &[][..]] {
+                let mut buckets = [valid_bucket; MAX_HORDE_POSE_BUCKETS];
+                buckets[index] = CharacterBucket::new(&foreign, placements);
+                assert!(catch_unwind(AssertUnwindSafe(|| {
+                    CharacterHorde::new(&mesh, buckets)
+                })).is_err(), "foreign pose accepted in bucket {index}");
+            }
+        }
+    }
+}
+
 /// Maximum number of shared poses one horde may draw in a frame.
 ///
 /// This is a renderer budget rather than gameplay content. The app decides
@@ -22,6 +62,7 @@ const PALETTE_SLOTS: usize = 1 + MAX_HORDE_POSE_BUCKETS;
 
 /// One uploaded character mesh and material.
 pub struct CharacterMesh {
+    asset_id: arpg_assets::CharacterAssetId,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
@@ -60,6 +101,7 @@ impl CharacterMesh {
             "character base colour",
         );
         let uploaded = Self {
+            asset_id: character.asset_id(),
             vertices,
             indices,
             index_count: character.index_count() as u32,
@@ -78,19 +120,27 @@ impl CharacterMesh {
 /// One frame's placement and sampled pose for an uploaded character.
 #[derive(Clone, Copy)]
 pub struct CharacterPreview<'a> {
-    pub(crate) mesh: &'a CharacterMesh,
-    pub(crate) joints: &'a [arpg_assets::JointMatrix],
-    pub(crate) instance: Instance,
+    mesh: &'a CharacterMesh,
+    joints: &'a [arpg_assets::JointMatrix],
+    instance: Instance,
 }
 
 impl<'a> CharacterPreview<'a> {
+    pub(crate) fn mesh(self) -> &'a CharacterMesh {
+        self.mesh
+    }
+
     /// Pairs an uploaded mesh, a sampled CPU pose and an app-owned world transform.
+    ///
+    /// # Panics
+    /// Panics if the pose and mesh originate from different character imports.
     #[must_use]
     pub fn new(
         mesh: &'a CharacterMesh,
         pose: &'a arpg_assets::CharacterPose,
         instance: Instance,
     ) -> Self {
+        assert!(mesh.asset_id.owns(pose), "character pose belongs to a different asset than the mesh");
         Self {
             mesh,
             joints: pose.joint_matrices(),
@@ -102,7 +152,7 @@ impl<'a> CharacterPreview<'a> {
 /// One shared joint palette and all world placements that use it.
 #[derive(Clone, Copy)]
 pub struct CharacterBucket<'a> {
-    joints: &'a [arpg_assets::JointMatrix],
+    pose: &'a arpg_assets::CharacterPose,
     instances: &'a [Instance],
 }
 
@@ -111,7 +161,7 @@ impl<'a> CharacterBucket<'a> {
     #[must_use]
     pub fn new(pose: &'a arpg_assets::CharacterPose, instances: &'a [Instance]) -> Self {
         Self {
-            joints: pose.joint_matrices(),
+            pose,
             instances,
         }
     }
@@ -120,17 +170,28 @@ impl<'a> CharacterBucket<'a> {
 /// One uploaded mesh drawn through a fixed set of shared pose buckets.
 #[derive(Clone, Copy)]
 pub struct CharacterHorde<'a> {
-    pub(crate) mesh: &'a CharacterMesh,
+    mesh: &'a CharacterMesh,
     buckets: [CharacterBucket<'a>; MAX_HORDE_POSE_BUCKETS],
 }
 
 impl<'a> CharacterHorde<'a> {
+    pub(crate) fn mesh(self) -> &'a CharacterMesh {
+        self.mesh
+    }
+
     /// Creates one horde draw description without allocating or copying poses.
+    ///
+    /// # Panics
+    /// Panics if any bucket's pose belongs to a different import than the mesh,
+    /// including empty buckets. Asset selection is dynamic, so this invariant
+    /// is checked at construction rather than encoded in a static Rust type.
     #[must_use]
     pub fn new(
         mesh: &'a CharacterMesh,
         buckets: [CharacterBucket<'a>; MAX_HORDE_POSE_BUCKETS],
     ) -> Self {
+        assert!(buckets.iter().all(|bucket| mesh.asset_id.owns(bucket.pose)),
+            "horde pose belongs to a different asset than the mesh");
         Self { mesh, buckets }
     }
 }
@@ -303,8 +364,9 @@ impl CharacterPipeline {
 
         if let Some(horde) = horde {
             for (index, bucket) in horde.buckets.iter().enumerate() {
-                debug_assert!(!bucket.joints.is_empty());
-                debug_assert!(bucket.joints.len() <= arpg_assets::MAX_JOINTS);
+                let joints = bucket.pose.joint_matrices();
+                debug_assert!(!joints.is_empty());
+                debug_assert!(joints.len() <= arpg_assets::MAX_JOINTS);
                 let count = bucket.instances.len().min(MAX_INSTANCES - next_instance);
                 if count == 0 {
                     continue;
@@ -317,7 +379,7 @@ impl CharacterPipeline {
                 queue.write_buffer(
                     &self.joints,
                     (index as u64 + 1) * palette_bytes,
-                    bytemuck::cast_slice(bucket.joints),
+                    bytemuck::cast_slice(joints),
                 );
                 draws.horde[index] = next_instance as u32..(next_instance + count) as u32;
                 next_instance += count;
