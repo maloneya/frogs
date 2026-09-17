@@ -641,28 +641,27 @@ fn a_steady_state_frame_allocates_nothing() {
     let east = MoveDir::new(Vec3::X);
     let dt = tick_dt();
 
-    let mut world = World::default();
-    world.set_enemy_count(512);
+    for profile in AttackProfile::ALL {
+        let mut world = World::default();
+        world.set_enemy_count(512);
+        world.set_attack_profile(profile);
+        let attack = profile.resolve();
+        let duration = attack.startup() + attack.active() + attack.recovery().get();
 
-    world.step(dt, Intent::new(east, false));
-    observe_presentation(&world, Alpha::ONE);
+        world.step(dt, Intent::new(east, false));
+        observe_presentation(&world, Alpha::ONE);
 
-    let allocations = alloc_counter::allocations(|| {
-        for tick in 0..60 {
-            // **Swings included.** The guard used to pass `false` on every
-            // tick, so the one allocating line the attack added — pushing a
-            // struck body onto a list reserved for sixteen — was never
-            // reached by the thing whose job is to notice. A wider hitbox
-            // or a bigger body radius would have gone unremarked.
-            //
-            // Every 20 ticks is exactly the swing length, so this runs three
-            // back-to-back swings rather than one and then idling.
-            world.step(dt, Intent::new(east, tick % 20 == 0));
-            observe_presentation(&world, Alpha::ONE);
-        }
-    });
+        let allocations = alloc_counter::allocations(|| {
+            for tick in 0..3 * duration {
+                // Include three consecutive swings: walking alone cannot catch
+                // a hit list that grows when the attack reaches a crowded rank.
+                world.step(dt, Intent::new(east, tick % duration == 0));
+                observe_presentation(&world, Alpha::ONE);
+            }
+        });
 
-    assert_eq!(allocations, 0, "60 steady-state frames allocated {allocations} times");
+        assert_eq!(allocations, 0, "{profile}: three swings allocated {allocations} times");
+    }
 }
 
 /// Walking into the wall must stop, not leave the ground plane — and must

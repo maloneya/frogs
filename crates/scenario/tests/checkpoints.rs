@@ -121,8 +121,13 @@ fn recovery_commands_reject_invalid_values_and_unreachable_ticks() {
 fn attack_profile_commands_reject_unknown_profiles_and_unreachable_ticks() {
     for command in [
         "(at: 0, profile: Typo)",
+        "(at: 0, profile: Basic)",
+        "(at: 0, profile: Thrust)",
+        "(at: 0, profile: Sweep)",
+        "(at: 0, profile: HeavySweep)",
+        "(at: 0, profile: CrowdBreaker)",
         "(at: 0, profile: 1)",
-        "(at: 1, profile: Sweep)",
+        "(at: 1, profile: Slam)",
     ] {
         let fixture = Fixture::new(&format!(
             "(attack_profiles: [{command}], budget: (ticks: 1), expect: ())"

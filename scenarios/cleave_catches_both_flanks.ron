@@ -1,6 +1,6 @@
 // A 1.1m disc sweeps from (-1.8,1.2) to (1.8,1.2) over six samples.
 // The flanks are 1m beyond the endpoints; the centre at z=3.1 enters on
-// sample 2. All three are outside Basic's reach. Impulse 24 / mass 1
+// sample 2. Impulse 24 / mass 1
 // yields 24m/s, then a .4m first step and 21.6m/s after damping.
 (
     description: "Cleave reaches both flanks and the distant centre in order, with a single strong impulse per body.",

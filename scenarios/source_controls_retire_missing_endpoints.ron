@@ -1,6 +1,20 @@
 (
     description: "Removing an activated body or its source before the next tick retires the connection; recycled body storage cannot activate the old relationship.",
-    setup: (scenes: [File("../scenes/source_control.ron"), File("../scenes/source_control.ron")]),
+    setup: (scenes: [Gameplay((
+    engine: (
+        name: "Source control",
+        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
+    ),
+    source_controls: [(body: 0, source: 0)],
+)), Gameplay((
+    engine: (
+        name: "Source control",
+        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
+    ),
+    source_controls: [(body: 0, source: 0)],
+))]),
     interactions: [0, 1, 2, 3],
     despawns: [(at: 1, body: 0)],
     remove_sources: [(at: 3, scene: 1, source: 0)],

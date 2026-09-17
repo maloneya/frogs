@@ -137,12 +137,8 @@ impl PresentationRole {
         match self {
             Self::Idle => "idle",
             Self::Run => "run",
-            Self::Attack(AttackProfile::Basic) => "attack_basic",
-            Self::Attack(AttackProfile::Thrust) => "attack_thrust",
-            Self::Attack(AttackProfile::Sweep) => "attack_sweep",
-            Self::Attack(AttackProfile::HeavySweep) => "attack_heavy_sweep",
             Self::Attack(AttackProfile::Cleave) => "attack_cleave",
-            Self::Attack(AttackProfile::CrowdBreaker) => "attack_crowd_breaker",
+            Self::Attack(AttackProfile::Slam) => "attack_slam",
         }
     }
 }
@@ -175,12 +171,8 @@ impl CharacterClips {
 
     fn attack_name(profile: AttackProfile) -> &'static str {
         match profile {
-            AttackProfile::Basic => "AttackBasic",
-            AttackProfile::Thrust => "AttackThrust",
-            AttackProfile::Sweep => "AttackSweep",
-            AttackProfile::HeavySweep => "AttackHeavySweep",
             AttackProfile::Cleave => "AttackCleave",
-            AttackProfile::CrowdBreaker => "AttackCrowdBreaker",
+            AttackProfile::Slam => "AttackSlam",
         }
     }
 

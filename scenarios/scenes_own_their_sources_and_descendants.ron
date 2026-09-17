@@ -2,17 +2,29 @@
     description: "Eviction removes A and its source descendants, preserves B and unowned bodies, and prevents later firing; reloading has an independent lifetime.",
     setup: (
         scenes: [
-            File("../scenes/stream.ron"),
+            Inline((
+    name: "A body and a continuous source",
+    bodies: [(pos: (20.0, 0.0))],
+    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2)],
+)),
             Inline((name: "B", bodies: [(pos: (-20.0, 0.0))])),
         ],
         actions: [Place((-40.0, 0.0))],
     ),
     scenes: [
         (at: 1, action: Evict(0)),
-        (at: 2, action: Load(File("../scenes/stream.ron"))),
+        (at: 2, action: Load(Inline((
+    name: "A body and a continuous source",
+    bodies: [(pos: (20.0, 0.0))],
+    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2)],
+)))),
         (at: 3, action: Evict(1)),
         (at: 4, action: Evict(2)),
-        (at: 5, action: Load(File("../scenes/stream.ron"))),
+        (at: 5, action: Load(Inline((
+    name: "A body and a continuous source",
+    bodies: [(pos: (20.0, 0.0))],
+    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2)],
+)))),
         (at: 5, action: Evict(3)),
     ],
     checkpoints: [

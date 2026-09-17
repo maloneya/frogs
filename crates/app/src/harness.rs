@@ -513,7 +513,7 @@ mod tests {
         );
         assert!(matches!(parse("scene restart"), Ok(Command::RestartScene)));
         assert!(matches!(parse("scene list"), Ok(Command::ListScenes)));
-        assert!(matches!(parse("scene add scenes/pair.ron"), Ok(Command::AddScene(_))));
+        assert!(matches!(parse("scene add scenes/seekers.ron"), Ok(Command::AddScene(_))));
         assert!(matches!(parse("scene evict c0"), Ok(Command::EvictScene(_))));
         for bad in [
             "scene",

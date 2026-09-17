@@ -3,7 +3,14 @@
     setup: (scenes: [Inline((name: "setup"))]),
     scenes: [
         (at: 3, action: Load(Inline((name: "late")))),
-        (at: 0, action: Load(File("../scenes/source_control.ron"))),
+        (at: 0, action: Load(Gameplay((
+    engine: (
+        name: "Source control",
+        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
+    ),
+    source_controls: [(body: 0, source: 0)],
+)))),
         (at: 0, action: Load(Inline((name: "external source",
             sources: [(pos: (-20.0, 0.0), enabled: false)])))),
         (at: 3, action: Evict(1)),

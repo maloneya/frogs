@@ -12,37 +12,23 @@ use crate::swing::Swing;
 /// authors an attack by replaying a sequence of UI increments.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 pub enum AttackProfile {
-    /// The original short, stationary hit in front of the player.
-    #[default]
-    Basic,
-    /// A quick narrow line away from the player.
-    Thrust,
-    /// A medium-speed side-to-side arc.
-    Sweep,
-    /// A slower, broader arc with more knockback.
-    HeavySweep,
     /// A broad, fast arc that drives a front rank back.
+    #[default]
     Cleave,
     /// An expanding frontal slam with enough impulse to clear a crowd.
-    CrowdBreaker,
+    Slam,
 }
 
 impl AttackProfile {
     /// The complete authored catalog. Presentation may choose how to lay it out.
-    pub const ALL: [Self; 6] = [
-        Self::Basic, Self::Thrust, Self::Sweep, Self::HeavySweep, Self::Cleave, Self::CrowdBreaker,
-    ];
+    pub const ALL: [Self; 2] = [Self::Cleave, Self::Slam];
 
     /// The authored name, shared by state, traces, and selection surfaces.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Basic => "Basic",
-            Self::Thrust => "Thrust",
-            Self::Sweep => "Sweep",
-            Self::HeavySweep => "Heavy sweep",
             Self::Cleave => "Cleave",
-            Self::CrowdBreaker => "Crowd breaker",
+            Self::Slam => "Slam",
         }
     }
 
@@ -51,15 +37,11 @@ impl AttackProfile {
     #[must_use]
     pub fn resolve(self) -> ResolvedAttack {
         let (startup, active, recovery, shape, knockback) = match self {
-            Self::Basic => (6, 4, 10, shape((0.0, 1.1, 0.6), (0.0, 1.1, 0.6)), 6.0),
-            Self::Thrust => (4, 4, 8, shape((0.0, 0.8, 0.3), (0.0, 1.8, 0.3)), 4.0),
-            Self::Sweep => (6, 5, 10, shape((-0.8, 0.8, 0.35), (0.8, 0.8, 0.35)), 6.0),
-            Self::HeavySweep => (12, 7, 18, shape((-1.0, 0.8, 0.5), (1.0, 0.8, 0.6)), 10.0),
             // Crowd-control content uses the same impulse and swept-disc doors
-            // as Basic. At unit enemy mass and 0.9 retention, free travel is
+            // as other physical producers. At unit enemy mass and 0.9 retention, free travel is
             // roughly impulse / 6 metres; contacts distribute it through the rank.
             Self::Cleave => (6, 6, 10, shape((-1.8, 1.2, 1.1), (1.8, 1.2, 1.1)), 24.0),
-            Self::CrowdBreaker => (9, 5, 16, shape((0.0, 1.6, 1.4), (0.0, 1.6, 2.6)), 40.0),
+            Self::Slam => (9, 5, 16, shape((0.0, 1.6, 1.4), (0.0, 1.6, 2.6)), 40.0),
         };
         ResolvedAttack::try_new(
             startup,

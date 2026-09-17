@@ -2,14 +2,14 @@
 0 swung
 1 attack recovery ticks=30
 6 hitbox opened
-10 hitbox closed
-12 swung
-18 hitbox opened
-22 hitbox closed
-23 attack recovery ticks=1
-52 swung
-58 hitbox opened
-62 hitbox closed
-63 swung
-69 hitbox opened
-73 hitbox closed
+12 hitbox closed
+14 swung
+20 hitbox opened
+26 hitbox closed
+27 attack recovery ticks=1
+56 swung
+62 hitbox opened
+68 hitbox closed
+69 swung
+75 hitbox opened
+81 hitbox closed

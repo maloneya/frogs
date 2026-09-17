@@ -252,7 +252,7 @@ mod tests {
     }
 
     /// A swing whose ends coincide tests the same disc every tick. It has to
-    /// survive generation unchanged, since it is also the default configuration.
+    /// survive generation unchanged, independently of the authored attack catalog.
     #[test]
     fn a_swing_that_does_not_move_generates_one_position() {
         let at = Vec2::new(0.0, 1.1);

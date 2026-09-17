@@ -110,27 +110,27 @@ mod tests {
     #[test]
     fn attack_outlines_follow_committed_samples_and_completed_tick_pose() {
         let mut game = Game::empty();
-        game.set_attack_profile(arpg_sim::AttackProfile::Thrust);
+        game.set_attack_profile(arpg_sim::AttackProfile::Slam);
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         let mut debug = CollisionDebug::default();
         debug.set_enabled(true, &game);
         assert!(debug.attack.is_empty());
 
-        // Thrust: four startup ticks, four active samples, eight recovery ticks.
+        // Slam: nine startup ticks, five active samples, sixteen recovery ticks.
         // Move and turn throughout, then select a different next swing mid-attack.
-        for elapsed in 0..=16 {
+        for elapsed in 0..=30 {
             game.step(dt, Intent::new(MoveDir::new(Vec3::X), elapsed == 0));
             if elapsed == 1 {
-                game.set_attack_profile(arpg_sim::AttackProfile::CrowdBreaker);
+                game.set_attack_profile(arpg_sim::AttackProfile::Cleave);
             }
             let before = game.hash();
             debug.rebuild(&game);
             assert_eq!(game.hash(), before, "observation must not affect gameplay");
             assert_eq!(debug.tick, game.tick());
             let (phase, samples): (_, Vec<usize>) = match elapsed {
-                0..=3 => (AttackPhase::Startup, (0..4).collect()),
-                4..=7 => (AttackPhase::Active, vec![elapsed - 4]),
-                8..=15 => (AttackPhase::Recovery, vec![]),
+                0..=8 => (AttackPhase::Startup, (0..5).collect()),
+                9..=13 => (AttackPhase::Active, vec![elapsed - 9]),
+                14..=29 => (AttackPhase::Recovery, vec![]),
                 _ => (AttackPhase::Idle, vec![]),
             };
             assert_eq!(debug.attack_phase, Some(phase));
@@ -140,17 +140,17 @@ mod tests {
             let (sin, cos) = game.player_facing().sin_cos();
             for (disc, sample) in debug.attack.iter().zip(samples) {
                 assert_eq!(disc.sample(), sample);
-                let reach = 0.8 + sample as f32 / 3.0;
+                let reach = 1.6;
                 let expected = Vec3::new(origin.x + sin * reach, 0.0, origin.z + cos * reach);
                 assert!(disc.centre().distance(expected) < 1e-5);
-                assert!((disc.radius() - 0.3).abs() < 1e-6);
+                assert!((disc.radius() - (1.4 + 0.3 * sample as f32)).abs() < 1e-6);
             }
             let mut report = Report::default();
             debug.report(&mut report);
             let report = report.finish();
             assert!(report.contains(&format!("\"phase\":\"{phase}\"")));
             assert!(report.contains(&format!("\"attack\":{{\"disc_count\":{}", debug.attack.len())));
-            if elapsed == 4 {
+            if elapsed == 9 {
                 debug.set_enabled(false, &game);
                 assert!(debug.attack.is_empty());
                 assert!(debug.drawings.is_empty());

@@ -151,7 +151,7 @@ fn character_replacement_is_atomic_across_import_and_upload_failure() {
         (current.asset.node_count(), current.asset.joint_count()),
         (6, 4)
     );
-    assert_eq!(current.asset.clip_count(), 8);
+    assert_eq!(current.asset.clip_count(), 4);
     let current = slot.as_mut().unwrap();
     let player = Game::empty().player_presentation(Alpha::ONE);
     current.sample(player, Alpha::ONE, 0.5);
@@ -180,7 +180,7 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview(Some(&preview), &mut active);
     assert_eq!(
         active.finish(),
-        r#"{"active":true,"path":"assets/character.glb","vertices":144,"indices":216,"texture_width":16,"texture_height":16,"nodes":6,"joints":4,"clips":8,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":12,"sample_seconds":0.2500}"#
+        r#"{"active":true,"path":"assets/character.glb","vertices":144,"indices":216,"texture_width":16,"texture_height":16,"nodes":6,"joints":4,"clips":4,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":12,"sample_seconds":0.2500}"#
     );
 }
 
@@ -347,12 +347,8 @@ fn resetting_horde_presentation_cannot_reuse_a_previous_runs_heading() {
 fn every_attack_profile_resolves_to_its_own_presentation_clip() {
     let character = loaded_character("character.glb");
     let expected = [
-        "AttackBasic",
-        "AttackThrust",
-        "AttackSweep",
-        "AttackHeavySweep",
         "AttackCleave",
-        "AttackCrowdBreaker",
+        "AttackSlam",
     ];
     for (profile, expected) in AttackProfile::ALL.into_iter().zip(expected) {
         let id = character.clips.for_role(PresentationRole::Attack(profile));
@@ -377,7 +373,7 @@ fn authoritative_player_facts_drive_direct_roles() {
     character.sample(running, Alpha::ONE, 1.0 / 60.0);
     assert_eq!(character.sampled_role, PresentationRole::Run);
 
-    game.set_attack_profile(AttackProfile::Sweep);
+    game.set_attack_profile(AttackProfile::Slam);
     let dt = Accumulator::default()
         .pending(arpg_sim::Dt::SECS)
         .next()
@@ -387,10 +383,10 @@ fn authoritative_player_facts_drive_direct_roles() {
     character.sample(attacking, Alpha::ONE, 0.25);
     assert_eq!(
         character.sampled_role,
-        PresentationRole::Attack(AttackProfile::Sweep)
+        PresentationRole::Attack(AttackProfile::Slam)
     );
     let clip = character.clips.for_role(character.sampled_role);
-    assert_eq!(character.asset.clip(clip).unwrap().name(), "AttackSweep");
+    assert_eq!(character.asset.clip(clip).unwrap().name(), "AttackSlam");
 }
 
 #[test]
@@ -487,68 +483,34 @@ fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
         );
     }
 
-    for profile in [AttackProfile::Sweep, AttackProfile::HeavySweep] {
-        let resolved = profile.resolve();
-        let wound = tip(
-            &mut character,
-            profile,
-            AttackPhase::Active,
-            resolved.startup(),
-            Alpha::ZERO,
-        );
-        let struck = tip(
-            &mut character,
-            profile,
-            AttackPhase::Recovery,
-            resolved.startup() + resolved.active(),
-            Alpha::ZERO,
-        );
-        assert!(
-            wound.x < -0.15 && struck.x > 0.55 && struck.x - wound.x > 0.9,
-            "{profile:?}: {wound:?} -> {struck:?}"
-        );
-    }
     let profile = AttackProfile::Cleave;
     let resolved = profile.resolve();
-    let raised = tip(
-        &mut character,
-        profile,
-        AttackPhase::Active,
-        resolved.startup(),
-        Alpha::ZERO,
+    let wound = tip(
+        &mut character, profile, AttackPhase::Active,
+        resolved.startup(), Alpha::ZERO,
     );
-    let lowered = tip(
-        &mut character,
-        profile,
-        AttackPhase::Recovery,
-        resolved.startup() + resolved.active(),
-        Alpha::ZERO,
+    let struck = tip(
+        &mut character, profile, AttackPhase::Recovery,
+        resolved.startup() + resolved.active(), Alpha::ZERO,
     );
     assert!(
-        raised.y > lowered.y + 0.5,
-        "cleave did not fall during active: {raised:?} -> {lowered:?}"
+        wound.x < -0.15 && struck.x > 0.55 && struck.x - wound.x > 0.9,
+        "cleave must sweep left to right: {wound:?} -> {struck:?}"
     );
+    let mut previous = wound;
+    for tick in 0..resolved.active() {
+        for alpha in [Alpha::ZERO, Alpha::ONE] {
+            let current = tip(
+                &mut character, profile, AttackPhase::Active,
+                resolved.startup() + tick, alpha,
+            );
+            assert!(current.z > 0.0, "cleave went behind the player: {current:?}");
+            assert!(current.x >= previous.x - 1.0e-4, "cleave reversed: {previous:?} -> {current:?}");
+            previous = current;
+        }
+    }
 
-    let profile = AttackProfile::Thrust;
-    let resolved = profile.resolve();
-    let drawn = tip(
-        &mut character,
-        profile,
-        AttackPhase::Active,
-        resolved.startup(),
-        Alpha::ZERO,
-    );
-    let extended = tip(
-        &mut character,
-        profile,
-        AttackPhase::Recovery,
-        resolved.startup() + resolved.active(),
-        Alpha::ZERO,
-    );
-    assert!(
-        extended.z > drawn.z + 0.25,
-        "thrust did not extend during active: {drawn:?} -> {extended:?}"
-    );
+
 }
 
 #[test]

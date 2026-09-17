@@ -154,12 +154,8 @@ def add_action(name, keys):
 
 add_action("Idle", [(1, 0, 0, 0), (16, 0, 4, 0), (31, 0, 0, 0)])
 add_action("Run", [(1, -8, -7, 0), (8, -8, 7, 0), (16, -8, -7, 0)])
-add_action("AttackBasic", [(1, 0, 0, -25), (16, 0, 0, 35), (31, 0, 0, 0)])
-add_action("AttackThrust", [(1, 8, 0, -10), (16, -14, 0, 5), (31, 0, 0, 0)])
-add_action("AttackSweep", [(1, 0, 0, -70), (16, 0, 0, 70), (31, 0, 0, 0)])
-add_action("AttackHeavySweep", [(1, 8, 0, -100), (18, -8, 0, 100), (31, 0, 0, 0)])
 add_action("AttackCleave", [(1, 0, 0, -130), (14, 0, 0, 130), (31, 0, 0, 0)])
-add_action("AttackCrowdBreaker", [(1, 18, 0, 0), (16, -22, 0, 0), (31, 0, 0, 0)])
+add_action("AttackSlam", [(1, 18, 0, 0), (16, -22, 0, 0), (31, 0, 0, 0)])
 bpy.context.scene.frame_set(1)
 
 bpy.context.scene.render.image_settings.file_format = "PNG"

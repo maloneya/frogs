@@ -41,7 +41,7 @@ fn failed_start_and_additive_load_preserve_the_complete_run() {
     for run in [&mut game, &mut control] {
         step(run, Intent::NONE.with_interact(true));
         assert!(run.request_spawn(Vec2::new(-20.0, 0.0), Template::BODY));
-        run.set_attack_profile(AttackProfile::Sweep);
+        run.set_attack_profile(AttackProfile::Slam);
     }
     let before = (game.hash(), report(&game), game.trace().render());
     let mut invalid = scene();
@@ -82,7 +82,7 @@ fn restart_uses_its_snapshot_and_replaces_all_live_state_and_pending_work() {
         bodies: vec![Placed { pos: (-40.0, 0.0), what: Template::BODY }],
         ..Scene::default()
     }.into()).unwrap();
-    game.set_attack_profile(AttackProfile::Sweep);
+    game.set_attack_profile(AttackProfile::Slam);
     game.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
     assert!(game.apply_impulse(game.player_id(), Impulse::try_from((6.0, 0.0)).unwrap()));
     step(&mut game, Intent::new(MoveDir::new(Vec3::Z), true));

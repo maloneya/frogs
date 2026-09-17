@@ -1,28 +1,17 @@
-// The other half of a window: what it does *not* catch. A target in range
-// throughout cannot tell a correct window from one a tick too long — the hit
-// lands either way and only its timestamp moves.
-//
-// `seek` runs before `attack`, so on tick t the hitbox tests a body that has
-// taken t+1 steps of 3.5/60. The hitbox catches a body dead ahead while
-// |d - 1.1| < 0.85 minus the 0.001 slop, so d < 1.949:
-//
-//   tick 9  (last live tick)   d = 1.9767   outside by 0.028
-//   tick 10 (first dead tick)  d = 1.9183   inside by 0.031
-//
-// The chaser crosses into range on the very tick the hitbox stops existing.
-// Margins are a full tick's travel wide on both sides, so this is about the
-// window rather than about float noise. Extend ACTIVE by one and it hits.
+// Slam closes at 14. Final reach is 1.6+2.6+.25-.001=4.449m.
+// Seeker at 5.3m is at 4.48333 after tick 13, 4.425 after tick 14.
 (
     description: "A chaser that comes into range on the tick the hitbox shuts is not hit.",
     setup: (
         actions: [
-            Place((0.0, 2.56)),
+            Place((0.0, 5.3)),
             Seek(0),
         ],
     ),
     inputs: [],
+    attack_profiles: [(at: 0, profile: Slam)],
     attacks: [0],
-    budget: (ticks: 20),
+    budget: (ticks: 30),
     expect: (
         player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
         struck: 0,

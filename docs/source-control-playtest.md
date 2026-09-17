@@ -6,8 +6,8 @@ Move with WASD and swing with Space. E does not toggle the source off.
 **F2 → Restart current** restores the blue block and empty arena.
 
 The authored scene is [activate_horde.ron](../scenes/activate_horde.ron).
-The fast architecture fixture remains unchanged in
-[source_control.ron](../scenes/source_control.ron).
+The fast architecture fixtures are inline in the source-control regression
+scenarios.
 
 | Setting | Purpose |
 |---|---|

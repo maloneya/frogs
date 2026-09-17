@@ -82,7 +82,7 @@ when blessing. Public Game tests also exercise restart after pending and
 consumed activation, invalid-load atomicity, cached relationship hashes, and
 stale source identities.
 
-The fast fixture is `scenes/source_control.ron`. The playable trial is
+The fast fixtures are inline in the regression scenarios. The playable trial is
 `scenes/activate_horde.ron`: select it through F2 and press E beside the blue
 block. See the [playtest instructions and evidence](source-control-playtest.md)
 for the tuned setup, assertions, screenshots, and restart verification.

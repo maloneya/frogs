@@ -255,12 +255,12 @@ mod tests {
         tap(&mut controls, "down");
         tap(&mut controls, "down");
         tap(&mut controls, "right");
-        assert_eq!(controls.menu().pending(), Some(AttackProfile::HeavySweep));
+        assert_eq!(controls.menu().pending(), Some(AttackProfile::Slam));
         // Readout / gameplay sampling on zero-tick frames must not eat a selection.
         let _ = controls.menu().profile(AttackProfile::default());
         let _ = controls.sample();
         tap(&mut controls, "escape");
-        assert_eq!(controls.take_profile(), Some(AttackProfile::HeavySweep));
+        assert_eq!(controls.take_profile(), Some(AttackProfile::Slam));
         assert!(controls.take_profile().is_none());
         tap(&mut controls, "f1");
         tap(&mut controls, "right");
@@ -277,7 +277,7 @@ mod tests {
         for _ in 0..AttackProfile::ALL.len() + 2 {
             tap(&mut controls, "left");
         }
-        assert_eq!(controls.menu().pending(), Some(AttackProfile::Basic));
+        assert_eq!(controls.menu().pending(), Some(AttackProfile::Cleave));
         for _ in 0..AttackProfile::ALL.len() + 2 {
             tap(&mut controls, "right");
         }
@@ -288,7 +288,7 @@ mod tests {
     fn every_authored_attack_profile_is_reachable() {
         let mut controls = Controls::default();
         tap(&mut controls, "f1");
-        assert_eq!(controls.menu().profile(AttackProfile::Basic), AttackProfile::Basic);
+        assert_eq!(controls.menu().profile(AttackProfile::Cleave), AttackProfile::Cleave);
         for profile in AttackProfile::ALL.into_iter().skip(1) {
             tap(&mut controls, "down");
             assert_eq!(controls.menu().pending(), Some(profile));

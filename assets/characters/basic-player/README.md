@@ -27,3 +27,10 @@ Every attack action uses frame 1 for neutral entry, frame 13 for the completed
 wind-up, frame 19 for contact/follow-through, and frame 31 for recovery to
 neutral. Keep the major striking motion between frames 13 and 19: app maps that
 authored interval to the simulation's committed active ticks.
+
+Cleave winds the torso left, carries the sword across the front from left to
+right during frames 13–19, then recovers. The exported-asset presentation test
+checks the direction throughout the active interval and rejects a path behind
+the player. This first pass retains the eight-joint rig; elbow and wrist
+articulation are a separate improvement. The broad damage disc remains a
+simulation shape, not a literal outline of the blade.

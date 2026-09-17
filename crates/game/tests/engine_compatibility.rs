@@ -74,8 +74,8 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
                 assert!(world.request_spawn(Vec2::new(-3.0, 2.0), Template::BODY));
             }
             if stepped == 20 {
-                game.set_attack_profile(AttackProfile::Sweep);
-                world.set_attack_profile(AttackProfile::Sweep);
+                game.set_attack_profile(AttackProfile::Slam);
+                world.set_attack_profile(AttackProfile::Slam);
             }
             let direction = if stepped < 12 { Vec3::ZERO } else { Vec3::Z };
             let intent = Intent::new(MoveDir::new(direction), stepped % 24 == 0)

@@ -278,7 +278,7 @@ the scenario timeline does not yet offer a restart command.
 Clippy, workspace tests including the GPU test, rustdoc, and all 59 scenarios
 passed. The original scenarios and golden traces are unchanged. Rustdoc retains
 existing private-link warnings. See [source control](source-control.md).
-The minimal connected fixture is `scenes/source_control.ron`; live playtesting
+The minimal connected fixture now lives inline in the regression scenarios; live playtesting
 and tuning remain phase 6.
 
 ### 6. Author and playtest the scenario

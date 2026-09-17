@@ -76,9 +76,8 @@ targets, non-joint targets and non-uniform scale are rejected explicitly. Key
 the bind pose at both ends when the clip should loop without a seam. One asset
 may contain at most 16 clips.
 
-The player presentation contract resolves `Idle`, `Run`, `AttackBasic`,
-`AttackThrust`, `AttackSweep`, `AttackHeavySweep`, `AttackCleave` and
-`AttackCrowdBreaker` once at load. Attack actions reserve consecutive authored
+The player presentation contract resolves `Idle`, `Run`, `AttackCleave` and
+`AttackSlam` once at load. Attack actions reserve consecutive authored
 segments for wind-up, contact and recovery; app maps those segments to the
 committed simulation phase lengths. Recovery tuning therefore cannot move the
 visible contact interval. These names and segment boundaries are

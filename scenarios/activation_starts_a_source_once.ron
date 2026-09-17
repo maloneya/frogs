@@ -1,6 +1,13 @@
 (
     description: "Activation on tick 2 permits the first emission on tick 3; repeated interaction cannot re-enable a source later paused by an external command.",
-    setup: (scenes: [File("../scenes/source_control.ron")]),
+    setup: (scenes: [Gameplay((
+    engine: (
+        name: "Source control",
+        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
+    ),
+    source_controls: [(body: 0, source: 0)],
+))]),
     interactions: [2, 4, 6, 8, 10],
     source_switches: [
         (at: 6, scene: 0, source: 0, enabled: false),

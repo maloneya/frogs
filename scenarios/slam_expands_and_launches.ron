@@ -2,12 +2,12 @@
 // Enemy radius .25 means targets 2.8m sideways / 2.7m ahead of its centre
 // enter only on the final sample. Rear and distant-side controls stay clear.
 (
-    description: "Crowd breaker hits close immediately, expands to distant targets, and gives each one 40 impulse exactly once.",
+    description: "Slam hits close immediately, expands to distant targets, and gives each one 40 impulse exactly once.",
     setup: (actions: [
         Place((0.0, 0.8)), Place((-2.8, 1.6)), Place((2.8, 1.6)),
         Place((0.0, 4.3)), Place((0.0, -1.5)), Place((4.0, 1.6)),
     ]),
-    attack_profiles: [(at: 0, profile: CrowdBreaker)],
+    attack_profiles: [(at: 0, profile: Slam)],
     attacks: [0],
     checkpoints: [
         (at: 8, expect: (attack_phase: Startup, struck: 0)),
@@ -31,12 +31,12 @@
     ],
     budget: (ticks: 15),
     expect: (
-        attack_profile: CrowdBreaker, attack_phase: Recovery, hitbox: false,
+        attack_profile: Slam, attack_phase: Recovery, hitbox: false,
         struck: 4, contacts: 0, crowd_contacts: 0, enemy_count: 6,
         bodies: [
             (nth: 4, health: 3, pos: (x: 0.0, z: -1.5, tol: 0.0)),
             (nth: 5, health: 3, pos: (x: 4.0, z: 1.6, tol: 0.0)),
         ],
-        trace: "crowd_breaker_expands_and_launches.trace",
+        trace: "slam_expands_and_launches.trace",
     ),
 )

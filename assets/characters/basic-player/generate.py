@@ -242,37 +242,15 @@ def build_actions(armature):
         (8, {"Spine": (7, 0, 0), "LeftArm": (24, 0, 0), "RightArm": (-24, 0, 0), "LeftLeg": (-28, 0, 0), "RightLeg": (28, 0, 0)}),
         (16, {"Spine": (7, 0, 0), "LeftArm": (-24, 0, 0), "RightArm": (24, 0, 0), "LeftLeg": (28, 0, 0), "RightLeg": (-28, 0, 0)}),
     ]))
-    actions.append(add_action(armature, "AttackBasic", [
-        (ready, {}),
-        (windup, {"Spine": (0, 0, -12), "RightArm": (0, 0, -38), "Weapon": (0, 0, -45)}),
-        (contact, {"Spine": (0, 0, 18), "RightArm": (0, 0, 55), "Weapon": (0, 0, 80)}),
-        (recovered, {}),
-    ]))
-    actions.append(add_action(armature, "AttackThrust", [
-        (ready, {}),
-        (windup, {"Spine": (-8, 0, 0), "RightArm": (28, 0, -10), "Weapon": (30, 0, 0)}),
-        (contact, {"Spine": (18, 0, 0), "RightArm": (-30, 0, 4), "Weapon": (-30, 0, 0)}),
-        (recovered, {}),
-    ]))
-    actions.append(add_action(armature, "AttackSweep", [
-        (ready, {}),
-        (windup, {"Spine": (0, -25, 0), "RightArm": (0, 0, 70)}),
-        (contact, {"Spine": (0, 25, 0)}),
-        (recovered, {}),
-    ]))
-    actions.append(add_action(armature, "AttackHeavySweep", [
+    # Spine local Y twists about the upright axis. Keep the lateral strike
+    # inside the shared active segment; simulation owns its timing and reach.
+    actions.append(add_action(armature, "AttackCleave", [
         (ready, {}),
         (windup, {"Spine": (0, -35, 0), "RightArm": (0, 0, 80)}),
         (contact, {"Spine": (0, 35, 0)}),
         (recovered, {}),
     ]))
-    actions.append(add_action(armature, "AttackCleave", [
-        (ready, {}),
-        (windup, {"Spine": (-18, 0, 0), "RightArm": (-105, 0, -18), "Weapon": (-35, 0, 0)}),
-        (contact, {"Spine": (22, 0, 0), "RightArm": (72, 0, 18), "Weapon": (42, 0, 0)}),
-        (recovered, {}),
-    ]))
-    actions.append(add_action(armature, "AttackCrowdBreaker", [
+    actions.append(add_action(armature, "AttackSlam", [
         (ready, {}),
         (windup, {"Spine": (-18, 0, 0), "LeftArm": (0, 0, -32), "RightArm": (0, 0, 32), "Weapon": (-30, 0, 0)}),
         (contact, {"Spine": (30, 0, 0), "LeftArm": (0, 0, 48), "RightArm": (0, 0, -48), "Weapon": (50, 0, 0)}),

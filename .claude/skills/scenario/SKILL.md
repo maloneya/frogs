@@ -112,7 +112,7 @@ bodies. Every one is optional. The tick budget is always checked — the run mus
 take exactly that many ticks.
 
 Attack selection uses sim's authored identity rather than replaying debug-menu
-input. Commands look like `attack_profiles: [(at: 0, profile: Sweep)]`;
+input. Commands look like `attack_profiles: [(at: 0, profile: Slam)]`;
 `attack_profile` asserts the next swing and `swing_profile` the in-flight copy.
 Assert resolved geometry and force through the bodies hit, their hit ticks, and
 their resulting velocities rather than copying attack fields into this schema.
@@ -131,7 +131,7 @@ named zero-based tick completes:
 checkpoints: [
     (at: 5, expect: (hitbox: false, struck: 0)),
     (at: 6, expect: (hitbox: true, struck: 1)),
-    (at: 10, expect: (hitbox: false, struck: 1)),
+    (at: 12, expect: (hitbox: false, struck: 1)),
 ],
 budget: (ticks: 30),
 expect: (hitbox: false, trace: "the_hitbox_opens_and_shuts_on_schedule.trace"),

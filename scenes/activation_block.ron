@@ -1,7 +1,0 @@
-// Trial: walk to the blue block and press E. It should turn green once.
-// Push against it and swing: it stays put and cannot be damaged.
-// Restart current in F2 restores its Ready state.
-(
-    name: "Activate a static block (E)",
-    bodies: [(pos: (0.0, 2.0), what: (fixed: true, interactable: true))],
-)

@@ -74,7 +74,7 @@ keeps validation and tuning together within files during this staged migration.
 `crates/sim/src/pass/seek.rs` is engine: it carries the assert that a chaser
 must be slower than the player, without which kiting stops existing. The `3.5`
 that assert bounds is game. Same in `attack.rs` — that a swing's timings are
-non-zero and bounded is engine; the `6`, `4` and `10` that `AttackProfile::Basic`
+non-zero and bounded is engine; the `6`, `6` and `10` that `AttackProfile::Cleave`
 resolves to are game. The engine half sits in two different mechanisms, which is
 worth knowing before editing either: `ResolvedAttack::try_new` bounds startup and
 active, while recovery is bounded by the `RecoveryTicks` newtype, so the panel,
@@ -353,8 +353,7 @@ Game actions (rebindable, go through `Action`):
 
 Static props and the activation playtest: [`docs/interaction.md`](docs/interaction.md).
 
-`F1` opens the attack profile panel · arrows choose Basic, Thrust, Sweep,
-Heavy sweep, Cleave, or Crowd breaker · `R` returns to Basic ·
+`F1` opens the attack profile panel · arrows choose Cleave or Slam · `R` returns to Cleave ·
 `F1` / `Esc` close. The panel captures gameplay input while the world keeps
 running. Selections apply to the next swing and last for the current run.
 

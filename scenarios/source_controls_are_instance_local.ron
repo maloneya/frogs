@@ -1,11 +1,32 @@
 (
     description: "Loading the same connection twice creates independent relationships; eviction between activation and its consumption cancels only that instance.",
-    setup: (scenes: [File("../scenes/source_control.ron"), File("../scenes/source_control.ron")]),
+    setup: (scenes: [Gameplay((
+    engine: (
+        name: "Source control",
+        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
+    ),
+    source_controls: [(body: 0, source: 0)],
+)), Gameplay((
+    engine: (
+        name: "Source control",
+        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
+    ),
+    source_controls: [(body: 0, source: 0)],
+))]),
     interactions: [0, 2, 5],
     scenes: [
         (at: 3, action: Evict(1)),
         (at: 4, action: Evict(0)),
-        (at: 5, action: Load(File("../scenes/source_control.ron"))),
+        (at: 5, action: Load(Gameplay((
+    engine: (
+        name: "Source control",
+        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
+    ),
+    source_controls: [(body: 0, source: 0)],
+)))),
     ],
     checkpoints: [
         (at: 1, expect: (enemy_count: 1, controls: [

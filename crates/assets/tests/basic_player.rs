@@ -14,17 +14,14 @@ fn basic_player_satisfies_the_player_presentation_contract() {
     assert_eq!(character.base_color_texture().width(), 64);
     assert_eq!(character.base_color_texture().height(), 64);
     assert_eq!(character.joint_count(), 8);
+    assert_eq!(character.clip_count(), 4);
     assert!(character.joint_named("Weapon").is_some());
 
     for name in [
         "Idle",
         "Run",
-        "AttackBasic",
-        "AttackThrust",
-        "AttackSweep",
-        "AttackHeavySweep",
         "AttackCleave",
-        "AttackCrowdBreaker",
+        "AttackSlam",
     ] {
         assert!(character.clip_named(name).is_some(), "missing {name}");
     }

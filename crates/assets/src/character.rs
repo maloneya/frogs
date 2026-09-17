@@ -1299,7 +1299,7 @@ mod tests {
                 .iter()
                 .all(|matrix| { matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-5) })
         );
-        assert_eq!(character.clip_count(), 8);
+        assert_eq!(character.clip_count(), 4);
         let idle = character.clip_named("Idle").unwrap();
         let clip = character.clip(idle).unwrap();
         assert_eq!(clip.name(), "Idle");
@@ -1322,12 +1322,8 @@ mod tests {
         assert!(character.joint_named("Weapon").is_some());
         for name in [
             "Run",
-            "AttackBasic",
-            "AttackThrust",
-            "AttackSweep",
-            "AttackHeavySweep",
             "AttackCleave",
-            "AttackCrowdBreaker",
+            "AttackSlam",
         ] {
             assert!(character.clip_named(name).is_some(), "missing {name}");
         }
@@ -1423,7 +1419,7 @@ mod tests {
             mutate_json(
                 FIXTURE,
                 "\"name\":\"AttackCleave\"",
-                "\"name\":\"AttackBasic\"",
+                "\"name\":\"AttackSlam\"",
             ),
             mutate_json(
                 FIXTURE,

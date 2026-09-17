@@ -39,8 +39,10 @@ const HITBOX_SAMPLES: usize = ResolvedAttack::MAX_ACTIVE_TICKS as usize;
 ///
 /// Only a starting capacity: the list grows if a swing lands in a crowd. It is
 /// reserved up front so that a steady-state tick does not reach the allocator,
-/// which is a property `a_steady_state_frame_allocates_nothing` checks.
-const EXPECTED_HITS: usize = 16;
+/// which is a property `a_steady_state_frame_allocates_nothing` checks for
+/// both crowd attacks. Sixteen covered the old narrow default, but Cleave
+/// and Slam routinely hit more bodies in the normal horde.
+const EXPECTED_HITS: usize = 64;
 
 /// A swing in the air: how far through it is, and the shape it committed to.
 ///

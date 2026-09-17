@@ -1,54 +1,28 @@
+// Cleave stays committed for 22 ticks; selecting Slam at tick 1 applies at 22.
+// A target 4.3m ahead is beyond Cleave's maximum reach, but enters Slam's
+// final sample at 22+13=35, receiving exactly 40 impulse.
 (
-    description: "A selected profile supplies a resolved attack; changing profiles during startup affects only the next swing.",
-    setup: (
-        actions: [
-            Place((-0.8, 0.8)),
-            Place((0.8, 0.8)),
-            Place((0.0, 2.2)),
-        ],
-    ),
-    attack_profiles: [
-        (at: 0, profile: Sweep),
-        // The sweep is already in flight, so this selection belongs to the
-        // second press rather than reshaping the first attack.
-        (at: 1, profile: Thrust),
-    ],
-    attacks: [0, 21],
+    description: "Selecting Slam during Cleave preserves the committed timing and geometry until the next swing.",
+    setup: (actions: [Place((0.0, 4.3))]),
+    attack_profiles: [(at: 1, profile: Slam)],
+    attacks: [0, 22],
     checkpoints: [
-        (at: 1, expect: (
-            attack_phase: Startup,
-            swing_tick: 1,
-            attack_profile: Thrust,
-            swing_profile: Sweep,
-            recovery_ticks: 8,
-            swing_recovery_ticks: 10,
-        )),
-        (at: 6, expect: (attack_phase: Active, struck: 1, bodies: [
-            (nth: 0, velocity: (x: 0.0, z: 6.0, tol: 0.00001)),
-            (nth: 1, velocity: (x: 0.0, z: 0.0, tol: 0.0)),
-        ])),
-        (at: 9, expect: (attack_phase: Active, struck: 2, bodies: [
-            (nth: 1, velocity: (x: 0.0, z: 6.0, tol: 0.00001)),
-            (nth: 2, velocity: (x: 0.0, z: 0.0, tol: 0.0)),
-        ])),
-        (at: 11, expect: (attack_phase: Recovery, hitbox: false)),
-        (at: 21, expect: (
-            attack_phase: Startup,
-            swing_tick: 0,
-            attack_profile: Thrust,
-            swing_profile: Thrust,
-        )),
-        (at: 28, expect: (attack_phase: Active, struck: 1, bodies: [
-            (nth: 2, velocity: (x: 0.0, z: 4.0, tol: 0.00001)),
+        (at: 1, expect: (attack_phase: Startup, swing_tick: 1,
+            attack_profile: Slam, swing_profile: Cleave,
+            recovery_ticks: 16, swing_recovery_ticks: 10)),
+        (at: 6, expect: (attack_phase: Active, struck: 0)),
+        (at: 11, expect: (attack_phase: Active, struck: 0)),
+        (at: 12, expect: (attack_phase: Recovery, hitbox: false)),
+        (at: 22, expect: (attack_phase: Startup, swing_tick: 0,
+            attack_profile: Slam, swing_profile: Slam, swing_recovery_ticks: 16)),
+        (at: 30, expect: (attack_phase: Startup)),
+        (at: 31, expect: (attack_phase: Active, struck: 0)),
+        (at: 35, expect: (attack_phase: Active, struck: 1, bodies: [
+            (nth: 0, health: 2, velocity: (x: 0.0, z: 40.0, tol: 0.00001)),
         ])),
     ],
-    budget: (ticks: 31),
-    expect: (
-        attack_phase: Recovery,
-        swing_tick: 9,
-        struck: 1,
-        attack_profile: Thrust,
-        swing_profile: Thrust,
-        trace: "attack_profiles_apply_to_the_next_swing.trace",
-    ),
+    budget: (ticks: 37),
+    expect: (attack_phase: Recovery, swing_tick: 14, struck: 1,
+        attack_profile: Slam, swing_profile: Slam,
+        trace: "attack_profiles_apply_to_the_next_swing.trace"),
 )
