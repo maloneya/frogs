@@ -28,8 +28,8 @@ use arpg_sim::AttackProfile;
 // Both contexts share key names, while only the game column can mint Actions.
 type Binding = (&'static str, KeyCode, Option<Action>, Option<MenuKey>);
 const BINDINGS: &[Binding] = &[
-    ("w", KeyCode::KeyW, Some(Action::MoveUp), None),
-    ("s", KeyCode::KeyS, Some(Action::MoveDown), None),
+    ("w", KeyCode::KeyW, Some(Action::MoveUp), Some(MenuKey::Previous)),
+    ("s", KeyCode::KeyS, Some(Action::MoveDown), Some(MenuKey::Next)),
     ("a", KeyCode::KeyA, Some(Action::MoveLeft), None),
     ("d", KeyCode::KeyD, Some(Action::MoveRight), None),
     ("up", KeyCode::ArrowUp, Some(Action::MoveUp), Some(MenuKey::Previous)),
@@ -200,7 +200,7 @@ mod tests {
         assert!(controls.menu().pending().is_none(), "picker keys cannot edit attack tuning");
         tap(&mut controls, "f1");
         tap(&mut controls, "right");
-        assert!(controls.menu().pending().is_some());
+        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Slam);
         tap(&mut controls, "f2");
         tap(&mut controls, "escape");
         assert!(!controls.menu().open());
@@ -249,23 +249,46 @@ mod tests {
     }
 
     #[test]
-    fn profile_selection_coalesces_until_consumed_and_survives_closing_the_menu() {
+    fn profile_navigation_waits_for_enter_and_does_not_leak_held_movement() {
         let mut controls = Controls::default();
         tap(&mut controls, "f1");
-        tap(&mut controls, "down");
-        tap(&mut controls, "down");
-        tap(&mut controls, "right");
+        tap(&mut controls, "s");
+        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Slam);
+        assert!(controls.take_profile().is_none(), "navigation must not apply the profile");
+        tap(&mut controls, "w");
+        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Cleave);
+        controls.on_key(KeyCode::KeyS, true, false, AttackProfile::default());
+        assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
+        tap(&mut controls, "enter");
+        assert!(!controls.menu().open());
         assert_eq!(controls.menu().pending(), Some(AttackProfile::Slam));
-        // Readout / gameplay sampling on zero-tick frames must not eat a selection.
-        let _ = controls.menu().profile(AttackProfile::default());
         let _ = controls.sample();
-        tap(&mut controls, "escape");
         assert_eq!(controls.take_profile(), Some(AttackProfile::Slam));
         assert!(controls.take_profile().is_none());
+        controls.on_key(KeyCode::KeyS, true, true, AttackProfile::Slam);
+        assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
+        controls.on_key(KeyCode::KeyS, false, false, AttackProfile::Slam);
+        controls.on_key(KeyCode::KeyS, true, false, AttackProfile::Slam);
+        assert!(controls.sample().held(Action::MoveDown));
+    }
+
+    #[test]
+    fn closing_an_attack_menu_discards_only_unconfirmed_selection() {
+        let mut controls = Controls::default();
         tap(&mut controls, "f1");
-        tap(&mut controls, "right");
+        tap(&mut controls, "s");
+        tap(&mut controls, "escape");
+        assert!(controls.take_profile().is_none());
+        tap(&mut controls, "f1");
+        tap(&mut controls, "s");
+        tap(&mut controls, "enter");
+        // Reopen before a simulation tick consumes the confirmed selection.
+        tap(&mut controls, "f1");
+        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Slam);
         tap(&mut controls, "r");
-        assert_eq!(controls.take_profile(), Some(AttackProfile::default()));
+        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Cleave);
+        tap(&mut controls, "escape");
+        assert_eq!(controls.take_profile(), Some(AttackProfile::Slam));
     }
 
     #[test]
@@ -277,11 +300,11 @@ mod tests {
         for _ in 0..AttackProfile::ALL.len() + 2 {
             tap(&mut controls, "left");
         }
-        assert_eq!(controls.menu().pending(), Some(AttackProfile::Cleave));
+        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Cleave);
         for _ in 0..AttackProfile::ALL.len() + 2 {
             tap(&mut controls, "right");
         }
-        assert_eq!(controls.menu().pending().as_ref(), AttackProfile::ALL.last());
+        assert_eq!(Some(controls.menu().profile(AttackProfile::default())), AttackProfile::ALL.last().copied());
     }
 
     #[test]
@@ -291,7 +314,7 @@ mod tests {
         assert_eq!(controls.menu().profile(AttackProfile::Cleave), AttackProfile::Cleave);
         for profile in AttackProfile::ALL.into_iter().skip(1) {
             tap(&mut controls, "down");
-            assert_eq!(controls.menu().pending(), Some(profile));
+            assert_eq!(controls.menu().profile(AttackProfile::default()), profile);
         }
     }
 

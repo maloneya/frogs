@@ -353,11 +353,11 @@ Game actions (rebindable, go through `Action`):
 
 Static props and the activation playtest: [`docs/interaction.md`](docs/interaction.md).
 
-`F1` opens the attack profile panel · arrows choose Cleave or Slam · `R` returns to Cleave ·
-`F1` / `Esc` close. The panel captures gameplay input while the world keeps
-running. Selections apply to the next swing and last for the current run.
+`F1` opens the attack profile panel · W/S or arrows highlight Cleave or Slam ·
+Enter selects and closes · `R` highlights Cleave · `F1` / `Esc` cancel. The panel captures gameplay input while the world keeps
+running. Confirmed selections apply to the next swing and last for the current run.
 
-`F2` opens the scene picker · Up/Down select · Enter starts fresh · F2/Esc
+`F2` opens the scene picker · W/S or Up/Down navigate · Enter starts fresh and closes · F2/Esc
 close. Restart current reuses its cached snapshot; file choices reread disk.
 See [`docs/scene-playtests.md`](docs/scene-playtests.md).
 

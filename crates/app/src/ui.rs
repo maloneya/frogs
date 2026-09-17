@@ -86,6 +86,8 @@ pub(crate) struct Menu {
     mode: Mode,
     /// A content selection waiting for the next simulation tick.
     pending: Option<AttackProfile>,
+    /// Highlighted attack; only Enter commits it to pending.
+    selected_attack: AttackProfile,
     picker: Picker,
     request: Option<MenuRequest>,
 }
@@ -108,7 +110,7 @@ impl Menu {
     }
 
     pub(crate) fn profile(&self, applied: AttackProfile) -> AttackProfile {
-        self.pending.unwrap_or(applied)
+        if self.mode == Mode::Attack { self.selected_attack } else { self.pending.unwrap_or(applied) }
     }
 
     pub(crate) fn on_key(&mut self, key: MenuKey, applied: AttackProfile) {
@@ -117,6 +119,9 @@ impl Menu {
                 let target =
                     if matches!(key, MenuKey::Toggle) { Mode::Attack } else { Mode::Scenes };
                 self.mode = if self.mode == target { Mode::Closed } else { target };
+                if self.mode == Mode::Attack {
+                    self.selected_attack = self.pending.unwrap_or(applied);
+                }
                 self.request = (self.mode == Mode::Scenes).then_some(MenuRequest::RefreshScenes);
             }
             MenuKey::Close => {
@@ -132,19 +137,23 @@ impl Menu {
             }
             MenuKey::Previous | MenuKey::Decrease if self.mode == Mode::Attack => {
                 let current = profile_index(self.profile(applied));
-                self.pending = Some(AttackProfile::ALL[current.saturating_sub(1)]);
+                self.selected_attack = AttackProfile::ALL[current.saturating_sub(1)];
             }
             MenuKey::Next | MenuKey::Increase if self.mode == Mode::Attack => {
                 let current = profile_index(self.profile(applied));
-                self.pending =
-                    Some(AttackProfile::ALL[(current + 1).min(AttackProfile::ALL.len() - 1)]);
+                self.selected_attack =
+                    AttackProfile::ALL[(current + 1).min(AttackProfile::ALL.len() - 1)];
+            }
+            MenuKey::Accept if self.mode == Mode::Attack => {
+                self.pending = Some(self.selected_attack);
+                self.mode = Mode::Closed;
             }
             MenuKey::Accept if self.mode == Mode::Scenes => {
                 self.request =
                     Some(MenuRequest::Start(self.picker.entries[self.picker.selected].clone()));
             }
             MenuKey::Reset if self.mode == Mode::Attack => {
-                self.pending = Some(AttackProfile::default());
+                self.selected_attack = AttackProfile::default();
             }
             _ => {}
         }
@@ -175,10 +184,11 @@ impl Menu {
     }
 
     pub(crate) fn report(&self, out: &mut Report) {
-        let Self { mode, pending, picker, request } = self;
+        let Self { mode, pending, selected_attack, picker, request } = self;
         out.bool("attack_menu_open", *mode == Mode::Attack);
         out.bool("scene_picker_open", *mode == Mode::Scenes);
         out.bool("captures_gameplay", self.open());
+        out.text("selected_attack_profile", selected_attack.label());
         out.bool("attack_profile_pending", pending.is_some());
         out.text("pending_attack_profile", pending.map_or("", |profile| profile.label()));
         out.bool("scene_request_pending", request.is_some());

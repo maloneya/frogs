@@ -67,14 +67,15 @@ sock() { echo "$1" | nc -U /tmp/arpg.sock; }
 
 Keys come from `BINDINGS` in `crates/app/src/input.rs`, so whatever is bound is
 drivable — currently `w a s d up down left right space f1 f2 enter escape r`.
-`tap f2` opens the scene picker; Up/Down select and Enter starts fresh.
+`tap f2` opens the scene picker; W/S or Up/Down navigate and Enter starts fresh and closes.
 Its state and any load error are reported under `state.ui`; see
 [`docs/scene-playtests.md`](../../../docs/scene-playtests.md).
-`tap f1` opens the attack profile panel. Any arrow chooses between Cleave
-and Slam; `tap r` returns to Cleave and
-`tap escape` closes the panel. These go through the same modal input route as
+`tap f1` opens the attack profile panel. W/S or arrows highlight Cleave
+or Slam; `tap r` highlights Cleave. `tap enter` confirms and closes;
+`tap escape` cancels the highlighted choice. These go through the same modal input route as
 native keys. While open, the panel captures gameplay input but the world keeps
-ticking. A selection applies before the next sim tick;
+ticking. A confirmed selection applies before the next sim tick;
+`state.ui.selected_attack_profile` exposes the highlighted row while open.
 `state.ui.attack_profile_pending` and `pending_attack_profile` expose that moment.
 `state.sim.attack_profile` is the authored move selected for the next swing and
 `swing_profile` is the in-flight copy. `resolved_attack` and

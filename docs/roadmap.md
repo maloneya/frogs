@@ -52,8 +52,8 @@ what matters here is what it left behind to build on.
   first; see `crates/sim/src/members.rs` for why the storage is shaped this way.
 - **The swing.** Startup, active and recovery with a timed hitbox, asserted tick
   by tick against golden traces.
-- **Attack profile UI.** F1 opens a modal keyboard panel; arrows choose Cleave
-  or Slam and R returns to Cleave. The world keeps running.
+- **Attack profile UI.** F1 opens a modal keyboard panel; W/S or arrows highlight Cleave
+  or Slam, Enter confirms and closes, and R highlights Cleave. The world keeps running.
   `AttackProfile` is authored game content; it resolves to a private-field
   `ResolvedAttack`, the same validated runtime value a future skill, weapon,
   stats, and buffs can produce through the atomic `try_new` boundary. The menu

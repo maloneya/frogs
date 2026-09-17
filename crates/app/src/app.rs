@@ -995,8 +995,8 @@ mod tests {
         app.start_playtest(pair()).unwrap();
         tap(&mut app, KeyCode::F2);
         app.input.menu_mut().set_catalog(Ok(paths.clone()));
-        tap(&mut app, KeyCode::ArrowDown);
-        tap(&mut app, KeyCode::ArrowDown);
+        tap(&mut app, KeyCode::KeyS);
+        tap(&mut app, KeyCode::KeyS);
         tap(&mut app, KeyCode::Enter);
         let initial = app.game.hash();
         let direct = Game::from_scene(&arpg_content::load_scene(&path).unwrap()).unwrap();
@@ -1017,7 +1017,7 @@ mod tests {
         tap(&mut app, KeyCode::F2);
         app.input.menu_mut().set_catalog(Ok(paths.clone()));
         for _ in 0..3 {
-            tap(&mut app, KeyCode::ArrowDown);
+            tap(&mut app, KeyCode::KeyS);
         }
         tap(&mut app, KeyCode::Enter);
         assert!(app.input.menu().picker().error().unwrap().contains("b.ron"));
@@ -1025,7 +1025,7 @@ mod tests {
         assert_eq!(app.game.hash(), initial);
         assert_eq!(app.run_id, 3);
         std::fs::remove_file(&path).unwrap();
-        tap(&mut app, KeyCode::ArrowUp);
+        tap(&mut app, KeyCode::KeyW);
         tap(&mut app, KeyCode::Enter); // A file disappearing after discovery is safe too.
         assert!(app.input.menu().picker().error().is_some());
         assert_eq!(app.game.hash(), initial);
@@ -1036,7 +1036,7 @@ mod tests {
         assert_eq!(app.run_id, 4);
         assert!(!app.input.menu().open());
         tap(&mut app, KeyCode::F2);
-        tap(&mut app, KeyCode::ArrowDown);
+        tap(&mut app, KeyCode::KeyS);
         tap(&mut app, KeyCode::Enter);
         assert_eq!(app.game.hash(), Game::from_scene(&Scene::boot()).unwrap().hash());
         std::fs::remove_dir_all(directory).unwrap();
@@ -1083,6 +1083,7 @@ mod tests {
         assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
         app.input.on_key(KeyCode::F1, true, false, profile);
         app.input.on_key(KeyCode::ArrowRight, true, false, profile);
+        app.input.on_key(KeyCode::Enter, true, false, profile);
         assert!(app.input.menu().pending().is_some());
         let mut camera = OrthoCamera::new(1280, 720);
         camera.snap_to(glam::Vec3::new(40.0, 0.0, 40.0));

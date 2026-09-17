@@ -69,7 +69,7 @@ working-directory-dependent boot fallback.
 
 ## In-game picker
 
-`F2` opens the scene picker. `Up` / `Down` select, `Enter` starts fresh, and
+`F2` opens the scene picker. W/S or Up/Down navigate, Enter starts fresh and closes, and
 `F2` / `Esc` closes. `F1` switches to attack tuning. The world keeps running
 while either panel captures gameplay input.
 
@@ -104,8 +104,9 @@ F2 offers **Default horde** (1,024 stationary enemies) and three files:
 | `activate_horde.ron` | An interaction starts a source that replenishes up to eight seekers |
 | `three_enemy_spawners.ron` | Three approach directions build toward twelve seekers |
 
-F1 selects **Cleave**, the default broad arc, or **Slam**, an expanding frontal
-hit with stronger knockback. R restores Cleave. Fresh starts and restarts also
+F1 opens the attack picker. W/S or arrows highlight **Cleave**, the default
+broad arc, or **Slam**, an expanding frontal hit with stronger knockback.
+Enter confirms and closes; F1/Esc cancels. R highlights Cleave. Fresh starts and restarts also
 restore Cleave. Separate regression scenarios assert each attack's timing,
 reach, hit order, impulse, and subsequent movement.
 

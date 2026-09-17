@@ -76,11 +76,11 @@ pub(crate) fn draw(
         .expect("line capacity");
         write!(
             lines[FOOTER + 1],
-            "Arrows: choose profile   {}",
-            if menu.pending().is_some() { "pending" } else { "applied" }
+            "W/S or arrows: navigate   Next attack: {}",
+            menu.pending().unwrap_or(attack.profile).label()
         )
         .expect("line capacity");
-        write!(lines[FOOTER + 2], "R: basic   F1/Esc: close   Selection affects next swing")
+        write!(lines[FOOTER + 2], "Enter: select/close   R: Cleave   F1/Esc: cancel")
             .expect("line capacity");
         write!(lines[FOOTER + 3], "Resolved values are captured when the swing begins")
             .expect("line capacity");
@@ -165,7 +165,7 @@ fn draw_picker(font: &Glyphs, menu: &Menu, current: &str, viewport: Vec2, sink: 
             lines[count + 1].label(font, error, width);
             count += 2;
         }
-        lines[count].label(font, "Up/Down: select   Enter: start fresh", width);
+        lines[count].label(font, "W/S or Up/Down: navigate   Enter: select/close", width);
         lines[count + 1].label(font, "F2/Esc: close   World keeps running", width);
         (count + 2, Some(highlight))
     };
