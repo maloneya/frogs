@@ -76,8 +76,13 @@ targets, non-joint targets and non-uniform scale are rejected explicitly. Key
 the bind pose at both ends when the clip should loop without a seam. One asset
 may contain at most 16 clips.
 
-The player presentation contract resolves `Idle`, `Run`, `AttackCleave` and
-`AttackSlam` once at load. Attack actions reserve consecutive authored
+The player presentation contract resolves `Idle`, `Run`, `RunBackward`,
+`RunLeft`, `RunRight`, `AttackCleave` and `AttackSlam` once at load.
+Locomotion clips share a normalized gait phase and blend according to actual
+displacement relative to facing. The attack layer replaces local transforms
+for `Spine`, `Head`, `LeftArm`, `RightArm` and `Weapon`; those joints are required
+by the player presentation contract. Root and legs retain locomotion.
+The mask is validated before replacing a live character. Attack actions reserve consecutive authored
 segments for wind-up, contact and recovery; app maps those segments to the
 committed simulation phase lengths. Recovery tuning therefore cannot move the
 visible contact interval. These names and segment boundaries are
@@ -106,7 +111,9 @@ directory. Missing or invalid defaults fail startup explicitly. `character clear
 and `horde clear` restore their respective default assets; there is no character cube fallback.
 
 The checked-in `assets/fixtures/blender-bind-pose.glb` exercises this contract
-with a four-bone, asymmetric training dummy and the required player clip names.
+with a four-bone, asymmetric training dummy and basic animation clips.
+It remains an importer/horde fixture; the playable player is the complete
+directional-locomotion and upper-body-layer fixture.
 Its diagnostic motion is distinct from the playable player's attack authoring.
 Regenerate it from the repository root with:
 

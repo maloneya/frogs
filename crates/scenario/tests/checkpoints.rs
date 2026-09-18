@@ -337,6 +337,17 @@ fn gameplay_content_and_relationship_assertions_fail_closed() {
 }
 
 #[test]
+fn invalid_aim_cannot_reach_game_even_when_blessing() {
+    for aim in ["(at: 0, dir: (0.0, 0.0))", "(at: 0, dir: (NaN, 1.0))", "(at: 0, dir: (inf, 1.0))", "(at: 2, dir: (1.0, 0.0))"] {
+        let fixture = Fixture::new(&format!("(aims: [{aim}], budget: (ticks: 2))"));
+        for flags in [&[][..], &["--bless"][..]] {
+            let (output, text) = fixture.run(flags);
+            assert_eq!(output.status.code(), Some(1), "invalid aim passed: {text}");
+        }
+    }
+}
+
+#[test]
 fn encounter_admission_and_observation_errors_cannot_be_blessed() {
     let scene = r#"engine: (name: "trial", bodies: [
         (pos: (1.0,0.0), what: (fixed:true, interactable:true)),

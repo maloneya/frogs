@@ -1,7 +1,7 @@
 //! Contracts for asset selection and simulation-driven presentation.
 
 use super::*;
-use arpg_core::{Intent, MoveDir};
+use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::Game;
 use arpg_sim::Accumulator;
 
@@ -25,19 +25,9 @@ fn startup_assets_support_their_presentation_roles() {
 }
 
 fn loaded_character_from(path: std::path::PathBuf) -> LoadedCharacter<()> {
-    let source = std::fs::read(&path).unwrap();
-    let asset = arpg_assets::import_character_glb(&source).unwrap();
-    let clips = CharacterClips::resolve(&asset).unwrap();
-    let pose = asset.bind_pose();
-    LoadedCharacter {
-        path,
-        asset,
-        pose,
-        clips,
-        sampled_role: PresentationRole::Idle,
-        sampled_seconds: 0.0,
-        gpu: (),
-    }
+    let mut slot = None;
+    replace_character(&mut slot, path, |_| Ok(())).unwrap();
+    slot.unwrap()
 }
 
 fn weapon_tip_at(
@@ -61,7 +51,7 @@ fn weapon_tip_at(
 }
 
 fn loaded_character(path: &str) -> LoadedCharacter<()> {
-    let mut character = loaded_character_from(character_fixture_path());
+    let mut character = loaded_character_from(default_character_path());
     character.path = path.into();
     character
 }
@@ -81,24 +71,24 @@ fn character_replacement_is_atomic_across_import_and_upload_failure() {
     assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
 
     assert!(
-        replace_character(&mut slot, character_fixture_path(), |_| {
+        replace_character(&mut slot, default_character_path(), |_| {
             Err("GPU refused it".into())
         })
         .is_err()
     );
     assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
 
-    replace_character(&mut slot, character_fixture_path(), |_| Ok(())).unwrap();
+    replace_character(&mut slot, default_character_path(), |_| Ok(())).unwrap();
     let current = slot.as_ref().unwrap();
     assert_eq!(
         (current.asset.vertex_count(), current.asset.index_count()),
-        (144, 216)
+        (528, 792)
     );
     assert_eq!(
         (current.asset.node_count(), current.asset.joint_count()),
-        (6, 4)
+        (10, 8)
     );
-    assert_eq!(current.asset.clip_count(), 4);
+    assert_eq!(current.asset.clip_count(), 7);
     let current = slot.as_mut().unwrap();
     let player = Game::empty().player_presentation(Alpha::ONE);
     current.sample(player, Alpha::ONE, 0.5);
@@ -117,7 +107,7 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview::<()>(None, &mut inactive);
     assert_eq!(
         inactive.finish(),
-        r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0,"nodes":0,"joints":0,"clips":0,"role":"","clip":"","clip_duration":0.0000,"channels":0,"sample_seconds":0.0000}"#
+        r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0,"nodes":0,"joints":0,"clips":0,"role":"","clip":"","clip_duration":0.0000,"channels":0,"sample_seconds":0.0000,"locomotion_base":"","locomotion_overlay":"","locomotion_weight":0.0000}"#
     );
 
     let mut preview = loaded_character("assets/character.glb");
@@ -127,7 +117,7 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview(Some(&preview), &mut active);
     assert_eq!(
         active.finish(),
-        r#"{"active":true,"path":"assets/character.glb","vertices":144,"indices":216,"texture_width":16,"texture_height":16,"nodes":6,"joints":4,"clips":4,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":12,"sample_seconds":0.2500}"#
+        r#"{"active":true,"path":"assets/character.glb","vertices":528,"indices":792,"texture_width":64,"texture_height":64,"nodes":10,"joints":8,"clips":7,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":24,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000}"#
     );
 }
 
@@ -213,7 +203,7 @@ fn stable_identity_selects_bounded_reused_horde_pose_buckets() {
         .pending(arpg_sim::Dt::SECS)
         .next()
         .unwrap();
-    game.step(dt, Intent::default());
+    game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     horde.rebuild(game.enemy_presentations(Alpha::ONE), 0.2);
     assert!(
         horde.buckets[..HORDE_PHASES_PER_ROLE]
@@ -240,7 +230,7 @@ fn stopped_horde_members_keep_heading_and_dead_identities_are_forgotten() {
         .pending(arpg_sim::Dt::SECS)
         .next()
         .unwrap();
-    game.step(dt, Intent::default());
+    game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     horde.rebuild(game.enemy_presentations(Alpha::ONE), 0.0);
     let moving_yaw = horde
         .buckets
@@ -253,7 +243,7 @@ fn stopped_horde_members_keep_heading_and_dead_identities_are_forgotten() {
 
     // Carried motion decays to rest without changing this body's identity.
     for _ in 0..100 {
-        game.step(dt, Intent::default());
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
     assert_eq!(game.enemy_presentations(Alpha::ONE).next().unwrap().displacement(), glam::Vec2::ZERO);
     horde.rebuild(game.enemy_presentations(Alpha::ONE), 0.1);
@@ -282,7 +272,7 @@ fn resetting_horde_presentation_cannot_reuse_a_previous_runs_heading() {
         .pending(arpg_sim::Dt::SECS)
         .next()
         .unwrap();
-    old.step(dt, Intent::default());
+    old.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     horde.rebuild(old.enemy_presentations(Alpha::ONE), 1.0);
     let old_id = old.enemy_presentations(Alpha::ONE).next().unwrap().id();
     assert_ne!(horde.headings[&old_id].yaw, 0.0);
@@ -325,7 +315,7 @@ fn authoritative_player_facts_drive_direct_roles() {
         .pending(arpg_sim::Dt::SECS)
         .next()
         .unwrap();
-    game.step(dt, Intent::new(MoveDir::new(Vec3::X), false));
+    game.step(dt, Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     let running = game.player_presentation(Alpha::ONE);
     character.sample(running, Alpha::ONE, 1.0 / 60.0);
     assert_eq!(character.sampled_role, PresentationRole::Run);
@@ -335,7 +325,7 @@ fn authoritative_player_facts_drive_direct_roles() {
         .pending(arpg_sim::Dt::SECS)
         .next()
         .unwrap();
-    game.step(dt, Intent::new(MoveDir::NONE, true));
+    game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, true));
     let attacking = game.player_presentation(Alpha::ONE);
     character.sample(attacking, Alpha::ONE, 0.25);
     assert_eq!(
@@ -486,8 +476,14 @@ fn world_assets_follow_prop_membership_and_authored_geometry() {
                 assert!((vertex.position().x.abs() - 0.5).abs() < 1e-6);
                 assert!((vertex.position().z.abs() - 0.5).abs() < 1e-6);
             }
-            let red = mesh.base_color_texture().rgba8()[0];
-            assert!((40..=56).contains(&red), "floor colours must be encoded into sRGB, got {red}");
+            let texture = mesh.base_color_texture();
+            assert_eq!((texture.width(), texture.height()), (256, 256));
+            assert!(texture.rgba8().as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255));
+            let uv_min = mesh.vertices().iter().map(|vertex| vertex.uv())
+                .fold(glam::Vec2::splat(f32::INFINITY), glam::Vec2::min);
+            let uv_max = mesh.vertices().iter().map(|vertex| vertex.uv())
+                .fold(glam::Vec2::splat(f32::NEG_INFINITY), glam::Vec2::max);
+            assert_eq!(uv_max - uv_min, glam::Vec2::splat(96.0));
         }
         Ok(())
     }).unwrap();
@@ -499,19 +495,81 @@ fn world_assets_follow_prop_membership_and_authored_geometry() {
     game.place(glam::Vec2::new(4.0, 0.0), arpg_sim::Template::BODY).unwrap();
     let id = game.place(glam::Vec2::new(0.0, 1.0), arpg_sim::Template::BLOCK.interactive()).unwrap();
     let before = game.hash();
-    world.rebuild(game.prop_presentations(Alpha::ONE));
+    world.rebuild(game.prop_presentations(Alpha::ONE), |id| game.chest_state_for_body(id));
     assert_eq!(game.hash(), before, "presentation cannot modify gameplay");
     assert_eq!(world.instance_count(), 2);
     assert_eq!(world.draw_count(), 2);
     assert_eq!(world.props.as_slice()[0].pos(), Vec3::new(0.0, 0.0, 1.0));
     assert_eq!(game.prop_presentations(Alpha::ONE).next().unwrap().interaction(), Some(arpg_sim::InteractionState::Ready));
     let mut accumulator = Accumulator::default();
-    game.step(accumulator.pending(arpg_sim::Dt::SECS).next().unwrap(), Intent::NONE.with_interact(true));
+    game.step(accumulator.pending(arpg_sim::Dt::SECS).next().unwrap(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true));
     let snapshot = game.prop_presentations(Alpha::ONE).next().unwrap();
     assert_eq!(snapshot.id(), id);
     assert_eq!(snapshot.interaction(), Some(arpg_sim::InteractionState::Activated));
-    world.rebuild(game.prop_presentations(Alpha::ONE));
-    world.rebuild(Game::empty().prop_presentations(Alpha::ONE));
+    world.rebuild(game.prop_presentations(Alpha::ONE), |id| game.chest_state_for_body(id));
+    world.rebuild(Game::empty().prop_presentations(Alpha::ONE), |_| None);
     assert_eq!(world.instance_count(), 1, "old props must not survive a fresh world");
     assert_eq!(world.draw_count(), 1);
+}
+
+#[test]
+fn moving_attacks_keep_directional_legs_and_committed_weapon_pose() {
+    for (direction, clip_name) in [(Vec3::Z, "Run"), (-Vec3::Z, "RunBackward"), (Vec3::X, "RunRight"), (-Vec3::X, "RunLeft")] {
+        let mut character = loaded_character_from(default_character_path());
+        let mut game = Game::empty();
+        for tick in 0..=6 {
+            let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+            game.step(dt, Intent::new(MoveDir::new(direction), AimDir::FORWARD, tick == 0));
+        }
+        let player = game.player_presentation(Alpha::ONE);
+        character.sample(player, Alpha::ONE, 0.1);
+        let mut expected = character.asset.bind_pose();
+        character.asset.sample(character.asset.clip_named(clip_name).unwrap(), 0.1, &mut expected);
+        for name in ["LeftLeg", "RightLeg"] {
+            let joint = character.asset.joint_named(name).unwrap();
+            assert!(character.asset.joint_transform(&character.pose, joint).unwrap()
+                .abs_diff_eq(character.asset.joint_transform(&expected, joint).unwrap(), 1e-5), "{clip_name} {name}");
+        }
+        let weapon = character.asset.joint_named("Weapon").unwrap();
+        character.asset.sample(character.clips.attack(AttackProfile::Cleave), character.sampled_seconds, &mut expected);
+        assert!(character.asset.joint_transform(&character.pose, weapon).unwrap()
+            .abs_diff_eq(character.asset.joint_transform(&expected, weapon).unwrap(), 1e-5));
+    }
+}
+
+#[test]
+fn chest_presentation_follows_opening_and_eviction_without_drawing_a_plinth() {
+    use arpg_game::{ChestSpec, EncounterAction, EncounterObjective, EncounterSpec, EncounterStart, DefeatObjective};
+    let mut scene = arpg_game::GameScene::default();
+    scene.engine.bodies = vec![
+        arpg_sim::Placed { pos: (1.2, 0.0), what: arpg_sim::Template::BLOCK.interactive() },
+        arpg_sim::Placed { pos: (-1.2, 0.0), what: arpg_sim::Template::BLOCK },
+    ];
+    scene.engine.sources = vec![arpg_sim::SourceSpec { pos: (20.0,20.0), radius: 0.0, every: 100,
+        when: arpg_sim::Condition::Always, what: arpg_sim::Template::BODY, enabled: false }];
+    scene.chests = vec![ChestSpec { body: 1 }];
+    // A one-tick timeout exercises the same unlock effect without a combat fixture.
+    scene.encounters = vec![EncounterSpec { name: "View test".into(), start: EncounterStart::Activated(0),
+        objective: EncounterObjective::Defeat(DefeatObjective { sources: vec![0], count: 1.try_into().unwrap(), within_ticks: 1.try_into().unwrap() }),
+        on_start: vec![EncounterAction::EnableSource(0)], on_success: vec![], on_failure: vec![EncounterAction::UnlockChest(0)] }];
+    let mut game = Game::from_scene(&scene).unwrap();
+    let owner = game.scene_instances().next().unwrap().0;
+    let mut view = WorldAssets::load(|_| Ok(())).unwrap();
+    view.rebuild(game.prop_presentations(Alpha::ONE), |id| game.chest_state_for_body(id));
+    assert_eq!(view.props.as_slice().len(), 1);
+    assert_eq!(view.closed_chests.len(), 1);
+    assert!(view.open_chests.is_empty());
+    for interact in [true, false, true, false] {
+        game.step(Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap(),
+            Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(interact));
+    }
+    let hash = game.hash();
+    view.rebuild(game.prop_presentations(Alpha::ONE), |id| game.chest_state_for_body(id));
+    assert_eq!(game.hash(), hash);
+    assert!(view.closed_chests.is_empty());
+    assert_eq!(view.open_chests.len(), 1);
+    assert_eq!(view.open_chests[0].pos(), Vec3::new(-1.2, 0.0, 0.0));
+    assert!(game.evict_scene(owner));
+    view.rebuild(game.prop_presentations(Alpha::ONE), |id| game.chest_state_for_body(id));
+    assert_eq!(view.instance_count(), 1);
 }

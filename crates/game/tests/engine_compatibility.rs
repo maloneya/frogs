@@ -2,7 +2,7 @@
 //! tick history and physical output. The restart report is the explicit new
 //! game-owned state; the engine fingerprint remains unchanged by that addition.
 
-use arpg_core::{Intent, MoveDir, Report};
+use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::Game;
 use arpg_sim::{
     Accumulator, Alpha, AttackProfile, Condition, Dt, Event, Impulse, Placed,
@@ -38,6 +38,7 @@ fn assert_same(game: &Game, world: &World, restart: Option<(&str, u64)>) {
         }
     });
     engine_report.object("doors", |_| {});
+    engine_report.object("chests", |_| {});
     engine_report.object("encounters", |_| {});
     engine_report.int("encounter_events_dropped", 0);
     engine_report.int("control_events_dropped", 0);
@@ -99,7 +100,7 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
                 world.set_attack_profile(AttackProfile::Slam);
             }
             let direction = if stepped < 12 { Vec3::ZERO } else { Vec3::Z };
-            let intent = Intent::new(MoveDir::new(direction), stepped % 24 == 0)
+            let intent = Intent::new(MoveDir::new(direction), AimDir::FORWARD, stepped % 24 == 0)
                 .with_interact(stepped == 0);
             game.step(dt, intent);
             world.step(dt, intent);

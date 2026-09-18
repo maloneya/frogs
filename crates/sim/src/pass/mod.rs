@@ -52,7 +52,8 @@
 //!    separation, so a correction cannot leave a body outside the arena.
 //! 10. [`motion::settle`] — damp carried velocity and snap its small tail to
 //!     rest. After contact response, before a new attack impulse.
-//! 11. [`face`] — turn toward the requested direction before placing a hitbox.
+//! 11. [`face`] — follow independent aim before placing a hitbox; snap on an accepted
+//!     attack and hold that facing through recovery. Walking is unaffected.
 //! 12. [`attack`] — test final positions, apply an impulse and subtract one hit
 //!     point once per target per swing. Velocity changes now; displacement
 //!     begins on the next tick.

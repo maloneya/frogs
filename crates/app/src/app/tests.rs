@@ -191,10 +191,10 @@ fn restart_resets_the_complete_playtest_boundary() {
     app.input.on_key(KeyCode::Space, true, false, profile);
     for dt in app.accumulator.pending(arpg_sim::Dt::SECS) {
         app.game
-            .step(dt, Intent::new(MoveDir::new(glam::Vec3::X), true));
+            .step(dt, Intent::new(MoveDir::new(glam::Vec3::X), arpg_core::AimDir::new(glam::Vec3::X).unwrap(), true));
     }
     for dt in app.accumulator.pending(arpg_sim::Dt::SECS * 8.0) {
-        app.game.step(dt, Intent::NONE);
+        app.game.step(dt, Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
         app.attack_effects.observe(&app.game);
     }
     app.attack_effects.rebuild(app.game.tick(), Alpha::ZERO);

@@ -179,6 +179,12 @@ pub struct CharacterPose {
     joints: Vec<JointMatrix>,
 }
 
+/// Validated per-node blend weights belonging to exactly one imported asset.
+pub struct PoseMask {
+    asset_id: CharacterAssetId,
+    weights: Vec<f32>,
+}
+
 /// Identity of one imported character, retained by its poses and uploaded mesh.
 ///
 /// Separate imports have separate identities, even for identical bytes. Keeping
@@ -389,6 +395,47 @@ impl CharacterAsset {
         };
         Self::sample_locals(&self.nodes, clip, seconds, &mut pose.locals);
         self.rebuild_pose(pose);
+        true
+    }
+
+    /// A mask blending every node, for locomotion transitions.
+    pub fn full_mask(&self) -> PoseMask {
+        PoseMask { asset_id: self.asset_id.clone(), weights: vec![1.0; self.nodes.len()] }
+    }
+
+    /// Builds a sparse mask from unique joint names and finite weights in [0, 1].
+    /// Unlisted joints keep the base pose. Names are resolved here so a joint
+    /// index from a different skeleton cannot silently select another body part.
+    pub fn pose_mask(&self, joints: &[(&str, f32)]) -> Result<PoseMask, &'static str> {
+        let mut weights = vec![0.0; self.nodes.len()];
+        let mut seen = vec![false; self.nodes.len()];
+        for &(name, weight) in joints {
+            if !weight.is_finite() || !(0.0..=1.0).contains(&weight) { return Err("invalid mask weight"); }
+            let joint = self.joint_named(name).ok_or("missing mask joint")?;
+            let node = self.joints[usize::from(joint.0)].node();
+            if seen[node] { return Err("duplicate mask joint"); }
+            seen[node] = true;
+            weights[node] = weight;
+        }
+        Ok(PoseMask { asset_id: self.asset_id.clone(), weights })
+    }
+
+    /// Blends local transforms, then rebuilds the hierarchy and skin matrices.
+    /// Rejects mismatched assets and invalid weights before changing the target.
+    /// No allocation occurs during blending.
+    pub fn blend(&self, target: &mut CharacterPose, source: &CharacterPose, mask: &PoseMask, amount: f32) -> bool {
+        if !self.asset_id.owns(target) || !self.asset_id.owns(source)
+            || !Arc::ptr_eq(&self.asset_id.0, &mask.asset_id.0)
+            || !amount.is_finite() || !(0.0..=1.0).contains(&amount) { return false; }
+        for ((base, overlay), weight) in target.locals.iter_mut().zip(&source.locals).zip(&mask.weights) {
+            let weight = weight * amount;
+            if weight == 0.0 { continue; }
+            if weight == 1.0 { *base = *overlay; continue; }
+            base.translation = base.translation.lerp(overlay.translation, weight);
+            base.rotation = base.rotation.slerp(overlay.rotation, weight).normalize();
+            base.scale = base.scale.lerp(overlay.scale, weight);
+        }
+        self.rebuild_pose(target);
         true
     }
 

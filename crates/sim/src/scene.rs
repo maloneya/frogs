@@ -427,7 +427,7 @@ mod tests {
 
     fn step(world: &mut World) {
         for dt in Accumulator::default().pending(Dt::SECS) {
-            world.step(dt, Intent::default());
+            world.step(dt, Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
         }
     }
 

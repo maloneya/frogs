@@ -4,7 +4,7 @@
 //! two seams, and the schedule — rather than being mostly test code.
 
 use super::*;
-use arpg_core::{Intent, MoveDir};
+use arpg_core::{AimDir, Intent, MoveDir};
 
 /// Counts allocations made on the calling thread.
 ///
@@ -86,10 +86,12 @@ fn hash_sequence(enemies: usize, ticks: usize, dir_at: impl Fn(u64) -> MoveDir) 
     let mut acc = Accumulator::default();
     let mut seq = Vec::with_capacity(ticks);
 
+    let mut aim = AimDir::FORWARD;
     while seq.len() < ticks {
         for dt in acc.pending(Dt::SECS) {
             let dir = dir_at(world.tick());
-            world.step(dt, Intent::new(dir, false));
+            if let Ok(direction) = AimDir::new(dir.as_vec3()) { aim = direction; }
+            world.step(dt, Intent::new(dir, aim, false));
             seq.push(world.hash());
         }
     }
@@ -109,7 +111,7 @@ fn in_open_ground() -> World {
     // The lone body spawns on top of the player. Two seconds east at
     // `PLAYER_SPEED` clears it by 18 units.
     for _ in 0..120 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     }
     world
 }
@@ -137,7 +139,7 @@ fn frame_rate_cannot_change_the_simulation() {
 
         for _ in 0..(120 / ticks_per_frame) {
             for dt in acc.pending(Dt::SECS * ticks_per_frame as f32) {
-                world.step(dt, Intent::new(MoveDir::new(Vec3::X), false));
+                world.step(dt, Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
                 seq.push(world.hash());
             }
         }
@@ -202,7 +204,7 @@ fn shoving_through_the_crowd(enemies: usize) -> World {
     // measures open ground again. 20 ticks is 3.0 units, which walks
     // straight out of a 64-body crowd (5.6 units across).
     for _ in 0..5 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     }
     assert!(world.contacts() > 0, "nothing is in contact, so nothing is being pushed");
     world
@@ -220,7 +222,7 @@ fn the_blend_endpoints_are_the_two_ticks_themselves() {
     let mut world = in_open_ground();
 
     let before = world.player_pos();
-    world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+    world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     let after = world.player_pos();
     assert_ne!(before, after, "the tick under test did not move anything");
 
@@ -243,7 +245,7 @@ fn player_presentation_carries_identity_transform_movement_and_attack() {
     let id = world.player_id();
     assert!(!world.despawn_body(id), "the player cannot be removed as an enemy");
     assert!(!world.add_seek(id), "the player cannot gain enemy seeking");
-    world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), true));
+    world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), true));
 
     let player = world.player_presentation(Alpha::ONE);
     assert_eq!(player.id(), id);
@@ -264,7 +266,7 @@ fn horde_presentation_is_stable_derived_and_excludes_props() {
     let mut world = World::empty();
     let enemy = world.place(Vec2::new(2.0, 0.0), Template::BODY).unwrap();
     let prop = world.place(Vec2::new(-2.0, 0.0), Template::BLOCK).unwrap();
-    world.step(tick_dt(), Intent::default());
+    world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
 
     let presentations: Vec<_> = world.enemy_presentations(Alpha::ONE).collect();
     assert_eq!(presentations.len(), 1);
@@ -287,7 +289,7 @@ fn the_blend_crosses_the_gap_once_and_in_order() {
     let mut world = in_open_ground();
 
     let before = world.player_pos();
-    world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+    world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     let after = world.player_pos();
     let span = (after - before).length();
 
@@ -333,7 +335,7 @@ fn the_horde_is_interpolated_too() {
     let mut world = shoving_through_the_crowd(256);
 
     let before: Vec<Vec2> = world.bodies.pos[1..].to_vec();
-    world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+    world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     let after: Vec<Vec2> = world.bodies.pos[1..].to_vec();
 
     let moved: Vec<usize> = (0..after.len()).filter(|&i| before[i] != after[i]).collect();
@@ -366,7 +368,7 @@ fn an_empty_horde_is_a_legal_world() {
     assert_eq!(world.enemy_count(), 0);
 
     for _ in 0..30 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     }
     assert_eq!(world.contacts(), 0, "an empty arena reported a contact");
 
@@ -403,7 +405,7 @@ fn a_new_horde_is_drawn_standing_still() {
 fn drawing_never_touches_sim_state() {
     let mut world = world_with_enemies(64);
     for _ in 0..10 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     }
 
     let untouched = world.hash();
@@ -458,7 +460,7 @@ fn a_body_that_did_not_move_is_drawn_where_it_is() {
 
     // Out in the open, standing still: nothing moves at all.
     for _ in 0..5 {
-        world.step(tick_dt(), Intent::NONE);
+        world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
     assert_eq!(world.contacts(), 0, "something is touching, so this measures the solver");
 
@@ -489,7 +491,7 @@ fn the_previous_tick_is_the_previous_tick() {
         let expected = world.bodies.pos[0];
         let enemies_before = world.bodies.pos[1..].to_vec();
 
-        world.step(tick_dt(), Intent::new(east, false));
+        world.step(tick_dt(), Intent::new(east, AimDir::new(east.as_vec3()).expect("nonzero test movement"), false));
 
         assert_eq!(world.bodies.prev_pos[0], expected, "the player's prev is not last tick");
         assert_eq!(world.bodies.prev_pos[1..], enemies_before, "the horde's prev is not last tick");
@@ -559,7 +561,7 @@ fn every_configured_and_committed_attack_profile_reaches_the_hash() {
         let mut changed = World::empty();
         let mut normal = World::empty();
         changed.set_attack_profile(profile);
-        let press = Intent::new(arpg_core::MoveDir::NONE, true);
+        let press = Intent::new(MoveDir::NONE, AimDir::FORWARD, true);
         changed.step(tick_dt(), press);
         normal.step(tick_dt(), press);
         // Configured profiles agree again; only the in-flight copy differs.
@@ -585,7 +587,7 @@ fn the_horde_is_part_of_what_a_replay_compares() {
     // hash from here is the horde's.
     let settled = {
         for _ in 0..30 {
-            world.step(tick_dt(), Intent::NONE);
+            world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
         }
         world.hash()
     };
@@ -615,14 +617,14 @@ fn a_steady_state_frame_allocates_nothing() {
         let attack = profile.resolve();
         let duration = attack.startup() + attack.active() + attack.recovery().get();
 
-        world.step(dt, Intent::new(east, false));
+        world.step(dt, Intent::new(east, AimDir::new(east.as_vec3()).expect("nonzero test movement"), false));
         observe_presentation(&world, Alpha::ONE);
 
         let allocations = alloc_counter::allocations(|| {
             for tick in 0..3 * duration {
                 // Include three consecutive swings: walking alone cannot catch
                 // a hit list that grows when the attack reaches a crowded rank.
-                world.step(dt, Intent::new(east, tick % duration == 0));
+                world.step(dt, Intent::new(east, AimDir::new(east.as_vec3()).expect("nonzero test movement"), tick % duration == 0));
                 observe_presentation(&world, Alpha::ONE);
             }
         });
@@ -641,7 +643,7 @@ fn the_player_cannot_walk_off_the_arena() {
         // the far wall from anywhere in a 96-unit half-arena, so this
         // reaches the clamp rather than merely walking toward it.
         for _ in 0..1200 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(dir), false));
+            world.step(tick_dt(), Intent::new(MoveDir::new(dir), AimDir::new(dir).unwrap(), false));
         }
         let pos = world.player_pos();
         assert!(pos.is_finite());
@@ -655,7 +657,7 @@ fn turning_never_overshoots_its_target() {
     let target = std::f32::consts::FRAC_PI_2;
 
     for _ in 0..200 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
         assert!(world.player.facing >= 0.0);
         assert!(world.player.facing <= target, "overshot to {}", world.player.facing);
     }
@@ -670,7 +672,7 @@ fn facing_stays_wrapped_while_spinning() {
 
     for lap in 0..50 {
         for _ in 0..30 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(circle[lap % 4]), false));
+            world.step(tick_dt(), Intent::new(MoveDir::new(circle[lap % 4]), AimDir::new(circle[lap % 4]).unwrap(), false));
         }
         assert!(
             world.player.facing.abs() <= std::f32::consts::PI + 1e-6,
@@ -775,7 +777,7 @@ fn no_enemy_is_left_overlapping_the_player() {
 
     // Walk into the middle of the horde and keep going.
     for _ in 0..240 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     }
 
     let contact = PLAYER_RADIUS + ENEMY_RADIUS;
@@ -797,7 +799,7 @@ fn walking_through_the_horde_displaces_it() {
 
     let mut ever_touched = 0;
     for _ in 0..240 {
-        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), false));
+        world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
         ever_touched += world.contacts();
     }
 
@@ -814,13 +816,13 @@ fn walking_through_the_horde_displaces_it() {
 #[test]
 fn the_contact_count_tracks_whether_anything_is_touching() {
     let mut clear = in_open_ground();
-    clear.step(tick_dt(), Intent::NONE);
+    clear.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(clear.contacts(), 0, "nothing is near the player out here");
 
     // The horde is centred on the origin and so is the player, so the
     // spawn itself puts bodies in contact.
     let mut crowded = World::default();
-    crowded.step(tick_dt(), Intent::NONE);
+    crowded.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert!(crowded.contacts() > 0, "spawned inside the horde and touched nothing");
 }
 
@@ -832,7 +834,7 @@ fn nothing_is_pushed_out_of_the_arena() {
 
     for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
         for _ in 0..600 {
-            world.step(tick_dt(), Intent::new(MoveDir::new(dir), false));
+            world.step(tick_dt(), Intent::new(MoveDir::new(dir), AimDir::new(dir).unwrap(), false));
         }
         for &enemy in &world.bodies.pos[1..] {
             assert!(enemy.is_finite(), "poisoned position {enemy}");
@@ -856,7 +858,7 @@ fn a_request_becomes_a_body_on_the_next_tick_and_not_before() {
     assert!(world.request_spawn(Vec2::new(3.0, 0.0), Template::BODY));
     assert_eq!(world.enemy_count(), 0, "the request was granted without a tick running");
 
-    world.step(tick_dt(), Intent::NONE);
+    world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(world.enemy_count(), 1);
 }
 
@@ -875,7 +877,7 @@ fn a_full_queue_refuses_out_loud() {
     }
     assert!(!world.request_spawn(Vec2::ZERO, Template::BODY), "the queue accepted past capacity");
 
-    world.step(tick_dt(), Intent::NONE);
+    world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
 
     assert_eq!(world.enemy_count(), QUEUE_CAPACITY, "the accepted requests were not all granted");
     let refusals: Vec<_> = world
@@ -910,7 +912,7 @@ fn a_held_back_source_fires_the_instant_its_condition_opens() {
     // Long enough that a source counting down regardless would have come round
     // twice over.
     for _ in 0..120 {
-        world.step(tick_dt(), Intent::NONE);
+        world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
     assert_eq!(world.enemy_count(), 0, "the condition was shut and something spawned anyway");
 
@@ -918,7 +920,7 @@ fn a_held_back_source_fires_the_instant_its_condition_opens() {
     // this half lives here: it isolates the opening of the condition from the
     // ticks spent walking to it.
     world.bodies.pos[0] = far;
-    world.step(tick_dt(), Intent::NONE);
+    world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
 
     assert_eq!(world.enemy_count(), 1, "a ready source did not fire the tick its gate opened");
 }
@@ -941,7 +943,7 @@ fn a_population_condition_fills_to_its_number_and_stops() {
     );
 
     for _ in 0..60 {
-        world.step(tick_dt(), Intent::NONE);
+        world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
     assert_eq!(
         world.enemy_count(),
@@ -953,7 +955,7 @@ fn a_population_condition_fills_to_its_number_and_stops() {
     // cannot do.
     let victim = world.bodies.slots.ids()[1];
     assert!(world.despawn_body(victim));
-    world.step(tick_dt(), Intent::NONE);
+    world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(world.enemy_count(), 3, "a body was killed and not replaced");
 }
 
@@ -971,7 +973,7 @@ fn a_removed_source_stops_and_its_name_stays_dead() {
         Template::BODY,
     ));
     for _ in 0..5 {
-        world.step(tick_dt(), Intent::NONE);
+        world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
     let made = world.enemy_count();
     assert_eq!(made, 5, "every=1 should fire on every tick");
@@ -981,7 +983,7 @@ fn a_removed_source_stops_and_its_name_stays_dead() {
     assert_eq!(world.source_count(), 0);
 
     for _ in 0..20 {
-        world.step(tick_dt(), Intent::NONE);
+        world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
     assert_eq!(world.enemy_count(), made, "a removed source kept spawning");
 
@@ -1008,7 +1010,7 @@ fn a_ring_does_not_stack_what_it_makes() {
     // to separate anything — so this measures the placement, not the response
     // to a bad placement.
     for _ in 0..4 {
-        world.step(tick_dt(), Intent::NONE);
+        world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
 
     let places = world.bodies.pos[1..].to_vec();
@@ -1038,7 +1040,7 @@ fn despawning_preserves_a_swapped_survivors_payloads() {
     assert_eq!(world.motion(b).unwrap().velocity(), Vec2::new(6.0, 0.0));
     assert_eq!(world.health(b), Some(2));
     assert_eq!(world.health(c), Some(3));
-    world.step(tick_dt(), Intent::NONE);
+    world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert!((world.body_pos(b).unwrap().x - 20.1).abs() < 1e-5);
     assert_eq!(world.body_pos(c).unwrap().x, 30.0);
 }
@@ -1071,7 +1073,7 @@ fn scene_eviction_revokes_prop_activation() {
     let owner = world.load_scene(&scene).unwrap();
     let id = world.bodies.slots.ids()[1];
     assert!(!world.add_seek(id));
-    world.step(tick_dt(), Intent::NONE.with_interact(true));
+    world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true));
 
     assert_eq!(world.interaction_state(id), Some(InteractionState::Activated));
     assert_eq!(world.body_count(), 1);
@@ -1115,7 +1117,7 @@ fn an_interaction_tie_survives_dense_row_swaps() {
     let first = world.place(Vec2::Y, Template::BLOCK.interactive()).unwrap();
     let last = world.place(-Vec2::Y, Template::BLOCK.interactive()).unwrap();
     world.despawn_body(removed);
-    world.step(tick_dt(), Intent::NONE.with_interact(true));
+    world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true));
     assert_eq!(world.interaction_state(first), Some(InteractionState::Activated));
     assert_eq!(world.interaction_state(last), Some(InteractionState::Ready));
 }
@@ -1130,7 +1132,7 @@ fn activation_state_reaches_the_world_hash() {
         world
     };
     let (mut ready, mut activated) = (make(), make());
-    ready.step(tick_dt(), Intent::NONE);
-    activated.step(tick_dt(), Intent::NONE.with_interact(true));
+    ready.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+    activated.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true));
     assert_ne!(ready.hash(), activated.hash());
 }

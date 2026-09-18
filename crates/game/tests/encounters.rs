@@ -1,5 +1,5 @@
 //! Encounter composition through Game, with real combat and full lifetime checks.
-use arpg_core::{Intent, MoveDir, Report};
+use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{
     DefeatObjective, DoorSpec, DoorState, EncounterAction as Action, EncounterObjective,
     EncounterPhase as Phase, EncounterSpec, EncounterStart, Game, GameScene, SourceControlSpec,
@@ -65,7 +65,7 @@ fn step(game: &mut Game, tick: u64, interact: bool) {
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
     game.step(
         dt,
-        Intent::new(movement, [630, 660, 690].contains(&tick))
+        Intent::new(movement, AimDir::FORWARD, [630, 660, 690].contains(&tick))
             .with_interact(interact),
     );
 }

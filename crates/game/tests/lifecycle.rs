@@ -1,6 +1,6 @@
 //! Complete game lifecycle through the public boundary used by the app.
 
-use arpg_core::{Intent, MoveDir, Report};
+use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene, RestartError, SceneError};
 use arpg_sim::{
     Accumulator, AttackProfile, BodyGrid, Condition, Dt, Impulse, InteractionState,
@@ -39,7 +39,7 @@ fn failed_start_and_additive_load_preserve_the_complete_run() {
     let mut game = Game::from_scene(&selected).unwrap();
     let mut control = Game::from_scene(&selected).unwrap();
     for run in [&mut game, &mut control] {
-        step(run, Intent::NONE.with_interact(true));
+        step(run, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true));
         assert!(run.request_spawn(Vec2::new(-20.0, 0.0), Template::BODY));
         run.set_attack_profile(AttackProfile::Slam);
     }
@@ -60,8 +60,8 @@ fn failed_start_and_additive_load_preserve_the_complete_run() {
         assert_eq!(game.selected_scene_name(), Some(selected.engine.name.as_str()));
     }
     assert_eq!(game.start_scene(&oversized), Err(SceneError::Engine(arpg_sim::SceneError::Capacity)));
-    step(&mut game, Intent::NONE);
-    step(&mut control, Intent::NONE);
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+    step(&mut control, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(game.hash(), control.hash(), "accepted pending work must survive refusal");
     assert_eq!(game.enemy_count(), 2, "first emission plus the accepted queued body");
     game.restart().unwrap();
@@ -75,7 +75,7 @@ fn restart_uses_its_snapshot_and_replaces_all_live_state_and_pending_work() {
     let mut fresh = Game::from_scene(&authored).unwrap();
     let original = game.scene_instances().next().unwrap().0;
     let prop = game.scene_bodies(original).unwrap()[0];
-    step(&mut game, Intent::NONE.with_interact(true));
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true));
     assert_eq!(game.interaction_state(prop), Some(InteractionState::Activated));
     let extra = game.load_scene(&Scene {
         name: "additive".into(),
@@ -85,7 +85,7 @@ fn restart_uses_its_snapshot_and_replaces_all_live_state_and_pending_work() {
     game.set_attack_profile(AttackProfile::Slam);
     game.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
     assert!(game.apply_impulse(game.player_id(), Impulse::try_from((6.0, 0.0)).unwrap()));
-    step(&mut game, Intent::new(MoveDir::new(Vec3::Z), true));
+    step(&mut game, Intent::new(MoveDir::new(Vec3::Z), AimDir::new(Vec3::Z).unwrap(), true));
     assert!(game.request_spawn(Vec2::new(-50.0, 0.0), Template::BODY));
     assert!(game.evict_scene(original));
     assert!(game.scene_bodies(extra).is_some());
@@ -107,8 +107,8 @@ fn restart_uses_its_snapshot_and_replaces_all_live_state_and_pending_work() {
     let restored_prop = game.scene_bodies(restored).unwrap()[0];
     assert_eq!(game.interaction_state(restored_prop), Some(InteractionState::Ready));
     for _ in 0..4 {
-        step(&mut game, Intent::NONE);
-        step(&mut fresh, Intent::NONE);
+        step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+        step(&mut fresh, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
         assert_eq!(game.hash(), fresh.hash(), "old queued work must not reappear");
     }
     assert_eq!(game.enemy_count(), 2, "only fresh source emissions at ticks 0 and 2");
@@ -120,7 +120,7 @@ fn eviction_is_local_and_preserves_the_restart_choice() {
     let mut game = Game::from_scene(&selected).unwrap();
     let a = game.scene_instances().next().unwrap().0;
     let b = game.load_scene(&selected).unwrap();
-    step(&mut game, Intent::NONE);
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     let retired = game.scene_bodies(a).unwrap().to_vec();
     let survivors = game.scene_bodies(b).unwrap().to_vec();
     assert_eq!(retired.len(), 2, "one authored prop and one emitted body");
@@ -131,14 +131,14 @@ fn eviction_is_local_and_preserves_the_restart_choice() {
     assert!(survivors.iter().all(|id| game.is_alive(*id)));
     assert_eq!(game.selected_scene_name(), Some(selected.engine.name.as_str()));
     for _ in 0..4 {
-        step(&mut game, Intent::NONE);
+        step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
     assert_eq!(game.enemy_count(), 4, "B's three emissions plus unowned queued work");
     assert_eq!(game.source_count(), 1);
     let c = game.load_scene(&selected).unwrap();
     assert_ne!(a, c);
     assert!(game.evict_scene(c)); // Eviction before the first source evaluation.
-    step(&mut game, Intent::NONE); // Tick 5: B is waiting; C must not emit.
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); // Tick 5: B is waiting; C must not emit.
     assert_eq!(game.enemy_count(), 4);
 }
 
@@ -183,11 +183,11 @@ fn source_enablement_is_instance_local_and_restart_restores_authored_state() {
     let a = SourceId::parse("s0").unwrap();
     let b = SourceId::parse("s1").unwrap();
     let dormant = Some(SourceState { enabled: false, countdown: 0, emitted: 0 });
-    step(&mut game, Intent::NONE);
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(game.source_state(a), dormant);
     assert_eq!(game.source_state(b), dormant);
     assert!(game.set_source_enabled(a, true));
-    step(&mut game, Intent::NONE);
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(game.enemy_count(), 1);
     assert_eq!(game.source_state(b), dormant);
     assert!(game.evict_scene(original));
@@ -197,10 +197,10 @@ fn source_enablement_is_instance_local_and_restart_restores_authored_state() {
     assert_eq!(game.source_state(b), dormant);
     assert_eq!(game.enemy_count(), 0);
     assert!(game.set_source_enabled(b, true));
-    step(&mut game, Intent::NONE);
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(game.enemy_count(), 1);
     game.restart().unwrap();
     assert_eq!(game.hash(), fresh_hash);
-    step(&mut game, Intent::NONE);
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(game.enemy_count(), 0, "restart must restore authored dormancy");
 }

@@ -41,6 +41,7 @@ pub(crate) struct Request {
 }
 
 pub(crate) enum Command {
+    Cursor(glam::Vec2),
     /// Atomically load and select one app-global player character.
     ShowCharacter(PathBuf),
     /// Restore the default player asset.
@@ -148,6 +149,14 @@ fn parse(line: &str) -> Result<Command, String> {
     };
 
     Ok(match verb {
+        "cursor" => {
+            let usage = "expected: cursor <finite physical x> <finite physical y>";
+            let x = arg.ok_or(usage)?.parse::<f32>().map_err(|_| usage)?;
+            let y = it.next().ok_or(usage)?.parse::<f32>().map_err(|_| usage)?;
+            let pixel = glam::Vec2::new(x, y);
+            if !pixel.is_finite() || it.next().is_some() { return Err(usage.into()); }
+            Command::Cursor(pixel)
+        }
         "press" => Command::Press(key(arg)?),
         "release" => Command::Release(key(arg)?),
         "tap" => Command::Tap(key(arg)?),
@@ -467,6 +476,17 @@ mod tests {
             "wait",
         ] {
             assert!(parse(bad).is_err(), "{bad:?} should not parse");
+        }
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    #[test]
+    fn cursor_commands_reject_invalid_coordinates_and_extra_fields() {
+        assert!(matches!(super::parse("cursor 100 200"), Ok(super::Command::Cursor(_))));
+        for bad in ["cursor NaN 0", "cursor 0 inf", "cursor 1", "cursor 1 2 3"] {
+            assert!(super::parse(bad).is_err(), "{bad}");
         }
     }
 }

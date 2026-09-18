@@ -2,6 +2,7 @@ use crate::scene::{GameScene, RestartError, RestartScene, SceneError, fingerprin
 use crate::source_control::{self, ControlEvent, ControlState, SourceControls};
 use arpg_core::{Intent, Report};
 use crate::torch::{Torches, TorchSpec};
+use crate::chest::{self, Chests};
 use crate::door::{self, Doors};
 use crate::encounter::{self, Encounters, EncounterEvent};
 use arpg_sim::{
@@ -27,6 +28,7 @@ pub struct Game {
     controls: SourceControls,
     torches: Torches,
     doors: Doors,
+    chests: Chests,
     encounters: Encounters,
     encounter_trace: Trace<EncounterEvent>,
     control_trace: Trace<ControlEvent>,
@@ -51,6 +53,7 @@ impl Game {
             controls: SourceControls::default(),
             torches: Torches::default(),
             doors: Doors::default(),
+            chests: Chests::default(),
             encounters: Encounters::default(),
             encounter_trace: Trace::default(),
             control_trace: Trace::default(),
@@ -59,13 +62,14 @@ impl Game {
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
-        let (world, controls, torches, doors, encounters, restart) = RestartScene::prepare(scene)?;
+        let crate::scene::PreparedScene { world, controls, torches, doors, chests, encounters, restart } = RestartScene::prepare(scene)?;
         Ok(Self {
             world,
             restart: Some(restart),
             controls,
             torches,
             doors,
+            chests,
             encounters,
             encounter_trace: Trace::default(),
             control_trace: Trace::default(),
@@ -111,6 +115,7 @@ impl Game {
             controls,
             torches: _,
             doors,
+            chests,
             encounters,
             encounter_trace,
             control_trace,
@@ -121,10 +126,11 @@ impl Game {
         let (mut access, _) = world.encounter_access();
         let mut trace = encounter_trace.sink(tick);
         door::advance(doors, &mut access, &mut trace);
-        encounter::begin(encounters, doors, &mut access, &mut trace);
+        chest::advance(chests, &mut access, &mut trace);
+        encounter::begin(encounters, doors, chests, &mut access, &mut trace);
         world.step(dt, intent);
         let (mut access, defeats) = world.encounter_access();
-        encounter::finish(encounters, doors, defeats, &mut access, &mut trace);
+        encounter::finish(encounters, doors, chests, defeats, &mut access, &mut trace);
     }
 
     /// Hashes engine state, live relationships, and the cached restart effect.
@@ -136,12 +142,13 @@ impl Game {
             controls,
             torches,
             doors,
+            chests,
             encounters,
             encounter_trace: _,
             control_trace: _,
         } = self;
         let mut hash = Fnv::default();
-        hash.u64(fingerprint(world, controls, torches, doors, encounters));
+        hash.u64(fingerprint(world, controls, torches, doors, chests, encounters));
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
             snapshot.hash(&mut hash);
@@ -163,6 +170,7 @@ impl Game {
             controls,
             torches,
             doors,
+            chests,
             encounters,
             encounter_trace,
             control_trace,
@@ -171,6 +179,7 @@ impl Game {
         controls.report(out);
         torches.report(out);
         doors.report(out);
+        chests.report(out);
         encounters.report(out);
         out.int("encounter_events_dropped", encounter_trace.dropped() as u64);
         out.int("control_events_dropped", control_trace.dropped() as u64);
@@ -190,11 +199,12 @@ impl Game {
             controls,
             torches,
             doors,
+            chests,
             encounters,
             encounter_trace: _,
             control_trace: _,
         } = self;
-        scene.install(world, controls, torches, doors, encounters)
+        scene.install(world, controls, torches, doors, chests, encounters)
     }
 
     /// Evicts a live instance and its descendants; preserves the restart snapshot.
@@ -207,6 +217,7 @@ impl Game {
             controls,
             torches,
             doors,
+            chests,
             encounters,
             encounter_trace: _,
             control_trace: _,
@@ -217,6 +228,7 @@ impl Game {
         controls.evict(id);
         torches.evict(id);
         doors.evict(id);
+        chests.evict(id);
         encounters.evict(id);
         true
     }
@@ -532,6 +544,17 @@ impl Game {
     pub fn door_state(&self, scene: SceneId, nth: usize) -> Option<crate::DoorState> { self.doors.state(scene, nth) }
     /// Lossless combat outcomes of the latest completed engine tick.
     pub fn defeats(&self) -> &[arpg_sim::Defeat] { self.world.defeats() }
-    /// Encounter/door diagnostics, separate from authoritative progression.
+    /// Encounter, door and chest diagnostics, separate from authoritative progression.
     pub fn encounter_trace(&self) -> &Trace<EncounterEvent> { &self.encounter_trace }
+}
+
+impl Game {
+    /// Scene-local authoritative chest state, absent after eviction.
+    pub fn chest_state(&self, scene: SceneId, nth: usize) -> Option<crate::ChestState> {
+        self.chests.state(scene, nth)
+    }
+    /// Chest role for a stable physical prop identity; presentation cannot change it.
+    pub fn chest_state_for_body(&self, body: EntityId) -> Option<crate::ChestState> {
+        self.chests.for_body(body)
+    }
 }

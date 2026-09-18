@@ -127,8 +127,8 @@ impl OrthoCamera {
     ///
     /// Per *frame*, not per simulation tick, and that is deliberate: where the
     /// camera points is a presentation decision, not simulation state. Nothing
-    /// downstream depends on it, no other system reads it, and smoothing it at
-    /// display rate is what keeps the motion smooth at any refresh rate. When
+    /// in simulation reads the camera; app uses it to resolve device intent.
+    /// Smoothing at display rate keeps motion smooth at any refresh rate. When
     /// the fixed timestep lands, this call stays exactly where it is.
     ///
     /// Call it *after* stepping the world. Following last tick's position adds
@@ -190,6 +190,22 @@ impl OrthoCamera {
         // what "up the screen" means on the floor.
         let right = forward.cross(Vec3::Y).normalize();
         (right, Vec3::Y.cross(right))
+    }
+
+    /// Projects a physical viewport pixel onto the ground using this camera's
+    /// current view. Invalid or zero-sized viewports are rejected.
+    pub fn ground_point(&self, pixel: glam::Vec2, width: u32, height: u32) -> Result<Vec3, &'static str> {
+        if !pixel.is_finite() || width == 0 || height == 0 {
+            return Err("cursor needs finite pixels and a nonzero viewport");
+        }
+        let ndc = glam::Vec2::new(pixel.x / width as f32 * 2.0 - 1.0, 1.0 - pixel.y / height as f32 * 2.0);
+        let inverse = self.view_proj().inverse();
+        let near = inverse.project_point3(ndc.extend(0.0));
+        let far = inverse.project_point3(ndc.extend(1.0));
+        let ray = far - near;
+        let point = near - ray * (near.y / ray.y);
+        if !point.is_finite() { return Err("cursor ray does not intersect the ground"); }
+        Ok(Vec3::new(point.x, 0.0, point.z))
     }
 
     /// The combined view-projection matrix, as uploaded to the shader.

@@ -50,6 +50,6 @@ mod smoothing;
 pub use lighting::{PointLight, MAX_POINT_LIGHTS};
 pub use input::{Action, ActionMask, Actions, InputState};
 pub use instance::{Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES};
-pub use intent::{Intent, MoveDir};
+pub use intent::{AimDir, Intent, MoveDir};
 pub use report::Report;
 pub use smoothing::{damp, damp_vec3};

@@ -6,7 +6,7 @@ Run from the repository root:
 
 The script deliberately mirrors the engine's small character interchange
 contract: one joined mesh (including the sword), one material with a packed
-PNG, one armature, rigid vertex groups, and eight presentation actions.
+PNG, one armature, rigid vertex groups, and seven presentation actions.
 """
 
 from pathlib import Path
@@ -242,6 +242,26 @@ def build_actions(armature):
         (8, {"Spine": (7, 0, 0), "LeftArm": (24, 0, 0), "RightArm": (-24, 0, 0), "LeftLeg": (-28, 0, 0), "RightLeg": (28, 0, 0)}),
         (16, {"Spine": (7, 0, 0), "LeftArm": (-24, 0, 0), "RightArm": (24, 0, 0), "LeftLeg": (28, 0, 0), "RightLeg": (-28, 0, 0)}),
     ]))
+    # Keep the same 15-frame gait period and foot phase in every direction.
+    # Legs rotate about local X for forward/back, local Z for sideways travel.
+    # The deliberately rigid eight-joint rig cannot bend knees yet.
+    for name, x, z, lean in (
+        ("RunBackward", -22, 0, -4),
+        ("RunLeft", 0, -22, 0),
+        ("RunRight", 0, 22, 0),
+    ):
+        keys = []
+        for frame, sign in ((1, 1), (8, -1), (16, 1)):
+            keys.append((frame, {
+                "Spine": (lean, 0, 0),
+                # Side steps alternate an outward foot with one under the hip.
+                # Swinging both rigid legs inward made them visibly intersect.
+                "LeftLeg": (x * sign, 0, max(0, -z * sign)),
+                "RightLeg": (-x * sign, 0, min(0, -z * sign)),
+                "LeftArm": (-x * sign * 0.5, 0, -z * sign * 0.5),
+                "RightArm": (x * sign * 0.5, 0, z * sign * 0.5),
+            }))
+        actions.append(add_action(armature, name, keys))
     # Spine local Y twists about the upright axis. Keep the lateral strike
     # inside the shared active segment; simulation owns its timing and reach.
     actions.append(add_action(armature, "AttackCleave", [
@@ -271,9 +291,9 @@ def save_and_export(output_directory):
     blend_path = (output_directory / "basic-player.blend").resolve()
     glb_path = (output_directory / "basic-player.glb").resolve()
     bpy.context.scene.render.image_settings.file_format = "PNG"
-    bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
+    assert bpy.ops.wm.save_as_mainfile(filepath=str(blend_path)) == {"FINISHED"}
     bpy.ops.object.select_all(action="SELECT")
-    bpy.ops.export_scene.gltf(
+    result = bpy.ops.export_scene.gltf(
         filepath=str(glb_path),
         export_format="GLB",
         export_apply=False,
@@ -283,6 +303,7 @@ def save_and_export(output_directory):
         export_animation_mode="ACTIONS",
         export_nla_strips=False,
     )
+    assert result == {"FINISHED"}
     print(f"wrote {blend_path}")
     print(f"wrote {glb_path}")
 

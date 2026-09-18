@@ -21,7 +21,7 @@ fn scene() -> GameScene {
 
 fn step(game: &mut Game, interact: bool) {
     for dt in Accumulator::default().pending(Dt::SECS) {
-        game.step(dt, Intent::NONE.with_interact(interact));
+        game.step(dt, Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false).with_interact(interact));
     }
 }
 

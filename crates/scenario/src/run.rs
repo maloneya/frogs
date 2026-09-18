@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use arpg_core::{Intent, MoveDir};
+use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::Game;
 use arpg_sim::{Accumulator, Dt, EntityId, Event, SourceId, Template};
 use glam::Vec3;
@@ -78,6 +78,11 @@ use arpg_sim::WALK_PER_TICK as TICK_OF_WALKING;
 /// just to remove one field from checkpoints.
 pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     let mut failures = Vec::new();
+    for aim in &scenario.aims {
+        if aim.at >= scenario.budget.ticks || AimDir::new(Vec3::new(aim.dir.0, 0.0, aim.dir.1)).is_err() {
+            failures.push(Failure::new("aims", "a finite nonzero aim and a tick inside the budget".into(), format!("{aim:?}")));
+        }
+    }
     let scenes: Vec<_> = scenario.setup.scenes.iter().chain(scenario.scene_commands().into_iter()
         .filter_map(|command| match &command.action {
             crate::spec::SceneAction::Load(scene) => Some(scene),
@@ -113,6 +118,11 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
         for item in &expect.doors {
             if !scenes.get(item.scene).is_some_and(|scene| item.door < scene.doors.len()) {
                 failures.push(Failure::new("doors", "an authored scene door".into(), format!("scene {} door {}", item.scene, item.door)));
+            }
+        }
+        for item in &expect.chests {
+            if !scenes.get(item.scene).is_some_and(|scene| item.chest < scene.chests.len()) {
+                failures.push(Failure::new("chests", "an authored scene chest".into(), format!("scene {} chest {}", item.scene, item.chest)));
             }
         }
         for control in &expect.controls {
@@ -250,6 +260,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
 
     let budget = scenario.budget.ticks as usize;
     let schedule = input_schedule(scenario);
+    let aims = aim_schedule(scenario, &schedule);
 
     // Whether any body can appear mid-run at all. Hoisted because the check
     // below costs a walk of the whole trace ring, and the overwhelming majority
@@ -369,7 +380,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                     ));
                 }
             }
-            let intent = Intent::new(schedule[tick as usize], scenario.attacks.contains(&tick))
+            let intent = Intent::new(schedule[tick as usize], aims[tick as usize], scenario.attacks.contains(&tick))
                 .with_interact(scenario.interactions.contains(&tick));
             let started = std::time::Instant::now();
             game.step(dt, intent);
@@ -482,6 +493,22 @@ fn input_schedule(scenario: &Scenario) -> Vec<MoveDir> {
     schedule
 }
 
+/// Device-free adapter. Every tick still supplies a concrete AimDir to Game.
+fn aim_schedule(scenario: &Scenario, movement: &[MoveDir]) -> Vec<AimDir> {
+    let mut aim = AimDir::FORWARD;
+    movement.iter().enumerate().map(|(tick, dir)| {
+        if scenario.aims.is_empty() {
+            if let Ok(direction) = AimDir::new(dir.as_vec3()) { aim = direction; }
+        } else {
+            for command in scenario.aims.iter().filter(|a| a.at == tick as u64) {
+                aim = AimDir::new(Vec3::new(command.dir.0, 0.0, command.dir.1))
+                    .expect("scenario aim validated before running");
+            }
+        }
+        aim
+    }).collect()
+}
+
 /// Checks the run against what the scenario predicted.
 ///
 /// Collects every failure rather than stopping at the first. One run of the
@@ -544,6 +571,7 @@ fn check_state(
         controls,
         encounters,
         doors,
+        chests,
         scene_count,
         torch_count,
         torches,
@@ -634,6 +662,12 @@ fn check_state(
         let actual = instances.get(expected.scene).copied().flatten().and_then(|id| game.door_state(id, expected.door));
         if actual != expected.state {
             failures.push(Failure::new(&format!("doors[{}/{}]", expected.scene, expected.door), format!("{:?}", expected.state), format!("{actual:?}")));
+        }
+    }
+    for expected in chests {
+        let actual = instances.get(expected.scene).copied().flatten().and_then(|id| game.chest_state(id, expected.chest));
+        if actual != expected.state {
+            failures.push(Failure::new(&format!("chests[{}/{}]", expected.scene, expected.chest), format!("{:?}", expected.state), format!("{actual:?}")));
         }
     }
     for expected in controls {

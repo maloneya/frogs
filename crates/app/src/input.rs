@@ -57,6 +57,9 @@ pub(crate) struct Controls {
     menu: Menu,
     /// Physical keys, including those swallowed by the menu.
     down: u32,
+    mouse_down: bool,
+    mouse_accepted: bool,
+    aim: CursorAim,
 }
 
 impl Controls {
@@ -91,8 +94,7 @@ impl Controls {
             self.menu.on_key(menu_key, profile);
         }
         if previous_mode != self.menu.mode() {
-            self.accepted = 0;
-            self.state = InputState::default();
+            self.clear_gameplay();
         } else if !consumed {
             if pressed {
                 self.accepted |= bit;
@@ -104,19 +106,51 @@ impl Controls {
         consumed
     }
 
+    /// Cancel accepted input and pending edges together, without forgetting
+    /// physical buttons that still need a release before their next press.
+    fn clear_gameplay(&mut self) {
+        self.accepted = 0;
+        self.mouse_accepted = false;
+        self.state = InputState::default();
+    }
+
     /// Restart discards gameplay and pending edits, but a physically held key
     /// must still be released before it can act in the new playtest.
     pub(crate) fn restart(&mut self) {
-        self.accepted = 0;
-        self.state = InputState::default();
+        self.clear_gameplay();
         self.menu = Menu::default();
+        self.aim = CursorAim::default();
     }
 
     /// Focus loss discards held keys and unsampled edges, but preserves the menu.
     pub(crate) fn release_all(&mut self) {
         self.down = 0;
-        self.accepted = 0;
-        self.state = InputState::default();
+        self.mouse_down = false;
+        self.aim.cursor = CursorPosition::Retained;
+        self.clear_gameplay();
+    }
+
+    /// Physical mouse buttons share the action latch with keyboard attacks.
+    pub(crate) fn on_mouse(&mut self, pressed: bool) {
+        if self.mouse_down == pressed { return; }
+        self.mouse_down = pressed;
+        self.mouse_accepted = pressed && !self.menu.open();
+        self.sync();
+    }
+
+    /// Cursor pixels from either the window or the harness.
+    pub(crate) fn on_cursor(&mut self, pixel: glam::Vec2) -> Result<(), &'static str> {
+        if !pixel.is_finite() { return Err("cursor pixels must be finite"); }
+        self.aim.cursor = CursorPosition::Pixel(pixel);
+        Ok(())
+    }
+
+    /// Losing the pointer retains a valid direction, rather than inventing one.
+    pub(crate) fn cursor_left(&mut self) { self.aim.cursor = CursorPosition::Retained; }
+
+    pub(crate) fn aim(&mut self, camera: &arpg_gfx::OrthoCamera, viewport: (u32, u32), player: glam::Vec3) -> arpg_core::AimDir {
+        if !self.menu.open() { self.aim.update(camera, viewport, player); }
+        self.aim.direction
     }
 
     /// Sample once per simulation tick; zero-tick frames must retain edges.
@@ -140,6 +174,7 @@ impl Controls {
                 held.insert(*action);
             }
         }
+        if self.mouse_accepted { held.insert(Action::Attack); }
         self.state.set_held(held);
     }
 
@@ -153,6 +188,42 @@ impl Controls {
 
     pub(crate) fn take_profile(&mut self) -> Option<AttackProfile> {
         self.menu.take_profile()
+    }
+}
+
+/// Absence of a screen coordinate is a device state; the aim is always valid.
+#[derive(Default)]
+enum CursorPosition {
+    #[default]
+    Retained,
+    Pixel(glam::Vec2),
+}
+
+struct CursorAim {
+    cursor: CursorPosition,
+    direction: arpg_core::AimDir,
+}
+
+impl Default for CursorAim {
+    fn default() -> Self {
+        Self { cursor: CursorPosition::Retained, direction: arpg_core::AimDir::FORWARD }
+    }
+}
+
+impl CursorAim {
+    fn update(&mut self, camera: &arpg_gfx::OrthoCamera, viewport: (u32, u32), player: glam::Vec3) {
+        let CursorPosition::Pixel(pixel) = self.cursor else { return; };
+        if pixel.x < 0.0 || pixel.y < 0.0
+            || pixel.x >= viewport.0 as f32 || pixel.y >= viewport.1 as f32 {
+            return;
+        }
+        let Ok(point) = camera.ground_point(pixel, viewport.0, viewport.1) else { return; };
+        let direction = point - player;
+        // Two centimetres avoids a direction flip from subpixel projection noise.
+        if direction.length_squared() > 0.02 * 0.02
+            && let Ok(aim) = arpg_core::AimDir::new(direction) {
+            self.direction = aim;
+        }
     }
 }
 
@@ -416,4 +487,60 @@ mod tests {
         assert!(controls.sample().just_pressed(Action::Interact));
     }
 
+}
+
+#[cfg(test)]
+mod aiming_tests {
+    use super::*;
+    use glam::{Vec2, Vec3};
+
+    #[test]
+    fn cursor_projection_tracks_camera_and_retains_aim_at_the_player() {
+        let mut camera = arpg_gfx::OrthoCamera::new(800, 600);
+        camera.snap_to(Vec3::new(5.0, 0.0, -3.0));
+        camera.zoom_by(0.5);
+        let mut controls = Controls::default();
+        let player = Vec3::new(5.0, 0.0, -3.0);
+        let target = player + Vec3::X * 4.0;
+        let ndc = camera.view_proj().project_point3(target);
+        let pixel = Vec2::new((ndc.x + 1.0) * 400.0, (1.0 - ndc.y) * 300.0);
+        controls.on_cursor(pixel).unwrap();
+        let aimed = controls.aim(&camera, (800, 600), player);
+        assert!(aimed.as_vec3().abs_diff_eq(Vec3::X, 1e-4));
+        controls.on_cursor(Vec2::new(400.0, 300.0)).unwrap();
+        assert_eq!(controls.aim(&camera, (800, 600), player), aimed);
+        assert!(controls.on_cursor(Vec2::splat(f32::NAN)).is_err());
+        assert_eq!(controls.aim(&camera, (0, 0), player), aimed);
+        for outside in [Vec2::new(-1.0, 300.0), Vec2::new(400.0, -1.0),
+            Vec2::new(800.0, 300.0), Vec2::new(400.0, 600.0)] {
+            controls.on_cursor(outside).unwrap();
+            assert_eq!(controls.aim(&camera, (800, 600), player), aimed);
+        }
+        controls.release_all();
+        assert_eq!(controls.aim(&camera, (800, 600), player), aimed);
+        controls.restart();
+        assert_eq!(controls.aim(&camera, (800, 600), player), arpg_core::AimDir::FORWARD);
+    }
+
+    #[test]
+    fn menu_captures_mouse_and_aim_and_keyboard_release_does_not_cancel_mouse() {
+        let camera = arpg_gfx::OrthoCamera::new(800, 600);
+        let mut controls = Controls::default();
+        controls.on_mouse(true);
+        assert!(controls.sample().just_pressed(Action::Attack));
+        controls.on_key(KeyCode::Space, true, false, AttackProfile::Cleave);
+        controls.on_key(KeyCode::Space, false, false, AttackProfile::Cleave);
+        assert!(controls.held().contains(Action::Attack));
+        controls.on_key(KeyCode::F1, true, false, AttackProfile::Cleave);
+        controls.on_cursor(Vec2::new(750.0, 300.0)).unwrap();
+        assert_eq!(controls.aim(&camera, (800, 600), Vec3::ZERO), arpg_core::AimDir::FORWARD);
+        assert!(!controls.sample().just_pressed(Action::Attack));
+        controls.on_key(KeyCode::Escape, true, false, AttackProfile::Cleave);
+        assert!(!controls.held().contains(Action::Attack));
+        controls.on_mouse(false);
+        controls.on_mouse(true);
+        assert!(controls.sample().just_pressed(Action::Attack));
+        controls.release_all();
+        assert!(!controls.sample().just_pressed(Action::Attack));
+    }
 }

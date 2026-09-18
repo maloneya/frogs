@@ -237,7 +237,7 @@ impl App {
             camera.snap_to(self.game.player_pos());
         }
         if let Some(world) = &mut self.world_assets {
-            world.rebuild(self.game.prop_presentations(Alpha::ZERO));
+            world.rebuild(self.game.prop_presentations(Alpha::ZERO), |id| self.game.chest_state_for_body(id));
             world.torches.rebuild(self.game.torches(), &[]);
         }
         self.collision_debug.rebuild(&self.game);
@@ -303,16 +303,15 @@ impl App {
             if let Some(profile) = self.input.take_profile() {
                 self.game.set_attack_profile(profile);
             }
+            let viewport = self.window.as_ref().expect("rendering requires a window").inner_size();
+            let aim = self.input.aim(camera, (viewport.width, viewport.height), self.game.player_presentation(Alpha::ONE).ground_position());
             let intent = self.input.sample();
             // `just_pressed`, not `held`: a swing is an edge. Holding the key
             // must not swing every tick, and a tap shorter than a frame must
             // still swing exactly once.
             self.game.step(
                 dt,
-                Intent::new(
-                    to_world(intent.move_axis()),
-                    intent.just_pressed(Action::Attack),
-                )
+                Intent::new(to_world(intent.move_axis()), aim, intent.just_pressed(Action::Attack))
                 .with_interact(intent.just_pressed(Action::Interact)),
             );
             self.attack_effects.observe(&self.game);
@@ -341,7 +340,7 @@ impl App {
             character.sample(player, alpha, presentation_seconds);
         }
         let world_assets = self.world_assets.as_mut().expect("rendering requires world assets");
-        world_assets.rebuild(self.game.prop_presentations(alpha));
+        world_assets.rebuild(self.game.prop_presentations(alpha), |id| self.game.chest_state_for_body(id));
         world_assets.torches.rebuild(self.game.torches(), self.attack_effects.vertices());
         self.collision_debug.rebuild(&self.game);
 
@@ -485,6 +484,13 @@ impl ApplicationHandler for App {
                 }
             }
 
+            WindowEvent::CursorMoved { position, .. } => {
+                let _ = self.input.on_cursor(Vec2::new(position.x as f32, position.y as f32));
+            }
+            WindowEvent::CursorLeft { .. } => self.input.cursor_left(),
+            WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
+                self.input.on_mouse(state == ElementState::Pressed);
+            }
             WindowEvent::KeyboardInput { event: key_event, .. } => {
                 log::debug!(
                     "key: physical={:?} state={:?} repeat={}",

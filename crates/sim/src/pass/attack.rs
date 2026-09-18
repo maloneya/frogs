@@ -67,12 +67,15 @@ struct InFlight {
     /// value chosen from the configuration captured beside it.
     ///
     /// Local rather than world, because baking world positions at the press
-    /// would bake the facing with them, and the player may still turn
-    /// mid-swing.
+    /// would prevent the hitbox from following the moving player.
     hitbox: Hitbox<HITBOX_SAMPLES>,
 }
 
 impl InFlight {
+    fn duration(&self) -> u32 {
+        self.resolved.startup() + self.resolved.active() + self.resolved.recovery().get()
+    }
+
     /// Which part of the swing this tick falls in.
     ///
     /// **Each phase carries what that phase has**, rather than a bare tag
@@ -130,6 +133,14 @@ impl Default for Attack {
 }
 
 impl Attack {
+    /// Whether the current swing still owns facing on the upcoming tick.
+    /// Retirement happens before new input, matching the attack pass below.
+    pub(crate) fn holds_facing(&self) -> bool {
+        self.swing.as_ref().is_some_and(|swing| {
+            swing.elapsed + 1 < swing.duration()
+        })
+    }
+
     /// Whether a swing is in progress.
     #[cfg(test)]
     pub(crate) fn is_swinging(&self) -> bool {
@@ -257,10 +268,8 @@ pub(crate) struct Pose {
 /// geometry.
 ///
 /// Runs last in the schedule, after `pass::face`, so the hitbox is oriented by
-/// the facing this tick ended with rather than the one it started with. The
-/// player may still turn mid-swing, and that is deliberate for now: locking
-/// facing during an attack is a feel decision worth making against a real
-/// animation rather than in advance.
+/// the facing this tick ended with rather than the one it started with. Facing
+/// is held through recovery by the facing pass; translation remains free.
 ///
 /// The hitbox itself is generated at the press and stored — see
 /// [`crate::swing`]. Hit resolution uses that committed shape throughout the swing.
@@ -304,11 +313,7 @@ pub(crate) fn attack(
     if state
         .swing
         .as_ref()
-        .is_some_and(|swing| {
-            let resolved = swing.resolved;
-            swing.elapsed >=
-                resolved.startup() + resolved.active() + resolved.recovery().get()
-        })
+        .is_some_and(|swing| swing.elapsed >= swing.duration())
     {
         state.swing = None;
     }

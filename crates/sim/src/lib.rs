@@ -853,7 +853,7 @@ impl World {
             trace.reborrow(),
         );
         pass::motion::settle(&mut self.bodies.physics, dt, trace.reborrow());
-        pass::face::face(&mut self.player.facing, move_dir, dt);
+        pass::face::aim(&mut self.player.facing, &self.player.attack, intent, dt);
 
         // **After `face`.** The hitbox is oriented by the facing this
         // tick ended with, and it is tested against where the bodies actually

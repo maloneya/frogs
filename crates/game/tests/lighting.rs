@@ -1,5 +1,5 @@
 //! Scene lighting admission, lifetime and deterministic observations through Game.
-use arpg_core::{Intent, MAX_POINT_LIGHTS, PointLight, Report};
+use arpg_core::{AimDir, Intent, MAX_POINT_LIGHTS, MoveDir, PointLight, Report};
 use arpg_game::{Game, GameScene, TorchSpec};
 use arpg_sim::{Accumulator, Dt, Placed, Template};
 use glam::{Vec2, Vec3};
@@ -26,7 +26,7 @@ fn observed(game: &Game) -> (u64, String, String) {
 }
 fn step(game: &mut Game) {
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
-    game.step(dt, Intent::NONE);
+    game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
 }
 
 #[test]

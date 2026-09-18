@@ -43,6 +43,30 @@ impl MoveDir {
     }
 }
 
+/// A finite, nonzero horizontal unit direction. Unlike movement, aim cannot stop.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AimDir(Vec3);
+
+impl AimDir {
+    /// The world's +Z direction, also the player's initial facing.
+    pub const FORWARD: Self = Self(Vec3::Z);
+
+    /// Validates a ground direction and normalizes without overflow or underflow.
+    pub fn new(v: Vec3) -> Result<Self, &'static str> {
+        if !v.is_finite() || v.y != 0.0 {
+            return Err("aim must be finite and horizontal");
+        }
+        let scale = v.x.abs().max(v.z.abs());
+        if scale == 0.0 {
+            return Err("aim must be nonzero");
+        }
+        Ok(Self((v / scale).normalize()))
+    }
+
+    /// The validated unit vector.
+    pub fn as_vec3(self) -> Vec3 { self.0 }
+}
+
 /// One tick's worth of intent, in the **simulation's** vocabulary.
 ///
 /// The seam between `app` and `sim`, and it exists because [`crate::Actions`] cannot
@@ -51,21 +75,19 @@ impl MoveDir {
 /// to the simulation would put a presentation decision inside it.
 ///
 /// So `app` resolves screen to world, and this is what comes out the other
-/// side: a world-space direction and the discrete things the player asked for
-/// this tick. Adding an intent later — dodge, block — adds a field here rather
+/// side: independent world-space movement and aim, and the discrete actions
+/// requested this tick. Aim is required even while stationary. Adding an intent later — dodge, block — adds a field here rather
 /// than a parameter to `World::step`, which is what stops that signature
 /// growing a tail of booleans nobody can read at the call site.
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Intent {
     move_dir: MoveDir,
+    aim: AimDir,
     attack: bool,
     interact: bool,
 }
 
 impl Intent {
-    /// Nothing at all. What a tick with no input looks like.
-    pub const NONE: Self = Self { move_dir: MoveDir::NONE, attack: false, interact: false };
-
     /// Builds one tick's intent.
     ///
     /// `attack` is an **edge**: true on the tick the swing was asked for, not
@@ -73,8 +95,8 @@ impl Intent {
     /// button is down, which is the bug the `pressed`/`held` split in
     /// [`crate::Actions`] exists to make hard.
     #[must_use]
-    pub fn new(move_dir: MoveDir, attack: bool) -> Self {
-        Self { move_dir, attack, interact: false }
+    pub fn new(move_dir: MoveDir, aim: AimDir, attack: bool) -> Self {
+        Self { move_dir, aim, attack, interact: false }
     }
 
     /// Adds this tick's interaction edge. Holding a key does not repeat it.
@@ -94,6 +116,9 @@ impl Intent {
     pub fn move_dir(self) -> MoveDir {
         self.move_dir
     }
+
+    /// Where the player aims, independently of movement.
+    pub fn aim(self) -> AimDir { self.aim }
 
     /// Whether a swing was asked for on this tick.
     #[must_use]
@@ -128,10 +153,30 @@ mod tests {
         assert_eq!(dir.as_vec3(), Vec3::new(0.0, 0.0, 1.0));
     }
 
-    /// A swing is an edge, so `Intent::NONE` must not be asking for one.
+    /// A swing is an edge, so an idle intent must not be asking for one.
     #[test]
     fn nothing_at_all_asks_for_nothing() {
-        assert_eq!(Intent::NONE.move_dir(), MoveDir::NONE);
-        assert!(!Intent::NONE.attack());
+        assert_eq!(Intent::new(MoveDir::NONE, AimDir::FORWARD, false).move_dir(), MoveDir::NONE);
+        assert!(!Intent::new(MoveDir::NONE, AimDir::FORWARD, false).attack());
+    }
+}
+
+#[cfg(test)]
+mod aim_tests {
+    use super::*;
+
+    #[test]
+    fn aim_rejects_absent_vertical_and_nonfinite_directions() {
+        for v in [Vec3::ZERO, Vec3::Y, Vec3::new(1.0, 1.0, 0.0), Vec3::splat(f32::NAN), Vec3::splat(f32::INFINITY)] {
+            assert!(AimDir::new(v).is_err());
+        }
+    }
+
+    #[test]
+    fn finite_nonzero_aim_normalizes_even_at_numeric_extremes() {
+        for scale in [f32::MAX, f32::MIN_POSITIVE, f32::from_bits(1), 17.0] {
+            let aim = AimDir::new(Vec3::new(scale, 0.0, -scale)).unwrap().as_vec3();
+            assert!(aim.abs_diff_eq(Vec3::new(1.0, 0.0, -1.0).normalize(), 1e-6));
+        }
     }
 }

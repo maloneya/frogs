@@ -77,6 +77,10 @@ impl App {
                     }
                     out.finish()
                 }
+                Command::Cursor(pixel) => match self.input.on_cursor(pixel) {
+                    Ok(()) => "ok".into(),
+                    Err(error) => error.into(),
+                },
                 Command::Press(key) => {
                     self.handle_key(key, true, false);
                     "ok".to_string()

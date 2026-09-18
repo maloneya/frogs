@@ -119,7 +119,7 @@ mod tests {
         // Slam: nine startup ticks, five active samples, sixteen recovery ticks.
         // Move and turn throughout, then select a different next swing mid-attack.
         for elapsed in 0..=30 {
-            game.step(dt, Intent::new(MoveDir::new(Vec3::X), elapsed == 0));
+            game.step(dt, Intent::new(MoveDir::new(Vec3::X), arpg_core::AimDir::new(Vec3::X).unwrap(), elapsed == 0));
             if elapsed == 1 {
                 game.set_attack_profile(arpg_sim::AttackProfile::Cleave);
             }
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(debug.drawings()[1].radius(), 0.25);
         assert_eq!(debug.drawings()[2].centre(), Vec3::new(-2.0, 0.0, 0.0));
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
-        game.step(dt, Intent::new(MoveDir::new(Vec3::Z), false));
+        game.step(dt, Intent::new(MoveDir::new(Vec3::Z), arpg_core::AimDir::new(Vec3::Z).unwrap(), false));
         debug.rebuild(&game);
         assert_eq!(debug.drawings()[0].centre().z, arpg_sim::WALK_PER_TICK);
         assert_eq!(debug.tick, game.tick());

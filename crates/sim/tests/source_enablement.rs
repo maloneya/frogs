@@ -31,7 +31,7 @@ fn setting_is_hashed_observable_idempotent_and_refuses_retired_names() {
     assert_eq!(world.source_state(id), None);
     assert_eq!((world.hash(), world.trace().render()), before);
     for dt in Accumulator::default().pending(Dt::SECS) {
-        world.step(dt, Intent::NONE);
+        world.step(dt, Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
     }
     assert_eq!(world.enemy_count(), 1, "stale updates cannot disable the new source");
 }

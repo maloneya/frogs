@@ -1,6 +1,7 @@
 //! Small typed encounter rules. Authoring, admission and observations live here;
 //! runtime instances never retain authored engine indices for body/source access.
 use crate::door::Doors;
+use crate::chest::Chests;
 use crate::{DoorState, GameScene, SceneError};
 use arpg_core::Report;
 use arpg_sim::{
@@ -38,13 +39,15 @@ pub enum EncounterObjective {
     Defeat(DefeatObjective),
 }
 
-/// Typed effects. Targets are scene-local source or door indices.
+/// Typed effects. Targets are scene-local source, door or chest indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub enum EncounterAction {
     /// Enable an owned source at encounter start.
     EnableSource(usize),
     /// Unlock a gameplay door; opening still needs a fresh interaction.
     UnlockDoor(usize),
+    /// Unlock a chest; a fresh interaction opens its lid.
+    UnlockChest(usize),
 }
 
 /// A complete encounter composition, installed independently for each scene copy.
@@ -108,6 +111,15 @@ pub enum EncounterEvent {
         /// State after the transition.
         state: EncounterState,
     },
+    /// Chest changed state.
+    Chest {
+        /// Owning scene.
+        scene: SceneId,
+        /// Authored chest index.
+        index: usize,
+        /// New chest state.
+        state: crate::ChestState,
+    },
     /// Door changed state.
     Door {
         /// Owning scene.
@@ -130,6 +142,7 @@ impl std::fmt::Display for EncounterEvent {
                 "encounter scene={scene} index={index} phase={:?} defeated={} remaining={}",
                 state.phase, state.defeated, state.remaining_ticks
             ),
+            Self::Chest { scene, index, state } => write!(out, "chest scene={scene} index={index} state={state:?}"),
             Self::Door {
                 scene,
                 index,
@@ -143,6 +156,7 @@ impl std::fmt::Display for EncounterEvent {
 enum Action {
     EnableSource(SourceId),
     Door(usize),
+    Chest(usize),
 }
 struct Encounter {
     owner: SceneId,
@@ -150,6 +164,7 @@ struct Encounter {
     start: EntityId,
     sources: Vec<SourceId>,
     doors: Vec<usize>,
+    chests: Vec<usize>,
     on_start: Vec<Action>,
     on_success: Vec<Action>,
     on_failure: Vec<Action>,
@@ -171,6 +186,7 @@ impl Encounters {
         }
         let mut owned_sources = Vec::new();
         let mut owned_doors = Vec::new();
+        let mut owned_chests = Vec::new();
         for (nth, spec) in scene.encounters.iter().enumerate() {
             if spec.name.is_empty()
                 || spec.name.len() > 48
@@ -223,6 +239,7 @@ impl Encounters {
                 owned_sources.push(source);
             }
             let mut local_doors = Vec::new();
+            let mut local_chests = Vec::new();
             for (stage, actions) in [&spec.on_start, &spec.on_success, &spec.on_failure]
                 .into_iter()
                 .enumerate()
@@ -242,6 +259,12 @@ impl Encounters {
                                 return invalid("terminal encounters cannot enable sources");
                             }
                         }
+                        EncounterAction::UnlockChest(chest) => {
+                            if chest >= scene.chests.len() || owned_chests.contains(&chest) {
+                                return invalid("chest action must bind an exclusively owned scene chest");
+                            }
+                            if !local_chests.contains(&chest) { local_chests.push(chest); }
+                        }
                         EncounterAction::UnlockDoor(door) => {
                             if door >= scene.doors.len() || owned_doors.contains(&door) {
                                 return invalid(
@@ -256,6 +279,7 @@ impl Encounters {
                 }
             }
             owned_doors.extend(local_doors);
+            owned_chests.extend(local_chests);
         }
         Ok(())
     }
@@ -277,16 +301,20 @@ impl Encounters {
                             Action::EnableSource(sources[index])
                         }
                         EncounterAction::UnlockDoor(index) => Action::Door(index),
+                        EncounterAction::UnlockChest(index) => Action::Chest(index),
                     })
                     .collect()
             };
             let mut doors = Vec::new();
+            let mut chests = Vec::new();
             for action in spec
                 .on_start
                 .iter()
                 .chain(&spec.on_success)
                 .chain(&spec.on_failure)
             {
+                if let EncounterAction::UnlockChest(index) = *action
+                    && !chests.contains(&index) { chests.push(index); }
                 if let EncounterAction::UnlockDoor(index) = *action
                     && !doors.contains(&index)
                 {
@@ -303,6 +331,7 @@ impl Encounters {
                     .map(|&index| sources[index])
                     .collect(),
                 doors,
+                chests,
                 on_start: resolve(&spec.on_start),
                 on_success: resolve(&spec.on_success),
                 on_failure: resolve(&spec.on_failure),
@@ -337,6 +366,7 @@ impl Encounters {
                 start,
                 sources,
                 doors,
+                chests,
                 on_start,
                 on_success,
                 on_failure,
@@ -356,6 +386,8 @@ impl Encounters {
             for door in doors {
                 out.usize(*door);
             }
+            out.usize(chests.len());
+            for chest in chests { out.usize(*chest); }
             for actions in [on_start, on_success, on_failure] {
                 out.usize(actions.len());
                 for action in actions {
@@ -364,6 +396,7 @@ impl Encounters {
                             out.usize(0);
                             id.hash_into(out);
                         }
+                        Action::Chest(index) => { out.usize(2); out.usize(*index); }
                         Action::Door(index) => {
                             out.usize(1);
                             out.usize(*index);
@@ -403,6 +436,7 @@ fn effects(
     owner: SceneId,
     actions: &[Action],
     doors: &mut Doors,
+    chests: &mut Chests,
     access: &mut GameplayAccess<'_>,
     trace: &mut TraceSink<'_, EncounterEvent>,
 ) {
@@ -411,6 +445,7 @@ fn effects(
             Action::EnableSource(id) => {
                 let _ = access.set_source(id, true);
             }
+            Action::Chest(index) => chests.unlock(owner, index, access, trace),
             Action::Door(index) => doors.unlock(owner, index, access, trace),
         }
     }
@@ -426,6 +461,7 @@ fn stop(row: &Encounter, access: &mut GameplayAccess<'_>) {
 pub(crate) fn begin(
     encounters: &mut Encounters,
     doors: &mut Doors,
+    chests: &mut Chests,
     access: &mut GameplayAccess<'_>,
     trace: &mut TraceSink<'_, EncounterEvent>,
 ) {
@@ -441,6 +477,7 @@ pub(crate) fn begin(
                 .sources
                 .iter()
                 .any(|&source| access.source(source).is_none())
+                || row.chests.iter().any(|&chest| !chests.available(row.owner, chest, access))
                 || row
                     .doors
                     .iter()
@@ -454,7 +491,7 @@ pub(crate) fn begin(
                 && access.interaction(row.start) == Some(InteractionState::Activated)
             {
                 row.state.phase = EncounterPhase::Running;
-                effects(row.owner, &row.on_start, doors, access, trace);
+                effects(row.owner, &row.on_start, doors, chests, access, trace);
             } else {
                 continue;
             }
@@ -472,6 +509,7 @@ pub(crate) fn begin(
 pub(crate) fn finish(
     encounters: &mut Encounters,
     doors: &mut Doors,
+    chests: &mut Chests,
     defeats: &[Defeat],
     access: &mut GameplayAccess<'_>,
     trace: &mut TraceSink<'_, EncounterEvent>,
@@ -508,7 +546,7 @@ pub(crate) fn finish(
                 } else {
                     &row.on_failure
                 };
-                effects(row.owner, actions, doors, access, trace);
+                effects(row.owner, actions, doors, chests, access, trace);
             }
             if row.state.defeated != previous || row.state.phase != EncounterPhase::Running {
                 trace.emit(EncounterEvent::Progress {

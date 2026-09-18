@@ -268,7 +268,7 @@ mod tests {
             let resolved = profile.resolve();
             let close = resolved.startup() + resolved.active();
             for elapsed in 0..close + 12 {
-                game.step(dt, Intent::new(MoveDir::new(Vec3::X), elapsed == 0));
+                game.step(dt, Intent::new(MoveDir::new(Vec3::X), arpg_core::AimDir::new(Vec3::X).unwrap(), elapsed == 0));
                 // Changing the next move must not change the effect already in flight.
                 if elapsed == 1 {
                     game.set_attack_profile(AttackProfile::Cleave);
@@ -321,11 +321,11 @@ mod tests {
         let mut effects = AttackEffects::default();
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         for elapsed in 0..8 {
-            game.step(dt, Intent::new(MoveDir::NONE, elapsed == 0));
+            game.step(dt, Intent::new(MoveDir::NONE, arpg_core::AimDir::FORWARD, elapsed == 0));
             effects.observe(&game);
         }
         let previous = effects.samples.front().unwrap().centre;
-        game.step(dt, Intent::new(MoveDir::new(Vec3::X), false));
+        game.step(dt, Intent::new(MoveDir::new(Vec3::X), arpg_core::AimDir::new(Vec3::X).unwrap(), false));
         effects.observe(&game);
         assert_eq!(effects.samples.front().unwrap().centre, previous);
         effects.rebuild(game.tick(), Alpha::ZERO);

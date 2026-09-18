@@ -34,3 +34,9 @@ checks the direction throughout the active interval and rejects a path behind
 the player. This first pass retains the eight-joint rig; elbow and wrist
 articulation are a separate improvement. The broad damage disc remains a
 simulation shape, not a literal outline of the blade.
+
+Directional locomotion uses `Run`, `RunBackward`, `RunLeft` and `RunRight`,
+all with a 15-frame gait period. App blends their local poses for diagonal
+movement. Attacks replace the spine/arms/head/weapon pose while keeping the
+root and legs from locomotion. The rig still has rigid legs without knees;
+this is a functional control/animation baseline, not finished footwork.

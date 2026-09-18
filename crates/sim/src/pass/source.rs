@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(world.queue.len(), 1);
         assert!(world.set_source_enabled(id, false));
         for dt in Accumulator::default().pending(Dt::SECS) {
-            world.step(dt, Intent::NONE);
+            world.step(dt, Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
         }
         assert_eq!(world.enemy_count(), 1);
         assert_eq!(world.source_state(id), Some(SourceState {

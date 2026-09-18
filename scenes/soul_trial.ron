@@ -1,34 +1,37 @@
-// Can a replenishing crowd make 30 defeats in 30 seconds readable and achievable?
-// Press E by the blue switch, face the approaching enemies, and attack with Space.
-// The HUD counts only this trial's enemies. Success unlocks the centre exit prop
-// at (0,5); press E nearby to open it. Timeout stops spawning; F2 restarts.
-// Props are a greybox gate with circular footprints, not a rectangular door asset.
+// Can attacks from all directions stay readable as enemies emerge into one light?
+// Press E by the blue switch, aim with the cursor, and attack with Space/left click.
+// Defeat 30 in 30 seconds to unlock the chest; press E beside it to open its lid.
+// Eight sources sit 9 m from the centre, outside the light's 8 m range even
+// with their 0.5 m spawn radius. Every 144 ticks per source preserves the old
+// aggregate rate (8/144 = 1/18), now arriving in eight-enemy waves.
 (
     engine: (
-        name: "Soul trial - 30 in 30",
+        name: "Soul trial - circle in the dark",
         bodies: [
             (pos: (1.2, 0.0), what: (fixed: true, interactable: true)), // switch 0
-            (pos: (0.0, 5.0), what: (fixed: true)), // door body 1
-            (pos: (-1.2, 5.0), what: (fixed: true)),
-            (pos: (1.2, 5.0), what: (fixed: true)),
-            (pos: (-2.4, 5.0), what: (fixed: true)),
-            (pos: (2.4, 5.0), what: (fixed: true)),
+            (pos: (0.0, 2.5), what: (fixed: true)), // chest 1
         ],
-        sources: [(
-            pos: (0.0, -4.0), radius: 2.5, every: 18,
-            what: (seeks: true), enabled: false,
-        )],
+        sources: [
+            (pos: (0.0, 9.0), radius: 0.5, every: 144, what: (seeks: true), enabled: false),
+            (pos: (6.364, 6.364), radius: 0.5, every: 144, what: (seeks: true), enabled: false),
+            (pos: (9.0, 0.0), radius: 0.5, every: 144, what: (seeks: true), enabled: false),
+            (pos: (6.364, -6.364), radius: 0.5, every: 144, what: (seeks: true), enabled: false),
+            (pos: (0.0, -9.0), radius: 0.5, every: 144, what: (seeks: true), enabled: false),
+            (pos: (-6.364, -6.364), radius: 0.5, every: 144, what: (seeks: true), enabled: false),
+            (pos: (-9.0, 0.0), radius: 0.5, every: 144, what: (seeks: true), enabled: false),
+            (pos: (-6.364, 6.364), radius: 0.5, every: 144, what: (seeks: true), enabled: false),
+        ],
     ),
-    doors: [(body: 1)],
+    chests: [(body: 1)],
     encounters: [(
         name: "Soul trial",
         start: Activated(0),
-        objective: Defeat((sources: [0], count: 30, within_ticks: 1800)),
-        on_start: [EnableSource(0)],
-        on_success: [UnlockDoor(0)],
+        objective: Defeat((sources: [0,1,2,3,4,5,6,7], count: 30, within_ticks: 1800)),
+        on_start: [EnableSource(0), EnableSource(1), EnableSource(2), EnableSource(3),
+                   EnableSource(4), EnableSource(5), EnableSource(6), EnableSource(7)],
+        on_success: [UnlockChest(0)],
     )],
     torches: [
-        (position: (-3.0, 2.2, 3.5), colour: (0.4, 0.7, 1.0), intensity: 24.0, range: 14.0),
-        (position: (3.0, 2.2, 3.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0),
+        (position: (0.0, 2.2, 0.0), colour: (1.0, 0.65, 0.3), intensity: 55.0, range: 8.0),
     ],
 )

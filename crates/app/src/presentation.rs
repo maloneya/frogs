@@ -41,10 +41,14 @@ impl LoadedMesh<MeshAsset> {
 }
 
 /// Required static world assets and their reusable placement buffers.
-/// Both assets must import and upload before this value can exist.
+/// Every required asset must import and upload before this value can exist.
 pub(super) struct WorldAssets<T> {
     ground: LoadedMesh<T>,
     prop: LoadedMesh<T>,
+    chest_closed: LoadedMesh<T>,
+    chest_open: LoadedMesh<T>,
+    closed_chests: Vec<Instance>,
+    open_chests: Vec<Instance>,
     ground_instance: [Instance; 1],
     props: InstanceBuffer,
     pub(super) torches: crate::torch::Torches,
@@ -54,10 +58,16 @@ impl<T> WorldAssets<T> {
     pub(super) fn load(mut upload: impl FnMut(&arpg_assets::StaticMesh) -> Result<T, String>) -> Result<Self, String> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/world");
         let ground = load_static(root.join("ground.glb"), &mut upload)?;
-        let prop = load_static(root.join("prop.glb"), upload)?;
+        let prop = load_static(root.join("prop.glb"), &mut upload)?;
+        let chest_closed = load_static(root.join("chest/closed.glb"), &mut upload)?;
+        let chest_open = load_static(root.join("chest/open.glb"), upload)?;
         Ok(Self {
             ground,
             prop,
+            chest_closed,
+            chest_open,
+            closed_chests: Vec::with_capacity(arpg_game::MAX_CHESTS),
+            open_chests: Vec::with_capacity(arpg_game::MAX_CHESTS),
             ground_instance: [Instance::new(
                 Vec3::ZERO,
                 Vec3::new(arpg_sim::ARENA_HALF * 2.0, 1.0, arpg_sim::ARENA_HALF * 2.0),
@@ -68,9 +78,17 @@ impl<T> WorldAssets<T> {
         })
     }
 
-    pub(super) fn rebuild(&mut self, props: impl Iterator<Item = arpg_sim::PropPresentation>) {
+    pub(super) fn rebuild(&mut self, props: impl Iterator<Item = arpg_sim::PropPresentation>, chest_state: impl Fn(arpg_sim::EntityId) -> Option<arpg_game::ChestState>) {
+        self.closed_chests.clear();
+        self.open_chests.clear();
         let mut sink = self.props.sink();
         for prop in props {
+            if let Some(state) = chest_state(prop.id()) {
+                let instances = if state == arpg_game::ChestState::Open { &mut self.open_chests } else { &mut self.closed_chests };
+                assert!(instances.len() < arpg_game::MAX_CHESTS, "game chest admission bound");
+                instances.push(Instance::new(prop.ground_position(), Vec3::ONE, Vec3::ONE));
+                continue;
+            }
             let tint = if prop.interaction() == Some(arpg_sim::InteractionState::Activated) {
                 Vec3::new(0.06, 0.55, 0.12)
             } else {
@@ -80,13 +98,17 @@ impl<T> WorldAssets<T> {
         }
     }
 
-    pub(super) fn instance_count(&self) -> usize { 1 + self.torches.stand().len() + self.props.as_slice().len() }
+    pub(super) fn instance_count(&self) -> usize { 1 + self.torches.stand().len() + self.props.as_slice().len() + self.closed_chests.len() + self.open_chests.len() }
 
-    pub(super) fn draw_count(&self) -> usize { 1 + usize::from(!self.torches.stand().is_empty()) + usize::from(!self.props.as_slice().is_empty()) }
+    pub(super) fn draw_count(&self) -> usize { 1 + usize::from(!self.torches.stand().is_empty()) + usize::from(!self.props.as_slice().is_empty()) + usize::from(!self.closed_chests.is_empty()) + usize::from(!self.open_chests.is_empty()) }
 
     pub(super) fn report(&self, out: &mut Report) {
         out.object("ground", |out| self.ground.report(out));
         out.object("prop", |out| self.prop.report(out));
+        out.object("chest_closed", |out| self.chest_closed.report(out));
+        out.object("chest_open", |out| self.chest_open.report(out));
+        out.int("closed_chest_instances", self.closed_chests.len() as u64);
+        out.int("open_chest_instances", self.open_chests.len() as u64);
         out.int("torch_instances", self.torches.stand().len() as u64);
         out.int("ground_instances", 1);
         out.int("prop_instances", self.props.as_slice().len() as u64);
@@ -95,11 +117,13 @@ impl<T> WorldAssets<T> {
 }
 
 impl WorldAssets<MeshAsset> {
-    pub(super) fn draws(&self) -> [MeshBatch<'_>; 3] {
+    pub(super) fn draws(&self) -> [MeshBatch<'_>; 5] {
         [
             self.ground.draw(&self.ground_instance),
             self.prop.draw(self.props.as_slice()),
             self.prop.draw(self.torches.stand()),
+            self.chest_closed.draw(&self.closed_chests),
+            self.chest_open.draw(&self.open_chests),
         ]
     }
 }
@@ -126,6 +150,9 @@ struct CharacterClips {
     idle: arpg_assets::ClipId,
     run: arpg_assets::ClipId,
     attacks: Vec<arpg_assets::ClipId>,
+    backward: arpg_assets::ClipId,
+    left: arpg_assets::ClipId,
+    right: arpg_assets::ClipId,
 }
 
 impl CharacterClips {
@@ -144,6 +171,9 @@ impl CharacterClips {
         Ok(Self {
             idle,
             run: clip("Run")?,
+            backward: clip("RunBackward")?,
+            left: clip("RunLeft")?,
+            right: clip("RunRight")?,
             attacks,
         })
     }
@@ -172,14 +202,31 @@ impl CharacterClips {
     }
 }
 
+/// The exact locomotion blend used to build the last displayed pose.
+struct LocomotionSample {
+    base: arpg_assets::ClipId,
+    overlay: arpg_assets::ClipId,
+    weight: f32,
+}
+
+impl LocomotionSample {
+    fn idle(clips: &CharacterClips) -> Self {
+        Self { base: clips.idle, overlay: clips.idle, weight: 0.0 }
+    }
+}
+
 /// CPU hierarchy, role mapping and GPU resources committed after a complete load.
 pub(super) struct LoadedCharacter<T> {
     path: std::path::PathBuf,
     asset: arpg_assets::CharacterAsset,
     pose: arpg_assets::CharacterPose,
     clips: CharacterClips,
+    scratch: arpg_assets::CharacterPose,
+    full_mask: arpg_assets::PoseMask,
+    upper_mask: arpg_assets::PoseMask,
     sampled_role: PresentationRole,
     sampled_seconds: f32,
+    locomotion: LocomotionSample,
     gpu: T,
 }
 
@@ -206,6 +253,7 @@ impl<T> LoadedCharacter<T> {
     pub(super) fn reset(&mut self) {
         self.sampled_role = PresentationRole::Idle;
         self.sampled_seconds = 0.0;
+        self.locomotion = LocomotionSample::idle(&self.clips);
     }
 
     fn role(player: PlayerPresentation) -> PresentationRole {
@@ -250,7 +298,39 @@ impl<T> LoadedCharacter<T> {
                 )
             }
         };
-        let _ = self.asset.sample(clip, clip_seconds, &mut self.pose);
+        let movement = player.displacement();
+        if movement.length_squared() > 1.0e-8 {
+            let (sin, cos) = player.facing().sin_cos();
+            let forward = movement.x * sin + movement.y * cos;
+            let right = movement.x * cos - movement.y * sin;
+            let longitudinal = if forward >= 0.0 { self.clips.run } else { self.clips.backward };
+            let lateral = if right >= 0.0 { self.clips.right } else { self.clips.left };
+            let weight = right.abs() / (right.abs() + forward.abs());
+            self.locomotion = LocomotionSample { base: longitudinal, overlay: lateral, weight };
+            // All movement clips share one normalized phase, including diagonals.
+            let gait = self.asset.clip(self.clips.run).expect("resolved clip");
+            let phase = gait.loop_time(presentation_seconds) / gait.duration_seconds();
+            let time = |id| phase * self.asset.clip(id).expect("resolved clip").duration_seconds();
+            // Cardinal movement uses one pose; do not sample and rebuild an
+            // unused second hierarchy at the blend endpoints.
+            if weight == 0.0 {
+                self.asset.sample(longitudinal, time(longitudinal), &mut self.pose);
+            } else if weight == 1.0 {
+                self.asset.sample(lateral, time(lateral), &mut self.pose);
+            } else {
+                self.asset.sample(longitudinal, time(longitudinal), &mut self.pose);
+                self.asset.sample(lateral, time(lateral), &mut self.scratch);
+                self.asset.blend(&mut self.pose, &self.scratch, &self.full_mask, weight);
+            }
+        } else {
+            self.locomotion = LocomotionSample::idle(&self.clips);
+            let idle = self.asset.clip(self.clips.idle).expect("resolved clip");
+            self.asset.sample(self.clips.idle, idle.loop_time(presentation_seconds), &mut self.pose);
+        }
+        if matches!(role, PresentationRole::Attack(_)) {
+            self.asset.sample(clip, clip_seconds, &mut self.scratch);
+            self.asset.blend(&mut self.pose, &self.scratch, &self.upper_mask, 1.0);
+        }
         self.sampled_role = role;
         self.sampled_seconds = clip_seconds;
     }
@@ -516,10 +596,14 @@ pub(super) fn report_character_preview<T>(preview: Option<&LoadedCharacter<T>>, 
             .expect("resolved clip remains live");
         out.int("clips", preview.asset.clip_count() as u64);
         out.text("role", preview.sampled_role.label());
+        // During locomotion this is the gait clock; the actual blend is reported below.
         out.text("clip", clip.name());
         out.num("clip_duration", clip.duration_seconds());
         out.int("channels", clip.channel_count() as u64);
         out.num("sample_seconds", preview.sampled_seconds);
+        out.text("locomotion_base", preview.asset.clip(preview.locomotion.base).expect("resolved clip").name());
+        out.text("locomotion_overlay", preview.asset.clip(preview.locomotion.overlay).expect("resolved clip").name());
+        out.num("locomotion_weight", preview.locomotion.weight);
     } else {
         out.int("clips", 0);
         out.text("role", "");
@@ -527,6 +611,9 @@ pub(super) fn report_character_preview<T>(preview: Option<&LoadedCharacter<T>>, 
         out.num("clip_duration", 0.0);
         out.int("channels", 0);
         out.num("sample_seconds", 0.0);
+        out.text("locomotion_base", "");
+        out.text("locomotion_overlay", "");
+        out.num("locomotion_weight", 0.0);
     }
 }
 
@@ -665,6 +752,12 @@ pub(super) fn default_horde_path() -> std::path::PathBuf {
         .join("../../assets/characters/basic-enemy/basic-enemy.glb")
 }
 
+/// Character roles stay here, outside the generic asset importer.
+fn player_upper_mask(asset: &arpg_assets::CharacterAsset) -> Result<arpg_assets::PoseMask, String> {
+    asset.pose_mask(&[("Spine", 1.0), ("Head", 1.0), ("LeftArm", 1.0), ("RightArm", 1.0), ("Weapon", 1.0)])
+        .map_err(str::to_owned)
+}
+
 pub(super) fn replace_character<T>(
     slot: &mut Option<LoadedCharacter<T>>,
     path: std::path::PathBuf,
@@ -675,13 +768,21 @@ pub(super) fn replace_character<T>(
         .map_err(|error| format!("{}: {error}", path.display()))?;
     let clips =
         CharacterClips::resolve(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
+    let upper_mask = player_upper_mask(&asset)?;
+    let full_mask = asset.full_mask();
+    let scratch = asset.bind_pose();
     let gpu = upload(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
     let pose = asset.bind_pose();
+    let locomotion = LocomotionSample::idle(&clips);
     *slot = Some(LoadedCharacter {
         path,
         asset,
         pose,
         clips,
+        locomotion,
+        scratch,
+        full_mask,
+        upper_mask,
         sampled_role: PresentationRole::Idle,
         sampled_seconds: 0.0,
         gpu,

@@ -1,12 +1,30 @@
-// Prediction: repeatedly slamming toward the approach will defeat at least 30
-// trial enemies inside the deadline and unlock the exit. This checks feasibility,
-// not combat feel or the precise first success tick. Fourteen steps south give
-// the movement-facing controller enough time to turn before the first attack.
+// Prediction: sweeping Slam around the crowd will defeat at least 30 trial
+// enemies within 30 seconds and unlock the chest. This checks feasibility,
+// not combat feel or the precise first success tick. Afterwards walk toward
+// the chest and press E; its open state must persist.
 (
     description: "The actual 30-in-30 scene can be won using ordinary attack inputs before the deadline.",
     setup: (scenes: [File("../scenes/soul_trial.ron")]),
-    interactions: [0],
-    inputs: [(at: 0, ticks: 14, dir: (0.0, -1.0))],
+    interactions: [0, 1812],
+    inputs: [(at: 1801, ticks: 8, dir: (0.0, 1.0))],
+    // Stand in the light and sweep aim around the encircling crowd.
+    aims: [
+        (at: 0, dir: (0.0, 1.0)),
+        (at: 120, dir: (1.0, 0.0)),
+        (at: 240, dir: (0.0, -1.0)),
+        (at: 360, dir: (-1.0, 0.0)),
+        (at: 480, dir: (0.0, 1.0)),
+        (at: 600, dir: (1.0, 0.0)),
+        (at: 720, dir: (0.0, -1.0)),
+        (at: 840, dir: (-1.0, 0.0)),
+        (at: 960, dir: (0.0, 1.0)),
+        (at: 1080, dir: (1.0, 0.0)),
+        (at: 1200, dir: (0.0, -1.0)),
+        (at: 1320, dir: (-1.0, 0.0)),
+        (at: 1440, dir: (0.0, 1.0)),
+        (at: 1560, dir: (1.0, 0.0)),
+        (at: 1680, dir: (0.0, -1.0)),
+    ],
     attack_profiles: [(at: 0, profile: Slam)],
     attacks: [
         30,60,90,120,150,180,210,240,270,300,330,360,390,420,450,
@@ -18,8 +36,9 @@
     checkpoints: [
         (at: 1, expect: (encounters: [
             (scene: 0, encounter: 0, state: Some((phase: Running, defeated: 0, target: 30, remaining_ticks: 1799))),
-        ], doors: [(scene: 0, door: 0, state: Some(Locked))])),
+        ], chests: [(scene: 0, chest: 0, state: Some(Locked))])),
+        (at: 1800, expect: (chests: [(scene: 0, chest: 0, state: Some(Unlocked))])),
     ],
-    budget: (ticks: 1801),
-    expect: (doors: [(scene: 0, door: 0, state: Some(Unlocked))]),
+    budget: (ticks: 1814),
+    expect: (chests: [(scene: 0, chest: 0, state: Some(Open))]),
 )

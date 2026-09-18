@@ -2,7 +2,8 @@
 
 Start with [the playable soul trial](../scenes/soul_trial.ron). Its `encounters`
 entry contains the complete gameplay composition. Physical placements remain
-under `engine`; `doors` binds static props to the door component. Multiple
+under `engine`; `doors` and `chests` bind static props to their gameplay components. The soul
+trial uses eight sources around a central light and rewards a chest opening. Multiple
 entries run independently in the same scene, and loading the scene twice makes
 independent copies of every relationship.
 
@@ -15,15 +16,16 @@ is [EncounterSpec](../crates/game/src/encounter.rs); door content is defined by
 encounters: [(
     name: "Soul trial",
     start: Activated(0),
-    objective: Defeat((sources: [0], count: 30, within_ticks: 1800)),
-    on_start: [EnableSource(0)],
-    on_success: [UnlockDoor(0)],
+    objective: Defeat((sources: [0,1,2,3,4,5,6,7], count: 30, within_ticks: 1800)),
+    on_start: [EnableSource(0), EnableSource(1), EnableSource(2), EnableSource(3),
+               EnableSource(4), EnableSource(5), EnableSource(6), EnableSource(7)],
+    on_success: [UnlockChest(0)],
 )],
 ```
 
 The numbers bind to **authored scene entries**, never current dense storage rows:
 `Activated` addresses an explicit engine body; source actions and the objective
-address engine sources; `UnlockDoor` addresses the gameplay `doors` list.
+address engine sources; `UnlockDoor` addresses `doors`; `UnlockChest` addresses `chests`.
 References are resolved once to generational body IDs and monotonic source IDs.
 Reordering valid authored entries can change their meaning: keep a short label
 comment beside endpoints and review bindings when reordering. This first version
@@ -41,6 +43,13 @@ registry. Names on encounters are display labels, unique within a scene.
   opens it; the next gameplay pass removes the blocking prop. Opening is a
   greybox removal, with no animated rectangular door asset yet.
 
+- `UnlockChest` grants interaction to a locked chest. A fresh nearby E press
+  opens its lid on the next gameplay pass. The body stays present, with the
+  same circular collision footprint; opening has no loot or inventory effect.
+  Declare `chests: [(body: 1)]` alongside `engine`. Admission requires an
+  explicit non-interactable fixed body, rejects duplicate bindings and bodies
+  shared with doors, and enforces game-owned `MAX_CHESTS` across live scenes.
+
 A source group is a set of producer identities, not a population counter. The
 engine records provenance when a spawn actually lands, then carries it into
 lossless defeat outcomes. Manual removal, scene eviction, unrelated enemies,
@@ -48,7 +57,8 @@ and recycled body slots cannot award progress. `FewerThan` still gates on the
 world's enemy population; the playable trial uses cadence alone so another
 encounter cannot hold its source closed through that global condition.
 
-Every source and controlled door has one gameplay controller within the scene.
+
+Every source and controlled door or chest has one gameplay controller within the scene.
 Admission rejects conflicting encounters, conflicts with legacy source controls,
 invalid endpoints, duplicate effects, zero targets/durations and excess live
 encounters before installation mutates anything. A source action cannot target
@@ -59,11 +69,11 @@ All terminal outcomes automatically stop the encounter's sources. Existing enemi
 `Orphaned`, stops surviving sources, and runs no reward/failure effects.
 After activation is consumed, the switch is no longer a required endpoint.
 Terminal records preserve their historical result. Restart restores the entire
-cached scene, including locked doors and ready encounters.
+cached scene, including locked doors/chests and ready encounters.
 
 ## Tick contract
 
-1. Before engine simulation, doors consume the previous tick's interaction.
+1. Before engine simulation, doors and chests consume the previous tick's interaction.
    Encounters validate endpoints and consume activation, running start effects.
 2. Engine simulation emits enemies, moves bodies, resolves combat and interaction,
    then records defeats before removing bodies.
@@ -78,10 +88,12 @@ locked cannot be remembered as an opening request.
 
 ## Observe and verify
 
-`Game::encounter_state(scene, index)` returns `EncounterState`; `Game::door_state`
-returns `DoorState`. Reports expose `encounters` and `doors`, keyed by scene/index.
+`Game::encounter_state(scene, index)` returns `EncounterState`; `Game::door_state` returns `DoorState`; `Game::chest_state` returns
+`ChestState`. Chests expose Locked, Unlocked, Open and Missing. Even an open
+chest becomes Missing if its body disappears; a reused body slot cannot inherit
+its state. Reports expose `encounters`, `doors` and `chests`, keyed by scene/index.
 The HUD is a read-only projection of encounter state. `Game::encounter_trace`
-records progress, phase and door transitions; it is diagnostic only. Engine
+records progress, phase, door and chest transitions; it is diagnostic only. Engine
 source operations at the post-step boundary may have the following tick stamp;
 separate trace streams do not imply a combined chronology.
 

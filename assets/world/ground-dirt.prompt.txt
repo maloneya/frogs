@@ -1,0 +1,3 @@
+Built-in imagegen prompt:
+
+Use case: stylized-concept. Asset type: seamless square repeating game ground base-colour texture. Create subtle muted dark grey-brown dirt, fine dusty grain and soft mottling, restrained low contrast. Orthographic directly overhead flat albedo, uniform illumination, no shadows, no highlights, no perspective. Seamless tile matching all opposite edges, no borders, no objects, no grass, no large stones, no text. Small-scale detail suitable for a 2 metre ground patch. Output 256 by 256 pixels if possible, opaque RGBA PNG.

@@ -41,6 +41,12 @@ A minimal movement example:
 )
 ```
 
+For independent aim use `aims: [(at: 0, dir: (0.0, 1.0))]`; each finite,
+nonzero direction is retained until the next aim command. Without aim commands,
+the keyboard driver uses nonzero movement and retains its last direction when
+stationary, initially +Z. Every tick supplies a required `AimDir` to `Game`.
+See [retreating attacks](../../../scenarios/retreating_attacks_keep_their_aim.ron).
+
 `dir` is world space, with ground coordinates `(x, z)`. Screen-direction mapping
 belongs to app/camera. Start with zero enemies unless the crowd is the subject;
 otherwise contact can change a movement prediction. Place bodies deliberately

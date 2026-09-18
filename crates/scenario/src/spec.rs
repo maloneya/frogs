@@ -30,6 +30,11 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) inputs: Vec<Span>,
 
+    /// Explicit aim changes, retained until another change. When empty, the
+    /// keyboard driver aims along movement and retains its last nonzero direction.
+    #[serde(default)]
+    pub(crate) aims: Vec<AimAt>,
+
     /// Ticks on which the attack button is pressed.
     ///
     /// A list of moments rather than spans, because a swing is an **edge**: it
@@ -276,6 +281,14 @@ pub(crate) struct Span {
     pub(crate) dir: (f32, f32),
 }
 
+/// Changes the driver's retained aim before the named tick.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AimAt {
+    pub(crate) at: u64,
+    pub(crate) dir: (f32, f32),
+}
+
 /// How long the scenario is allowed to run.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -348,6 +361,8 @@ pub(crate) struct Expect {
     pub(crate) encounters: Vec<EncounterExpect>,
     #[serde(default)]
     pub(crate) doors: Vec<DoorExpect>,
+    #[serde(default)]
+    pub(crate) chests: Vec<ChestExpect>,
     #[serde(default)]
     pub(crate) scene_count: Option<usize>,
     #[serde(default)]
@@ -484,14 +499,14 @@ pub(crate) struct ImpulseAt {
 /// Test orchestration uses the same complete gameplay content as scene files.
 #[derive(Debug, Deserialize)]
 pub(crate) enum SceneRef {
-    Inline(arpg_game::GameScene),
+    Inline(Box<arpg_game::GameScene>),
     File(std::path::PathBuf),
 }
 
 impl SceneRef {
     pub(crate) fn resolve(&mut self, base: &std::path::Path) -> Result<(), arpg_content::LoadError> {
         match self {
-            Self::File(path) => *self = Self::Inline(arpg_content::load_scene(&base.join(path))?),
+            Self::File(path) => *self = Self::Inline(Box::new(arpg_content::load_scene(&base.join(path))?)),
             Self::Inline(_) => {}
         }
         Ok(())
@@ -560,4 +575,13 @@ pub(crate) struct DoorExpect {
     pub(crate) scene: usize,
     pub(crate) door: usize,
     pub(crate) state: Option<arpg_game::DoorState>,
+}
+
+/// Exact authoritative chest observation, including disappearance and eviction.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChestExpect {
+    pub(crate) scene: usize,
+    pub(crate) chest: usize,
+    pub(crate) state: Option<arpg_game::ChestState>,
 }

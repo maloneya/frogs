@@ -20,3 +20,6 @@ mod door;
 mod encounter;
 pub use door::{DoorSpec, DoorState};
 pub use encounter::{DefeatObjective, EncounterAction, EncounterEvent, EncounterObjective, EncounterPhase, EncounterSpec, EncounterStart, EncounterState, MAX_ENCOUNTERS};
+
+mod chest;
+pub use chest::{ChestSpec, ChestState, MAX_CHESTS};
