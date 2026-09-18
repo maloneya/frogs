@@ -1,0 +1,16 @@
+// Walk between the warm and cool torches to compare separate pools and their overlap.
+// Stationary monsters mark the dim edge; judge whether silhouettes remain readable.
+(
+    engine: (
+        name: "Two torches: warm and cool",
+        bodies: [
+            (pos: (-7.0, 0.0)),
+            (pos: (0.0, -3.0)),
+            (pos: (7.0, 0.0)),
+        ],
+    ),
+    torches: [
+        (position: (-3.5, 2.2, 1.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0),
+        (position: (3.5, 2.2, 1.5), colour: (0.18, 0.45, 1.0), intensity: 24.0, range: 14.0),
+    ],
+)

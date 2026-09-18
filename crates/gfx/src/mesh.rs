@@ -110,7 +110,7 @@ impl MeshPipeline {
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
-        let shader = device.create_shader_module(wgpu::include_wgsl!("mesh.wgsl"));
+        let shader = crate::lighting::shader(device, include_str!("mesh.wgsl"));
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("static mesh pipeline layout"),
             bind_group_layouts: &[Some(camera_layout), Some(material_layout.raw())],

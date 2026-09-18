@@ -13,7 +13,8 @@ use glam::{Vec3, Vec4};
 const LIFE: f32 = 8.0;
 const CAPACITY: usize = 10;
 const RING_SEGMENTS: usize = 64;
-const _: () = assert!(CAPACITY * 8 * 12 + RING_SEGMENTS * 18 <= MAX_EFFECT_VERTICES);
+pub(crate) const MAX_ATTACK_VERTICES: usize = CAPACITY * 8 * 12 + RING_SEGMENTS * 18;
+const _: () = assert!(MAX_ATTACK_VERTICES <= MAX_EFFECT_VERTICES);
 
 #[derive(Clone, Copy)]
 struct Sample {

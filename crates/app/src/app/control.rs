@@ -229,14 +229,10 @@ impl App {
                     + static_instances
                     + self.collision_debug.drawings().len() as u64,
             );
-            r.int(
-                "effect_vertices",
-                self.attack_effects.vertices().len() as u64,
-            );
-            r.int(
-                "effect_draws",
-                u64::from(!self.attack_effects.vertices().is_empty()),
-            );
+            let effect_vertices = self.world_assets.as_ref()
+                .map_or(0, |world| world.torches.effects().len());
+            r.int("effect_vertices", effect_vertices as u64);
+            r.int("effect_draws", u64::from(effect_vertices > 0));
             r.int(
                 "debug_disc_instances",
                 self.collision_debug.drawings().len() as u64,

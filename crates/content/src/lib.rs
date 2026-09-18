@@ -64,6 +64,24 @@ mod tests {
     }
 
     #[test]
+    fn torch_files_use_shared_validation_before_game_mutation() {
+        let valid = "(position: (1.0, 2.2, 3.0), colour: (1.0, 0.5, 0.2), intensity: 24.0, range: 14.0)";
+        let scene = parse_scene(&format!("(engine: (name: \"lit\"), torches: [{valid}])")).unwrap();
+        assert_eq!(scene.torches.len(), 1);
+        for invalid in [
+            valid.replace("1.0, 2.2, 3.0", "NaN, 2.2, 3.0"),
+            valid.replace("1.0, 2.2, 3.0", "1.0, 0.1, 3.0"),
+            valid.replace("1.0, 0.5, 0.2", "2.0, 0.5, 0.2"),
+            valid.replace("intensity: 24.0", "intensity: -1.0"),
+            valid.replace("intensity: 24.0", "intensity: inf"),
+            valid.replace("range: 14.0", "range: 0.0"),
+            valid.replace("range: 14.0", "range: 14.0, typo: 1"),
+        ] {
+            assert!(parse_scene(&format!("(engine: (name: \"invalid\"), torches: [{invalid}])")).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
     fn scenes_reject_legacy_content_and_unknown_fields() {
         for source in [
             r#"(name: "trial", sources: [])"#,

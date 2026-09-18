@@ -213,10 +213,10 @@ impl OrthoCamera {
     }
 }
 
-/// The GPU-side half of the camera: one 64-byte uniform holding the combined
-/// view-projection matrix, plus the bind group that makes it visible to shaders.
+/// Per-view GPU bindings: the camera matrix and the scene's bounded light list.
 pub(crate) struct CameraBinding {
     buffer: wgpu::Buffer,
+    light: wgpu::Buffer,
     pub(crate) layout: wgpu::BindGroupLayout,
     pub(crate) bind_group: wgpu::BindGroup,
 }
@@ -230,6 +230,12 @@ impl CameraBinding {
             mapped_at_creation: false,
         });
 
+        let light = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("point light uniform"),
+            size: size_of::<crate::lighting::LightUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -241,6 +247,15 @@ impl CameraBinding {
                     min_binding_size: wgpu::BufferSize::new(64),
                 },
                 count: None,
+            }, wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(size_of::<crate::lighting::LightUniform>() as u64),
+                },
+                count: None,
             }],
         });
 
@@ -250,13 +265,20 @@ impl CameraBinding {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: buffer.as_entire_binding(),
+            }, wgpu::BindGroupEntry {
+                binding: 1,
+                resource: light.as_entire_binding(),
             }],
         });
 
-        Self { buffer, layout, bind_group }
+        Self { buffer, light, layout, bind_group }
     }
 
-    /// One of only two places per frame where data crosses into the GPU.
+    pub(crate) fn upload_lights(&self, queue: &wgpu::Queue, lights: &[crate::PointLight]) {
+        queue.write_buffer(&self.light, 0, bytemuck::bytes_of(&crate::lighting::LightUniform::new(lights)));
+    }
+
+    /// Uploads the camera matrix for this view.
     pub(crate) fn upload(&self, queue: &wgpu::Queue, camera: &OrthoCamera) {
         let m = camera.view_proj();
         queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&m.to_cols_array()));

@@ -40,12 +40,14 @@
 //! This contract is documented, not enforced by dimensional types: ordinary
 //! floats and vectors do not distinguish metres from pixels or seconds.
 
+mod lighting;
 mod input;
 mod instance;
 mod intent;
 mod report;
 mod smoothing;
 
+pub use lighting::{PointLight, MAX_POINT_LIGHTS};
 pub use input::{Action, ActionMask, Actions, InputState};
 pub use instance::{Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES};
 pub use intent::{Intent, MoveDir};

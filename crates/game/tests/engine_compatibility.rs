@@ -19,6 +19,24 @@ fn assert_same(game: &Game, world: &World, restart: Option<(&str, u64)>) {
     game.report(&mut game_report);
     world.report(&mut engine_report);
     engine_report.object("source_controls", |_| {});
+    // Lighting is checked independently; this comparison still pins all engine output.
+    engine_report.int("torch_count", game.torch_count() as u64);
+    engine_report.object("torches", |out| {
+        for (scene, _) in game.scene_instances() {
+            let mut nth = 0;
+            while let Some(torch) = game.scene_torch(scene, nth) {
+                let light = torch.light();
+                out.object(&format!("{scene}/{nth}"), |out| {
+                    out.text("scene", &scene.to_string());
+                    out.vec3("position", light.position());
+                    out.vec3("colour", light.colour());
+                    out.num("intensity", light.intensity());
+                    out.num("range", light.range());
+                });
+                nth += 1;
+            }
+        }
+    });
     engine_report.int("control_events_dropped", 0);
     engine_report.object("restart", |out| {
         out.bool("available", restart.is_some());

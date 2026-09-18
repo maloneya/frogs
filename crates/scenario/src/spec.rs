@@ -346,6 +346,10 @@ pub(crate) struct Expect {
     pub(crate) controls: Vec<ControlExpect>,
     #[serde(default)]
     pub(crate) scene_count: Option<usize>,
+    #[serde(default)]
+    pub(crate) torch_count: Option<usize>,
+    #[serde(default)]
+    pub(crate) torches: Vec<TorchExpect>,
     /// Predictions about individual bodies placed by [`Setup::actions`].
     #[serde(default)]
     pub(crate) bodies: Vec<BodyExpect>,
@@ -526,4 +530,13 @@ pub(crate) struct ControlExpect {
 pub(crate) struct DespawnAt {
     pub(crate) at: u64,
     pub(crate) body: usize,
+}
+
+/// Exact game-owned torch observation, addressed by scene installation and authored index.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TorchExpect {
+    pub(crate) scene: usize,
+    pub(crate) torch: usize,
+    pub(crate) state: Option<arpg_game::TorchSpec>,
 }

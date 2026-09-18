@@ -99,6 +99,12 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     for expect in std::iter::once(&scenario.expect)
         .chain(scenario.checkpoints.iter().map(|checkpoint| &checkpoint.expect))
     {
+        for torch in &expect.torches {
+            if !scenes.get(torch.scene).is_some_and(|scene| torch.torch < scene.torches.len()) {
+                failures.push(Failure::new("torches", "an authored scene torch".into(),
+                    format!("scene {} torch {}", torch.scene, torch.torch)));
+            }
+        }
         for control in &expect.controls {
             if !scenes.get(control.scene).is_some_and(|scene| control.control < scene.source_controls.len()) {
                 failures.push(Failure::new("controls", "an authored scene control".into(),
@@ -527,6 +533,8 @@ fn check_state(
         source_states,
         controls,
         scene_count,
+        torch_count,
+        torches,
         bodies,
         trace: _,
     } = expect;
@@ -609,6 +617,15 @@ fn check_state(
             .and_then(|id| game.source_control_state(id, expected.control));
         if actual != expected.state {
             failures.push(Failure::new(&format!("controls[{}/{}]", expected.scene, expected.control),
+                format!("{:?}", expected.state), format!("{actual:?}")));
+        }
+    }
+    check_eq("torch_count", torch_count, game.torch_count(), &mut failures);
+    for expected in torches {
+        let actual = instances.get(expected.scene).copied().flatten()
+            .and_then(|id| game.scene_torch(id, expected.torch));
+        if actual != expected.state {
+            failures.push(Failure::new(&format!("torches[{}/{}]", expected.scene, expected.torch),
                 format!("{:?}", expected.state), format!("{actual:?}")));
         }
     }

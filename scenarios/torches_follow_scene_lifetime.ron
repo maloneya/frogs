@@ -1,0 +1,26 @@
+(
+    description: "The playable two-torch file owns both lights. An additive scene survives its eviction; removing both leaves no global light.",
+    setup: (scenes: [File("../scenes/two_torches.ron")]),
+    scenes: [
+        (at: 1, action: Load(Inline((engine: (name: "extra torch"), torches: [
+            (position: (0.0, 3.0, 12.0), colour: (1.0, 1.0, 1.0), intensity: 10.0, range: 8.0),
+        ])))),
+        (at: 2, action: Evict(0)),
+        (at: 3, action: Evict(1)),
+    ],
+    checkpoints: [
+        (at: 0, expect: (torch_count: 2, scene_count: 1, enemy_count: 3, torches: [
+            (scene: 0, torch: 0, state: Some((position: (-3.5, 2.2, 1.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0))),
+            (scene: 0, torch: 1, state: Some((position: (3.5, 2.2, 1.5), colour: (0.18, 0.45, 1.0), intensity: 24.0, range: 14.0))),
+        ])),
+        (at: 1, expect: (torch_count: 3, scene_count: 2, enemy_count: 3)),
+        (at: 2, expect: (torch_count: 1, scene_count: 1, enemy_count: 0, torches: [
+            (scene: 0, torch: 0, state: None),
+            (scene: 1, torch: 0, state: Some((position: (0.0, 3.0, 12.0), colour: (1.0, 1.0, 1.0), intensity: 10.0, range: 8.0))),
+        ])),
+    ],
+    budget: (ticks: 4),
+    expect: (torch_count: 0, scene_count: 0, enemy_count: 0, player_pos: (x: 0.0, z: 0.0, tol: 0.0), torches: [
+        (scene: 0, torch: 1, state: None), (scene: 1, torch: 0, state: None),
+    ]),
+)

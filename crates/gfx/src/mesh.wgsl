@@ -24,7 +24,8 @@ struct VsIn {
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
-    @location(0) shade: f32,
+    @location(0) world_pos: vec3<f32>,
+    @location(3) normal: vec3<f32>,
     @location(1) tint: vec3<f32>,
     @location(2) uv: vec2<f32>,
 };
@@ -42,8 +43,8 @@ fn vs_main(in: VsIn) -> VsOut {
     let world_pos = rotate_y(in.pos * in.i_scale.xyz, yaw) + in.i_pos.xyz;
     out.clip = camera.view_proj * vec4<f32>(world_pos, 1.0);
     let normal = normalize(rotate_y(in.normal / in.i_scale.xyz, yaw));
-    let light_dir = normalize(vec3<f32>(0.4, 1.0, 0.3));
-    out.shade = dot(normal, light_dir) * 0.5 + 0.5;
+    out.world_pos = world_pos;
+    out.normal = normal;
     out.tint = in.i_color.xyz;
     out.uv = in.uv;
     return out;
@@ -54,6 +55,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Rgba8UnormSrgb decoding happens before this multiplication. The surface
     // performs the matching linear-to-sRGB encode on output.
     let texel = textureSample(base_color_texture, base_color_sampler, in.uv);
-    let linear = texel.rgb * material.base_color_factor.rgb * in.tint * in.shade;
+    let linear = texel.rgb * material.base_color_factor.rgb * in.tint * illumination(in.world_pos, in.normal);
     return vec4<f32>(linear, 1.0);
 }

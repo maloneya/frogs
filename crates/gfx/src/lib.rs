@@ -17,12 +17,14 @@ mod instance;
 mod debug;
 mod effect;
 mod material;
+mod lighting;
 mod mesh;
 mod overlay;
 mod quad;
 mod text;
 
 pub use camera::OrthoCamera;
+pub use arpg_core::PointLight;
 pub use debug::DebugDisc;
 pub use effect::{EffectVertex, MAX_EFFECT_VERTICES};
 pub use character::{
@@ -327,6 +329,7 @@ impl Renderer {
     pub fn render(
         &mut self,
         camera: &OrthoCamera,
+        lights: &[PointLight],
         meshes: &[MeshBatch<'_>],
         character: Option<CharacterPreview<'_>>,
         horde: Option<CharacterHorde<'_>>,
@@ -389,6 +392,7 @@ impl Renderer {
             });
 
         self.camera.upload(&self.queue, camera);
+        self.camera.upload_lights(&self.queue, lights);
         self.static_meshes.upload(&self.queue, meshes);
         let effect_count = self.effects.upload(&self.queue, effects);
         let debug_count = self.debug.upload(&self.queue, debug_discs);
@@ -410,17 +414,8 @@ impl Renderer {
                         // cost real bandwidth, so always clear what you'll
                         // fully overwrite.
                         //
-                        // These are *linear* values. The surface is sRGB, so the
-                        // hardware encodes on write: passing the sRGB numbers
-                        // you actually want (0.05, 0.06, 0.08) would come out
-                        // roughly five times too bright. This is the linear
-                        // pre-image of that colour.
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0039,
-                            g: 0.0049,
-                            b: 0.0072,
-                            a: 1.0,
-                        }),
+                        // No ambient sky: unlit world pixels stay black.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -531,6 +526,15 @@ mod tests {
         .expect("create headless device")
     }
 
+    /// A broad white light keeps geometry/texture checks independent of torch tuning.
+    fn lit_camera_binding(device: &wgpu::Device, queue: &wgpu::Queue) -> CameraBinding {
+        let binding = CameraBinding::new(device);
+        binding.upload_lights(queue, &[PointLight::new(
+            Vec3::new(40.0, 100.0, 30.0), Vec3::ONE, 12_000.0, 1_000.0,
+        )]);
+        binding
+    }
+
     /// What a rendered silhouette looks like: its bounding box, and which way
     /// it leans.
     struct Silhouette {
@@ -554,7 +558,7 @@ mod tests {
         const N: u32 = 256;
         let (device, queue) = headless_device();
 
-        let camera_binding = CameraBinding::new(&device);
+        let camera_binding = lit_camera_binding(&device, &queue);
         let pipeline = MeshPipeline::new(
             &device, &camera_binding.layout, MaterialLayout::new(&device), TEST_FORMAT, DEPTH_FORMAT,
         );
@@ -729,7 +733,7 @@ mod tests {
         const N: u32 = 256;
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let camera_binding = CameraBinding::new(&device);
+        let camera_binding = lit_camera_binding(&device, &queue);
         let pipeline = MeshPipeline::new(
             &device,
             &camera_binding.layout,
@@ -911,7 +915,7 @@ mod tests {
         const N: u32 = 256;
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let camera_binding = CameraBinding::new(&device);
+        let camera_binding = lit_camera_binding(&device, &queue);
         let pipeline = MeshPipeline::new(
             &device,
             &camera_binding.layout,
@@ -1017,7 +1021,7 @@ mod tests {
         const N: u32 = 256;
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let camera_binding = CameraBinding::new(&device);
+        let camera_binding = lit_camera_binding(&device, &queue);
         let pipeline = CharacterPipeline::new(
             &device,
             &camera_binding.layout,

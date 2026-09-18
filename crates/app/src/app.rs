@@ -238,6 +238,7 @@ impl App {
         }
         if let Some(world) = &mut self.world_assets {
             world.rebuild(self.game.prop_presentations(Alpha::ZERO));
+            world.torches.rebuild(self.game.torches(), &[]);
         }
         self.collision_debug.rebuild(&self.game);
         self.quads.sink();
@@ -341,6 +342,7 @@ impl App {
         }
         let world_assets = self.world_assets.as_mut().expect("rendering requires world assets");
         world_assets.rebuild(self.game.prop_presentations(alpha));
+        world_assets.torches.rebuild(self.game.torches(), self.attack_effects.vertices());
         self.collision_debug.rebuild(&self.game);
 
         // The overlay is built here rather than inside `render` for the same
@@ -370,12 +372,13 @@ impl App {
         let horde = self.horde_preview.as_ref().map(LoadedHorde::draw);
         match renderer.render(
             camera,
+            world_assets.torches.lights(),
             &meshes,
             character,
             horde,
             self.quads.as_slice(),
             self.collision_debug.drawings(),
-            self.attack_effects.vertices(),
+            world_assets.torches.effects(),
             self.capture.path(),
         ) {
             FrameOutcome::Presented { capture } => {

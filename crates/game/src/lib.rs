@@ -8,6 +8,8 @@
 
 mod game;
 mod scene;
+mod torch;
+pub use torch::TorchSpec;
 mod source_control;
 
 pub use game::Game;

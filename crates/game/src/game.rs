@@ -1,6 +1,7 @@
 use crate::scene::{GameScene, RestartError, RestartScene, SceneError, fingerprint};
 use crate::source_control::{self, ControlEvent, ControlState, SourceControls};
 use arpg_core::{Intent, Report};
+use crate::torch::{Torches, TorchSpec};
 use arpg_sim::{
     Alpha, AttackProfile, AttackStatus, Dt, EntityId, Fnv, Impulse, InteractionState, Motion,
     RecoveryTicks, SceneId, Source, SourceId, Template, Trace, World,
@@ -22,18 +23,16 @@ pub struct Game {
     world: World,
     restart: Option<RestartScene>,
     controls: SourceControls,
+    torches: Torches,
     control_trace: Trace<ControlEvent>,
 }
 
 impl Default for Game {
     /// Constructs the built-in horde through ordinary scene loading.
     fn default() -> Self {
-        Self {
-            world: World::default(),
-            restart: None,
-            controls: SourceControls::default(),
-            control_trace: Trace::default(),
-        }
+        let mut game = Self::empty();
+        game.load_scene(&GameScene::boot()).expect("valid boot scene");
+        game
     }
 }
 
@@ -45,17 +44,19 @@ impl Game {
             world: World::empty(),
             restart: None,
             controls: SourceControls::default(),
+            torches: Torches::default(),
             control_trace: Trace::default(),
         }
     }
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
-        let (world, controls, restart) = RestartScene::prepare(scene)?;
+        let (world, controls, torches, restart) = RestartScene::prepare(scene)?;
         Ok(Self {
             world,
             restart: Some(restart),
             controls,
+            torches,
             control_trace: Trace::default(),
         })
     }
@@ -97,6 +98,7 @@ impl Game {
             world,
             restart: _,
             controls,
+            torches: _,
             control_trace,
         } = self;
         let tick = world.tick();
@@ -112,10 +114,11 @@ impl Game {
             world,
             restart,
             controls,
+            torches,
             control_trace: _,
         } = self;
         let mut hash = Fnv::default();
-        hash.u64(fingerprint(world, controls));
+        hash.u64(fingerprint(world, controls, torches));
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
             snapshot.hash(&mut hash);
@@ -135,10 +138,12 @@ impl Game {
             world,
             restart,
             controls,
+            torches,
             control_trace,
         } = self;
         world.report(out);
         controls.report(out);
+        torches.report(out);
         out.int("control_events_dropped", control_trace.dropped() as u64);
         out.object("restart", |out| {
             out.bool("available", restart.is_some());
@@ -154,9 +159,10 @@ impl Game {
             world,
             restart: _,
             controls,
+            torches,
             control_trace: _,
         } = self;
-        scene.install(world, controls)
+        scene.install(world, controls, torches)
     }
 
     /// Evicts a live instance and its descendants; preserves the restart snapshot.
@@ -167,13 +173,26 @@ impl Game {
             world,
             restart: _,
             controls,
+            torches,
             control_trace: _,
         } = self;
         if !world.evict_scene(id) {
             return false;
         }
         controls.evict(id);
+        torches.evict(id);
         true
+    }
+
+    /// Stationary torches in stable scene-installation and authored order.
+    pub fn torches(&self) -> impl Iterator<Item = TorchSpec> + '_ { self.torches.iter() }
+
+    /// Number of lights across all live scenes.
+    pub fn torch_count(&self) -> usize { self.torches.len() }
+
+    /// A scene-local torch, or None for an evicted scene or missing index.
+    pub fn scene_torch(&self, scene: SceneId, nth: usize) -> Option<TorchSpec> {
+        self.torches.state(scene, nth)
     }
 
     /// Number of live scene instances.

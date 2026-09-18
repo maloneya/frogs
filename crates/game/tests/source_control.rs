@@ -14,6 +14,7 @@ fn scene() -> GameScene {
             grids: vec![],
         },
         source_controls: vec![SourceControlSpec { body: 0, source: 0 }],
+        torches: vec![],
     }
 }
 

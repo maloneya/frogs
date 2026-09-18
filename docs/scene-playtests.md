@@ -95,13 +95,14 @@ and text bounds without a GPU.
 
 ### Playable catalog
 
-F2 offers **Default horde** (1,024 stationary enemies) and three files:
+F2 offers **Default horde** (1,024 stationary enemies) and these files:
 
 | File | Encounter |
 |---|---|
 | `seekers.ron` | Three approaching seekers |
 | `activate_horde.ron` | An interaction starts a source that replenishes up to eight seekers |
 | `three_enemy_spawners.ron` | Three approach directions build toward twelve seekers |
+| `two_torches.ron` | Warm and cool pools overlap around stationary monsters |
 
 F1 opens the attack picker. W/S or arrows highlight **Cleave**, the default
 broad arc, or **Slam**, an expanding frontal hit with stronger knockback.
@@ -112,6 +113,9 @@ reach, hit order, impulse, and subsequent movement.
 Mechanism fixtures live inline in `scenarios/`; they are not picker entries.
 
 ### Scene format
+
+Scenes may also own [stationary torches](lighting.md). They participate in the
+same admission, eviction and cached-restart boundaries; omission means no lights.
 
 ```ron
 (

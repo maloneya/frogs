@@ -263,7 +263,7 @@ impl CharacterPipeline {
                 }),
             }],
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("character.wgsl"));
+        let shader = crate::lighting::shader(device, include_str!("character.wgsl"));
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("character pipeline layout"),
             bind_group_layouts: &[

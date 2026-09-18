@@ -13,6 +13,7 @@ mod harness;
 mod hud;
 mod input;
 mod presentation;
+mod torch;
 mod time;
 mod ui;
 

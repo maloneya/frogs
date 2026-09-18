@@ -10,9 +10,9 @@ use arpg_sim::{
 };
 use glam::Vec3;
 
-// Ground adds one placement to an all-prop world.
+// Static placements include an all-prop world, the ground and two stand pieces per light.
 // This also covers an all-enemy world plus the player in the character buffer.
-const _: () = assert!(arpg_sim::MAX_BODIES < arpg_core::MAX_INSTANCES);
+const _: () = assert!(arpg_sim::MAX_BODIES + 1 + 2 * arpg_core::MAX_POINT_LIGHTS <= arpg_core::MAX_INSTANCES);
 
 struct LoadedMesh<T> {
     path: std::path::PathBuf,
@@ -47,6 +47,7 @@ pub(super) struct WorldAssets<T> {
     prop: LoadedMesh<T>,
     ground_instance: [Instance; 1],
     props: InstanceBuffer,
+    pub(super) torches: crate::torch::Torches,
 }
 
 impl<T> WorldAssets<T> {
@@ -63,6 +64,7 @@ impl<T> WorldAssets<T> {
                 Vec3::ONE,
             )],
             props: InstanceBuffer::default(),
+            torches: crate::torch::Torches::default(),
         })
     }
 
@@ -78,13 +80,14 @@ impl<T> WorldAssets<T> {
         }
     }
 
-    pub(super) fn instance_count(&self) -> usize { 1 + self.props.as_slice().len() }
+    pub(super) fn instance_count(&self) -> usize { 1 + self.torches.stand().len() + self.props.as_slice().len() }
 
-    pub(super) fn draw_count(&self) -> usize { 1 + usize::from(!self.props.as_slice().is_empty()) }
+    pub(super) fn draw_count(&self) -> usize { 1 + usize::from(!self.torches.stand().is_empty()) + usize::from(!self.props.as_slice().is_empty()) }
 
     pub(super) fn report(&self, out: &mut Report) {
         out.object("ground", |out| self.ground.report(out));
         out.object("prop", |out| self.prop.report(out));
+        out.int("torch_instances", self.torches.stand().len() as u64);
         out.int("ground_instances", 1);
         out.int("prop_instances", self.props.as_slice().len() as u64);
         out.int("draws", self.draw_count() as u64);
@@ -92,10 +95,11 @@ impl<T> WorldAssets<T> {
 }
 
 impl WorldAssets<MeshAsset> {
-    pub(super) fn draws(&self) -> [MeshBatch<'_>; 2] {
+    pub(super) fn draws(&self) -> [MeshBatch<'_>; 3] {
         [
             self.ground.draw(&self.ground_instance),
             self.prop.draw(self.props.as_slice()),
+            self.prop.draw(self.torches.stand()),
         ]
     }
 }

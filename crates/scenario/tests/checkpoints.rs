@@ -9,6 +9,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn torch_observations_reject_nonexistent_indices_and_wrong_checkpoints() {
+    for expect in [
+        "torches: [(scene: 0, torch: 1, state: None)]",
+        "torch_count: 0",
+    ] {
+        let fixture = Fixture::new(&format!(r#"(
+            setup: (scenes: [Inline((engine: (name: "lit"), torches: [
+                (position: (0.0, 2.0, 0.0), colour: (1.0, 0.5, 0.1), intensity: 10.0, range: 8.0)
+            ]))]),
+            checkpoints: [(at: 0, expect: ({expect}))],
+            budget: (ticks: 2), expect: (torch_count: 1),
+        )"#));
+        for flags in [&[][..], &["--bless"][..]] {
+            let (output, text) = fixture.run(flags);
+            assert_eq!(output.status.code(), Some(1), "bad torch observation passed: {text}");
+            assert!(text.contains("torch"), "{text}");
+        }
+    }
+}
+
+#[test]
 fn out_of_order_loads_cannot_validate_absence_against_a_different_scene() {
     let fixture = Fixture::new(r#"(
         scenes: [

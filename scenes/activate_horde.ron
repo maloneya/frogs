@@ -13,4 +13,7 @@
         )],
     ),
     source_controls: [(body: 0, source: 0)],
+    torches: [(
+        position: (2.5, 2.2, 1.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0,
+    )],
 )

@@ -22,6 +22,7 @@ loads both assets. Runtime paths resolve from the build-time repository location
 
 `state.world_assets` exposes imported paths, geometry/texture counts and live
 prop placements. `state.render.static_mesh_instances` and `static_mesh_draws`
-include ground and props.
+include ground, props and two stand pieces per live scene torch.
+[Lighting](../../docs/lighting.md) describes scene-authored torches and their shared limit.
 [Attack effects](../../docs/attack-effects.md) show committed attack reach;
 [collision debug drawing](../../docs/collision-debug.md) exposes physical shapes.
