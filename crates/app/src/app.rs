@@ -71,6 +71,8 @@ pub(crate) struct App {
     quads: QuadBuffer,
     input: Controls,
     clock: Clock,
+    /// Wall-clock observations live only in presentation, outside Game and replay hashes.
+    perf: crate::perf::Recorder,
     /// Turns the frame's elapsed seconds into whole simulation ticks.
     ///
     /// Owned by `app` because the frame loop is here, but defined in `sim`,
@@ -128,6 +130,7 @@ impl App {
         let Self {
             renderer,
             character_preview,
+            perf,
             ..
         } = self;
         let renderer = renderer
@@ -138,6 +141,7 @@ impl App {
                 .upload_character(character)
                 .map_err(|error| error.to_string())
         })?;
+        perf.reset();
         Ok(character_preview
             .as_ref()
             .expect("successful replacement selects a character")
@@ -148,6 +152,7 @@ impl App {
         let Self {
             renderer,
             horde_preview,
+            perf,
             ..
         } = self;
         let renderer = renderer
@@ -158,6 +163,7 @@ impl App {
                 .upload_character(character)
                 .map_err(|error| error.to_string())
         })?;
+        perf.reset();
         Ok(horde_preview
             .as_ref()
             .expect("successful replacement selects a horde")
@@ -244,6 +250,7 @@ impl App {
         self.quads.sink();
         // Exclude file reading, construction, and the old run's frame remainder.
         self.clock = Clock::default();
+        self.perf.reset();
     }
 
     fn ready_reply(&self) -> String {
@@ -280,7 +287,11 @@ impl App {
             return;
         };
 
+        self.perf.begin_frame(std::time::Instant::now());
         let frame = self.clock.tick();
+        let simulation_start = std::time::Instant::now();
+        let mut game_step = std::time::Duration::ZERO;
+        let mut ticks = 0;
 
         // Screen space becomes world space here, and only here. The camera owns
         // the mapping because it owns the angle; `sim` is handed a direction it
@@ -309,13 +320,16 @@ impl App {
             // `just_pressed`, not `held`: a swing is an edge. Holding the key
             // must not swing every tick, and a tap shorter than a frame must
             // still swing exactly once.
-            self.game.step(
-                dt,
-                Intent::new(to_world(intent.move_axis()), aim, intent.just_pressed(Action::Attack))
-                .with_interact(intent.just_pressed(Action::Interact)),
-            );
+            let intent = Intent::new(to_world(intent.move_axis()), aim, intent.just_pressed(Action::Attack))
+                .with_interact(intent.just_pressed(Action::Interact));
+            let step_start = std::time::Instant::now();
+            self.game.step(dt, intent);
+            game_step += step_start.elapsed();
+            ticks += 1;
             self.attack_effects.observe(&self.game);
         }
+        let presentation_start = std::time::Instant::now();
+        let simulation = presentation_start.duration_since(simulation_start);
 
         // Blend the previous and current snapshots using the fractional tick remainder.
         // Everything below draws; nothing below simulates.
@@ -367,13 +381,15 @@ impl App {
 
         // Count presentation, not redraw attempts: occluded surfaces can skip
         // thousands of attempts a second without producing any frames.
+        let render_start = std::time::Instant::now();
+        let presentation = render_start.duration_since(presentation_start);
         let meshes = world_assets.draws();
         let character = self
             .character_preview
             .as_ref()
             .map(|preview| preview.draw(player));
         let horde = self.horde_preview.as_ref().map(LoadedHorde::draw);
-        match renderer.render(
+        let presented = match renderer.render(
             camera,
             world_assets.torches.lights(),
             &meshes,
@@ -389,9 +405,18 @@ impl App {
                 if let Some(result) = capture {
                     self.capture.finish(result);
                 }
+                true
             }
-            FrameOutcome::Skipped => self.skipped += 1,
-        }
+            FrameOutcome::Skipped => {
+                self.skipped += 1;
+                false
+            }
+        };
+        self.perf.finish_frame(crate::perf::FrameWork {
+            simulation, game_step, presentation, render_cpu: render_start.elapsed(),
+            ticks, end_tick: self.game.tick(), enemies: self.game.enemy_count(),
+            crowd_contacts: self.game.crowd_contacts(), presented,
+        });
 
         if self.clock.hud_due()
             && let Some(window) = &self.window
@@ -513,6 +538,7 @@ impl ApplicationHandler for App {
                         KeyCode::Escape => event_loop.exit(),
                         KeyCode::KeyV => {
                             self.renderer.as_mut().expect("initialized").toggle_vsync();
+                            self.perf.reset();
                         }
                         KeyCode::KeyP => {
                             let path = capture_dir().join(format!("arpg-{:04}.png", self.captures));
@@ -527,6 +553,7 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 self.renderer.as_mut().expect("initialized").resize(size.width, size.height);
                 self.camera.as_mut().expect("initialized").set_viewport(size.width, size.height);
+                self.perf.reset();
             }
 
             WindowEvent::RedrawRequested => self.redraw(),

@@ -71,6 +71,10 @@ pub(crate) enum Command {
     Shot(PathBuf),
     /// Report simulation and camera state.
     State,
+    /// Bounded timing summary, optionally including individual frames.
+    Perf { samples: bool },
+    /// Discard the timing window without changing playable state.
+    ResetPerf,
     /// Every trace event from this tick onward.
     ///
     /// The counterpart to `state`, and the reason both exist: `state` is a
@@ -166,6 +170,16 @@ fn parse(line: &str) -> Result<Command, String> {
             arg.ok_or_else(|| "expected a path".to_string())?,
         )),
         "state" => Command::State,
+        "perf" => {
+            let command = match arg {
+                None => Command::Perf { samples: false },
+                Some("samples") => Command::Perf { samples: true },
+                Some("reset") => Command::ResetPerf,
+                _ => return Err("expected: perf [samples|reset]".into()),
+            };
+            if it.next().is_some() { return Err("expected: perf [samples|reset]".into()); }
+            command
+        }
         // `trace since <tick>` rather than `trace <tick>`, so the reply cannot
         // be misread as "the trace at tick N".
         "trace" => match (arg, it.next()) {
@@ -338,6 +352,16 @@ fn serve(stream: UnixStream, tx: &Sender<Request>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn performance_commands_reject_unknown_operations_and_extra_arguments() {
+        assert!(matches!(super::parse("perf"), Ok(super::Command::Perf { samples: false })));
+        assert!(matches!(super::parse("perf samples"), Ok(super::Command::Perf { samples: true })));
+        assert!(matches!(super::parse("perf reset"), Ok(super::Command::ResetPerf)));
+        for bad in ["perf start", "perf reset extra", "perf samples extra", "perf 2000"] {
+            assert!(super::parse(bad).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn collision_debug_requires_an_explicit_valid_setting() {
         assert!(matches!(super::parse("debug collision on"), Ok(super::Command::SetCollisionDebug(true))));

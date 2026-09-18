@@ -54,6 +54,7 @@ impl App {
                         .map_err(|error| error.to_string())
                 }) {
                     Ok(id) => {
+                        self.perf.reset();
                         format!(
                             "ready run={} scene={id} tick={}",
                             self.run_id,
@@ -64,6 +65,7 @@ impl App {
                 },
                 Command::EvictScene(id) => {
                     if self.game.evict_scene(id) {
+                        self.perf.reset();
                         format!("evicted run={} scene={id}", self.run_id)
                     } else {
                         format!("error: no live scene {id} in run {}", self.run_id)
@@ -115,6 +117,11 @@ impl App {
                     }
                 }
                 Command::State => self.report_state(),
+                Command::Perf { samples } => self.report_perf(samples),
+                Command::ResetPerf => {
+                    self.perf.reset();
+                    "ok".to_string()
+                }
                 Command::Impulse { target, value } => match self.game.body_named(&target) {
                     Some(id) if self.game.apply_impulse(id, value) => {
                         format!("impulse applied to {id}")
@@ -159,6 +166,7 @@ impl App {
                     Some(renderer) => {
                         if renderer.vsync() != on {
                             renderer.toggle_vsync();
+                            self.perf.reset();
                         }
                         format!("vsync {}", renderer.vsync())
                     }
@@ -172,6 +180,17 @@ impl App {
             let _ = reply.send(answer);
         }
         quit
+    }
+
+    /// Compact observations: never invoke Game::report or Game::hash here.
+    pub(super) fn report_perf(&self, samples: bool) -> String {
+        let mut out = Report::default();
+        out.int("run_id", self.run_id);
+        out.int("current_tick", self.game.tick());
+        out.int("current_enemies", self.game.enemy_count() as u64);
+        out.bool("vsync", self.renderer.as_ref().is_some_and(Renderer::vsync));
+        self.perf.report(&mut out, samples);
+        out.finish()
     }
 
     /// Everything worth knowing about the running program, as JSON.

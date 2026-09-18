@@ -315,3 +315,58 @@ fn harness_start_reads_content_but_restart_reuses_the_snapshot() {
     assert_eq!(unchanged, reloaded);
     assert_eq!(run, 3);
 }
+
+/// Synthetic time avoids flaky sleeps while checking the real harness boundary.
+fn record_perf_frame(app: &mut App) {
+    let start = std::time::Instant::now();
+    app.perf.begin_frame(start);
+    app.perf.finish_frame(crate::perf::FrameWork {
+        ticks: 1, presented: true, ..Default::default()
+    });
+    app.perf.begin_frame(start + std::time::Duration::from_millis(20));
+}
+
+#[test]
+fn perf_queries_and_reset_preserve_gameplay_and_pending_work() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App { harness: Some(rx), ..Default::default() };
+    app.start_playtest(pair()).unwrap();
+    assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
+    record_perf_frame(&mut app);
+    let before = app.report_state();
+    let trace = app.game.trace().render();
+    let mut query = |command| {
+        let (reply, response) = std::sync::mpsc::channel();
+        tx.send(Request { command, reply }).unwrap();
+        assert!(!app.drain_harness());
+        response.try_recv().unwrap()
+    };
+    let summary = query(Command::Perf { samples: false });
+    assert!(summary.contains("\"samples\":1"));
+    assert!(!summary.contains("\"bodies\""));
+    assert!(!summary.contains("\"sim_hash\""));
+    assert!(!summary.contains("\"frames\""));
+    let raw = query(Command::Perf { samples: true });
+    assert!(raw.contains("\"frames\":{\"0\":{\"frame_ms\":20.0000"));
+    assert_eq!(query(Command::ResetPerf), "ok");
+    assert!(query(Command::Perf { samples: false }).contains("\"samples\":0"));
+    assert_eq!(app.report_state(), before);
+    assert_eq!(app.game.trace().render(), trace);
+}
+
+#[test]
+fn successful_scene_replacement_resets_perf_but_rejected_content_preserves_it() {
+    let mut app = App::default();
+    app.start_playtest(pair()).unwrap();
+    record_perf_frame(&mut app);
+    let before = app.report_perf(true);
+    let mut invalid = pair();
+    invalid.engine.bodies[0].pos.0 = f32::INFINITY;
+    assert!(app.start_playtest(invalid).is_err());
+    assert_eq!(app.report_perf(true), before);
+    app.restart_playtest().unwrap();
+    assert!(app.report_perf(true).contains("\"samples\":0"));
+    record_perf_frame(&mut app);
+    app.start_playtest(pair()).unwrap();
+    assert!(app.report_perf(true).contains("\"samples\":0"));
+}

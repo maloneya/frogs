@@ -40,6 +40,7 @@ body lands on a later tick. The game continues stepping between commands.
 |---|---|
 | Input | `press`, `release`, `tap`, `hold <key> <ms>`, `cursor <x> <y>` |
 | Observe | `state`, `trace since <tick>`, `wait <ms>`, `shot <path>` |
+| Performance | `perf`, `perf samples`, `perf reset` |
 | Place or push | `spawn (pos: (<x>, <z>), what: (seeks: true))`, `impulse <player\|#id> <x> <z>` |
 | Sources | `source (pos: (<x>, <z>), every: <ticks>)`, `source remove\|enable\|disable <id>` |
 | Scenes | `scene start <path>`, `scene restart`, `scene add <path>`, `scene evict <id>`, `scene list` |
@@ -108,6 +109,14 @@ Similar rates can mean throttling, a real bottleneck or a workload already near
 the display limit; investigate rather than declaring the measurement invalid.
 The frame-time EMA hides variance. For simulation cost alone, use the scenario
 runner's step budget. Keep historical numbers out of current tuning decisions.
+
+Prefer `perf` for timing: it reports a bounded frame window with percentiles,
+phase timings and ticks per frame without hashing or serializing world state.
+Warm up, send `perf reset`, wait for the sample interval, then query `perf`.
+Use `perf samples` for chronological frame details, including enemy/contact
+counts. Export once after the interval rather than polling raw samples.
+See [performance telemetry](../../../docs/performance.md) for measurement
+boundaries, automatic resets, retention and interpretation limits.
 
 For presentation smoothing, use `arpg_core::damp` or `damp_vec3`: their elapsed-time
 half-life stays consistent across frame rates. A fixed fraction per frame does
