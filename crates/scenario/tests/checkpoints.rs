@@ -335,3 +335,31 @@ fn gameplay_content_and_relationship_assertions_fail_closed() {
         }
     }
 }
+
+#[test]
+fn encounter_admission_and_observation_errors_cannot_be_blessed() {
+    let scene = r#"engine: (name: "trial", bodies: [
+        (pos: (1.0,0.0), what: (fixed:true, interactable:true)),
+        (pos: (0.0,3.0), what: (fixed:true))
+    ], sources: [(pos: (0.0,10.0), enabled:false)]),
+    doors: [(body:1)],
+    encounters: [(name:"Trial", start:Activated(0),
+        objective:Defeat((sources:[0], count:1, within_ticks:10)),
+        on_start:[EnableSource(0)], on_success:[UnlockDoor(0)])]"#;
+    for (content,expect) in [
+        (scene.to_owned(), "encounters:[(scene:0, encounter:1, state:None)]"),
+        (scene.to_owned(), "doors:[(scene:0, door:1, state:None)]"),
+        (scene.to_owned(), "doors:[(scene:0, door:0, state:Some(Open))]"),
+        (scene.replace("count:1", "count:0"), ""),
+        (scene.replace("within_ticks:10", "within_ticks:0"), ""),
+        (scene.replace("sources:[0]", "sources:[99]"), ""),
+        (scene.replace("UnlockDoor(0)", "UnlockDoor(99)"), ""),
+        (scene.replace("count:1", "count:1, typo:3"), ""),
+    ] {
+        let fixture=Fixture::new(&format!("(setup:(scenes:[Inline(({content}))]), checkpoints:[(at:0,expect:({expect}))], budget:(ticks:2))"));
+        for flags in [&[][..], &["--bless"][..]] {
+            let (output,text)=fixture.run(flags);
+            assert_eq!(output.status.code(),Some(1),"invalid encounter passed: {text}");
+        }
+    }
+}

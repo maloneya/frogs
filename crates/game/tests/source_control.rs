@@ -15,6 +15,7 @@ fn scene() -> GameScene {
         },
         source_controls: vec![SourceControlSpec { body: 0, source: 0 }],
         torches: vec![],
+        ..GameScene::default()
     }
 }
 

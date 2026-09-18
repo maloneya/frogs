@@ -31,6 +31,7 @@ pub use attack::{
 pub use hash::Fnv;
 use members::Members;
 use pass::health::Health;
+pub use pass::health::Defeat;
 use pass::interact::Interactions;
 pub use pass::interact::{INTERACTION_REACH, InteractionState};
 use pass::motion::Physics;
@@ -53,7 +54,7 @@ use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, TICK_HZ, Ticks};
 pub use trace::{Event, Trace, TraceSink};
 mod access;
-pub use access::{InteractionView, SourceEnablement};
+pub use access::{InteractionView, SourceEnablement, GameplayAccess};
 
 /// One tick of walking, in world units. Re-exported because a scenario or a
 /// harness reading a position is almost always trying to work out how many
@@ -377,6 +378,8 @@ pub struct World {
     /// See [`crate::pass::source`].
     sources: Sources,
     scenes: Scenes,
+    /// Lossless outcomes of the latest tick, replaced only by the next step.
+    defeats: Vec<Defeat>,
     /// Enemy pairs the crowd solver pushed apart in the last [`World::step`].
     ///
     /// Kept apart from `contacts` rather than summed into it: one number
@@ -405,6 +408,7 @@ impl World {
             queue: SpawnQueue::default(),
             sources: Sources::default(),
             scenes: Scenes::default(),
+            defeats: Vec::with_capacity(MAX_BODIES),
             contacts: 0,
             crowd_contacts: 0,
         }
@@ -564,11 +568,13 @@ impl World {
             queue: _,
             sources: _,
             scenes,
+            defeats,
             player: _,
             contacts: _,
             crowd_contacts: _,
         } = self;
 
+        let _ = defeats; // Between-tick removals never manufacture combat outcomes.
         let mut trace = trace.sink(*tick);
         remove_body(bodies, seekers, scenes, id, &mut trace)
     }
@@ -680,6 +686,7 @@ impl World {
             queue,
             sources,
             scenes,
+            defeats,
             contacts,
             crowd_contacts,
             trace,
@@ -693,6 +700,13 @@ impl World {
         bodies.physics.report(&bodies.pos, &bodies.slots, out);
         bodies.health.report(out);
         bodies.interactions.report(out);
+        out.object("defeats", |out| {
+            for defeat in defeats {
+                out.object(&defeat.body.to_string(), |out| {
+                    if let Some(source) = defeat.source { out.text("source", &source.to_string()); }
+                });
+            }
+        });
         out.int("tick", *tick);
         out.vec3("player_pos", on_ground(bodies.pos[0], PLAYER_HALF_HEIGHT));
         out.num("facing", *facing);
@@ -871,6 +885,7 @@ impl World {
             &mut self.bodies,
             &mut self.seekers,
             &mut self.scenes,
+            &mut self.defeats,
             trace.reborrow(),
         );
 
@@ -880,6 +895,9 @@ impl World {
         // decided once and written down rather than rediscovered per pass.
         self.tick += 1;
     }
+
+    /// Combat outcomes from the latest step; clearing diagnostics does not affect these.
+    pub fn defeats(&self) -> &[Defeat] { &self.defeats }
 
     /// Ticks completed since this world was created.
     #[must_use]
@@ -914,6 +932,7 @@ impl World {
             queue,
             sources,
             scenes,
+            defeats,
             contacts,
             crowd_contacts,
             trace,
@@ -940,6 +959,12 @@ impl World {
             prev_pos: enemy_prev,
         } = bodies;
         let mut h = Fnv::default();
+        h.usize(defeats.len());
+        for defeat in defeats {
+            defeat.body.hash_into(&mut h);
+            h.usize(usize::from(defeat.source.is_some()));
+            if let Some(source) = defeat.source { source.hash_into(&mut h); }
+        }
         physics.hash(&mut h);
         interactions.hash(&mut h);
 

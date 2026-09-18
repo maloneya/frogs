@@ -25,7 +25,8 @@
 //!
 //! ## The request is the abstraction, not the spawner
 //!
-//! Nothing here knows what asked. That is deliberate and it is the whole
+//! Requests carry optional producer identity for outcome attribution, but no
+//! producer behaviour. That separation is the whole
 //! extension point: a "spawner" is not a kind of entity that owns this
 //! machinery, it is *anything that pushes a request*. A wave director, a body
 //! that splits when killed, and a debug key are the same thing to this module.
@@ -161,6 +162,7 @@ struct Request {
     at: Vec2,
     what: Template,
     owner: Option<SceneId>,
+    source: Option<crate::SourceId>,
 }
 
 /// What has been asked for and not yet granted.
@@ -199,11 +201,15 @@ impl SpawnQueue {
     }
 
     pub(crate) fn push_owned(&mut self, at: Vec2, what: Template, owner: Option<SceneId>) -> bool {
+        self.push_from(at, what, owner, None)
+    }
+
+    pub(crate) fn push_from(&mut self, at: Vec2, what: Template, owner: Option<SceneId>, source: Option<crate::SourceId>) -> bool {
         if self.pending.len() >= QUEUE_CAPACITY {
             self.refused += 1;
             return false;
         }
-        self.pending.push(Request { at, what, owner });
+        self.pending.push(Request { at, what, owner, source });
         true
     }
 
@@ -224,10 +230,12 @@ impl SpawnQueue {
         h.usize(pending.len());
         h.usize(*refused);
         for request in pending {
-            let Request { at, what, owner } = request;
+            let Request { at, what, owner, source } = request;
             h.f32(at.x);
             h.f32(at.y);
             what.hash_into(h);
+            h.usize(usize::from(source.is_some()));
+            if let Some(source) = source { source.hash_into(h); }
             h.usize(usize::from(owner.is_some()));
             if let Some(owner) = owner {
                 owner.hash_into(h);
@@ -310,6 +318,7 @@ pub(crate) fn drain(
         }
         match place(enemies, seekers, request.at, request.what, &mut trace) {
             Some(id) => {
+                enemies.health.set_origin(id, request.source);
                 if let Some(owner) = request.owner {
                     scenes.record_body(owner, id);
                 }

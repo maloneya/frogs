@@ -2,6 +2,8 @@ use crate::scene::{GameScene, RestartError, RestartScene, SceneError, fingerprin
 use crate::source_control::{self, ControlEvent, ControlState, SourceControls};
 use arpg_core::{Intent, Report};
 use crate::torch::{Torches, TorchSpec};
+use crate::door::{self, Doors};
+use crate::encounter::{self, Encounters, EncounterEvent};
 use arpg_sim::{
     Alpha, AttackProfile, AttackStatus, Dt, EntityId, Fnv, Impulse, InteractionState, Motion,
     RecoveryTicks, SceneId, Source, SourceId, Template, Trace, World,
@@ -24,6 +26,9 @@ pub struct Game {
     restart: Option<RestartScene>,
     controls: SourceControls,
     torches: Torches,
+    doors: Doors,
+    encounters: Encounters,
+    encounter_trace: Trace<EncounterEvent>,
     control_trace: Trace<ControlEvent>,
 }
 
@@ -45,18 +50,24 @@ impl Game {
             restart: None,
             controls: SourceControls::default(),
             torches: Torches::default(),
+            doors: Doors::default(),
+            encounters: Encounters::default(),
+            encounter_trace: Trace::default(),
             control_trace: Trace::default(),
         }
     }
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
-        let (world, controls, torches, restart) = RestartScene::prepare(scene)?;
+        let (world, controls, torches, doors, encounters, restart) = RestartScene::prepare(scene)?;
         Ok(Self {
             world,
             restart: Some(restart),
             controls,
             torches,
+            doors,
+            encounters,
+            encounter_trace: Trace::default(),
             control_trace: Trace::default(),
         })
     }
@@ -89,7 +100,7 @@ impl Game {
         self.restart.as_ref().map(|snapshot| snapshot.description().engine.name.as_str())
     }
 
-    /// Advances source control, then one fixed tick of the engine schedule.
+    /// Consumes prior interactions, runs one engine tick, then resolves encounter outcomes.
     ///
     /// Neither adapter owns a second schedule. Exhaustive destructuring forces
     /// any future gameplay state to receive an explicit scheduling decision.
@@ -99,12 +110,21 @@ impl Game {
             restart: _,
             controls,
             torches: _,
+            doors,
+            encounters,
+            encounter_trace,
             control_trace,
         } = self;
         let tick = world.tick();
         let (interactions, sources) = world.interaction_sources();
         source_control::advance(controls, interactions, sources, control_trace.sink(tick));
+        let (mut access, _) = world.encounter_access();
+        let mut trace = encounter_trace.sink(tick);
+        door::advance(doors, &mut access, &mut trace);
+        encounter::begin(encounters, doors, &mut access, &mut trace);
         world.step(dt, intent);
+        let (mut access, defeats) = world.encounter_access();
+        encounter::finish(encounters, doors, defeats, &mut access, &mut trace);
     }
 
     /// Hashes engine state, live relationships, and the cached restart effect.
@@ -115,10 +135,13 @@ impl Game {
             restart,
             controls,
             torches,
+            doors,
+            encounters,
+            encounter_trace: _,
             control_trace: _,
         } = self;
         let mut hash = Fnv::default();
-        hash.u64(fingerprint(world, controls, torches));
+        hash.u64(fingerprint(world, controls, torches, doors, encounters));
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
             snapshot.hash(&mut hash);
@@ -139,11 +162,17 @@ impl Game {
             restart,
             controls,
             torches,
+            doors,
+            encounters,
+            encounter_trace,
             control_trace,
         } = self;
         world.report(out);
         controls.report(out);
         torches.report(out);
+        doors.report(out);
+        encounters.report(out);
+        out.int("encounter_events_dropped", encounter_trace.dropped() as u64);
         out.int("control_events_dropped", control_trace.dropped() as u64);
         out.object("restart", |out| {
             out.bool("available", restart.is_some());
@@ -160,9 +189,12 @@ impl Game {
             restart: _,
             controls,
             torches,
+            doors,
+            encounters,
+            encounter_trace: _,
             control_trace: _,
         } = self;
-        scene.install(world, controls, torches)
+        scene.install(world, controls, torches, doors, encounters)
     }
 
     /// Evicts a live instance and its descendants; preserves the restart snapshot.
@@ -174,6 +206,9 @@ impl Game {
             restart: _,
             controls,
             torches,
+            doors,
+            encounters,
+            encounter_trace: _,
             control_trace: _,
         } = self;
         if !world.evict_scene(id) {
@@ -181,6 +216,8 @@ impl Game {
         }
         controls.evict(id);
         torches.evict(id);
+        doors.evict(id);
+        encounters.evict(id);
         true
     }
 
@@ -265,6 +302,7 @@ impl Game {
     pub fn clear_trace(&mut self) {
         self.world.clear_trace();
         self.control_trace.clear();
+        self.encounter_trace.clear();
     }
 
     /// Reads tick-stamped engine events; observation cannot mutate them.
@@ -455,10 +493,10 @@ impl Game {
     #[must_use]
     pub fn control_trace(&self) -> &Trace<ControlEvent> { &self.control_trace }
 
-    /// Dropped events across both bounded diagnostic streams.
+    /// Dropped events across all bounded diagnostic streams.
     #[must_use]
     pub fn trace_dropped(&self) -> usize {
-        self.world.trace().dropped() + self.control_trace.dropped()
+        self.world.trace().dropped() + self.control_trace.dropped() + self.encounter_trace.dropped()
     }
 
     /// Engine diagnostics followed by a labelled gameplay stream. Each stream
@@ -476,6 +514,24 @@ impl Game {
             out.push_str("# gameplay transitions\n");
             for (tick, event) in gameplay { let _ = writeln!(out, "{tick} {event}"); }
         }
+        let mut encounters = self.encounter_trace.since(since).peekable();
+        if encounters.peek().is_some() {
+            out.push_str("# encounters\n");
+            for (tick, event) in encounters { let _ = writeln!(out, "{tick} {event}"); }
+        }
         out
     }
+}
+
+impl Game {
+    /// Observe one encounter by scene identity and authored index.
+    pub fn encounter_state(&self, scene: SceneId, nth: usize) -> Option<crate::EncounterState> { self.encounters.state(scene, nth) }
+    /// Scene-installation order, then authored order; presentation cannot mutate these facts.
+    pub fn encounters(&self) -> impl Iterator<Item = (&str, crate::EncounterState)> { self.encounters.iter() }
+    /// Observe a scene-owned door, including terminal Open or Missing state.
+    pub fn door_state(&self, scene: SceneId, nth: usize) -> Option<crate::DoorState> { self.doors.state(scene, nth) }
+    /// Lossless combat outcomes of the latest completed engine tick.
+    pub fn defeats(&self) -> &[arpg_sim::Defeat] { self.world.defeats() }
+    /// Encounter/door diagnostics, separate from authoritative progression.
+    pub fn encounter_trace(&self) -> &Trace<EncounterEvent> { &self.encounter_trace }
 }

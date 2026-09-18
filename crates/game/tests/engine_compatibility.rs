@@ -37,6 +37,9 @@ fn assert_same(game: &Game, world: &World, restart: Option<(&str, u64)>) {
             }
         }
     });
+    engine_report.object("doors", |_| {});
+    engine_report.object("encounters", |_| {});
+    engine_report.int("encounter_events_dropped", 0);
     engine_report.int("control_events_dropped", 0);
     engine_report.object("restart", |out| {
         out.bool("available", restart.is_some());

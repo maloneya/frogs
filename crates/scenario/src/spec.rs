@@ -345,6 +345,10 @@ pub(crate) struct Expect {
     #[serde(default)]
     pub(crate) controls: Vec<ControlExpect>,
     #[serde(default)]
+    pub(crate) encounters: Vec<EncounterExpect>,
+    #[serde(default)]
+    pub(crate) doors: Vec<DoorExpect>,
+    #[serde(default)]
     pub(crate) scene_count: Option<usize>,
     #[serde(default)]
     pub(crate) torch_count: Option<usize>,
@@ -539,4 +543,21 @@ pub(crate) struct TorchExpect {
     pub(crate) scene: usize,
     pub(crate) torch: usize,
     pub(crate) state: Option<arpg_game::TorchSpec>,
+}
+
+/// Exact authoritative encounter observation, indexed in its owning scene.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EncounterExpect {
+    pub(crate) scene: usize,
+    pub(crate) encounter: usize,
+    pub(crate) state: Option<arpg_game::EncounterState>,
+}
+/// Exact authoritative door observation, including removal and eviction.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DoorExpect {
+    pub(crate) scene: usize,
+    pub(crate) door: usize,
+    pub(crate) state: Option<arpg_game::DoorState>,
 }

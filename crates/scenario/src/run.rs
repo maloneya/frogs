@@ -105,6 +105,16 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
                     format!("scene {} torch {}", torch.scene, torch.torch)));
             }
         }
+        for item in &expect.encounters {
+            if !scenes.get(item.scene).is_some_and(|scene| item.encounter < scene.encounters.len()) {
+                failures.push(Failure::new("encounters", "an authored scene encounter".into(), format!("scene {} encounter {}", item.scene, item.encounter)));
+            }
+        }
+        for item in &expect.doors {
+            if !scenes.get(item.scene).is_some_and(|scene| item.door < scene.doors.len()) {
+                failures.push(Failure::new("doors", "an authored scene door".into(), format!("scene {} door {}", item.scene, item.door)));
+            }
+        }
         for control in &expect.controls {
             if !scenes.get(control.scene).is_some_and(|scene| control.control < scene.source_controls.len()) {
                 failures.push(Failure::new("controls", "an authored scene control".into(),
@@ -532,6 +542,8 @@ fn check_state(
         sources,
         source_states,
         controls,
+        encounters,
+        doors,
         scene_count,
         torch_count,
         torches,
@@ -610,6 +622,18 @@ fn check_state(
                 &format!("source_states[{}]", expected.source),
                 format!("{:?}", expected.state), format!("{actual:?}"),
             ));
+        }
+    }
+    for expected in encounters {
+        let actual = instances.get(expected.scene).copied().flatten().and_then(|id| game.encounter_state(id, expected.encounter));
+        if actual != expected.state {
+            failures.push(Failure::new(&format!("encounters[{}/{}]", expected.scene, expected.encounter), format!("{:?}", expected.state), format!("{actual:?}")));
+        }
+    }
+    for expected in doors {
+        let actual = instances.get(expected.scene).copied().flatten().and_then(|id| game.door_state(id, expected.door));
+        if actual != expected.state {
+            failures.push(Failure::new(&format!("doors[{}/{}]", expected.scene, expected.door), format!("{:?}", expected.state), format!("{actual:?}")));
         }
     }
     for expected in controls {

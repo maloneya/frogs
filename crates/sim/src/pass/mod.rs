@@ -60,7 +60,9 @@
 //!     changes only interaction state; it cannot spawn or move bodies.
 //! 14. [`health::remove_defeated`] — remove bodies reduced to zero. **Last**, so
 //!     its dense-row swaps cannot invalidate an index another pass will use.
-//!     Surviving bodies retain their new velocity and remain in every solver.
+//!     Before removal, record each defeat and its source provenance in the
+//!     lossless completed-tick outcomes consumed by Game. These are independent
+//!     of diagnostic history. Surviving bodies retain their new velocity.
 //!
 //! The player occupies row zero in the shared body store. Its facing and
 //! attack state are player-only; physics membership and payload use the same

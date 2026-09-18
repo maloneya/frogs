@@ -1,0 +1,26 @@
+// Activation tick 0; active ticks 1..1800 inclusive. Emissions at 1+18*k,
+// k=0..99: exactly 100 enemies without attacks. The door remains locked.
+(
+    description: "The authored 30-in-30 trial starts on activation, times out after exactly 1800 active ticks, and stops spawning without unlocking its door.",
+    setup: (scenes: [File("../scenes/soul_trial.ron")]),
+    interactions: [0, 1802],
+    checkpoints: [
+        (at: 0, expect: (enemy_count: 0, encounters: [
+            (scene: 0, encounter: 0, state: Some((phase: Ready, defeated: 0, target: 30, remaining_ticks: 1800))),
+        ])),
+        (at: 1, expect: (enemy_count: 1, encounters: [
+            (scene: 0, encounter: 0, state: Some((phase: Running, defeated: 0, target: 30, remaining_ticks: 1799))),
+        ])),
+        (at: 1799, expect: (enemy_count: 100, encounters: [
+            (scene: 0, encounter: 0, state: Some((phase: Running, defeated: 0, target: 30, remaining_ticks: 1))),
+        ])),
+        (at: 1800, expect: (encounters: [
+            (scene: 0, encounter: 0, state: Some((phase: Failed, defeated: 0, target: 30, remaining_ticks: 0))),
+        ])),
+    ],
+    budget: (ticks: 1850),
+    expect: (enemy_count: 100, doors: [(scene: 0, door: 0, state: Some(Locked))],
+        source_states: [(scene: 0, source: 0, state: Some((enabled: false, countdown: 0, emitted: 100)))],
+        encounters: [(scene: 0, encounter: 0, state: Some((phase: Failed, defeated: 0, target: 30, remaining_ticks: 0)))],
+    ),
+)

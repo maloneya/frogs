@@ -1,0 +1,34 @@
+// Can a replenishing crowd make 30 defeats in 30 seconds readable and achievable?
+// Press E by the blue switch, face the approaching enemies, and attack with Space.
+// The HUD counts only this trial's enemies. Success unlocks the centre exit prop
+// at (0,5); press E nearby to open it. Timeout stops spawning; F2 restarts.
+// Props are a greybox gate with circular footprints, not a rectangular door asset.
+(
+    engine: (
+        name: "Soul trial - 30 in 30",
+        bodies: [
+            (pos: (1.2, 0.0), what: (fixed: true, interactable: true)), // switch 0
+            (pos: (0.0, 5.0), what: (fixed: true)), // door body 1
+            (pos: (-1.2, 5.0), what: (fixed: true)),
+            (pos: (1.2, 5.0), what: (fixed: true)),
+            (pos: (-2.4, 5.0), what: (fixed: true)),
+            (pos: (2.4, 5.0), what: (fixed: true)),
+        ],
+        sources: [(
+            pos: (0.0, -4.0), radius: 2.5, every: 18,
+            what: (seeks: true), enabled: false,
+        )],
+    ),
+    doors: [(body: 1)],
+    encounters: [(
+        name: "Soul trial",
+        start: Activated(0),
+        objective: Defeat((sources: [0], count: 30, within_ticks: 1800)),
+        on_start: [EnableSource(0)],
+        on_success: [UnlockDoor(0)],
+    )],
+    torches: [
+        (position: (-3.0, 2.2, 3.5), colour: (0.4, 0.7, 1.0), intensity: 24.0, range: 14.0),
+        (position: (3.0, 2.2, 3.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0),
+    ],
+)

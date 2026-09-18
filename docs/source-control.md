@@ -88,3 +88,7 @@ The fast fixtures are inline in the regression scenarios. The playable trial is
 `scenes/activate_horde.ron`: select it through F2 and press E beside the blue
 block. See the [playtest instructions and evidence](source-control-playtest.md)
 for the tuned setup, assertions, screenshots, and restart verification.
+
+For objectives, deadlines, rewards and multiple independent trials, use
+[encounters](encounters.md). A source cannot be owned by both a one-shot
+source control and an encounter.

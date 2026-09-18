@@ -125,6 +125,7 @@ Read only the guides relevant to the work:
 - [Live playtesting, capture and performance](.claude/skills/playtest/SKILL.md)
 - [Author a scene](.claude/skills/create-scene/SKILL.md) and [scene lifecycle](docs/scene-playtests.md)
 - [Author Blender assets](.claude/skills/author-blender-asset/SKILL.md) and [asset contract](docs/character-assets-authoring.md)
+- [Author encounters](docs/encounters.md): typed objectives, source groups, doors and independent instances.
 - [Interaction](docs/interaction.md), [source enablement](docs/source-enablement.md), [source control](docs/source-control.md)
 - [Collision debug view](docs/collision-debug.md) and [attack effects](docs/attack-effects.md)
 

@@ -360,6 +360,10 @@ impl App {
                 Vec2::new(size.width as f32, size.height as f32),
                 &mut sink,
             );
+            if !self.input.menu().open() {
+                hud::draw_encounters(renderer.glyphs(), self.game.encounters(),
+                    Vec2::new(size.width as f32, size.height as f32), &mut sink);
+            }
         }
 
         // Count presentation, not redraw attempts: occluded surfaces can skip

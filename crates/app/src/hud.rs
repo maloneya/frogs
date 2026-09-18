@@ -104,7 +104,46 @@ pub(crate) fn draw(
     };
     let lines = &lines[..count];
     let width = lines.iter().map(|line| font.measure(line.as_str())).fold(0.0, f32::max);
-    draw_panel(font, lines, width, highlight, sink);
+    draw_panel(font, lines, width, MARGIN, highlight, sink);
+}
+
+/// Gameplay progress is a read-only projection, placed below the ordinary HUD.
+/// The number of rows is bounded by both game admission and viewport height.
+pub(crate) fn draw_encounters<'a>(
+    font: &Glyphs,
+    encounters: impl Iterator<Item = (&'a str, arpg_game::EncounterState)>,
+    viewport: Vec2,
+    sink: &mut QuadSink<'_>,
+) {
+    let width = (viewport.x - 2.0 * (MARGIN + PADDING)).min(900.0);
+    let line_step = font.line_height() + 8.0;
+    let top = MARGIN + 2.0 * PADDING + 3.0 * line_step;
+    let available = ((viewport.y - top - MARGIN - 2.0 * PADDING) / line_step).max(0.0) as usize;
+    if available == 0 || width < font.measure("...") { return; }
+    let mut lines: [Text; arpg_game::MAX_ENCOUNTERS] = core::array::from_fn(|_| Text::default());
+    let mut count = 0;
+    for (name, state) in encounters.take(available.min(lines.len())) {
+        encounter_line(&mut lines[count], name, state);
+        lines[count].fit(font, width);
+        count += 1;
+    }
+    if count == 0 { return; }
+    let lines = &lines[..count];
+    let measured = lines.iter().map(|line| font.measure(line.as_str())).fold(0.0, f32::max);
+    draw_panel(font, lines, measured, top, None, sink);
+}
+
+fn encounter_line(line: &mut Text, name: &str, state: arpg_game::EncounterState) {
+    use arpg_game::EncounterPhase;
+    let seconds = state.remaining_ticks.div_ceil(arpg_sim::TICK_HZ);
+    let status = match state.phase {
+        EncounterPhase::Ready => "Activate switch (E)",
+        EncounterPhase::Running => "Defeat enemies",
+        EncounterPhase::Succeeded => "Complete",
+        EncounterPhase::Failed => "Time up - F2 to restart",
+        EncounterPhase::Orphaned => "Unavailable - F2 to restart",
+    };
+    write!(line, "{name}: {}/{}  {seconds}s  {status}", state.defeated, state.target).expect("validated name and bounded numeric fields fit");
 }
 
 fn profile_line(line: &mut Text, profile: AttackProfile) {
@@ -169,7 +208,7 @@ fn draw_picker(font: &Glyphs, menu: &Menu, current: &str, viewport: Vec2, sink: 
         lines[count + 1].label(font, "F2/Esc: close   World keeps running", width);
         (count + 2, Some(highlight))
     };
-    draw_panel(font, &lines[..count], width, highlight, sink);
+    draw_panel(font, &lines[..count], width, MARGIN, highlight, sink);
 }
 
 /// Both menus submit the scrim, selection, and glyphs in the same order.
@@ -177,20 +216,21 @@ fn draw_panel(
     font: &Glyphs,
     lines: &[Text],
     width: f32,
+    top: f32,
     highlight: Option<usize>,
     sink: &mut QuadSink<'_>,
 ) {
     let line_step = font.line_height() + 8.0;
     let height = font.line_height() + (lines.len() - 1) as f32 * line_step;
     sink.push(Quad::solid(
-        Vec4::new(MARGIN, MARGIN, width + 2.0 * PADDING, height + 2.0 * PADDING),
+        Vec4::new(MARGIN, top, width + 2.0 * PADDING, height + 2.0 * PADDING),
         PANEL,
     ));
     if let Some(row) = highlight {
         sink.push(Quad::solid(
             Vec4::new(
                 MARGIN + PADDING / 2.0,
-                MARGIN + PADDING + row as f32 * line_step - 3.0,
+                top + PADDING + row as f32 * line_step - 3.0,
                 width + PADDING,
                 font.line_height() + 6.0,
             ),
@@ -201,7 +241,7 @@ fn draw_panel(
         font.layout(
             line.as_str(),
             MARGIN + PADDING,
-            MARGIN + PADDING + index as f32 * line_step,
+            top + PADDING + index as f32 * line_step,
             INK,
             sink,
         );
@@ -266,6 +306,27 @@ impl core::fmt::Write for Text {
 mod tests {
     use super::*;
     use arpg_gfx::QuadBuffer;
+
+    #[test]
+    fn encounter_hud_uses_authoritative_progress_and_rounds_remaining_seconds_up() {
+        let mut line = Text::default();
+        encounter_line(&mut line, "Trial", arpg_game::EncounterState {
+            phase: arpg_game::EncounterPhase::Running, defeated: 17, target: 30, remaining_ticks: 61,
+        });
+        assert_eq!(line.as_str(), "Trial: 17/30  2s  Defeat enemies");
+        let font = Glyphs::system();
+        let state = arpg_game::EncounterState { phase: arpg_game::EncounterPhase::Succeeded,
+            defeated: u32::MAX, target: u32::MAX, remaining_ticks: u32::MAX };
+        let name = "N".repeat(48);
+        for viewport in [Vec2::new(1280.0, 720.0), Vec2::new(400.0, 240.0)] {
+            let mut buffer = QuadBuffer::default();
+            draw_encounters(&font, std::iter::repeat_n((name.as_str(), state), arpg_game::MAX_ENCOUNTERS), viewport, &mut buffer.sink());
+            for quad in buffer.as_slice() {
+                let r = quad.rect();
+                assert!(r.x >= 0.0 && r.y >= 0.0 && r.x + r.z <= viewport.x && r.y + r.w <= viewport.y);
+            }
+        }
+    }
 
     #[test]
     fn picker_scrolls_and_bounds_external_text_to_the_viewport() {

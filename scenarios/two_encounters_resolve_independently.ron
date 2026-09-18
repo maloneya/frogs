@@ -1,0 +1,58 @@
+// The player reaches z=94.5 at tick 629. Slams hit on 639, 669, 699.
+// A starts at 1 with 699 ticks; B starts at 3 with 697. Both finish at 699.
+// Only A's source produces the target at the wall: A succeeds, B times out.
+(
+    description: "Two trials share a scene but not progress, source control, or door rewards; a last-tick defeat wins and the opened door clears its passage.",
+    setup: (scenes: [Inline((
+        engine: (
+            name: "Independent trials",
+            bodies: [
+                (pos: (1.0, 0.0), what: (fixed: true, interactable: true)),
+                (pos: (-1.0, 0.0), what: (fixed: true, interactable: true)),
+                (pos: (1.4, 94.5), what: (fixed: true)),
+                (pos: (-20.0, 0.0), what: (fixed: true)),
+            ],
+            sources: [
+                (pos: (0.0, 95.7), every: 10000, enabled: false),
+                (pos: (-50.0, 0.0), every: 10000, enabled: false),
+            ],
+        ),
+        doors: [(body: 2), (body: 3)],
+        encounters: [
+            (name: "East", start: Activated(0), objective: Defeat((sources: [0], count: 1, within_ticks: 699)), on_start: [EnableSource(0)], on_success: [UnlockDoor(0)]),
+            (name: "West", start: Activated(1), objective: Defeat((sources: [1], count: 1, within_ticks: 697)), on_start: [EnableSource(1)], on_success: [UnlockDoor(1)]),
+        ],
+    ))]),
+    interactions: [0, 2, 699, 701],
+    inputs: [(at: 0, ticks: 630, dir: (0.0, 1.0)), (at: 703, ticks: 20, dir: (1.0, 0.0))],
+    attack_profiles: [(at: 0, profile: Slam)], attacks: [630, 660, 690],
+    checkpoints: [
+        (at: 0, expect: (encounters: [
+            (scene: 0, encounter: 0, state: Some((phase: Ready, defeated: 0, target: 1, remaining_ticks: 699))),
+            (scene: 0, encounter: 1, state: Some((phase: Ready, defeated: 0, target: 1, remaining_ticks: 697))),
+        ])),
+        (at: 1, expect: (enemy_count: 1, encounters: [
+            (scene: 0, encounter: 0, state: Some((phase: Running, defeated: 0, target: 1, remaining_ticks: 698))),
+            (scene: 0, encounter: 1, state: Some((phase: Ready, defeated: 0, target: 1, remaining_ticks: 697))),
+        ])),
+        (at: 698, expect: (encounters: [
+            (scene: 0, encounter: 0, state: Some((phase: Running, defeated: 0, target: 1, remaining_ticks: 1))),
+            (scene: 0, encounter: 1, state: Some((phase: Running, defeated: 0, target: 1, remaining_ticks: 1))),
+        ], doors: [(scene: 0, door: 0, state: Some(Locked))])),
+        (at: 699, expect: (enemy_count: 1, encounters: [
+            (scene: 0, encounter: 0, state: Some((phase: Succeeded, defeated: 1, target: 1, remaining_ticks: 0))),
+            (scene: 0, encounter: 1, state: Some((phase: Failed, defeated: 0, target: 1, remaining_ticks: 0))),
+        ], doors: [(scene: 0, door: 0, state: Some(Unlocked)), (scene: 0, door: 1, state: Some(Locked))])),
+        (at: 700, expect: (bodies: [(nth: 2, alive: true)], doors: [(scene: 0, door: 0, state: Some(Unlocked))])),
+        (at: 702, expect: (bodies: [(nth: 2, alive: false)], doors: [(scene: 0, door: 0, state: Some(Open))])),
+    ],
+    budget: (ticks: 723),
+    expect: (
+        player_pos: (x: 3.0, z: 94.5, tol: 0.001),
+        doors: [(scene: 0, door: 0, state: Some(Open)), (scene: 0, door: 1, state: Some(Locked))],
+        source_states: [
+            (scene: 0, source: 0, state: Some((enabled: false, countdown: 9301, emitted: 1))),
+            (scene: 0, source: 1, state: Some((enabled: false, countdown: 9303, emitted: 1))),
+        ],
+    ),
+)
