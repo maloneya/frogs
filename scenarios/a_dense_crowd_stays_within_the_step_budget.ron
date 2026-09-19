@@ -1,0 +1,13 @@
+// No attacks: population must remain constant while seekers compress the pack.
+// Mean Game step budget leaves room within 16.67 ms for presentation and spikes.
+// Use release builds for performance conclusions; the gate also runs optimized sim.
+(
+    description: "Ten thousand seekers remain finite and deterministic while stepping within a 10 ms mean budget.",
+    setup: (scenes: [File("../scenes/crowd_stress.ron")]),
+    budget: (ticks: 1200, max_mean_step_micros: 10000.0),
+    checkpoints: [
+        (at: 0, expect: (enemy_count: 10000, seekers: 10000, scene_count: 1)),
+        (at: 899, expect: (enemy_count: 10000, seekers: 10000, scene_count: 1)),
+    ],
+    expect: (enemy_count: 10000, seekers: 10000, scene_count: 1),
+)

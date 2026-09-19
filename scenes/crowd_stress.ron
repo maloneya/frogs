@@ -1,0 +1,15 @@
+// Performance trial: 10,000 seekers compress around the player. Stand still
+// for 15 seconds, then reset perf and measure. Repeat while moving and swinging;
+// watch enemy counts because defeating bodies reduces collision workload.
+(
+    engine: (
+        name: "Crowd stress — 10,000 seekers",
+        grids: [(
+            origin: (-34.65, -34.65), columns: 100, rows: 100, spacing: 0.7,
+            what: (seeks: true),
+        )],
+    ),
+    torches: [(
+        position: (2.5, 2.2, 1.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0,
+    )],
+)

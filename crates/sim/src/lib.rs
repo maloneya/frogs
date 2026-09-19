@@ -15,7 +15,10 @@ mod angle;
 mod attack;
 mod contact;
 mod hash;
+mod grid;
 mod members;
+mod observe;
+pub use observe::{CrowdWork, StepObserver};
 mod pass;
 mod presentation;
 mod scene;
@@ -95,8 +98,7 @@ fn on_ground(p: Vec2, height: f32) -> Vec3 {
 pub const MAX_BODIES: usize = 183_494;
 const _: () = assert!(MAX_BODIES > 0);
 
-/// How large the horde starts. Big enough to read as a crowd, small enough that
-/// the brute-force passes landing next stay comfortably inside a frame.
+/// How large the horde starts. A readable crowd with headroom for gameplay.
 const DEFAULT_ENEMIES: usize = 1024;
 const _: () = assert!(DEFAULT_ENEMIES >= 1 && DEFAULT_ENEMIES <= MAX_BODIES);
 
@@ -348,8 +350,8 @@ pub struct World {
     /// The instrument the collision work is measured with. A body is nine
     /// pixels across at this zoom and a contact displaces it by a fraction of
     /// that, so "is anything actually touching" is invisible on screen and
-    /// obvious as a number. It earns its keep again when the broadphase lands:
-    /// a grid that finds a different number of pairs than brute force is wrong,
+    /// obvious as a number. It also checks broad-phase compatibility:
+    /// a grid that resolves different contacts than brute force is wrong,
     /// and this is what catches it.
     contacts: usize,
     /// Which bodies chase the player.
@@ -385,8 +387,10 @@ pub struct World {
     /// Kept apart from `contacts` rather than summed into it: one number
     /// covering both cannot distinguish the player wading into a pack from the
     /// pack settling on its own, and it is the crowd half specifically that the
-    /// uniform grid will change.
+    /// uniform grid accelerates.
     crowd_contacts: usize,
+    /// Rebuilt per pass; scratch contains no persistent identities or simulation facts.
+    crowd_grid: grid::Grid,
 }
 
 impl Default for World {
@@ -411,6 +415,7 @@ impl World {
             defeats: Vec::with_capacity(MAX_BODIES),
             contacts: 0,
             crowd_contacts: 0,
+            crowd_grid: grid::Grid::default(),
         }
     }
 }
@@ -572,6 +577,7 @@ impl World {
             player: _,
             contacts: _,
             crowd_contacts: _,
+            crowd_grid: _,
         } = self;
 
         let _ = defeats; // Between-tick removals never manufacture combat outcomes.
@@ -689,6 +695,7 @@ impl World {
             defeats,
             contacts,
             crowd_contacts,
+            crowd_grid: _,
             trace,
         } = self;
         let Player {
@@ -778,6 +785,11 @@ impl World {
     /// those is the camera's job, and letting it into `sim` would put a
     /// presentation decision inside the simulation.
     pub fn step(&mut self, dt: Dt, intent: Intent) {
+        self.step_observed(dt, intent, &mut ());
+    }
+
+    /// Run the same schedule with read-only diagnostic phase notifications.
+    pub fn step_observed(&mut self, dt: Dt, intent: Intent, observer: &mut impl StepObserver) {
         let move_dir = intent.move_dir();
         // Bound to the tick being run, so no pass can stamp an event with the
         // wrong one. See `trace::TraceSink`.
@@ -834,12 +846,16 @@ impl World {
             &mut self.bodies.pos,
             dt,
         );
-        self.crowd_contacts = pass::separate::crowd(
+        observer.crowd_started();
+        let crowd_work = pass::separate::crowd(
             &mut self.bodies.pos[1..],
             &self.bodies.slots.ids()[1..],
             &mut self.bodies.physics,
+            &mut self.crowd_grid,
             trace.reborrow(),
         );
+        self.crowd_contacts = crowd_work.contacts();
+        observer.crowd_finished(crowd_work);
         self.contacts = pass::separate::player(
             &mut self.bodies.pos,
             self.bodies.slots.ids(),
@@ -920,7 +936,7 @@ impl World {
     /// `contacts` goes in even though it is derived from the positions, and for
     /// a specific reason: a broadphase that finds a different number of pairs
     /// while leaving every body in the same place is exactly the bug the
-    /// uniform grid will introduce, and positions alone would call it agreement.
+    /// uniform grid could introduce, and positions alone would call it agreement.
     #[must_use]
     pub fn hash(&self) -> u64 {
         // Exhaustive on purpose — see above. Do not replace with `..`.
@@ -935,6 +951,7 @@ impl World {
             defeats,
             contacts,
             crowd_contacts,
+            crowd_grid: _,
             trace,
         } = self;
 

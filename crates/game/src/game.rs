@@ -109,6 +109,11 @@ impl Game {
     /// Neither adapter owns a second schedule. Exhaustive destructuring forces
     /// any future gameplay state to receive an explicit scheduling decision.
     pub fn step(&mut self, dt: Dt, intent: Intent) {
+        self.step_observed(dt, intent, &mut ());
+    }
+
+    /// The ordinary game schedule with read-only engine timing boundaries.
+    pub fn step_observed(&mut self, dt: Dt, intent: Intent, observer: &mut impl arpg_sim::StepObserver) {
         let Self {
             world,
             restart: _,
@@ -128,7 +133,7 @@ impl Game {
         door::advance(doors, &mut access, &mut trace);
         chest::advance(chests, &mut access, &mut trace);
         encounter::begin(encounters, doors, chests, &mut access, &mut trace);
-        world.step(dt, intent);
+        world.step_observed(dt, intent, observer);
         let (mut access, defeats) = world.encounter_access();
         encounter::finish(encounters, doors, chests, defeats, &mut access, &mut trace);
     }

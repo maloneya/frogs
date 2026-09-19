@@ -131,3 +131,47 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
     assert!(game.trace().iter().any(|(_, event)| matches!(event, Event::Fired { .. })));
     assert!(game.enemy_count() > 1, "the source and queued request must actually spawn");
 }
+
+#[test]
+fn crowd_observations_follow_the_same_game_schedule_without_changing_replay() {
+    #[derive(Default)]
+    struct Observer { active: bool, starts: usize, finishes: usize, work: arpg_sim::CrowdWork }
+    impl arpg_sim::StepObserver for Observer {
+        fn crowd_started(&mut self) {
+            assert!(!self.active);
+            self.active = true;
+            self.starts += 1;
+        }
+        fn crowd_finished(&mut self, work: arpg_sim::CrowdWork) {
+            assert!(self.active);
+            self.active = false;
+            self.finishes += 1;
+            self.work = work;
+        }
+    }
+    let scene = arpg_game::GameScene {
+        engine: Scene {
+            grids: vec![arpg_sim::BodyGrid {
+                origin: (-3.0, -3.0), columns: 10, rows: 10, spacing: 0.6,
+                what: Template::BODY.seeking(),
+            }], ..Default::default()
+        }, ..Default::default()
+    };
+    let mut observed = Game::from_scene(&scene).unwrap();
+    let mut ordinary = Game::from_scene(&scene).unwrap();
+    let mut observer = Observer::default();
+    for tick in 0..90 {
+        let before = observed.enemy_count() as u64;
+        let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+        let intent = Intent::new(MoveDir::new(Vec3::X), AimDir::FORWARD, tick % 25 == 0);
+        observed.step_observed(dt, intent, &mut observer);
+        ordinary.step(dt, intent);
+        assert_eq!(observer.work.possible_pairs(), before * before.saturating_sub(1) / 2);
+        assert!(observer.work.candidates() <= observer.work.possible_pairs());
+        assert_eq!(observer.work.contacts(), observed.crowd_contacts());
+        assert_eq!(observed.hash(), ordinary.hash());
+        assert_eq!(observed.trace().render(), ordinary.trace().render());
+        assert_eq!(observer.starts, tick + 1);
+        assert_eq!(observer.finishes, tick + 1);
+    }
+}

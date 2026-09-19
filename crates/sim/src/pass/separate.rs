@@ -13,9 +13,8 @@
 //! they share this module because they are the same behaviour over different
 //! pair sets — same response, same constants, and only the pairing differs.
 //!
-//! They also diverge in cost in a way that matters later: [`player`] is O(N)
-//! and [`crowd`] is O(N^2), so the uniform grid, when it lands, optimises one
-//! of them and leaves the other alone.
+//! Crowd separation uses a uniform grid to discard distant pairs. Player
+//! separation remains a linear scan. Both preserve immediate response order.
 
 use glam::Vec2;
 
@@ -90,26 +89,11 @@ pub(crate) fn player(
 /// resolved twice, which would double the correction and make the crowd
 /// springy.
 ///
-/// **O(N^2), and knowingly so.** Measured in release, per tick, against a
-/// 16.7ms frame:
-///
-/// | bodies | pairs | cost | share of a frame |
-/// |---|---|---|---|
-/// | 1024 | 523k | 0.14ms | 0.8% |
-/// | 4096 | 8.4M | 2.1ms | 12% |
-/// | 16384 | 134M | 32.6ms | 195% |
-///
-/// So the grid is not urgent at the size the game runs, and these numbers are
-/// what say so rather than a feeling. They also say when it stops being
-/// optional: somewhere past 4096 this pass alone is the frame.
-///
-/// Micro-optimising it is not the answer either — from about 4096 the position
-/// array leaves L1 and the loop is memory-bound, so the arithmetic is no longer
-/// what costs. Only a broadphase changes the shape.
-///
-/// When it comes, it is an *optimisation of something already correct*, and the
-/// way it gets tested is by producing the same contact set as this over a
-/// replayed input stream — a test that can only exist if this exists first.
+/// The grid visits nearby pairs in the same ascending dense-row order as the
+/// original brute-force loop. Membership updates after every positional change;
+/// crossing a cell re-queries later rows, preserving same-tick shove chains.
+/// The index is rebuilt after motion and discarded logically at the pass boundary.
+/// Degenerate piles can still require quadratic work: real contacts are not culled.
 ///
 /// Gauss-Seidel, as [`player`] is: each correction is written immediately, so
 /// the next pair sees it. That converges faster per sweep than accumulating and
@@ -127,49 +111,45 @@ pub(crate) fn crowd(
     horde: &mut [Vec2],
     ids: &[EntityId],
     physics: &mut Physics,
+    grid: &mut crate::grid::Grid,
     mut trace: TraceSink<'_>,
-) -> usize {
+) -> crate::CrowdWork {
     let contact_distance = 2.0 * ENEMY_RADIUS;
     let mut contacts = 0;
     let mut transfers = 0;
-
-    for i in 0..horde.len() {
-        // `split_at_mut` is what makes two simultaneous `&mut` into one slice
-        // legal. The alternative — index and copy out, compute, write back — is
-        // the same arithmetic with the borrow checker switched off for the one
-        // thing it is actually good at here.
-        let (head, tail) = horde.split_at_mut(i + 1);
-        let a = &mut head[i];
-
-        for (offset, b) in tail.iter_mut().enumerate() {
-            // Every pair gets its own tiebreak, so a stack of coincident bodies
-            // fans out instead of every pair escaping along the same line and
-            // re-stacking next tick.
-            let tiebreak = i + (i + 1 + offset);
-
-            if let Some(found) = contact::between(*a, *b, contact_distance, tiebreak) {
-                let (aid, bid) = (ids[i], ids[i + 1 + offset]);
-                resolve(
-                    a,
-                    b,
-                    found,
-                    physics.get(aid).expect("physical body").inverse_mass(),
-                    physics.get(bid).expect("physical body").inverse_mass(),
-                );
-                transfers += usize::from(physics.collide(aid, bid, found));
-                contacts += 1;
-            }
+    let mut visit = |i: usize, j: usize, a: &mut Vec2, b: &mut Vec2| {
+        if let Some(found) = contact::between(*a, *b, contact_distance, i + j) {
+            let (aid, bid) = (ids[i], ids[j]);
+            resolve(
+                a, b, found,
+                physics.get(aid).expect("physical body").inverse_mass(),
+                physics.get(bid).expect("physical body").inverse_mass(),
+            );
+            transfers += usize::from(physics.collide(aid, bid, found));
+            contacts += 1;
         }
-    }
+    };
+    #[cfg(test)]
+    let candidates = if grid.brute_force { brute_force(horde, &mut visit) }
+        else { grid.solve(horde, &mut visit) };
+    #[cfg(not(test))]
+    let candidates = grid.solve(horde, &mut visit);
 
-    if contacts > 0 {
-        trace.emit(Event::Crowded { count: contacts });
-    }
+    if contacts > 0 { trace.emit(Event::Crowded { count: contacts }); }
+    if transfers > 0 { trace.emit(Event::Momentum { pairs: transfers }); }
+    let possible_pairs = horde.len() as u64 * horde.len().saturating_sub(1) as u64 / 2;
+    crate::CrowdWork { candidates, possible_pairs, contacts }
+}
 
-    if transfers > 0 {
-        trace.emit(Event::Momentum { pairs: transfers });
+/// Executable reference retained only in engine tests; shares contact response
+/// but independently visits every pair, including ones a stale grid would miss.
+#[cfg(test)]
+fn brute_force(horde: &mut [Vec2], mut visit: impl FnMut(usize, usize, &mut Vec2, &mut Vec2)) -> u64 {
+    for i in 0..horde.len() {
+        let (head, tail) = horde.split_at_mut(i + 1);
+        for (offset, b) in tail.iter_mut().enumerate() { visit(i, i + 1 + offset, &mut head[i], b); }
     }
-    contacts
+    horde.len() as u64 * horde.len().saturating_sub(1) as u64 / 2
 }
 
 /// Pushes two overlapping bodies apart along the contact normal, splitting the

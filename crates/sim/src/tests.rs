@@ -1136,3 +1136,78 @@ fn activation_state_reaches_the_world_hash() {
     activated.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true));
     assert_ne!(ready.hash(), activated.hash());
 }
+
+#[test]
+fn grid_matches_brute_force_through_contacts_combat_and_structural_changes() {
+    for seed in 0..8u32 {
+        let mut random = seed + 1;
+        let mut coordinate = || {
+            random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (random % 1201) as f32 * 0.01 - 6.0
+        };
+        let mut scene = Scene { name: "grid oracle".into(), bodies: vec![], grids: vec![], sources: vec![] };
+        for i in 0..128 {
+            let pos = match seed % 4 {
+                0 => (coordinate(), coordinate()),
+                1 => (2.0, 2.0), // Pathological coincident pile.
+                2 => (96.0 + coordinate(), -96.0 + coordinate()), // Before containment.
+                _ => ((i % 16) as f32 * 0.49 - 4.0, (i / 16) as f32 * 0.49),
+            };
+            let what = if i % 13 == 0 && seed % 4 != 2 { Template::BLOCK }
+                else if i % 2 == 0 { Template::BODY.seeking() } else { Template::BODY };
+            scene.bodies.push(Placed { pos, what });
+        }
+        let mut grid = World::from_scene(&scene).unwrap();
+        let mut brute = World::from_scene(&scene).unwrap();
+        brute.crowd_grid.brute_force = true;
+        let mut extra = None;
+        for tick in 0..180 {
+            for world in [&mut grid, &mut brute] {
+                if tick % 11 == 0 {
+                    let id = world.bodies.slots.ids()[1 + tick % world.body_count()];
+                    assert!(world.apply_impulse(id, Impulse::try_from((12.0, -8.0)).unwrap()));
+                }
+                if tick % 17 == 0 { assert!(world.request_spawn(Vec2::new(0.49, 0.49), Template::BODY.seeking())); }
+                if tick == 25 {
+                    let id = world.bodies.slots.ids()[10];
+                    assert!(world.despawn_body(id));
+                    world.place(Vec2::new(-0.001, 0.0), Template::BODY).unwrap();
+                    assert!(!world.apply_impulse(id, Impulse::try_from((1.0, 0.0)).unwrap()));
+                    assert!(!world.despawn_body(id));
+                }
+                if tick == 40 {
+                    let id = world.load_scene(&Scene { name: "temporary".into(), bodies: vec![
+                        Placed { pos: (0.49, 0.0), what: Template::BODY },
+                        Placed { pos: (0.51, 0.0), what: Template::BODY },
+                    ], grids: vec![], sources: vec![] }).unwrap();
+                    if let Some(previous) = extra { assert_eq!(id, previous); }
+                    extra = Some(id);
+                }
+                if tick == 60 {
+                    assert!(world.evict_scene(extra.unwrap()));
+                    assert!(!world.evict_scene(extra.unwrap()));
+                }
+                let before = world.hash();
+                assert!(world.place(Vec2::new(f32::NAN, 0.0), Template::BODY).is_none());
+                assert_eq!(world.hash(), before, "rejected input preserves queued spawns");
+                let direction = [Vec3::X, Vec3::Z, -Vec3::X, -Vec3::Z][tick / 30 % 4];
+                world.step(tick_dt(), Intent::new(MoveDir::new(direction), AimDir::new(direction).unwrap(), tick % 23 == 0));
+            }
+            assert_eq!(grid.hash(), brute.hash(), "seed {seed}, tick {tick}: complete physical state");
+            assert_eq!(grid.trace().render(), brute.trace().render(), "seed {seed}, tick {tick}: transitions");
+        }
+    }
+}
+
+#[test]
+fn rebuilding_the_grid_uses_reserved_storage_even_after_population_changes() {
+    let mut world = world_with_enemies(1024);
+    let allocations = alloc_counter::allocations(|| {
+        for _ in 0..3 { world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); }
+    });
+    assert_eq!(allocations, 0, "the grid must not allocate, even on its first step");
+    let id = world.bodies.slots.ids()[10];
+    world.despawn_body(id);
+    assert!(world.request_spawn(Vec2::new(0.49, 0.49), Template::BODY));
+    assert_eq!(alloc_counter::allocations(|| world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false))), 0);
+}

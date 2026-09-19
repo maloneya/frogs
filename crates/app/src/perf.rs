@@ -13,12 +13,34 @@ const CAPACITY: usize = 1024;
 const TARGET_HZ: u32 = 60;
 const FRAME_BUDGET: Duration = Duration::from_nanos(1_000_000_000 / TARGET_HZ as u64);
 
+/// Wall-clock timing stays in app; sim provides only phase boundaries and counts.
+#[derive(Default)]
+pub(crate) struct CrowdTimer {
+    started: Option<Instant>,
+    pub(crate) elapsed: Duration,
+    pub(crate) candidates: u64,
+    pub(crate) possible_pairs: u64,
+}
+
+impl arpg_sim::StepObserver for CrowdTimer {
+    fn crowd_started(&mut self) { self.started = Some(Instant::now()); }
+    fn crowd_finished(&mut self, work: arpg_sim::CrowdWork) {
+        self.elapsed += self.started.take().expect("crowd phase started").elapsed();
+        self.candidates += work.candidates();
+        self.possible_pairs += work.possible_pairs();
+    }
+}
+
 /// Work measured by the frame loop. Durations cannot contain NaN or negative values.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FrameWork {
     pub(crate) simulation: Duration,
     /// Subset of simulation: only calls to Game::step, summed across this frame.
     pub(crate) game_step: Duration,
+    /// Subset of Game::step, summed over this frame's ticks.
+    pub(crate) crowd: Duration,
+    pub(crate) crowd_candidates: u64,
+    pub(crate) crowd_possible_pairs: u64,
     pub(crate) presentation: Duration,
     /// Includes surface acquisition, uploads, submission and present; not GPU execution time.
     pub(crate) render_cpu: Duration,
@@ -116,6 +138,10 @@ impl Recorder {
         out.int("over_1_5_budget", self.samples.iter().filter(|s| s.interval > FRAME_BUDGET.mul_f64(1.5)).count() as u64);
         let stepping: Duration = self.samples.iter().map(|s| s.work.game_step).sum();
         out.num("mean_step_ms", if ticks == 0 { 0.0 } else { millis(stepping) / ticks as f32 });
+        let crowd: Duration = self.samples.iter().map(|s| s.work.crowd).sum();
+        out.num("mean_crowd_step_ms", if ticks == 0 { 0.0 } else { millis(crowd) / ticks as f32 });
+        out.int("crowd_candidates", self.samples.iter().map(|s| s.work.crowd_candidates).sum());
+        out.int("crowd_possible_pairs", self.samples.iter().map(|s| s.work.crowd_possible_pairs).sum());
         for (name, get) in METRICS {
             let values = self.samples.iter().map(get).collect();
             out.object(name, |out| distribution(out, values));
@@ -130,6 +156,8 @@ impl Recorder {
                         out.int("end_tick", work.end_tick);
                         out.int("enemies", work.enemies as u64);
                         out.int("crowd_contacts", work.crowd_contacts as u64);
+                        out.int("crowd_candidates", work.crowd_candidates);
+                        out.int("crowd_possible_pairs", work.crowd_possible_pairs);
                         out.bool("presented", work.presented);
                     });
                 }
@@ -141,10 +169,11 @@ impl Recorder {
 /// Shared vocabulary for summaries and raw observations. `game_step` is nested
 /// inside simulation; other_ms covers HUD title work, event processing and waiting.
 type Metric = (&'static str, fn(&Sample) -> Duration);
-const METRICS: [Metric; 6] = [
+const METRICS: [Metric; 7] = [
     ("frame_ms", |s| s.interval),
     ("simulation_ms", |s| s.work.simulation),
     ("game_step_ms", |s| s.work.game_step),
+    ("crowd_ms", |s| s.work.crowd),
     ("presentation_ms", |s| s.work.presentation),
     ("render_cpu_ms", |s| s.work.render_cpu),
     ("other_ms", |s| s.interval.saturating_sub(s.work.simulation + s.work.presentation + s.work.render_cpu)),
@@ -225,5 +254,25 @@ mod tests {
         let mut out = Report::default();
         distribution(&mut out, (1..=100).rev().map(Duration::from_millis).collect());
         assert_eq!(out.finish(), r#"{"mean":50.5000,"p50":50.0000,"p95":95.0000,"p99":99.0000,"max":100.0000}"#);
+    }
+    #[test]
+    fn crowd_totals_share_the_frame_window_and_reset_with_it() {
+        let mut recorder = Recorder::default();
+        let start = Instant::now();
+        recorder.begin_frame(start);
+        recorder.finish_frame(FrameWork {
+            ticks: 2, simulation: Duration::from_millis(8), game_step: Duration::from_millis(7),
+            crowd: Duration::from_millis(6), crowd_candidates: 30,
+            crowd_possible_pairs: 1000, ..Default::default()
+        });
+        recorder.begin_frame(start + Duration::from_millis(16));
+        recorder.finish_frame(FrameWork::default());
+        recorder.begin_frame(start + Duration::from_millis(20));
+        let json = report(&recorder, true);
+        for field in ["\"mean_crowd_step_ms\":3.0000", "\"crowd_candidates\":30", "\"crowd_possible_pairs\":1000", "\"crowd_ms\":6.0000"] {
+            assert!(json.contains(field), "{field}");
+        }
+        recorder.reset();
+        assert!(report(&recorder, false).contains("\"crowd_candidates\":0"));
     }
 }

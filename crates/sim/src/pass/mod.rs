@@ -45,6 +45,8 @@
 //!    before testing contacts. Neither steering nor overlap correction writes
 //!    carried velocity, so neither can erase or manufacture a blow.
 //! 7. [`separate::crowd`] — repair enemy overlaps and exchange momentum.
+//!    Rebuild its grid from post-motion rows, then update cell membership as
+//!    each correction lands. Candidate order preserves the original pair sweep.
 //! 8. [`separate::player`] — do the same for the player against the horde.
 //!    After crowd resolution, preserving the existing player-space priority.
 //!    Both responses use the same physics store and mass properties.

@@ -291,6 +291,7 @@ impl App {
         let frame = self.clock.tick();
         let simulation_start = std::time::Instant::now();
         let mut game_step = std::time::Duration::ZERO;
+        let mut crowd = crate::perf::CrowdTimer::default();
         let mut ticks = 0;
 
         // Screen space becomes world space here, and only here. The camera owns
@@ -323,7 +324,7 @@ impl App {
             let intent = Intent::new(to_world(intent.move_axis()), aim, intent.just_pressed(Action::Attack))
                 .with_interact(intent.just_pressed(Action::Interact));
             let step_start = std::time::Instant::now();
-            self.game.step(dt, intent);
+            self.game.step_observed(dt, intent, &mut crowd);
             game_step += step_start.elapsed();
             ticks += 1;
             self.attack_effects.observe(&self.game);
@@ -413,6 +414,8 @@ impl App {
             }
         };
         self.perf.finish_frame(crate::perf::FrameWork {
+            crowd: crowd.elapsed, crowd_candidates: crowd.candidates,
+            crowd_possible_pairs: crowd.possible_pairs,
             simulation, game_step, presentation, render_cpu: render_start.elapsed(),
             ticks, end_tick: self.game.tick(), enemies: self.game.enemy_count(),
             crowd_contacts: self.game.crowd_contacts(), presented,

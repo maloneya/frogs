@@ -45,6 +45,7 @@ sample. Inter-frame event handling and waits remain part of frame time.
 | `frame_ms` | Unsmoothed redraw-start interval, including work and waiting |
 | `simulation_ms` | Input preparation, the simulation tick loop, and per-tick effect observations |
 | `game_step_ms` | Time inside Game::step calls, summed per frame; a subset of simulation_ms |
+| `crowd_ms` | Grid rebuilding, candidate selection and crowd contact response; a subset of game_step_ms |
 | `presentation_ms` | Camera, animation poses, instance/effect/debug preparation and HUD construction |
 | `render_cpu_ms` | Renderer call and draw preparation, including surface acquisition, uploads, submission, present and any capture work |
 | `other_ms` | Frame interval minus simulation, presentation and renderer CPU phases; includes event handling, reporting, title updates, recorder overhead and outside waits |
@@ -53,6 +54,11 @@ Each timing summary supplies mean, nearest-rank p50/p95/p99 and maximum in
 milliseconds. `mean_step_ms` divides total Game::step time by executed ticks,
 which distinguishes a costly tick from multiple normal ticks in one frame.
 `max_ticks_per_frame`, `zero_tick_frames` and `multi_tick_frames` expose catch-up.
+`mean_crowd_step_ms` divides crowd time by executed ticks. `crowd_candidates`
+counts exact disc tests, while `crowd_possible_pairs` counts all unordered
+non-player pairs before filtering. Both are summed across the same retained
+ticks, including props, and also appear on each raw frame. Their ratio measures
+how much distant-pair work the [crowd grid](crowd-collision.md) removes.
 No-tick and empty windows report zero for means/rates that have no denominator;
 check sample and tick counts before interpreting them.
 
@@ -68,9 +74,9 @@ longer than 25 ms. Neither field proves physical display frame delivery.
 
 **Renderer CPU time is not GPU execution time.** CPU calls can block on vsync,
 surface availability or the GPU; a long renderer phase does not isolate which.
-`gpu_timing_available` is false. There are no per-pass simulation timings yet.
-Use these broad measurements to choose the next profiling target before adding
-finer instrumentation. The headless scenario step budget independently measures
+`gpu_timing_available` is false. Crowd separation has its own timing boundary;
+other simulation passes are included only in total step time. Read-only observer
+callbacks mark boundaries in sim; the actual clock stays in app. The headless scenario step budget independently measures
 simulation without presentation.
 
 ## Reset and lifetime
