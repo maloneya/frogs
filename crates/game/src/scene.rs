@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::chest::{ChestSpec, Chests};
 use crate::door::{DoorSpec, Doors};
 use crate::encounter::{EncounterSpec, Encounters};
+use crate::enemy_attack::{EnemyAttackSpec, EnemyAttacks};
 use crate::torch::{Torches, TorchSpec};
 use crate::source_control::{SourceControlSpec, SourceControls};
 
@@ -30,11 +31,14 @@ pub struct GameScene {
     /// Independently instantiated gameplay encounters.
     #[serde(default)]
     pub encounters: Vec<EncounterSpec>,
+    /// The one melee attacker supported by the initial damage slice.
+    #[serde(default)]
+    pub enemy_attack: Option<EnemyAttackSpec>,
 }
 
 impl From<arpg_sim::Scene> for GameScene {
     fn from(engine: arpg_sim::Scene) -> Self {
-        Self { engine, source_controls: Vec::new(), torches: Vec::new(), doors: Vec::new(), chests: Vec::new(), encounters: Vec::new() }
+        Self { engine, source_controls: Vec::new(), torches: Vec::new(), doors: Vec::new(), chests: Vec::new(), encounters: Vec::new(), enemy_attack: None }
     }
 }
 
@@ -47,12 +51,14 @@ impl GameScene {
 
     /// The only installation path, shared by fresh runs and additive loads.
     /// Validate relationships before physical admission can mutate the world.
-    pub(crate) fn install(&self, world: &mut World, controls: &mut SourceControls, torches: &mut Torches, doors: &mut Doors, chests: &mut Chests, encounters: &mut Encounters) -> Result<SceneId, SceneError> {
+    pub(crate) fn install(&self, world: &mut World, live: LiveSceneState<'_>) -> Result<SceneId, SceneError> {
+        let LiveSceneState { controls, torches, doors, chests, encounters, attacks } = live;
         self.validate_controls()?;
         Doors::validate(&self.doors, &self.engine.bodies)?;
         chests.validate(&self.chests, &self.engine.bodies, &self.doors)?;
         encounters.validate_add(self)?;
         torches.validate_add(&self.torches)?;
+        attacks.validate_add(self.enemy_attack, &self.engine.bodies)?;
         let owner = world.load_scene(&self.engine)?;
         controls.install(owner, &self.source_controls,
             world.scene_bodies(owner).expect("admitted scene owns its bodies"),
@@ -60,12 +66,13 @@ impl GameScene {
         doors.install(owner, &self.doors, world.scene_bodies(owner).expect("admitted scene"));
         chests.install(owner, &self.chests, world.scene_bodies(owner).expect("admitted scene"));
         encounters.install(owner, &self.encounters, world.scene_bodies(owner).expect("admitted scene"), world.scene_sources(owner).expect("admitted scene"));
+        attacks.install(owner, self.enemy_attack, world.scene_bodies(owner).expect("admitted scene"));
         torches.install(owner, &self.torches);
         Ok(owner)
     }
 
     fn validate_controls(&self) -> Result<(), SceneError> {
-        let Self { engine, source_controls, torches: _, doors: _, chests: _, encounters: _ } = self;
+        let Self { engine, source_controls, torches: _, doors: _, chests: _, encounters: _, enemy_attack: _ } = self;
         for (nth, spec) in source_controls.iter().enumerate() {
             let SourceControlSpec { body, source } = *spec;
             if !engine.bodies.get(body).is_some_and(|body| body.what.interactable()) {
@@ -82,6 +89,17 @@ impl GameScene {
     }
 }
 
+/// The complete set of gameplay stores that participate in scene admission.
+/// Keeping this private prevents ordinary passes from using it as mutable Game.
+pub(crate) struct LiveSceneState<'a> {
+    pub(crate) controls: &'a mut SourceControls,
+    pub(crate) torches: &'a mut Torches,
+    pub(crate) doors: &'a mut Doors,
+    pub(crate) chests: &'a mut Chests,
+    pub(crate) encounters: &'a mut Encounters,
+    pub(crate) attacks: &'a mut EnemyAttacks,
+}
+
 /// Rejection of a complete scene, before any partial installation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SceneError {
@@ -93,6 +111,8 @@ pub enum SceneError {
     Lighting(&'static str),
     /// Invalid encounter or door composition.
     Encounter(&'static str),
+    /// Invalid or excess enemy-attack relationship.
+    EnemyAttack(&'static str),
 }
 
 impl From<arpg_sim::SceneError> for SceneError {
@@ -103,7 +123,8 @@ impl std::fmt::Display for SceneError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Engine(error) => error.fmt(out),
-            Self::Control(reason) | Self::Lighting(reason) | Self::Encounter(reason) => out.write_str(reason),
+            Self::Control(reason) | Self::Lighting(reason) | Self::Encounter(reason)
+            | Self::EnemyAttack(reason) => out.write_str(reason),
         }
     }
 }
@@ -125,6 +146,7 @@ pub(crate) struct PreparedScene {
     pub(crate) doors: Doors,
     pub(crate) chests: Chests,
     pub(crate) encounters: Encounters,
+    pub(crate) attacks: EnemyAttacks,
     pub(crate) restart: RestartScene,
 }
 
@@ -137,10 +159,14 @@ impl RestartScene {
         let mut doors = Doors::default();
         let mut chests = Chests::default();
         let mut encounters = Encounters::default();
-        scene.install(&mut world, &mut controls, &mut torches, &mut doors, &mut chests, &mut encounters)?;
-        let initial_hash = fingerprint(&world, &controls, &torches, &doors, &chests, &encounters);
+        let mut attacks = EnemyAttacks::default();
+        scene.install(&mut world, LiveSceneState {
+            controls: &mut controls, torches: &mut torches, doors: &mut doors,
+            chests: &mut chests, encounters: &mut encounters, attacks: &mut attacks,
+        })?;
+        let initial_hash = fingerprint(&world, &controls, &torches, &doors, &chests, &encounters, &attacks);
         let snapshot = Self { scene: scene.clone(), initial_hash };
-        Ok(PreparedScene { world, controls, torches, doors, chests, encounters, restart: snapshot })
+        Ok(PreparedScene { world, controls, torches, doors, chests, encounters, attacks, restart: snapshot })
     }
 
     pub(crate) fn description(&self) -> &GameScene {
@@ -183,8 +209,9 @@ impl std::fmt::Display for RestartError {
 impl std::error::Error for RestartError {}
 
 /// No relationship means exactly the established physical fingerprint.
-pub(crate) fn fingerprint(world: &World, controls: &SourceControls, torches: &Torches, doors: &Doors, chests: &Chests, encounters: &Encounters) -> u64 {
-    if controls.is_empty() && torches.len() == 0 && doors.is_empty() && chests.is_empty() && encounters.is_empty() { return world.hash(); }
+pub(crate) fn fingerprint(world: &World, controls: &SourceControls, torches: &Torches, doors: &Doors, chests: &Chests, encounters: &Encounters, attacks: &EnemyAttacks) -> u64 {
+    if controls.is_empty() && torches.len() == 0 && doors.is_empty() && chests.is_empty()
+        && encounters.is_empty() && attacks.is_pristine() { return world.hash(); }
     let mut hash = Fnv::default();
     controls.hash(&mut hash);
     if torches.len() > 0 { torches.hash(&mut hash); }
@@ -192,6 +219,7 @@ pub(crate) fn fingerprint(world: &World, controls: &SourceControls, torches: &To
     // Distinguish chest relationships from otherwise identical door rows.
     if !chests.is_empty() { hash.u64(0x6368_6573_7473); chests.hash(&mut hash); }
     if !encounters.is_empty() { encounters.hash(&mut hash); }
+    if !attacks.is_pristine() { attacks.hash(&mut hash); }
     hash.u64(world.hash());
     hash.finish()
 }

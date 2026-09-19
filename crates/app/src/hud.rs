@@ -49,6 +49,7 @@ pub(crate) fn draw(
     font: &Glyphs,
     menu: &Menu,
     attack: AttackStatus,
+    player_health: u8,
     current: &str,
     viewport: Vec2,
     sink: &mut QuadSink<'_>,
@@ -68,7 +69,9 @@ pub(crate) fn draw(
         }
         write!(
             lines[FOOTER],
-            "Phase: {}   Elapsed: {} ticks   Struck: {}",
+            "HP: {}/{}   Phase: {}   Elapsed: {} ticks   Struck: {}",
+            player_health,
+            arpg_game::PLAYER_MAX_HEALTH,
             attack.phase,
             attack.elapsed,
             attack.struck,
@@ -93,7 +96,9 @@ pub(crate) fn draw(
         write!(lines[0], "F1: attack profiles   F2: scenes").expect("line capacity");
         write!(
             lines[1],
-            "{} / {} / tick {} / struck {}",
+            "HP {}/{} / {} / {} / tick {} / struck {}",
+            player_health,
+            arpg_game::PLAYER_MAX_HEALTH,
             attack.profile,
             attack.phase,
             attack.elapsed,
@@ -385,6 +390,7 @@ mod tests {
                 &Glyphs::system(),
                 &menu,
                 world.attack_status(),
+                world.player_health(),
                 "default",
                 Vec2::new(1280.0, 720.0),
                 &mut sink,

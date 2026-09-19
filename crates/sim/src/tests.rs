@@ -780,7 +780,7 @@ fn no_enemy_is_left_overlapping_the_player() {
         world.step(tick_dt(), Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false));
     }
 
-    let contact = PLAYER_RADIUS + ENEMY_RADIUS;
+    let contact = PLAYER_ENEMY_CONTACT_DISTANCE;
     let player = world.bodies.pos[0];
     for (i, &enemy) in world.bodies.pos[1..].iter().enumerate() {
         let gap = player.distance(enemy);

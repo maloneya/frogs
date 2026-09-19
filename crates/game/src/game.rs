@@ -1,10 +1,11 @@
-use crate::scene::{GameScene, RestartError, RestartScene, SceneError, fingerprint};
+use crate::scene::{GameScene, LiveSceneState, RestartError, RestartScene, SceneError, fingerprint};
 use crate::source_control::{self, ControlEvent, ControlState, SourceControls};
 use arpg_core::{Intent, Report};
 use crate::torch::{Torches, TorchSpec};
 use crate::chest::{self, Chests};
 use crate::door::{self, Doors};
 use crate::encounter::{self, Encounters, EncounterEvent};
+use crate::enemy_attack::{self, EnemyAttacks};
 use arpg_sim::{
     Alpha, AttackProfile, AttackStatus, Dt, EntityId, Fnv, Impulse, InteractionState, Motion,
     RecoveryTicks, SceneId, Source, SourceId, Template, Trace, World,
@@ -32,6 +33,7 @@ pub struct Game {
     encounters: Encounters,
     encounter_trace: Trace<EncounterEvent>,
     control_trace: Trace<ControlEvent>,
+    attacks: EnemyAttacks,
 }
 
 impl Default for Game {
@@ -57,12 +59,13 @@ impl Game {
             encounters: Encounters::default(),
             encounter_trace: Trace::default(),
             control_trace: Trace::default(),
+            attacks: EnemyAttacks::default(),
         }
     }
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
-        let crate::scene::PreparedScene { world, controls, torches, doors, chests, encounters, restart } = RestartScene::prepare(scene)?;
+        let crate::scene::PreparedScene { world, controls, torches, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
         Ok(Self {
             world,
             restart: Some(restart),
@@ -73,6 +76,7 @@ impl Game {
             encounters,
             encounter_trace: Trace::default(),
             control_trace: Trace::default(),
+            attacks,
         })
     }
 
@@ -124,6 +128,7 @@ impl Game {
             encounters,
             encounter_trace,
             control_trace,
+            attacks,
         } = self;
         let tick = world.tick();
         let (interactions, sources) = world.interaction_sources();
@@ -134,6 +139,7 @@ impl Game {
         chest::advance(chests, &mut access, &mut trace);
         encounter::begin(encounters, doors, chests, &mut access, &mut trace);
         world.step_observed(dt, intent, observer);
+        enemy_attack::advance(attacks, world.melee_view(), trace.reborrow());
         let (mut access, defeats) = world.encounter_access();
         encounter::finish(encounters, doors, chests, defeats, &mut access, &mut trace);
     }
@@ -151,9 +157,10 @@ impl Game {
             encounters,
             encounter_trace: _,
             control_trace: _,
+            attacks,
         } = self;
         let mut hash = Fnv::default();
-        hash.u64(fingerprint(world, controls, torches, doors, chests, encounters));
+        hash.u64(fingerprint(world, controls, torches, doors, chests, encounters, attacks));
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
             snapshot.hash(&mut hash);
@@ -179,6 +186,7 @@ impl Game {
             encounters,
             encounter_trace,
             control_trace,
+            attacks,
         } = self;
         world.report(out);
         controls.report(out);
@@ -186,6 +194,7 @@ impl Game {
         doors.report(out);
         chests.report(out);
         encounters.report(out);
+        attacks.report(out);
         out.int("encounter_events_dropped", encounter_trace.dropped() as u64);
         out.int("control_events_dropped", control_trace.dropped() as u64);
         out.object("restart", |out| {
@@ -208,8 +217,9 @@ impl Game {
             encounters,
             encounter_trace: _,
             control_trace: _,
+            attacks,
         } = self;
-        scene.install(world, controls, torches, doors, chests, encounters)
+        scene.install(world, LiveSceneState { controls, torches, doors, chests, encounters, attacks })
     }
 
     /// Evicts a live instance and its descendants; preserves the restart snapshot.
@@ -226,6 +236,7 @@ impl Game {
             encounters,
             encounter_trace: _,
             control_trace: _,
+            attacks,
         } = self;
         if !world.evict_scene(id) {
             return false;
@@ -235,6 +246,7 @@ impl Game {
         doors.evict(id);
         chests.evict(id);
         encounters.evict(id);
+        attacks.evict(id);
         true
     }
 
@@ -274,7 +286,9 @@ impl Game {
 
     /// Removes a body through the engine lifetime boundary; false means refused.
     pub fn despawn_body(&mut self, id: EntityId) -> bool {
-        self.world.despawn_body(id)
+        if !self.world.despawn_body(id) { return false; }
+        self.attacks.remove_body(id);
+        true
     }
 
     /// Grants seeking only if the engine accepts the body capability.
@@ -457,6 +471,12 @@ impl Game {
     #[must_use]
     pub fn health(&self, id: EntityId) -> Option<u8> {
         self.world.health(id)
+    }
+
+    /// Player health remaining. Reaching zero does not yet end or interrupt play.
+    #[must_use]
+    pub fn player_health(&self) -> u8 {
+        self.attacks.player_health()
     }
 
     /// Read-only physical payload for a body with motion membership.

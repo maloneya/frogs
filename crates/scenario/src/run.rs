@@ -551,6 +551,7 @@ fn check_state(
     // Exhaustive, so an assertion added to the spec cannot be quietly left
     // unchecked — the same trick `Game::hash` uses, for the same reason.
     let Expect {
+        player_health,
         attack_phase,
         swing_tick,
         recovery_ticks,
@@ -579,6 +580,7 @@ fn check_state(
         trace: _,
     } = expect;
 
+    check_eq("player_health", player_health, game.player_health(), &mut failures);
     let attack = game.attack_status();
     check_eq("attack_phase", attack_phase, attack.phase, &mut failures);
     check_eq("swing_tick", swing_tick, attack.elapsed, &mut failures);

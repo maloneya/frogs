@@ -1,7 +1,7 @@
 //! Capability splits for deterministic callers outside the engine schedule.
 //! The constructor can borrow World; the returned types cannot reach it.
 
-use crate::{EntityId, InteractionState, SourceId, SourceState, TraceSink, World};
+use crate::{EntityId, InteractionState, PLAYER_ENEMY_CONTACT_DISTANCE, SourceId, SourceState, TraceSink, World};
 use crate::pass::interact::Interactions;
 use crate::pass::source::Sources;
 
@@ -13,6 +13,26 @@ impl InteractionView<'_> {
     #[must_use]
     pub fn state(&self, id: EntityId) -> Option<InteractionState> {
         self.0.get(id)
+    }
+}
+
+/// Read-only physical facts needed by a gameplay-owned melee relationship.
+/// The caller supplies a stable attacker identity and cannot inspect or move
+/// arbitrary body storage.
+pub struct MeleeView<'a> {
+    bodies: &'a crate::Bodies,
+    seekers: &'a crate::Members,
+}
+
+impl MeleeView<'_> {
+    /// Whether this live seeker has reached the player's collision boundary.
+    /// `None` means the identity is stale or no longer has seeking capability.
+    #[must_use]
+    pub fn reached_player(&self, id: EntityId) -> Option<bool> {
+        if !self.seekers.contains(id) { return None; }
+        let row = self.bodies.slots.index(id)?;
+        let reach = PLAYER_ENEMY_CONTACT_DISTANCE;
+        Some(self.bodies.pos[0].distance_squared(self.bodies.pos[row]) <= reach * reach)
     }
 }
 
@@ -42,6 +62,12 @@ impl World {
     pub fn interaction_sources(&mut self) -> (InteractionView<'_>, SourceEnablement<'_>) {
         (InteractionView(&self.bodies.interactions),
          SourceEnablement { sources: &mut self.sources, trace: self.trace.sink(self.tick) })
+    }
+
+    /// Restricts gameplay melee checks to stable identity and shared geometry.
+    #[must_use]
+    pub fn melee_view(&self) -> MeleeView<'_> {
+        MeleeView { bodies: &self.bodies, seekers: &self.seekers }
     }
 }
 

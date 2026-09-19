@@ -57,7 +57,7 @@ use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, TICK_HZ, Ticks};
 pub use trace::{Event, Trace, TraceSink};
 mod access;
-pub use access::{InteractionView, SourceEnablement, GameplayAccess};
+pub use access::{GameplayAccess, InteractionView, MeleeView, SourceEnablement};
 
 /// One tick of walking, in world units. Re-exported because a scenario or a
 /// harness reading a position is almost always trying to work out how many
@@ -128,6 +128,9 @@ const ENEMY_RADIUS: f32 = 0.25;
 
 /// Player collision footprint, independent of the authored mesh.
 const PLAYER_RADIUS: f32 = 0.3;
+
+/// Centre distance where an enemy rests against the player.
+pub(crate) const PLAYER_ENEMY_CONTACT_DISTANCE: f32 = PLAYER_RADIUS + ENEMY_RADIUS;
 
 const _: () = assert!(ENEMY_RADIUS > 0.0 && PLAYER_RADIUS > 0.0);
 const _: () = assert!(

@@ -102,6 +102,13 @@ pub struct EncounterState {
 /// Diagnostic transitions; no gameplay logic reads these events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EncounterEvent {
+    /// An enemy removed one player health.
+    PlayerDamaged {
+        /// Stable identity that dealt the damage.
+        attacker: EntityId,
+        /// Player health after the hit.
+        remaining: u8,
+    },
     /// Phase or progress changed.
     Progress {
         /// Owning scene.
@@ -133,6 +140,9 @@ pub enum EncounterEvent {
 impl std::fmt::Display for EncounterEvent {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PlayerDamaged { attacker, remaining } => {
+                write!(out, "enemy hit attacker={attacker} remaining={remaining}")
+            }
             Self::Progress {
                 scene,
                 index,

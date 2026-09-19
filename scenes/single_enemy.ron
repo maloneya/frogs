@@ -1,0 +1,14 @@
+// Can one enemy create basic contact pressure without interrupting movement?
+// Let it reach the player to watch health fall, then walk away at full speed.
+(
+    engine: (
+        name: "Single attacking enemy",
+        bodies: [
+            (pos: (0.0, 4.0), what: (seeks: true)),
+        ],
+    ),
+    enemy_attack: (body: 0),
+    torches: [(
+        position: (2.5, 2.2, 1.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0,
+    )],
+)

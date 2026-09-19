@@ -1,0 +1,17 @@
+(
+    description: "One registered seeker removes one health on arrival and once per second while it remains in reach.",
+    setup: (scenes: [File("../scenes/single_enemy.ron")]),
+    checkpoints: [
+        (at: 58, expect: (player_health: 5)),
+        (at: 59, expect: (player_health: 4)),
+        (at: 118, expect: (player_health: 4)),
+        (at: 119, expect: (player_health: 3)),
+    ],
+    budget: (ticks: 120),
+    expect: (
+        player_health: 3,
+        enemy_count: 1,
+        seekers: 1,
+        trace: "a_single_enemy_damages_the_player.trace",
+    ),
+)

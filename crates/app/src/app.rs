@@ -400,6 +400,7 @@ impl App {
                 renderer.glyphs(),
                 self.input.menu(),
                 self.game.attack_status(),
+                self.game.player_health(),
                 self.game.selected_scene_name().unwrap_or("--"),
                 Vec2::new(size.width as f32, size.height as f32),
                 &mut sink,

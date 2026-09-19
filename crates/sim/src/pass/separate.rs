@@ -23,7 +23,7 @@ use super::motion::Physics;
 use super::motion::{ENEMY_INV_MASS, PLAYER_INV_MASS};
 use crate::contact::{self, Contact};
 use crate::trace::{Event, TraceSink};
-use crate::{ENEMY_RADIUS, EntityId, PLAYER_RADIUS};
+use crate::{ENEMY_RADIUS, EntityId, PLAYER_ENEMY_CONTACT_DISTANCE};
 
 /// Separates every body overlapping the player, and reports how many.
 ///
@@ -46,7 +46,7 @@ pub(crate) fn player(
     mut trace: TraceSink<'_>,
 ) -> usize {
     let (player, horde) = pos.split_first_mut().expect("the player always exists");
-    let contact_distance = PLAYER_RADIUS + ENEMY_RADIUS;
+    let contact_distance = PLAYER_ENEMY_CONTACT_DISTANCE;
     let mut contacts = 0;
     let mut transfers = 0;
 

@@ -40,6 +40,11 @@ fn assert_same(game: &Game, world: &World, restart: Option<(&str, u64)>) {
     engine_report.object("doors", |_| {});
     engine_report.object("chests", |_| {});
     engine_report.object("encounters", |_| {});
+    engine_report.object("player_health", |out| {
+        out.int("remaining", u64::from(game.player_health()));
+        out.int("maximum", u64::from(arpg_game::PLAYER_MAX_HEALTH));
+    });
+    engine_report.object("enemy_attack", |out| out.bool("active", false));
     engine_report.int("encounter_events_dropped", 0);
     engine_report.int("control_events_dropped", 0);
     engine_report.object("restart", |out| {

@@ -310,6 +310,9 @@ pub(crate) struct Budget {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Expect {
+    /// Player health remaining; zero does not yet end the scenario.
+    #[serde(default)]
+    pub(crate) player_health: Option<u8>,
     #[serde(default)]
     pub(crate) attack_phase: Option<AttackPhase>,
     #[serde(default)]

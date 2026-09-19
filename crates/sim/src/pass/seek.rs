@@ -21,7 +21,7 @@ use glam::Vec2;
 
 use crate::members::Members;
 use crate::slots::Slots;
-use crate::{Dt, ENEMY_RADIUS, EntityId, PLAYER_RADIUS};
+use crate::{Dt, EntityId, PLAYER_ENEMY_CONTACT_DISTANCE};
 
 /// How fast a chaser moves, in world units per second.
 ///
@@ -45,10 +45,6 @@ const _: () = assert!(
 /// out, forever — which costs a contact per chaser per tick and fills the trace
 /// with a crowd that is not going anywhere.
 ///
-/// Derived from the radii rather than written down, so it cannot disagree with
-/// the contact distance `pass::separate` uses for the same pair.
-const STOP_AT: f32 = PLAYER_RADIUS + ENEMY_RADIUS;
-
 /// Walks every chaser toward `target`.
 ///
 /// **Takes the membership and the bodies separately**, which is the pass
@@ -78,12 +74,12 @@ pub(crate) fn seek(seekers: &Members, bodies: &Slots, pos: &mut [Vec2], target: 
         // clamps a turn to the remaining arc, and for the same reason — an
         // overshoot corrected elsewhere is a jitter whose cause is two passes
         // away from where it shows up.
-        let remaining = distance - STOP_AT;
+        let remaining = distance - PLAYER_ENEMY_CONTACT_DISTANCE;
         if remaining <= 0.0 {
             continue;
         }
 
-        // `distance` is strictly greater than `STOP_AT` here, which is
+        // `distance` is strictly greater than the contact distance here, which is
         // positive, so it cannot be zero and this cannot be a divide by it.
         *body += (to_target / distance) * full_step.min(remaining);
     }

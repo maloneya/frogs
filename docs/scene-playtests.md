@@ -99,6 +99,7 @@ F2 offers **Default horde** (1,024 stationary enemies) and these files:
 
 | File | Encounter |
 |---|---|
+| `single_enemy.ron` | One seeker deals contact damage without interrupting movement |
 | `seekers.ron` | Three approaching seekers |
 | `activate_horde.ron` | An interaction starts a source that replenishes up to eight seekers |
 | `three_enemy_spawners.ron` | Three approach directions build toward twelve seekers |
