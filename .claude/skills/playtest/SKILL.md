@@ -132,3 +132,12 @@ can repeat the trial, what was verified, and the remaining feel question.
 The harness exercises bindings and app input handling but bypasses OS event
 delivery. Its injection timing does not measure real keyboard latency. It also
 cannot judge whether the combat is satisfying; that needs the user's playtest.
+
+## Repeatable regression comparisons
+
+For performance changes use `python3 scripts/perf.py run --output target/perf/<new-name>.json`,
+then compare a candidate run with `--baseline <saved-result.json>`. The versioned
+suite drives exact tick schedules, records conditions and rejects invalid evidence.
+Read [the benchmark contract](../../../docs/performance.md#repeatable-benchmark-suite)
+for workload selection, exit statuses and baseline handling. Exit 2 means
+inconclusive; do not report it as a pass or adjust thresholds to make it pass.

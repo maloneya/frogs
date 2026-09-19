@@ -73,6 +73,10 @@ pub(crate) struct App {
     clock: Clock,
     /// Wall-clock observations live only in presentation, outside Game and replay hashes.
     perf: crate::perf::Recorder,
+    /// Owns the pending harness reply and deterministic input schedule.
+    trial: Option<crate::trial::Trial>,
+    /// Last native occlusion notification; never consulted by simulation.
+    occluded: bool,
     /// Turns the frame's elapsed seconds into whole simulation ticks.
     ///
     /// Owned by `app` because the frame loop is here, but defined in `sim`,
@@ -218,6 +222,9 @@ impl App {
     /// Infallible adapter cleanup after Game has installed a complete replacement.
     /// Device input, captures, and camera state belong to the app, not gameplay.
     fn finish_playtest_start(&mut self, run_id: u64, old_profile: arpg_sim::AttackProfile) {
+        if let Some(trial) = self.trial.take() {
+            trial.finish("error: cancelled by playtest restart".into());
+        }
         // Old delayed key releases must not lift a new run's presses. Pending
         // callers receive a cancellation rather than a success for another run.
         for deferred in self.scheduled.drain(..) {
@@ -283,11 +290,26 @@ impl App {
     /// Everything below the `alpha` line is presentation. Nothing there may
     /// write simulation state, and nothing there may consume an input edge.
     fn redraw(&mut self) {
+        if let Some(trial) = &mut self.trial
+            && trial.begin_frame(self.game.tick(), self.game.enemy_count())
+        {
+            self.perf.reset();
+        }
+        self.perf.begin_frame(std::time::Instant::now());
+        if self.trial.as_ref().is_some_and(|trial| trial.finished(self.game.tick())) {
+            let trial = self.trial.take().expect("completed trial");
+            let mut out = arpg_core::Report::default();
+            out.object("trial", |out| trial.report(out));
+            // Hashing and serialization happen after the last measured interval.
+            out.text("final_hash", &format!("{:016x}", self.game.hash()));
+            out.bool("finite", self.game.all_positions_finite());
+            out.object("perf", |out| self.write_perf(out, true));
+            trial.finish(out.finish());
+        }
         let (Some(renderer), Some(camera)) = (self.renderer.as_mut(), self.camera.as_mut()) else {
             return;
         };
 
-        self.perf.begin_frame(std::time::Instant::now());
         let frame = self.clock.tick();
         let simulation_start = std::time::Instant::now();
         let mut game_step = std::time::Duration::ZERO;
@@ -323,11 +345,16 @@ impl App {
             // still swing exactly once.
             let intent = Intent::new(to_world(intent.move_axis()), aim, intent.just_pressed(Action::Attack))
                 .with_interact(intent.just_pressed(Action::Interact));
+            let intent = self.trial.as_ref().map_or(intent, |trial| trial.intent(self.game.tick()));
             let step_start = std::time::Instant::now();
             self.game.step_observed(dt, intent, &mut crowd);
             game_step += step_start.elapsed();
             ticks += 1;
             self.attack_effects.observe(&self.game);
+            if let Some(trial) = &mut self.trial {
+                trial.stepped(self.game.enemy_count());
+                if trial.boundary(self.game.tick()) { break; }
+            }
         }
         let presentation_start = std::time::Instant::now();
         let simulation = presentation_start.duration_since(simulation_start);
@@ -345,7 +372,10 @@ impl App {
         // because a rig whose whole job is smoothness must not be given a
         // stair-step to follow. And `held`, never `sample` — a camera that
         // consumed a keypress would be the same bug wearing a different hat.
-        let facing = to_world(self.input.held().move_axis());
+        let facing = self.trial.as_ref().map_or_else(
+            || to_world(self.input.held().move_axis()),
+            |trial| trial.intent(self.game.tick()).move_dir(),
+        );
         camera.follow(player.ground_position(), facing, frame);
 
         if let Some(horde) = &mut self.horde_preview {
@@ -419,6 +449,8 @@ impl App {
             simulation, game_step, presentation, render_cpu: render_start.elapsed(),
             ticks, end_tick: self.game.tick(), enemies: self.game.enemy_count(),
             crowd_contacts: self.game.crowd_contacts(), presented,
+            focused: self.window.as_ref().is_some_and(|window| window.has_focus()),
+            occluded: self.occluded,
         });
 
         if self.clock.hud_due()
@@ -512,14 +544,18 @@ impl ApplicationHandler for App {
                 }
             }
 
+            WindowEvent::Occluded(occluded) => { self.occluded = occluded; }
+
             WindowEvent::CursorMoved { position, .. } => {
                 let _ = self.input.on_cursor(Vec2::new(position.x as f32, position.y as f32));
             }
             WindowEvent::CursorLeft { .. } => self.input.cursor_left(),
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
+                if let Some(trial) = &mut self.trial { trial.invalidate("native mouse input during trial"); }
                 self.input.on_mouse(state == ElementState::Pressed);
             }
             WindowEvent::KeyboardInput { event: key_event, .. } => {
+                if let Some(trial) = &mut self.trial { trial.invalidate("native keyboard input during trial"); }
                 log::debug!(
                     "key: physical={:?} state={:?} repeat={}",
                     key_event.physical_key,
@@ -554,6 +590,7 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::Resized(size) => {
+                if let Some(trial) = &mut self.trial { trial.invalidate("window resized during trial"); }
                 self.renderer.as_mut().expect("initialized").resize(size.width, size.height);
                 self.camera.as_mut().expect("initialized").set_viewport(size.width, size.height);
                 self.perf.reset();

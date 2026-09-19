@@ -370,3 +370,42 @@ fn successful_scene_replacement_resets_perf_but_rejected_content_preserves_it() 
     app.start_playtest(pair()).unwrap();
     assert!(app.report_perf(true).contains("\"samples\":0"));
 }
+
+#[test]
+fn performance_trial_refusal_preserves_game_and_pending_work() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App { harness: Some(rx), ..Default::default() };
+    let before = app.game.hash();
+    let spec = crate::trial::Spec::parse("1 60 idle".split_whitespace()).unwrap();
+    let (reply, response) = std::sync::mpsc::channel();
+    tx.send(Request { command: Command::PerfTrial(spec), reply }).unwrap();
+    app.drain_harness();
+    assert_eq!(response.try_recv().unwrap(), "error: no renderer yet");
+    assert_eq!(app.game.hash(), before);
+    assert!(app.trial.is_none());
+
+    let (reply, pending) = std::sync::mpsc::channel();
+    app.trial = Some(crate::trial::Trial::new(spec, reply, app.game.enemy_count()));
+    let (reply, response) = std::sync::mpsc::channel();
+    tx.send(Request { command: Command::ResetPerf, reply }).unwrap();
+    app.drain_harness();
+    assert_eq!(response.try_recv().unwrap(), "error: performance trial already running");
+    assert!(app.trial.is_some());
+    assert!(pending.try_recv().is_err());
+    assert_eq!(app.game.hash(), before);
+}
+
+#[test]
+fn successful_restart_cancels_performance_trial_but_failed_load_preserves_it() {
+    let mut app = App::default();
+    app.start_playtest(pair()).unwrap();
+    let spec = crate::trial::Spec::parse("1 60 idle".split_whitespace()).unwrap();
+    let (reply, response) = std::sync::mpsc::channel();
+    app.trial = Some(crate::trial::Trial::new(spec, reply, app.game.enemy_count()));
+    assert!(app.start_scene_file(std::path::Path::new("/nonexistent/arpg-perf-scene.ron")).is_err());
+    assert!(app.trial.is_some());
+    assert!(response.try_recv().is_err());
+    app.restart_playtest().unwrap();
+    assert!(app.trial.is_none());
+    assert_eq!(response.try_recv().unwrap(), "error: cancelled by playtest restart");
+}

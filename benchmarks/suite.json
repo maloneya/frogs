@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "repetitions": 3,
+  "relative_tolerance": 0.10,
+  "max_trial_spread": 0.15,
+  "workloads": [
+    {
+      "name": "sparse",
+      "scene": "benchmarks/sparse.ron",
+      "warmup_ticks": 120,
+      "sample_ticks": 180,
+      "input": "idle",
+      "animation": "idle",
+      "budgets_ms": {"mean_step_ms": 13.0, "frame_ms.p99": 25.0}
+    },
+    {
+      "name": "compressed",
+      "scene": "scenes/crowd_stress.ron",
+      "warmup_ticks": 900,
+      "sample_ticks": 180,
+      "input": "idle",
+      "animation": "run",
+      "budgets_ms": {"mean_step_ms": 13.0, "frame_ms.p99": 25.0}
+    },
+    {
+      "name": "combat",
+      "scene": "scenes/crowd_stress.ron",
+      "warmup_ticks": 900,
+      "sample_ticks": 240,
+      "input": "combat",
+      "animation": "run",
+      "budgets_ms": {"mean_step_ms": 13.0, "frame_ms.p99": 25.0}
+    },
+    {
+      "name": "animation",
+      "scene": "benchmarks/animation.ron",
+      "warmup_ticks": 120,
+      "sample_ticks": 180,
+      "input": "idle",
+      "animation": "run",
+      "budgets_ms": {"mean_step_ms": 13.0, "frame_ms.p99": 25.0}
+    }
+  ]
+}

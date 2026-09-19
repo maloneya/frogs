@@ -122,6 +122,9 @@ impl OrthoCamera {
         self.target
     }
 
+    /// Vertical extent of the orthographic view in world units, for observations.
+    pub fn view_height(&self) -> f32 { 2.0 * self.zoom }
+
     /// Chases `focus`, leading it in the direction of `heading`. Call once per
     /// rendered frame.
     ///

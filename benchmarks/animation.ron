@@ -1,0 +1,13 @@
+// A short trial catches a moving crowd before it compresses into a dense pack.
+(
+    engine: (
+        name: "Benchmark — moving animated crowd",
+        grids: [(
+            origin: (-74.25, -74.25), columns: 100, rows: 100, spacing: 1.5,
+            what: (seeks: true),
+        )],
+    ),
+    torches: [(
+        position: (2.5, 2.2, 1.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0,
+    )],
+)

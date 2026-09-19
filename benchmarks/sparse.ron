@@ -1,0 +1,10 @@
+// Separated idle enemies expose grid overhead and idle pose/render work.
+(
+    engine: (
+        name: "Benchmark — sparse idle crowd",
+        grids: [(origin: (-74.25, -74.25), columns: 100, rows: 100, spacing: 1.5)],
+    ),
+    torches: [(
+        position: (2.5, 2.2, 1.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0,
+    )],
+)

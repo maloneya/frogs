@@ -74,6 +74,8 @@ pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    /// Device identity for comparable benchmark artifacts; no runtime decisions.
+    adapter_info: wgpu::AdapterInfo,
     depth: wgpu::TextureView,
     camera: CameraBinding,
     static_meshes: MeshPipeline,
@@ -241,6 +243,7 @@ impl Renderer {
             device,
             queue,
             config,
+            adapter_info: info,
             depth,
             camera,
             static_meshes,
@@ -298,6 +301,16 @@ impl Renderer {
     /// Whether the surface is currently pinned to the refresh rate.
     pub fn vsync(&self) -> bool {
         self.vsync
+    }
+
+    /// Actual device and surface settings for performance comparisons.
+    pub fn report_performance_context(&self, out: &mut arpg_core::Report) {
+        out.text("name", &self.adapter_info.name);
+        out.text("backend", &format!("{:?}", self.adapter_info.backend));
+        out.text("driver", &self.adapter_info.driver);
+        out.text("driver_info", &self.adapter_info.driver_info);
+        out.text("present_mode", &format!("{:?}", self.config.present_mode));
+        out.text("format", &format!("{:?}", self.config.format));
     }
 
     /// Returns whether vsync is on afterwards — unchanged if the surface has no

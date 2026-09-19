@@ -99,6 +99,13 @@ cargo doc --workspace --lib --bins --no-deps --document-private-items
 cargo run --quiet -p scenario -- scenarios/
 ```
 
+For performance-sensitive changes, also run the relevant release workloads with
+`python3 scripts/perf.py run --baseline <saved-result.json> --output <new-result.json>`.
+Keep the baseline explicit; exit 2 is inconclusive, not a pass. See the
+[performance contract](docs/performance.md#agent-maintenance-contract) for workload
+selection, evidence requirements and intentional baseline changes. Never rewrite a
+baseline or widen a budget merely to clear a failing check.
+
 Workspace tests include GPU tests and require a real adapter. Scenarios need no
 GPU or window. Use `#[expect(lint, reason = "…")]` for a justified exception,
 never `#[allow]`. Do not relax lint or dependency policies to get a build through.

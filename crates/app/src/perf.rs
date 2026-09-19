@@ -50,6 +50,8 @@ pub(crate) struct FrameWork {
     /// Last completed tick's resolved contacts, not a sum across this frame.
     pub(crate) crowd_contacts: usize,
     pub(crate) presented: bool,
+    pub(crate) focused: bool,
+    pub(crate) occluded: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -126,6 +128,8 @@ impl Recorder {
         out.num("window_ms", millis(total));
         out.int("presented", presented as u64);
         out.int("surface_skipped", (self.samples.len() - presented) as u64);
+        out.int("unfocused_frames", self.samples.iter().filter(|s| !s.work.focused).count() as u64);
+        out.int("occluded_frames", self.samples.iter().filter(|s| s.work.occluded).count() as u64);
         out.num("presented_fps", rate(presented as u64, total));
         out.int("ticks", ticks);
         out.num("ticks_per_second", rate(ticks, total));
@@ -159,6 +163,8 @@ impl Recorder {
                         out.int("crowd_candidates", work.crowd_candidates);
                         out.int("crowd_possible_pairs", work.crowd_possible_pairs);
                         out.bool("presented", work.presented);
+                        out.bool("focused", work.focused);
+                        out.bool("occluded", work.occluded);
                     });
                 }
             });
@@ -255,6 +261,23 @@ mod tests {
         distribution(&mut out, (1..=100).rev().map(Duration::from_millis).collect());
         assert_eq!(out.finish(), r#"{"mean":50.5000,"p50":50.0000,"p95":95.0000,"p99":99.0000,"max":100.0000}"#);
     }
+
+    #[test]
+    fn invalid_presentation_conditions_follow_the_completed_interval() {
+        let mut recorder = Recorder::default();
+        let start = Instant::now();
+        recorder.begin_frame(start);
+        recorder.finish_frame(FrameWork { focused: false, occluded: true, ..Default::default() });
+        assert!(report(&recorder, false).contains("\"unfocused_frames\":0"));
+        recorder.begin_frame(start + Duration::from_millis(16));
+        let json = report(&recorder, true);
+        for field in ["\"unfocused_frames\":1", "\"occluded_frames\":1", "\"focused\":false", "\"occluded\":true"] {
+            assert!(json.contains(field), "{field}");
+        }
+        recorder.reset();
+        assert!(report(&recorder, false).contains("\"occluded_frames\":0"));
+    }
+
     #[test]
     fn crowd_totals_share_the_frame_window_and_reset_with_it() {
         let mut recorder = Recorder::default();

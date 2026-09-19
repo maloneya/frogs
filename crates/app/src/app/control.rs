@@ -22,6 +22,10 @@ impl App {
         let mut quit = false;
 
         for Request { command, reply } in requests {
+            if self.trial.is_some() && !matches!(command, Command::Quit) {
+                let _ = reply.send("error: performance trial already running".into());
+                continue;
+            }
             let now = std::time::Instant::now();
             let answer = match command {
                 Command::ShowCharacter(path) => match self.show_character(path) {
@@ -117,6 +121,17 @@ impl App {
                     }
                 }
                 Command::State => self.report_state(),
+                Command::PerfTrial(spec) => {
+                    if self.renderer.is_none() {
+                        "error: no renderer yet".into()
+                    } else if let Err(error) = self.restart_playtest() {
+                        format!("error: {error}")
+                    } else {
+                        self.window.as_ref().expect("renderer has a window").focus_window();
+                        self.trial = Some(crate::trial::Trial::new(spec, reply, self.game.enemy_count()));
+                        continue;
+                    }
+                }
                 Command::Perf { samples } => self.report_perf(samples),
                 Command::ResetPerf => {
                     self.perf.reset();
@@ -173,6 +188,7 @@ impl App {
                     None => "error: no renderer yet".to_string(),
                 },
                 Command::Quit => {
+                    if let Some(trial) = self.trial.take() { trial.finish("error: cancelled by quit".into()); }
                     quit = true;
                     "ok".to_string()
                 }
@@ -185,12 +201,34 @@ impl App {
     /// Compact observations: never invoke Game::report or Game::hash here.
     pub(super) fn report_perf(&self, samples: bool) -> String {
         let mut out = Report::default();
+        self.write_perf(&mut out, samples);
+        out.finish()
+    }
+
+    pub(super) fn write_perf(&self, out: &mut Report, samples: bool) {
+        out.int("schema_version", 1);
+        out.bool("debug_build", cfg!(debug_assertions));
         out.int("run_id", self.run_id);
         out.int("current_tick", self.game.tick());
         out.int("current_enemies", self.game.enemy_count() as u64);
         out.bool("vsync", self.renderer.as_ref().is_some_and(Renderer::vsync));
-        self.perf.report(&mut out, samples);
-        out.finish()
+        out.text("selected_scene", self.game.selected_scene_name().unwrap_or(""));
+        out.bool("collision_debug", self.collision_debug.enabled());
+        if let Some(camera) = &self.camera { out.num("view_height", camera.view_height()); }
+        if let Some(window) = &self.window {
+            let size = window.inner_size();
+            out.int("width", u64::from(size.width));
+            out.int("height", u64::from(size.height));
+            out.num("scale_factor", window.scale_factor() as f32);
+            out.int("refresh_millihertz", window.current_monitor()
+                .and_then(|monitor| monitor.refresh_rate_millihertz()).map_or(0, u64::from));
+        }
+        if let Some(renderer) = &self.renderer {
+            out.object("gpu", |out| renderer.report_performance_context(out));
+        }
+        out.object("horde", |out| report_horde_preview(self.horde_preview.as_ref(), out));
+        out.object("character", |out| report_character_preview(self.character_preview.as_ref(), out));
+        self.perf.report(out, samples);
     }
 
     /// Everything worth knowing about the running program, as JSON.

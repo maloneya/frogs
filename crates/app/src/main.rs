@@ -16,6 +16,7 @@ mod presentation;
 mod torch;
 mod time;
 mod perf;
+mod trial;
 mod ui;
 
 fn main() {
