@@ -1,6 +1,6 @@
 # Collision and attack debug drawing
 
-F3 toggles collision outlines while playing (close F1/F2 menus first). The
+F3 toggles collision outlines while playing (close the F2 scene picker first). The
 harness equivalent is `debug collision on` or `debug collision off`. It starts
 off and remains an app setting across scene starts and restarts.
 

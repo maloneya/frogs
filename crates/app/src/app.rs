@@ -178,7 +178,7 @@ impl App {
     /// Both native keys and harness keys execute menu requests at this same
     /// between-tick boundary. No file I/O or game replacement happens in HUD drawing.
     fn handle_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
-        let consumed = self.input.on_key(key, pressed, repeat, self.game.attack_status().profile);
+        let consumed = self.input.on_key(key, pressed, repeat);
         match self.input.menu_mut().take_request() {
             Some(MenuRequest::RefreshScenes) => {
                 self.input.menu_mut().set_catalog(scene_catalog(std::path::Path::new("scenes")));
@@ -204,9 +204,8 @@ impl App {
 
     fn restart_playtest(&mut self) -> Result<(), String> {
         let run_id = self.run_id.checked_add(1).ok_or("playtest identities exhausted")?;
-        let old_profile = self.game.attack_status().profile;
         self.game.restart().map_err(|error| error.to_string())?;
-        self.finish_playtest_start(run_id, old_profile);
+        self.finish_playtest_start(run_id);
         Ok(())
     }
 
@@ -214,15 +213,14 @@ impl App {
     /// playtest. Construction is synchronous and runs zero simulation ticks.
     fn start_playtest(&mut self, scene: Scene) -> Result<(), String> {
         let run_id = self.run_id.checked_add(1).ok_or("playtest identities exhausted")?;
-        let old_profile = self.game.attack_status().profile;
         self.game.start_scene(&scene).map_err(|error| error.to_string())?;
-        self.finish_playtest_start(run_id, old_profile);
+        self.finish_playtest_start(run_id);
         Ok(())
     }
 
     /// Infallible adapter cleanup after Game has installed a complete replacement.
     /// Device input, captures, and camera state belong to the app, not gameplay.
-    fn finish_playtest_start(&mut self, run_id: u64, old_profile: arpg_sim::AttackProfile) {
+    fn finish_playtest_start(&mut self, run_id: u64) {
         if let Some(trial) = self.trial.take() {
             trial.finish("error: cancelled by playtest restart".into());
         }
@@ -230,7 +228,7 @@ impl App {
         // callers receive a cancellation rather than a success for another run.
         for deferred in self.scheduled.drain(..) {
             if let Some(key) = deferred.release {
-                self.input.on_key(key, false, false, old_profile);
+                self.input.on_key(key, false, false);
             }
             if let Some(reply) = deferred.reply {
                 let _ = reply.send("error: cancelled by playtest restart".into());
@@ -334,19 +332,19 @@ impl App {
         // to exactly one. The symptom otherwise is "the attack sometimes does
         // not come out", which points nowhere near the frame loop.
         for dt in self.accumulator.pending(frame) {
-            // Requests wait through zero-tick frames and apply before this
-            // tick's attack input. Drawing below cannot consume or apply one.
-            if let Some(profile) = self.input.take_profile() {
-                self.game.set_attack_profile(profile);
-            }
             let viewport = self.window.as_ref().expect("rendering requires a window").inner_size();
             let aim = self.input.aim(camera, (viewport.width, viewport.height), self.game.player_presentation(Alpha::ONE).ground_position());
             let intent = self.input.sample();
+            let (profile, pressed, held) = self.input.attack_input(intent);
+            if let Some(profile) = profile
+                && profile != self.game.attack_status().profile {
+                self.game.set_attack_profile(profile);
+            }
             // `just_pressed`, not `held`: a swing is an edge. Holding the key
             // must not swing every tick, and a tap shorter than a frame must
             // still swing exactly once.
-            let intent = Intent::new(to_world(intent.move_axis()), aim, intent.just_pressed(Action::Attack))
-                .with_attack_held(intent.held(Action::Attack))
+            let intent = Intent::new(to_world(intent.move_axis()), aim, pressed)
+                .with_attack_held(held)
                 .with_interact(intent.just_pressed(Action::Interact));
             let intent = self.trial.as_ref().map_or(intent, |trial| trial.intent(self.game.tick()));
             let step_start = std::time::Instant::now();

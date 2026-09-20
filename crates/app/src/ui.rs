@@ -4,27 +4,14 @@
 use std::path::PathBuf;
 
 use arpg_core::Report;
-use arpg_sim::AttackProfile;
 
 #[derive(Clone, Copy)]
 pub(crate) enum MenuKey {
-    Toggle,
     Scenes,
     Close,
-    Decrease,
-    Increase,
-    Reset,
     Previous,
     Next,
     Accept,
-}
-
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum Mode {
-    #[default]
-    Closed,
-    Attack,
-    Scenes,
 }
 
 #[derive(Clone)]
@@ -83,77 +70,38 @@ impl Picker {
 
 #[derive(Default)]
 pub(crate) struct Menu {
-    mode: Mode,
-    /// A content selection waiting for the next simulation tick.
-    pending: Option<AttackProfile>,
-    /// Highlighted attack; only Enter commits it to pending.
-    selected_attack: AttackProfile,
+    open: bool,
     picker: Picker,
     request: Option<MenuRequest>,
 }
 
 impl Menu {
-    pub(crate) fn mode(&self) -> Mode {
-        self.mode
-    }
-
     pub(crate) fn open(&self) -> bool {
-        self.mode != Mode::Closed
+        self.open
     }
 
     pub(crate) fn picker(&self) -> &Picker {
         &self.picker
     }
 
-    pub(crate) fn pending(&self) -> Option<AttackProfile> {
-        self.pending
-    }
-
-    pub(crate) fn profile(&self, applied: AttackProfile) -> AttackProfile {
-        if self.mode == Mode::Attack { self.selected_attack } else { self.pending.unwrap_or(applied) }
-    }
-
-    pub(crate) fn on_key(&mut self, key: MenuKey, applied: AttackProfile) {
+    pub(crate) fn on_key(&mut self, key: MenuKey) {
         match key {
-            MenuKey::Toggle | MenuKey::Scenes => {
-                let target =
-                    if matches!(key, MenuKey::Toggle) { Mode::Attack } else { Mode::Scenes };
-                self.mode = if self.mode == target { Mode::Closed } else { target };
-                if self.mode == Mode::Attack {
-                    self.selected_attack = self.pending.unwrap_or(applied);
-                }
-                self.request = (self.mode == Mode::Scenes).then_some(MenuRequest::RefreshScenes);
+            MenuKey::Scenes => {
+                self.open = !self.open;
+                self.request = self.open.then_some(MenuRequest::RefreshScenes);
             }
             MenuKey::Close => {
-                self.mode = Mode::Closed;
+                self.open = false;
                 self.request = None;
             }
-            MenuKey::Previous if self.mode == Mode::Scenes => {
+            MenuKey::Previous if self.open => {
                 self.picker.selected = self.picker.selected.saturating_sub(1);
             }
-            MenuKey::Next if self.mode == Mode::Scenes => {
-                self.picker.selected =
-                    (self.picker.selected + 1).min(self.picker.entries.len() - 1);
+            MenuKey::Next if self.open => {
+                self.picker.selected = (self.picker.selected + 1).min(self.picker.entries.len() - 1);
             }
-            MenuKey::Previous | MenuKey::Decrease if self.mode == Mode::Attack => {
-                let current = profile_index(self.profile(applied));
-                self.selected_attack = AttackProfile::ALL[current.saturating_sub(1)];
-            }
-            MenuKey::Next | MenuKey::Increase if self.mode == Mode::Attack => {
-                let current = profile_index(self.profile(applied));
-                self.selected_attack =
-                    AttackProfile::ALL[(current + 1).min(AttackProfile::ALL.len() - 1)];
-            }
-            MenuKey::Accept if self.mode == Mode::Attack => {
-                self.pending = Some(self.selected_attack);
-                self.mode = Mode::Closed;
-            }
-            MenuKey::Accept if self.mode == Mode::Scenes => {
-                self.request =
-                    Some(MenuRequest::Start(self.picker.entries[self.picker.selected].clone()));
-            }
-            MenuKey::Reset if self.mode == Mode::Attack => {
-                self.selected_attack = AttackProfile::default();
+            MenuKey::Accept if self.open => {
+                self.request = Some(MenuRequest::Start(self.picker.entries[self.picker.selected].clone()));
             }
             _ => {}
         }
@@ -178,19 +126,10 @@ impl Menu {
         self.request.take()
     }
 
-    /// Called only at the input/sim boundary. A zero-tick frame leaves it alone.
-    pub(crate) fn take_profile(&mut self) -> Option<AttackProfile> {
-        self.pending.take()
-    }
-
     pub(crate) fn report(&self, out: &mut Report) {
-        let Self { mode, pending, selected_attack, picker, request } = self;
-        out.bool("attack_menu_open", *mode == Mode::Attack);
-        out.bool("scene_picker_open", *mode == Mode::Scenes);
+        let Self { open, picker, request } = self;
+        out.bool("scene_picker_open", *open);
         out.bool("captures_gameplay", self.open());
-        out.text("selected_attack_profile", selected_attack.label());
-        out.bool("attack_profile_pending", pending.is_some());
-        out.text("pending_attack_profile", pending.map_or("", |profile| profile.label()));
         out.bool("scene_request_pending", request.is_some());
         out.int("scene_picker_selected", picker.selected as u64);
         out.text("scene_picker_error", picker.error().unwrap_or(""));
@@ -200,11 +139,4 @@ impl Menu {
             }
         });
     }
-}
-
-fn profile_index(profile: AttackProfile) -> usize {
-    AttackProfile::ALL
-        .iter()
-        .position(|candidate| *candidate == profile)
-        .expect("every attack profile is in its catalog")
 }

@@ -646,7 +646,7 @@ impl World {
     /// Sets recovery for subsequent swings. Call before the tick whose inputs
     /// should see it; an in-flight swing retains its committed duration.
     /// The scenario command uses this same validated door, demonstrating a
-    /// runtime modifier without turning the profile picker into an editor.
+    /// runtime modifier without changing authored attack content.
     pub fn set_attack_recovery(&mut self, recovery: RecoveryTicks) {
         if self.player.attack.set_recovery(recovery) {
             self.trace.sink(self.tick).emit(Event::AttackRecoveryChanged { recovery });

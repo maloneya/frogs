@@ -34,14 +34,18 @@ pub enum Action {
     /// Attack: swings use the press edge, channels use the held level.
     /// Short taps still latch a swing; a released channel must stop immediately.
     Attack,
+    /// Second bound attack: press for swings, hold for channels.
+    AttackSecondary,
+    /// Third bound attack: press for swings, hold for channels.
+    AttackTertiary,
     /// Use a nearby object, once per press.
     Interact,
 }
 
 impl Action {
     /// Every action, in bit order. Iterating this is how a mask is built.
-    pub const ALL: [Action; 6] =
-        [Action::MoveUp, Action::MoveDown, Action::MoveLeft, Action::MoveRight, Action::Attack, Action::Interact];
+    pub const ALL: [Action; 8] =
+        [Action::MoveUp, Action::MoveDown, Action::MoveLeft, Action::MoveRight, Action::Attack, Action::AttackSecondary, Action::AttackTertiary, Action::Interact];
 
     const fn bit(self) -> u32 {
         1 << self as u32

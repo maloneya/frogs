@@ -15,9 +15,10 @@
 //! of quads a test can inspect — see the tests at the bottom, which never
 //! create a device.
 
-use crate::ui::{Menu, Mode};
+use crate::ui::Menu;
+use crate::input::ATTACK_BINDINGS;
 use arpg_gfx::{Glyphs, Quad, QuadSink};
-use arpg_sim::{AttackProfile, AttackStatus};
+use arpg_sim::AttackStatus;
 use core::fmt::Write as _;
 use glam::{Vec2, Vec4};
 
@@ -54,67 +55,38 @@ pub(crate) fn draw(
     viewport: Vec2,
     sink: &mut QuadSink<'_>,
 ) {
-    if menu.mode() == Mode::Scenes {
+    if menu.open() {
         draw_picker(font, menu, current, viewport, sink);
         return;
     }
     // Stack-backed lines preserve the overlay's no-allocation frame path.
-    const FOOTER: usize = 1 + AttackProfile::ALL.len();
-    let mut lines: [Text; FOOTER + 4] = core::array::from_fn(|_| Text::default());
-    let (count, highlight) = if menu.open() {
-        write!(lines[0], "ATTACK PROFILES").expect("line capacity");
-        let selected = menu.profile(attack.profile);
-        for (index, profile) in AttackProfile::ALL.into_iter().enumerate() {
-            profile_line(&mut lines[index + 1], profile);
-        }
+    let mut lines: [Text; 3] = core::array::from_fn(|_| Text::default());
+    write!(lines[0], "F2: scenes").expect("line capacity");
+    if attack.channeling {
+        write!(lines[1], "HP {}/{} / Disintegrate / Channeling / Release to move",
+            player_health, arpg_game::PLAYER_MAX_HEALTH).expect("line capacity");
+    } else {
         write!(
-            lines[FOOTER],
-            "HP: {}/{}   Phase: {}   Elapsed: {} ticks   Struck: {}",
+            lines[1],
+            "HP {}/{} / {} / {} / tick {} / struck {}",
             player_health,
             arpg_game::PLAYER_MAX_HEALTH,
+            attack.profile,
             attack.phase,
             attack.elapsed,
-            attack.struck,
+            attack.struck
         )
         .expect("line capacity");
-        write!(
-            lines[FOOTER + 1],
-            "W/S or arrows: navigate   Next attack: {}",
-            menu.pending().unwrap_or(attack.profile).label()
-        )
-        .expect("line capacity");
-        write!(lines[FOOTER + 2], "Enter: select/close   R: Cleave   F1/Esc: cancel")
-            .expect("line capacity");
-        write!(lines[FOOTER + 3], "Hold click/Space for beams; release to move")
-            .expect("line capacity");
-        let selected = AttackProfile::ALL
-            .iter()
-            .position(|profile| *profile == selected)
-            .expect("selected profile belongs to the catalog");
-        (lines.len(), Some(1 + selected))
-    } else {
-        write!(lines[0], "F1: attack profiles   F2: scenes").expect("line capacity");
-        if attack.channeling {
-            write!(lines[1], "HP {}/{} / Disintegrate / Channeling / Release to move",
-                player_health, arpg_game::PLAYER_MAX_HEALTH).expect("line capacity");
-        } else {
-            write!(
-                lines[1],
-                "HP {}/{} / {} / {} / tick {} / struck {}",
-                player_health,
-                arpg_game::PLAYER_MAX_HEALTH,
-                attack.profile,
-                attack.phase,
-                attack.elapsed,
-                attack.struck
-            )
-            .expect("line capacity");
-        }
-        (2, None)
-    };
-    let lines = &lines[..count];
+    }
+    binding_line(&mut lines[2]);
     let width = lines.iter().map(|line| font.measure(line.as_str())).fold(0.0, f32::max);
-    draw_panel(font, lines, width, MARGIN, highlight, sink);
+    draw_panel(font, &lines, width, MARGIN, None, sink);
+}
+
+fn binding_line(line: &mut Text) {
+    for &(_, profile, label) in &ATTACK_BINDINGS {
+        write!(line, "{}: {}   ", label, profile.label()).expect("line capacity");
+    }
 }
 
 /// Gameplay progress is a read-only projection, placed below the ordinary HUD.
@@ -154,30 +126,6 @@ fn encounter_line(line: &mut Text, name: &str, state: arpg_game::EncounterState)
         EncounterPhase::Orphaned => "Unavailable - F2 to restart",
     };
     write!(line, "{name}: {}/{}  {seconds}s  {status}", state.defeated, state.target).expect("validated name and bounded numeric fields fit");
-}
-
-fn profile_line(line: &mut Text, profile: AttackProfile) {
-    let Some(resolved) = profile.resolve() else {
-        write!(line, "Disintegrate: hold attack, aim cursor / {}m / {} hits per second",
-            arpg_sim::Beam::LENGTH, arpg_sim::TICK_HZ / arpg_sim::Beam::HIT_EVERY).expect("line capacity");
-        return;
-    };
-    write!(
-        line,
-        "{:<13} {:>2}/{:>2}/{:>2}t ({:.1},{:.1})->({:.1},{:.1}) r{:.2}/{:.2} kb{:.1}",
-        profile.label(),
-        resolved.startup(),
-        resolved.active(),
-        resolved.recovery().get(),
-        resolved.start().x,
-        resolved.start().y,
-        resolved.end().x,
-        resolved.end().y,
-        resolved.start_radius(),
-        resolved.end_radius(),
-        resolved.knockback(),
-    )
-    .expect("line capacity");
 }
 
 /// A bounded window into the catalog, with no allocation or I/O per frame.
@@ -346,14 +294,13 @@ mod tests {
     fn picker_scrolls_and_bounds_external_text_to_the_viewport() {
         let font = Glyphs::system();
         let mut menu = Menu::default();
-        let profile = arpg_sim::AttackProfile::default();
-        menu.on_key(crate::ui::MenuKey::Scenes, profile);
+        menu.on_key(crate::ui::MenuKey::Scenes);
         let long = "long scene\n名".repeat(40);
         menu.set_catalog(Ok((0..20)
             .map(|i| std::path::PathBuf::from(format!("{i}-{long}.ron")))
             .collect()));
         for _ in 0..100 {
-            menu.on_key(crate::ui::MenuKey::Next, profile);
+            menu.on_key(crate::ui::MenuKey::Next);
         }
         assert_eq!(menu.picker().selected(), 21);
         assert_eq!(menu.picker().visible(4), 18..22);
@@ -393,8 +340,7 @@ mod tests {
         {
             let mut sink = buf.sink();
             let world = arpg_game::Game::default();
-            let mut menu = Menu::default();
-            menu.on_key(crate::ui::MenuKey::Toggle, world.attack_status().profile);
+            let menu = Menu::default();
             draw(
                 &Glyphs::system(),
                 &menu,
@@ -419,8 +365,8 @@ mod tests {
         assert!(quads.len() > 1, "the overlay should draw a panel and some glyphs");
         assert!(quads[0].is_solid(), "the first quad must be the panel");
         assert!(
-            quads[1].is_solid() && quads[2..].iter().all(|q| !q.is_solid()),
-            "the focused row must be behind all glyphs"
+            quads[1..].iter().all(|q| !q.is_solid()),
+            "all glyphs follow the panel"
         );
     }
 

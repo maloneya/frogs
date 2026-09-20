@@ -9,6 +9,14 @@ use crate::ui::{Menu, MenuKey};
 use arpg_core::{Action, ActionMask, Actions, InputState};
 use arpg_sim::AttackProfile;
 
+/// Fixed attacks, in deterministic input priority order. HUD and input use
+/// this same table; there is no mutable loadout or menu selection to reset.
+pub(crate) const ATTACK_BINDINGS: [(Action, AttackProfile, &str); 3] = [
+    (Action::Attack, AttackProfile::Cleave, "1/Click/Space"),
+    (Action::AttackSecondary, AttackProfile::Slam, "2"),
+    (Action::AttackTertiary, AttackProfile::Disintegrate, "3"),
+];
+
 /// Which physical keys mean which action, and what each key is called.
 ///
 /// A table rather than a `match` because bindings are *data*: a match compiles
@@ -34,15 +42,16 @@ const BINDINGS: &[Binding] = &[
     ("d", KeyCode::KeyD, Some(Action::MoveRight), None),
     ("up", KeyCode::ArrowUp, Some(Action::MoveUp), Some(MenuKey::Previous)),
     ("down", KeyCode::ArrowDown, Some(Action::MoveDown), Some(MenuKey::Next)),
-    ("left", KeyCode::ArrowLeft, Some(Action::MoveLeft), Some(MenuKey::Decrease)),
-    ("right", KeyCode::ArrowRight, Some(Action::MoveRight), Some(MenuKey::Increase)),
+    ("left", KeyCode::ArrowLeft, Some(Action::MoveLeft), None),
+    ("right", KeyCode::ArrowRight, Some(Action::MoveRight), None),
+    ("1", KeyCode::Digit1, Some(Action::Attack), None),
+    ("2", KeyCode::Digit2, Some(Action::AttackSecondary), None),
+    ("3", KeyCode::Digit3, Some(Action::AttackTertiary), None),
     ("space", KeyCode::Space, Some(Action::Attack), None),
     ("e", KeyCode::KeyE, Some(Action::Interact), None),
-    ("f1", KeyCode::F1, None, Some(MenuKey::Toggle)),
     ("f2", KeyCode::F2, None, Some(MenuKey::Scenes)),
     ("enter", KeyCode::Enter, None, Some(MenuKey::Accept)),
     ("escape", KeyCode::Escape, None, Some(MenuKey::Close)),
-    ("r", KeyCode::KeyR, None, Some(MenuKey::Reset)),
 ];
 
 /// The one input route used by window events and injected harness keys.
@@ -70,13 +79,11 @@ impl Controls {
         key: KeyCode,
         pressed: bool,
         repeat: bool,
-        profile: AttackProfile,
     ) -> bool {
-        let previous_mode = self.menu.mode();
         let was_open = self.menu.open();
         let binding = BINDINGS.iter().enumerate().find(|(_, (_, bound, ..))| *bound == key);
         let menu_key = binding.and_then(|(_, (_, _, _, menu))| *menu);
-        let consumed = was_open || matches!(menu_key, Some(MenuKey::Toggle | MenuKey::Scenes));
+        let consumed = was_open || matches!(menu_key, Some(MenuKey::Scenes));
         if repeat {
             return consumed;
         }
@@ -91,9 +98,9 @@ impl Controls {
             self.down &= !bit;
         }
         if pressed && let Some(menu_key) = menu_key {
-            self.menu.on_key(menu_key, profile);
+            self.menu.on_key(menu_key);
         }
-        if previous_mode != self.menu.mode() {
+        if was_open != self.menu.open() {
             self.clear_gameplay();
         } else if !consumed {
             if pressed {
@@ -114,7 +121,7 @@ impl Controls {
         self.state = InputState::default();
     }
 
-    /// Restart discards gameplay and pending edits, but a physically held key
+    /// Restart discards gameplay and the scene picker, but a physically held key
     /// must still be released before it can act in the new playtest.
     pub(crate) fn restart(&mut self) {
         self.clear_gameplay();
@@ -158,6 +165,19 @@ impl Controls {
         self.state.sample()
     }
 
+    /// Resolve a single attack per tick. Fresh presses beat held buttons;
+    /// ties use slot order, independent of native event delivery order.
+    /// Only the winning button supplies the held level, so an unrelated held
+    /// swing button cannot sustain a released beam.
+    pub(crate) fn attack_input(&self, actions: Actions) -> (Option<AttackProfile>, bool, bool) {
+        let binding = ATTACK_BINDINGS.iter()
+            .find(|(action, ..)| actions.just_pressed(*action))
+            .or_else(|| ATTACK_BINDINGS.iter().find(|(action, ..)| actions.held(*action)));
+        binding.map_or((None, false, false), |&(action, profile, _)| {
+            (Some(profile), actions.just_pressed(action), actions.held(action))
+        })
+    }
+
     /// Presentation can read held state without consuming an input edge.
     pub(crate) fn held(&self) -> ActionMask {
         self.state.held()
@@ -186,9 +206,6 @@ impl Controls {
         &mut self.menu
     }
 
-    pub(crate) fn take_profile(&mut self) -> Option<AttackProfile> {
-        self.menu.take_profile()
-    }
 }
 
 /// Absence of a screen coordinate is a device state; the aim is always valid.
@@ -249,14 +266,79 @@ mod tests {
 
     fn tap(controls: &mut Controls, name: &str) {
         let key = key_named(name).expect("every UI key is harness-drivable");
-        controls.on_key(key, true, false, AttackProfile::default());
-        controls.on_key(key, false, false, AttackProfile::default());
+        controls.on_key(key, true, false);
+        controls.on_key(key, false, false);
+    }
+
+    fn step_controls(controls: &mut Controls, game: &mut arpg_game::Game) {
+        let actions = controls.sample();
+        let (profile, pressed, held) = controls.attack_input(actions);
+        if let Some(profile) = profile
+            && game.attack_status().profile != profile {
+            game.set_attack_profile(profile);
+        }
+        let dt = arpg_sim::Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+        game.step(dt, arpg_core::Intent::new(arpg_core::MoveDir::NONE,
+            arpg_core::AimDir::FORWARD, pressed).with_attack_held(held));
     }
 
     #[test]
-    fn picker_navigation_is_modal_and_panel_switches_do_not_leak_keys() {
+    fn bound_attacks_drive_committed_swings_and_release_channels_through_game() {
+        // Predicted before stepping: Cleave owns ticks 0..21 even if Slam is
+        // pressed at 1; a fresh Slam at 22 owns 22..51. Beam starts at 52,
+        // stops on release at 53, and a new primary press starts Cleave.
+        let run = || {
+            let mut controls = Controls::default();
+            let mut game = arpg_game::Game::empty();
+            let mut hashes = Vec::new();
+            for tick in 0..55 {
+                match tick {
+                    0 => tap(&mut controls, "1"),
+                    1 | 22 => tap(&mut controls, "2"),
+                    52 => { controls.on_key(KeyCode::Digit3, true, false); }
+                    53 => { controls.on_key(KeyCode::Digit3, false, false); }
+                    54 => tap(&mut controls, "space"),
+                    _ => {}
+                }
+                step_controls(&mut controls, &mut game);
+                let status = game.attack_status();
+                match tick {
+                    0..=21 => assert_eq!(status.swing_profile, Some(AttackProfile::Cleave)),
+                    22..=51 => assert_eq!(status.swing_profile, Some(AttackProfile::Slam)),
+                    52 => assert!(status.channeling),
+                    53 => { assert!(!status.channeling); assert_eq!(status.phase, arpg_sim::AttackPhase::Idle); }
+                    54 => assert_eq!(status.swing_profile, Some(AttackProfile::Cleave)),
+                    _ => unreachable!(),
+                }
+                hashes.push(game.hash());
+            }
+            hashes
+        };
+        assert_eq!(run(), run(), "identical button inputs replay tick for tick");
+    }
+
+    #[test]
+    fn new_presses_beat_holds_and_simultaneous_presses_use_slot_order() {
         let mut controls = Controls::default();
-        controls.on_key(KeyCode::ArrowUp, true, false, AttackProfile::default());
+        controls.on_key(KeyCode::Digit3, true, false);
+        let _ = controls.sample();
+        tap(&mut controls, "2");
+        let actions = controls.sample();
+        assert_eq!(controls.attack_input(actions), (Some(AttackProfile::Slam), true, false));
+        tap(&mut controls, "2");
+        tap(&mut controls, "1");
+        let actions = controls.sample();
+        assert_eq!(controls.attack_input(actions), (Some(AttackProfile::Cleave), true, false));
+        controls.on_key(KeyCode::Digit3, false, false);
+        controls.on_key(KeyCode::Space, true, false);
+        let actions = controls.sample();
+        assert_eq!(controls.attack_input(actions), (Some(AttackProfile::Cleave), true, true));
+    }
+
+    #[test]
+    fn picker_navigation_is_modal_and_does_not_leak_keys() {
+        let mut controls = Controls::default();
+        controls.on_key(KeyCode::ArrowUp, true, false);
         tap(&mut controls, "f2");
         assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
         assert!(matches!(
@@ -268,17 +350,12 @@ mod tests {
         }
         assert_eq!(controls.menu().picker().selected(), 1, "selection clamps at the last row");
         tap(&mut controls, "right");
-        assert!(controls.menu().pending().is_none(), "picker keys cannot edit attack tuning");
-        tap(&mut controls, "f1");
-        tap(&mut controls, "right");
-        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Slam);
-        tap(&mut controls, "f2");
         tap(&mut controls, "escape");
         assert!(!controls.menu().open());
-        controls.on_key(KeyCode::ArrowUp, true, true, AttackProfile::default());
+        controls.on_key(KeyCode::ArrowUp, true, true);
         assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
-        controls.on_key(KeyCode::ArrowUp, false, false, AttackProfile::default());
-        controls.on_key(KeyCode::ArrowUp, true, false, AttackProfile::default());
+        controls.on_key(KeyCode::ArrowUp, false, false);
+        controls.on_key(KeyCode::ArrowUp, true, false);
         assert!(controls.sample().held(Action::MoveUp));
         tap(&mut controls, "f2");
         tap(&mut controls, "f2");
@@ -289,30 +366,32 @@ mod tests {
     #[test]
     fn modal_transitions_discard_edges_and_require_fresh_gameplay_presses() {
         let mut controls = Controls::default();
-        let profile = AttackProfile::default();
-        controls.on_key(KeyCode::Space, true, false, profile);
-        controls.on_key(KeyCode::KeyW, true, false, profile);
+        controls.on_key(KeyCode::Space, true, false);
+        controls.on_key(KeyCode::KeyW, true, false);
         // Open before any tick has consumed the attack edge.
-        tap(&mut controls, "f1");
+        tap(&mut controls, "f2");
         assert!(controls.menu().open());
         let actions = controls.sample();
         assert!(!actions.just_pressed(Action::Attack));
         assert_eq!(actions.move_axis(), glam::Vec2::ZERO);
         tap(&mut controls, "right");
-        tap(&mut controls, "space");
-        assert!(!controls.sample().just_pressed(Action::Attack));
+        for key in ["space", "1", "2", "3"] {
+            tap(&mut controls, key);
+        }
+        let actions = controls.sample();
+        assert_eq!(controls.attack_input(actions), (None, false, false));
         assert_eq!(controls.held().move_axis(), glam::Vec2::ZERO);
 
         let esc = key_named("escape").unwrap();
-        assert!(controls.on_key(esc, true, false, profile), "closing must consume Escape");
+        assert!(controls.on_key(esc, true, false), "closing must consume Escape");
         assert!(!controls.menu().open());
-        assert!(controls.on_key(esc, true, false, profile), "a duplicate must not reach quit");
+        assert!(controls.on_key(esc, true, false), "a duplicate must not reach quit");
         // A held W cannot start moving through repeat OR duplicate injection.
-        controls.on_key(KeyCode::KeyW, true, true, profile);
-        controls.on_key(KeyCode::KeyW, true, false, profile);
+        controls.on_key(KeyCode::KeyW, true, true);
+        controls.on_key(KeyCode::KeyW, true, false);
         assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
-        controls.on_key(KeyCode::KeyW, false, false, profile);
-        controls.on_key(KeyCode::KeyW, true, false, profile);
+        controls.on_key(KeyCode::KeyW, false, false);
+        controls.on_key(KeyCode::KeyW, true, false);
         assert!(controls.sample().held(Action::MoveUp));
         tap(&mut controls, "space");
         assert!(controls.sample().just_pressed(Action::Attack));
@@ -320,80 +399,10 @@ mod tests {
     }
 
     #[test]
-    fn profile_navigation_waits_for_enter_and_does_not_leak_held_movement() {
-        let mut controls = Controls::default();
-        tap(&mut controls, "f1");
-        tap(&mut controls, "s");
-        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Slam);
-        assert!(controls.take_profile().is_none(), "navigation must not apply the profile");
-        tap(&mut controls, "w");
-        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Cleave);
-        controls.on_key(KeyCode::KeyS, true, false, AttackProfile::default());
-        assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
-        tap(&mut controls, "enter");
-        assert!(!controls.menu().open());
-        assert_eq!(controls.menu().pending(), Some(AttackProfile::Slam));
-        let _ = controls.sample();
-        assert_eq!(controls.take_profile(), Some(AttackProfile::Slam));
-        assert!(controls.take_profile().is_none());
-        controls.on_key(KeyCode::KeyS, true, true, AttackProfile::Slam);
-        assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
-        controls.on_key(KeyCode::KeyS, false, false, AttackProfile::Slam);
-        controls.on_key(KeyCode::KeyS, true, false, AttackProfile::Slam);
-        assert!(controls.sample().held(Action::MoveDown));
-    }
-
-    #[test]
-    fn closing_an_attack_menu_discards_only_unconfirmed_selection() {
-        let mut controls = Controls::default();
-        tap(&mut controls, "f1");
-        tap(&mut controls, "s");
-        tap(&mut controls, "escape");
-        assert!(controls.take_profile().is_none());
-        tap(&mut controls, "f1");
-        tap(&mut controls, "s");
-        tap(&mut controls, "enter");
-        // Reopen before a simulation tick consumes the confirmed selection.
-        tap(&mut controls, "f1");
-        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Slam);
-        tap(&mut controls, "r");
-        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Cleave);
-        tap(&mut controls, "escape");
-        assert_eq!(controls.take_profile(), Some(AttackProfile::Slam));
-    }
-
-    #[test]
-    fn profile_picker_clamps_and_ignores_os_repeat() {
-        let mut controls = Controls::default();
-        tap(&mut controls, "f1");
-        controls.on_key(KeyCode::ArrowRight, true, true, AttackProfile::default());
-        assert!(controls.menu().pending().is_none());
-        for _ in 0..AttackProfile::ALL.len() + 2 {
-            tap(&mut controls, "left");
-        }
-        assert_eq!(controls.menu().profile(AttackProfile::default()), AttackProfile::Cleave);
-        for _ in 0..AttackProfile::ALL.len() + 2 {
-            tap(&mut controls, "right");
-        }
-        assert_eq!(Some(controls.menu().profile(AttackProfile::default())), AttackProfile::ALL.last().copied());
-    }
-
-    #[test]
-    fn every_authored_attack_profile_is_reachable() {
-        let mut controls = Controls::default();
-        tap(&mut controls, "f1");
-        assert_eq!(controls.menu().profile(AttackProfile::Cleave), AttackProfile::Cleave);
-        for profile in AttackProfile::ALL.into_iter().skip(1) {
-            tap(&mut controls, "down");
-            assert_eq!(controls.menu().profile(AttackProfile::default()), profile);
-        }
-    }
-
-    #[test]
     fn focus_loss_discards_an_unsampled_attack_and_held_movement() {
         let mut controls = Controls::default();
         tap(&mut controls, "space");
-        controls.on_key(KeyCode::KeyD, true, false, AttackProfile::default());
+        controls.on_key(KeyCode::KeyD, true, false);
         controls.release_all();
         let actions = controls.sample();
         assert!(!actions.just_pressed(Action::Attack));
@@ -404,13 +413,13 @@ mod tests {
     #[test]
     fn releasing_one_of_two_keys_bound_to_the_same_action_keeps_it_held() {
         let mut input = Controls::default();
-        input.on_key(KeyCode::KeyW, true, false, AttackProfile::default());
-        input.on_key(KeyCode::ArrowUp, true, false, AttackProfile::default());
-        input.on_key(KeyCode::KeyW, false, false, AttackProfile::default());
+        input.on_key(KeyCode::KeyW, true, false);
+        input.on_key(KeyCode::ArrowUp, true, false);
+        input.on_key(KeyCode::KeyW, false, false);
 
         assert!(input.sample().held(Action::MoveUp), "Up is still down");
 
-        input.on_key(KeyCode::ArrowUp, false, false, AttackProfile::default());
+        input.on_key(KeyCode::ArrowUp, false, false);
         assert!(!input.sample().held(Action::MoveUp));
     }
 
@@ -418,11 +427,11 @@ mod tests {
     #[test]
     fn key_repeat_does_not_produce_extra_presses() {
         let mut input = Controls::default();
-        input.on_key(KeyCode::KeyD, true, false, AttackProfile::default());
+        input.on_key(KeyCode::KeyD, true, false);
         assert!(input.sample().just_pressed(Action::MoveRight));
 
         for _ in 0..10 {
-            input.on_key(KeyCode::KeyD, true, true, AttackProfile::default());
+            input.on_key(KeyCode::KeyD, true, true);
         }
         let actions = input.sample();
         assert!(!actions.just_pressed(Action::MoveRight));
@@ -433,8 +442,8 @@ mod tests {
     #[test]
     fn losing_focus_releases_everything() {
         let mut input = Controls::default();
-        input.on_key(KeyCode::KeyW, true, false, AttackProfile::default());
-        input.on_key(KeyCode::KeyD, true, false, AttackProfile::default());
+        input.on_key(KeyCode::KeyW, true, false);
+        input.on_key(KeyCode::KeyD, true, false);
         input.release_all();
 
         assert_eq!(input.sample().move_axis(), glam::Vec2::ZERO);
@@ -457,6 +466,10 @@ mod tests {
     #[test]
     fn an_unknown_name_is_not_a_key() {
         assert_eq!(key_named("q"), None);
+        assert_eq!(key_named("f1"), None);
+        let mut controls = Controls::default();
+        assert!(!controls.on_key(KeyCode::F1, true, false));
+        assert!(!controls.menu().open());
         assert_eq!(key_named(""), None);
     }
 
@@ -464,7 +477,7 @@ mod tests {
     #[test]
     fn an_unbound_key_changes_nothing() {
         let mut input = Controls::default();
-        input.on_key(KeyCode::KeyV, true, false, AttackProfile::default());
+        input.on_key(KeyCode::KeyV, true, false);
         assert_eq!(input.down, 0);
     }
     /// E follows the same edge latch and modal capture as attacks. Two nearby
@@ -472,11 +485,10 @@ mod tests {
     #[test]
     fn interaction_is_one_edge_and_is_captured_by_menus() {
         let mut controls = Controls::default();
-        let profile = AttackProfile::default();
-        controls.on_key(KeyCode::KeyE, true, false, profile);
+        controls.on_key(KeyCode::KeyE, true, false);
         assert!(controls.sample().just_pressed(Action::Interact));
         assert!(!controls.sample().just_pressed(Action::Interact));
-        controls.on_key(KeyCode::KeyE, true, true, profile);
+        controls.on_key(KeyCode::KeyE, true, true);
         assert!(!controls.sample().just_pressed(Action::Interact));
         tap(&mut controls, "f2");
         tap(&mut controls, "e");
@@ -528,14 +540,14 @@ mod aiming_tests {
         let mut controls = Controls::default();
         controls.on_mouse(true);
         assert!(controls.sample().just_pressed(Action::Attack));
-        controls.on_key(KeyCode::Space, true, false, AttackProfile::Cleave);
-        controls.on_key(KeyCode::Space, false, false, AttackProfile::Cleave);
+        controls.on_key(KeyCode::Space, true, false);
+        controls.on_key(KeyCode::Space, false, false);
         assert!(controls.held().contains(Action::Attack));
-        controls.on_key(KeyCode::F1, true, false, AttackProfile::Cleave);
+        controls.on_key(KeyCode::F2, true, false);
         controls.on_cursor(Vec2::new(750.0, 300.0)).unwrap();
         assert_eq!(controls.aim(&camera, (800, 600), Vec3::ZERO), arpg_core::AimDir::FORWARD);
         assert!(!controls.sample().just_pressed(Action::Attack));
-        controls.on_key(KeyCode::Escape, true, false, AttackProfile::Cleave);
+        controls.on_key(KeyCode::Escape, true, false);
         assert!(!controls.held().contains(Action::Attack));
         controls.on_mouse(false);
         controls.on_mouse(true);

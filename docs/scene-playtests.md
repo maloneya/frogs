@@ -69,7 +69,7 @@ working-directory-dependent boot fallback.
 ## In-game picker
 
 `F2` opens the scene picker. W/S or Up/Down navigate, Enter starts fresh and closes, and
-`F2` / `Esc` closes. `F1` switches to attack tuning. The world keeps running
+`F2` / `Esc` closes. The world keeps running
 while either panel captures gameplay input.
 
 The first two choices are **Restart current (cached snapshot)** and **Default
@@ -105,10 +105,16 @@ F2 offers **Default horde** (1,024 stationary enemies) and these files:
 | `three_enemy_spawners.ron` | Three approach directions build toward twelve seekers |
 | `two_torches.ron` | Warm and cool pools overlap around stationary monsters |
 
-F1 opens the attack picker. W/S or arrows highlight **Cleave**, the default
-broad arc, or **Slam**, an expanding frontal hit with stronger knockback.
-Enter confirms and closes; F1/Esc cancels. R highlights Cleave. Fresh starts and restarts also
-restore Cleave. Separate regression scenarios assert each attack's timing,
+Attacks use fixed bindings, shown in the HUD:
+
+- **1 / left click / Space:** Cleave, a broad arc.
+- **2:** Slam, an expanding frontal hit with stronger knockback.
+- **3:** Disintegrate, a beam. Hold to channel and release to stop.
+
+Each tick accepts one attack input. New presses win over held buttons; ties
+use slot order (1, then 2, then 3). A press during an active swing is dropped,
+with no change to that swing's timing or geometry. Held beams can begin when
+the swing finishes. Separate regression scenarios assert each attack's timing,
 reach, hit order, impulse, and subsequent movement.
 
 Mechanism fixtures live inline in `scenarios/`; they are not picker entries.

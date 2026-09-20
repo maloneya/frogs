@@ -41,8 +41,7 @@ attack scenarios continue to verify the authoritative collision behaviour.
 
 ## Disintegrate prototype
 
-Select **Disintegrate** in F1, then hold left click or Space and aim with the
-cursor. Release to stop. The channel pauses powered walking, while shared physics
+Hold **3** for Disintegrate and aim with the cursor. Release to stop. The channel pauses powered walking, while shared physics
 can still displace the player. It follows current aim every simulation tick.
 The existing Slam animation is held in a forward pose for this prototype.
 

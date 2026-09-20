@@ -160,8 +160,7 @@ fn exhausted_run_ids_preserve_the_game_input_and_pending_capture() {
     let mut app = App::default();
     app.start_playtest(pair()).unwrap();
     app.run_id = u64::MAX;
-    let profile = app.game.attack_status().profile;
-    app.input.on_key(KeyCode::KeyW, true, false, profile);
+    app.input.on_key(KeyCode::KeyW, true, false);
     let (reply, response) = std::sync::mpsc::channel();
     app.capture
         .request("pending.png".into(), Some(reply), std::time::Instant::now());
@@ -186,9 +185,8 @@ fn restart_resets_the_complete_playtest_boundary() {
     let mut app = App::default();
     app.start_playtest(pair()).unwrap();
     let initial = app.game.hash();
-    let profile = app.game.attack_status().profile;
-    app.input.on_key(KeyCode::KeyW, true, false, profile);
-    app.input.on_key(KeyCode::Space, true, false, profile);
+    app.input.on_key(KeyCode::KeyW, true, false);
+    app.input.on_key(KeyCode::Space, true, false);
     for dt in app.accumulator.pending(arpg_sim::Dt::SECS) {
         app.game
             .step(dt, Intent::new(MoveDir::new(glam::Vec3::X), arpg_core::AimDir::new(glam::Vec3::X).unwrap(), true));
@@ -206,10 +204,8 @@ fn restart_resets_the_complete_playtest_boundary() {
         arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()
     ));
     assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
-    app.input.on_key(KeyCode::F1, true, false, profile);
-    app.input.on_key(KeyCode::ArrowRight, true, false, profile);
-    app.input.on_key(KeyCode::Enter, true, false, profile);
-    assert!(app.input.menu().pending().is_some());
+    app.input.on_key(KeyCode::F2, true, false);
+    assert!(app.input.menu().open());
     let mut camera = OrthoCamera::new(1280, 720);
     camera.snap_to(glam::Vec3::new(40.0, 0.0, 40.0));
     app.camera = Some(camera);
@@ -227,16 +223,15 @@ fn restart_resets_the_complete_playtest_boundary() {
     assert_eq!(app.accumulator.alpha().get(), 0.0);
     assert_eq!(app.camera.as_ref().unwrap().target(), glam::Vec3::ZERO);
     assert!(!app.input.menu().open());
-    assert!(app.input.take_profile().is_none());
     assert_eq!(app.input.sample().move_axis(), Vec2::ZERO);
-    app.input.on_key(KeyCode::KeyW, true, false, profile);
+    app.input.on_key(KeyCode::KeyW, true, false);
     assert_eq!(
         app.input.sample().move_axis(),
         Vec2::ZERO,
         "held native keys require release"
     );
-    app.input.on_key(KeyCode::KeyW, false, false, profile);
-    app.input.on_key(KeyCode::KeyW, true, false, profile);
+    app.input.on_key(KeyCode::KeyW, false, false);
+    app.input.on_key(KeyCode::KeyW, true, false);
     assert_ne!(app.input.sample().move_axis(), Vec2::ZERO);
 }
 
@@ -246,7 +241,7 @@ fn restart_cancels_old_delayed_actions_and_capture_replies() {
     let (reply, response) = std::sync::mpsc::channel();
     let (shot_reply, shot_response) = std::sync::mpsc::channel();
     app.input
-        .on_key(KeyCode::KeyD, true, false, app.game.attack_status().profile);
+        .on_key(KeyCode::KeyD, true, false);
     app.scheduled.push(Deferred {
         due: std::time::Instant::now() + std::time::Duration::from_secs(60),
         release: Some(KeyCode::KeyD),
@@ -262,7 +257,7 @@ fn restart_cancels_old_delayed_actions_and_capture_replies() {
     assert!(shot_response.try_recv().unwrap().contains("cancelled"));
     assert!(app.scheduled.is_empty());
     app.input
-        .on_key(KeyCode::KeyD, true, false, app.game.attack_status().profile);
+        .on_key(KeyCode::KeyD, true, false);
     app.service_schedule();
     assert_ne!(
         app.input.sample().move_axis(),
@@ -276,7 +271,7 @@ fn rejected_replacement_preserves_the_current_playtest() {
     let mut app = App::default();
     app.start_playtest(pair()).unwrap();
     app.input
-        .on_key(KeyCode::KeyW, true, false, app.game.attack_status().profile);
+        .on_key(KeyCode::KeyW, true, false);
     let before = app.report_state();
     let trace = app.game.trace().render();
     let mut bad = pair();

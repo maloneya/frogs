@@ -57,9 +57,10 @@ reply lists them. `cursor <x> <y>` supplies physical window pixels through
 the same cursor path as native pointer movement. Aim starts at world +Z and
 retains its last valid direction on cursor loss or at the player.
 The live controls are WASD/arrows to move, cursor to aim, left click or Space
-to attack. A swing holds its starting direction through recovery while walking
-continues freely. `tap space` swings and `tap e` interacts. F1 opens the attack
-picker; F2 opens the scene picker. W/S or arrows navigate, Enter confirms,
+to use attack slot 1; keys 2 and 3 use the other slots. See
+[attack bindings](../../../docs/scene-playtests.md) for the fixed controls.
+A swing holds its starting direction through recovery while walking
+continues freely. `tap space` swings and `tap e` interacts. F2 opens the scene picker. W/S or arrows navigate, Enter confirms,
 Escape cancels. While a menu is open it captures gameplay input; the world keeps
 running. Use explicit harness commands for debug operations instead of trying
 to inject native debug keys.

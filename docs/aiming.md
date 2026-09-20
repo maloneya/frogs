@@ -1,8 +1,9 @@
 # Aiming while moving
 
-WASD/arrows control travel; the cursor controls aim. Left click or Space starts
-one attack. Holding the button does not repeat it, and presses during a swing
-are dropped. A new swing immediately takes the current aim and holds that
+WASD/arrows control travel; the cursor controls aim. Attack buttons use the
+slots described in [playtest controls](scene-playtests.md). A swing starts once
+per press. Holding its button does not repeat it, and presses during a swing
+are dropped. Beam attacks instead channel while their button is held. A new swing immediately takes the current aim and holds that
 direction through recovery. Walking and external impulses continue normally.
 Between attacks the character turns toward the current aim at the facing
 pass's rate.

@@ -380,7 +380,7 @@ impl App {
             }
             if let Some(key) = deferred.release {
                 self.input
-                    .on_key(key, false, false, self.game.attack_status().profile);
+                    .on_key(key, false, false);
             }
             if let Some(reply) = &deferred.reply {
                 let _ = reply.send("ok".to_string());
