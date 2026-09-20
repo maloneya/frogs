@@ -47,6 +47,7 @@ pub(crate) struct App {
     game: Game,
     collision_debug: crate::collision_debug::CollisionDebug,
     attack_effects: crate::attack_effects::AttackEffects,
+    enemy_health: crate::enemy_health::EnemyHealth,
     /// Game ids and ticks are scoped to this playtest generation.
     run_id: u64,
     /// Numbers keyboard screenshots within this process; paths may exist from an earlier run.
@@ -237,6 +238,7 @@ impl App {
         }
         self.capture.finish(Err("cancelled by playtest restart".into()));
         self.attack_effects.clear();
+        self.enemy_health.clear();
         self.input.restart();
         self.run_id = run_id;
         self.accumulator = Accumulator::default();
@@ -396,6 +398,8 @@ impl App {
         {
             let mut sink = self.quads.sink();
             let size = self.window.as_ref().expect("rendering has a window").inner_size();
+            self.enemy_health.draw(&self.game, alpha, camera,
+                Vec2::new(size.width as f32, size.height as f32), &mut sink);
             hud::draw(
                 renderer.glyphs(),
                 self.input.menu(),

@@ -34,7 +34,7 @@ pub use attack::{
 pub use hash::Fnv;
 use members::Members;
 use pass::health::Health;
-pub use pass::health::Defeat;
+pub use pass::health::{Defeat, ENEMY_HIT_POINTS};
 use pass::interact::Interactions;
 pub use pass::interact::{INTERACTION_REACH, InteractionState};
 use pass::motion::Physics;

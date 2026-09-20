@@ -23,7 +23,8 @@ pub struct Defeat {
     pub source: Option<SourceId>,
 }
 
-const ENEMY_HIT_POINTS: u8 = 3;
+/// Starting and maximum health for ordinary enemies, in hits.
+pub const ENEMY_HIT_POINTS: u8 = 3;
 const _: () = assert!(ENEMY_HIT_POINTS > 0, "an enemy must survive at least one hit");
 
 #[derive(Default)]

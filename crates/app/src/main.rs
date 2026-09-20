@@ -11,6 +11,7 @@ mod collision_debug;
 mod attack_effects;
 mod harness;
 mod hud;
+mod enemy_health;
 mod input;
 mod presentation;
 mod torch;
