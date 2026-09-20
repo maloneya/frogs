@@ -346,6 +346,7 @@ impl App {
             // must not swing every tick, and a tap shorter than a frame must
             // still swing exactly once.
             let intent = Intent::new(to_world(intent.move_axis()), aim, intent.just_pressed(Action::Attack))
+                .with_attack_held(intent.held(Action::Attack))
                 .with_interact(intent.just_pressed(Action::Interact));
             let intent = self.trial.as_ref().map_or(intent, |trial| trial.intent(self.game.tick()));
             let step_start = std::time::Instant::now();

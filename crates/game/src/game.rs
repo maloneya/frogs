@@ -399,7 +399,10 @@ impl Game {
         self.world.enemy_presentations(alpha)
     }
 
-    /// Read-only committed attack geometry at the completed tick's player pose.
+    /// Read-only active channel capsule at the completed tick's player pose.
+    pub fn beam(&self) -> Option<arpg_sim::Beam> { self.world.beam() }
+
+    /// Committed swing discs; beam geometry has its own read-only observation.
     pub fn attack_discs(&self) -> impl Iterator<Item = arpg_sim::AttackDisc> + '_ {
         self.world.attack_discs()
     }

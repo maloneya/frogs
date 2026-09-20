@@ -154,6 +154,11 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
             ));
         }
     }
+    for hold in &scenario.channels {
+        if hold.ticks == 0 || hold.at.checked_add(hold.ticks).is_none_or(|end| end > scenario.budget.ticks) {
+            failures.push(Failure::new("channels", "a nonempty span inside the budget".into(), format!("{} + {}", hold.at, hold.ticks)));
+        }
+    }
     for command in &scenario.attack_recovery {
         if command.at >= scenario.budget.ticks {
             failures.push(Failure::new(
@@ -375,6 +380,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                 }
             }
             let intent = Intent::new(schedule[tick as usize], aims[tick as usize], scenario.attacks.contains(&tick))
+                .with_attack_held(scenario.channels.iter().any(|span| tick >= span.at && tick - span.at < span.ticks))
                 .with_interact(scenario.interactions.contains(&tick));
             let started = std::time::Instant::now();
             game.step(dt, intent);
@@ -577,7 +583,7 @@ fn check_state(
     let attack = game.attack_status();
     check_eq("attack_phase", attack_phase, attack.phase, &mut failures);
     check_eq("swing_tick", swing_tick, attack.elapsed, &mut failures);
-    check_eq("recovery_ticks", recovery_ticks, attack.recovery.get(), &mut failures);
+    check_eq("recovery_ticks", recovery_ticks, attack.recovery.map_or(0, arpg_sim::RecoveryTicks::get), &mut failures);
     check_eq(
         "swing_recovery_ticks",
         swing_recovery_ticks,
@@ -1019,4 +1025,20 @@ fn resolve_source(setup: &[SourceId], installed: &[Vec<SourceId>],
         None => setup.get(source),
         Some(nth) => installed.get(nth).and_then(|sources| sources.get(source)),
     }.copied()
+}
+
+#[cfg(test)]
+mod channel_input_tests {
+    use super::*;
+
+    #[test]
+    fn channel_spans_reject_empty_unreachable_and_overflowing_input() {
+        for span in ["(at: 0, ticks: 0)", "(at: 10, ticks: 1)", "(at: 9, ticks: 2)", "(at: 1, ticks: 18446744073709551615)"] {
+            let source = format!("(description: \"refused channel\", channels: [{span}], budget: (ticks: 10))");
+            let scenario: Scenario = ron::from_str(&source).unwrap();
+            assert!(validate(&scenario).iter().any(|failure| failure.what == "channels"));
+        }
+        let scenario: Scenario = ron::from_str("(description: \"valid channel\", channels: [(at: 0, ticks: 10)], budget: (ticks: 10))").unwrap();
+        assert!(validate(&scenario).is_empty());
+    }
 }

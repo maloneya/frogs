@@ -17,11 +17,13 @@ pub enum AttackProfile {
     Cleave,
     /// An expanding frontal slam with enough impulse to clear a crowd.
     Slam,
+    /// A held, piercing beam that follows aim.
+    Disintegrate,
 }
 
 impl AttackProfile {
     /// The complete authored catalog. Presentation may choose how to lay it out.
-    pub const ALL: [Self; 2] = [Self::Cleave, Self::Slam];
+    pub const ALL: [Self; 3] = [Self::Cleave, Self::Slam, Self::Disintegrate];
 
     /// The authored name, shared by state, traces, and selection surfaces.
     #[must_use]
@@ -29,28 +31,30 @@ impl AttackProfile {
         match self {
             Self::Cleave => "Cleave",
             Self::Slam => "Slam",
+            Self::Disintegrate => "Disintegrate",
         }
     }
 
     /// Resolves this authored profile into the complete runtime value a swing
-    /// captures. A future skill/weapon/stat resolver produces this same type.
+    /// captures. Channels return `None`; their capsule and cadence belong to [`crate::Beam`].
     #[must_use]
-    pub fn resolve(self) -> ResolvedAttack {
+    pub fn resolve(self) -> Option<ResolvedAttack> {
         let (startup, active, recovery, shape, knockback) = match self {
+            Self::Disintegrate => return None,
             // Crowd-control content uses the same impulse and swept-disc doors
             // as other physical producers. At unit enemy mass and 0.9 retention, free travel is
             // roughly impulse / 6 metres; contacts distribute it through the rank.
             Self::Cleave => (6, 6, 10, shape((-1.8, 1.2, 1.1), (1.8, 1.2, 1.1)), 24.0),
             Self::Slam => (9, 5, 16, shape((0.0, 1.6, 1.4), (0.0, 1.6, 2.6)), 40.0),
         };
-        ResolvedAttack::try_new(
+        Some(ResolvedAttack::try_new(
             startup,
             active,
             RecoveryTicks::try_from(recovery).expect("profile recovery is supported"),
             shape,
             knockback,
         )
-        .expect("built-in attack profile is valid")
+        .expect("built-in attack profile is valid"))
     }
 }
 
@@ -280,7 +284,7 @@ impl ResolvedAttack {
 
 impl Default for ResolvedAttack {
     fn default() -> Self {
-        AttackProfile::default().resolve()
+        AttackProfile::default().resolve().expect("default is a swing")
     }
 }
 
@@ -367,11 +371,15 @@ pub struct AttackStatus {
     /// Authored attack captured by the swing in flight.
     pub swing_profile: Option<AttackProfile>,
     /// Configuration used by the next swing.
-    pub resolved: ResolvedAttack,
+    pub resolved: Option<ResolvedAttack>,
+    /// Whether the held beam is active at the completed tick.
+    pub channeling: bool,
+    /// Completed tick within the active channel damage cadence, absent when idle.
+    pub channel_tick: Option<u32>,
     /// Configuration captured by the swing in flight.
     pub swing_resolved: Option<ResolvedAttack>,
-    /// Recovery used by the next swing.
-    pub recovery: RecoveryTicks,
+    /// Recovery used by the next swing; absent for a channel.
+    pub recovery: Option<RecoveryTicks>,
     /// Recovery committed to by the swing already in flight.
     pub swing_recovery: Option<RecoveryTicks>,
     /// Bodies struck by the current or most recent swing.
@@ -382,6 +390,8 @@ impl AttackStatus {
     pub(crate) fn report(self, out: &mut arpg_core::Report) {
         let Self {
             phase,
+            channeling,
+            channel_tick,
             elapsed,
             profile,
             swing_profile,
@@ -391,17 +401,19 @@ impl AttackStatus {
             swing_recovery,
             struck,
         } = self;
-        out.bool("swinging", phase != AttackPhase::Idle);
+        out.bool("channeling", channeling);
+        out.int("channel_tick", u64::from(channel_tick.unwrap_or(0)));
+        out.bool("swinging", phase != AttackPhase::Idle && !channeling);
         out.bool("startup", phase == AttackPhase::Startup);
         out.bool("hitbox", phase == AttackPhase::Active);
         out.bool("recovering", phase == AttackPhase::Recovery);
         out.int("swing_tick", u64::from(elapsed));
-        out.int("recovery_ticks", u64::from(recovery.get()));
+        out.int("recovery_ticks", u64::from(recovery.map_or(0, RecoveryTicks::get)));
         out.int("swing_recovery_ticks", u64::from(swing_recovery.map_or(0, RecoveryTicks::get)));
         out.int("struck", struck as u64);
         out.text("attack_profile", profile.label());
         out.text("swing_profile", swing_profile.map_or("", AttackProfile::label));
-        out.object("resolved_attack", |out| resolved.report(out));
+        out.object("resolved_attack", |out| { if let Some(resolved) = resolved { resolved.report(out); } });
         out.object("swing_resolved_attack", |out| {
             if let Some(resolved) = swing_resolved {
                 resolved.report(out);
@@ -426,8 +438,9 @@ mod tests {
 
     #[test]
     fn every_authored_profile_resolves_to_a_distinct_valid_attack() {
-        let attacks: Vec<_> = AttackProfile::ALL.into_iter().map(AttackProfile::resolve).collect();
-        assert_eq!(attacks.len(), AttackProfile::ALL.len());
+        let attacks: Vec<_> = AttackProfile::ALL.into_iter().filter_map(AttackProfile::resolve).collect();
+        assert_eq!(attacks.len(), 2);
+        assert!(AttackProfile::Disintegrate.resolve().is_none());
         for (index, resolved) in attacks.iter().enumerate() {
             assert!(attacks[index + 1..].iter().all(|other| other != resolved));
         }

@@ -38,3 +38,32 @@ frames, duplicate observations, history expiry, turning, arc interpolation,
 unchanged game hashes, and the app's restart boundary. A headless GPU pixel test
 checks alpha blending, depth occlusion, and clearing the stream. The existing
 attack scenarios continue to verify the authoritative collision behaviour.
+
+## Disintegrate prototype
+
+Select **Disintegrate** in F1, then hold left click or Space and aim with the
+cursor. Release to stop. The channel pauses powered walking, while shared physics
+can still displace the player. It follows current aim every simulation tick.
+The existing Slam animation is held in a forward pose for this prototype.
+
+`sim::Beam` owns reach, radius and pulse cadence: 12 metres, 0.3 metre half-width,
+one hit immediately and every 12 ticks thereafter. With three-hit enemies this
+kills a stationary target on ticks 0, 12 and 24 of an uninterrupted channel.
+The capsule tests final body positions before defeat removal, includes enemy
+body radius, pierces all enemies, and applies no impulse. Scenery does not block
+it yet; there is no resource cost or damage ramp. Releasing resets the cadence.
+A committed melee swing must finish before channeling can begin; selecting a
+melee profile ends the channel on the next tick.
+
+`Game::beam` exposes the authoritative capsule; `state.sim.beam` reports its
+endpoints and tuning. `channeling` and `channel_tick` report active state and
+pulse clock. Traces emit channel start/stop and individual damage events.
+`attack_discs` continues to describe melee only, so F3's disc overlay does not
+outline this capsule. Restart clears channel state; scene eviction needs no
+beam target cleanup because pulses retain no target identities.
+
+Presentation draws three orange/gold bands using the existing linear-colour
+triangle stream, interpolating origin and angle between completed ticks. History
+is bounded and release removes the beam immediately. It never feeds geometry
+back into damage. Scenarios use `channels: [(at: 0, ticks: 24)]` for a half-open
+hold; `attacks` still supplies discrete swing press edges.

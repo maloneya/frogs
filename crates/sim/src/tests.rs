@@ -615,7 +615,7 @@ fn a_steady_state_frame_allocates_nothing() {
         let mut world = world_with_enemies(512);
         world.set_attack_profile(profile);
         let attack = profile.resolve();
-        let duration = attack.startup() + attack.active() + attack.recovery().get();
+        let duration = attack.map_or(60, |attack| attack.startup() + attack.active() + attack.recovery().get());
 
         world.step(dt, Intent::new(east, AimDir::new(east.as_vec3()).expect("nonzero test movement"), false));
         observe_presentation(&world, Alpha::ONE);
@@ -624,7 +624,7 @@ fn a_steady_state_frame_allocates_nothing() {
             for tick in 0..3 * duration {
                 // Include three consecutive swings: walking alone cannot catch
                 // a hit list that grows when the attack reaches a crowded rank.
-                world.step(dt, Intent::new(east, AimDir::new(east.as_vec3()).expect("nonzero test movement"), tick % duration == 0));
+                world.step(dt, Intent::new(east, AimDir::new(east.as_vec3()).expect("nonzero test movement"), tick % duration == 0).with_attack_held(profile == AttackProfile::Disintegrate));
                 observe_presentation(&world, Alpha::ONE);
             }
         });

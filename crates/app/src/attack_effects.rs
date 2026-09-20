@@ -63,6 +63,19 @@ impl AttackEffects {
         self.observed = Some(tick);
         let status = game.attack_status();
         self.active = status.phase == AttackPhase::Active;
+        if let Some(beam) = game.beam() {
+            if self.samples.back().is_some_and(|s| s.profile != AttackProfile::Disintegrate) { self.samples.clear(); }
+            if self.samples.len() == CAPACITY { self.samples.pop_front(); }
+            self.samples.push_back(Sample {
+                tick,
+                centre: Vec3::new(beam.end().x, 0.0, beam.end().y),
+                origin: Vec3::new(beam.start().x, 0.0, beam.start().y),
+                radius: arpg_sim::Beam::RADIUS,
+                profile: AttackProfile::Disintegrate,
+            });
+            return;
+        }
+        if self.samples.back().is_some_and(|s| s.profile == AttackProfile::Disintegrate) { self.samples.clear(); }
         if status.phase == AttackPhase::Startup && status.elapsed == 0 {
             self.samples.clear();
         }
@@ -102,6 +115,27 @@ impl AttackEffects {
         // between the previous and current completed tick, never extrapolated.
         let now = tick as f64 - 1.0 + f64::from(alpha.get());
         match last.profile {
+            AttackProfile::Disintegrate => {
+                let previous = self.samples.iter().rev().nth(1).copied().unwrap_or(last);
+                let origin = previous.origin.lerp(last.origin, alpha.get()) + Vec3::Y * 0.85;
+                // Interpolate direction as an angle so turning cannot shorten the beam.
+                let a = previous.centre - previous.origin;
+                let b = last.centre - last.origin;
+                let from = a.x.atan2(a.z);
+                let arc = (b.x.atan2(b.z) - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                let angle = from + arc * alpha.get();
+                let direction = Vec3::new(angle.sin(), 0.0, angle.cos());
+                let end = origin + direction * b.length();
+                let side = Vec3::new(direction.z, 0.0, -direction.x);
+                for (width, colour, opacity) in [
+                    (last.radius * 1.7, Vec3::new(1.0, 0.12, 0.025), 0.4),
+                    (last.radius, Vec3::new(1.0, 0.45, 0.06), 0.85),
+                    (last.radius * 0.22, Vec3::new(1.0, 0.9, 0.55), 1.0),
+                ] {
+                    band(&mut self.vertices, [origin - side * width, origin, origin + side * width],
+                        [end - side * width, end, end + side * width], colour, [opacity; 2]);
+                }
+            }
             AttackProfile::Cleave => {
                 for i in 0..self.samples.len() {
                     let end = self.samples[i];
@@ -265,7 +299,7 @@ mod tests {
             game.set_attack_profile(profile);
             let mut effects = AttackEffects::default();
             let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
-            let resolved = profile.resolve();
+            let Some(resolved) = profile.resolve() else { continue };
             let close = resolved.startup() + resolved.active();
             for elapsed in 0..close + 12 {
                 game.step(dt, Intent::new(MoveDir::new(Vec3::X), arpg_core::AimDir::new(Vec3::X).unwrap(), elapsed == 0));
@@ -361,5 +395,38 @@ mod tests {
                 sample.centre + sample.centre.normalize() * sample.radius + Vec3::Y * 0.65;
             assert!(cross_section(start, end, t)[2].distance(expected) < 1e-5);
         }
+    }
+}
+
+#[cfg(test)]
+mod beam_tests {
+    use super::*;
+    use arpg_core::{AimDir, Intent, MoveDir};
+    use arpg_sim::{Accumulator, Dt};
+
+    #[test]
+    fn beam_geometry_stays_bounded_tracks_aim_and_clears_on_release() {
+        let mut game = Game::empty();
+        game.set_attack_profile(AttackProfile::Disintegrate);
+        let mut effects = AttackEffects::default();
+        let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+        for tick in 0..200 {
+            let aim = if tick < 100 { AimDir::FORWARD } else { AimDir::new(Vec3::X).unwrap() };
+            game.step(dt, Intent::new(MoveDir::NONE, aim, false).with_attack_held(true));
+            let hash = game.hash();
+            effects.observe(&game);
+            effects.observe(&game);
+            effects.rebuild(game.tick(), Alpha::ONE);
+            assert_eq!(game.hash(), hash);
+            assert!(effects.samples.len() <= CAPACITY);
+            assert_eq!(effects.vertices().len(), 36);
+            let end = effects.samples.back().unwrap().centre;
+            assert!(end.abs_diff_eq(aim.as_vec3() * arpg_sim::Beam::LENGTH, 0.00001));
+        }
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+        effects.observe(&game);
+        effects.rebuild(game.tick(), Alpha::ZERO);
+        assert!(effects.vertices().is_empty());
+        assert!(effects.samples.is_empty());
     }
 }

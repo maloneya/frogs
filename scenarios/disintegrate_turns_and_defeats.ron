@@ -1,0 +1,19 @@
+// Pulse +Z on 0 and 12, then +X on 24 and 36. Return +Z on 48 kills
+// both front bodies together; their removal swaps dense rows underneath the beam.
+(
+    description: "Held beam follows current aim, defeats lines of enemies, and survives row moves.",
+    setup: (actions: [Place((0.0, 3.0)), Place((0.0, 7.0)), Place((4.0, 0.0))]),
+    attack_profiles: [(at: 0, profile: Disintegrate)],
+    channels: [(at: 0, ticks: 61)],
+    aims: [(at: 0, dir: (0.0, 1.0)), (at: 24, dir: (1.0, 0.0)),
+        (at: 48, dir: (0.0, 1.0)), (at: 60, dir: (1.0, 0.0))],
+    checkpoints: [
+        (at: 23, expect: (bodies: [(nth: 0, health: 1), (nth: 1, health: 1), (nth: 2, health: 3)])),
+        (at: 24, expect: (facing: (value: 1.5707963, tol: 0.00001), bodies: [(nth: 0, health: 1), (nth: 2, health: 2)])),
+        (at: 36, expect: (bodies: [(nth: 2, health: 1)])),
+        (at: 48, expect: (enemy_count: 1, bodies: [(nth: 0, alive: false), (nth: 1, alive: false), (nth: 2, health: 1)])),
+        (at: 60, expect: (enemy_count: 0, bodies: [(nth: 2, alive: false)])),
+    ],
+    budget: (ticks: 62),
+    expect: (enemy_count: 0, hitbox: false, attack_phase: Idle),
+)

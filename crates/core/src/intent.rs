@@ -84,6 +84,7 @@ pub struct Intent {
     move_dir: MoveDir,
     aim: AimDir,
     attack: bool,
+    attack_held: bool,
     interact: bool,
 }
 
@@ -96,8 +97,15 @@ impl Intent {
     /// [`crate::Actions`] exists to make hard.
     #[must_use]
     pub fn new(move_dir: MoveDir, aim: AimDir, attack: bool) -> Self {
-        Self { move_dir, aim, attack, interact: false }
+        Self { move_dir, aim, attack, attack_held: false, interact: false }
     }
+
+    /// Supplies the attack level independently of the press edge, for channels.
+    #[must_use]
+    pub fn with_attack_held(self, held: bool) -> Self { Self { attack_held: held, ..self } }
+
+    /// Whether the attack remains held on this tick.
+    pub fn attack_held(self) -> bool { self.attack_held }
 
     /// Adds this tick's interaction edge. Holding a key does not repeat it.
     #[must_use]

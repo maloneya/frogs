@@ -31,13 +31,8 @@ pub enum Action {
     MoveLeft,
     /// Toward the right of the screen.
     MoveRight,
-    /// Swing.
-    ///
-    /// Edge-triggered where the movement four are level-triggered, and that
-    /// difference is the whole reason [`Actions`] carries both: holding the key
-    /// must not swing every tick, and a tap shorter than a frame must still
-    /// swing exactly once. `just_pressed` is the accessor; `held` is the wrong
-    /// question to ask about it.
+    /// Attack: swings use the press edge, channels use the held level.
+    /// Short taps still latch a swing; a released channel must stop immediately.
     Attack,
     /// Use a nearby object, once per press.
     Interact,

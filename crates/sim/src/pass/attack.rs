@@ -108,7 +108,9 @@ pub(crate) struct Attack {
     /// Authored move selected for the next swing.
     profile: AttackProfile,
     /// The next swing's complete configuration; the current swing owns a copy.
-    resolved: ResolvedAttack,
+    resolved: Option<ResolvedAttack>,
+    /// Tick within the beam damage cadence; no body identities are retained.
+    channel: Option<u32>,
     /// Bodies this swing has already struck.
     ///
     /// **Once per swing, not once per tick.** Without this, a body standing in
@@ -125,6 +127,7 @@ impl Default for Attack {
     fn default() -> Self {
         Self {
             swing: None,
+            channel: None,
             profile: AttackProfile::default(),
             resolved: AttackProfile::default().resolve(),
             struck: Vec::with_capacity(EXPECTED_HITS),
@@ -133,6 +136,15 @@ impl Default for Attack {
 }
 
 impl Attack {
+    /// Channel admission for the upcoming tick, shared by walking, aim and damage.
+    pub(crate) fn channels(&self, held: bool) -> bool {
+        held && self.profile == AttackProfile::Disintegrate && !self.holds_facing()
+    }
+
+    pub(crate) fn beam(&self, origin: Vec2, facing: f32) -> Option<crate::Beam> {
+        self.channel.map(|_| crate::Beam::new(origin, facing))
+    }
+
     /// Whether the current swing still owns facing on the upcoming tick.
     /// Retirement happens before new input, matching the attack pass below.
     pub(crate) fn holds_facing(&self) -> bool {
@@ -149,8 +161,9 @@ impl Attack {
 
     /// A fresh observation, never a second maintained copy of attack state.
     pub(crate) fn status(&self) -> AttackStatus {
-        let Self { swing, profile, resolved, struck } = self;
+        let Self { swing, profile, resolved, channel, struck } = self;
         let phase = match swing.as_ref().map(InFlight::phase) {
+            None if channel.is_some() => AttackPhase::Active,
             None => AttackPhase::Idle,
             Some(Phase::Startup) => AttackPhase::Startup,
             Some(Phase::Active(_)) => AttackPhase::Active,
@@ -158,12 +171,14 @@ impl Attack {
         };
         AttackStatus {
             phase,
+            channeling: channel.is_some(),
+            channel_tick: *channel,
             elapsed: swing.as_ref().map_or(0, |s| s.elapsed),
             profile: *profile,
             swing_profile: swing.as_ref().map(|s| s.profile),
             resolved: *resolved,
             swing_resolved: swing.as_ref().map(|s| s.resolved),
-            recovery: resolved.recovery(),
+            recovery: resolved.map(ResolvedAttack::recovery),
             swing_recovery: swing.as_ref().map(|s| s.resolved.recovery()),
             struck: struck.len(),
         }
@@ -194,14 +209,15 @@ impl Attack {
     }
 
     pub(crate) fn set_recovery(&mut self, recovery: RecoveryTicks) -> bool {
-        let changed = self.resolved.recovery() != recovery;
-        self.resolved = self.resolved.with_recovery(recovery);
+        let Some(resolved) = self.resolved else { return false };
+        let changed = resolved.recovery() != recovery;
+        self.resolved = Some(resolved.with_recovery(recovery));
         changed
     }
 
     /// Whether the hitbox exists right now.
     pub(crate) fn hitbox_is_live(&self) -> bool {
-        matches!(self.swing.as_ref().map(InFlight::phase), Some(Phase::Active(_)))
+        self.channel.is_some() || matches!(self.swing.as_ref().map(InFlight::phase), Some(Phase::Active(_)))
     }
 
     /// How many bodies the current or most recent swing struck.
@@ -211,9 +227,11 @@ impl Attack {
 
     /// Feeds the swing into the world hash. Exhaustive, as every hash here is.
     pub(crate) fn hash(&self, h: &mut crate::hash::Fnv) {
-        let Self { swing, profile, resolved, struck } = self;
+        let Self { swing, profile, resolved, channel, struck } = self;
         h.usize(*profile as usize);
-        resolved.hash(h);
+        if let Some(resolved) = resolved { resolved.hash(h); }
+        h.usize(usize::from(channel.is_some()));
+        if let Some(cadence) = channel { h.u64(u64::from(*cadence)); }
 
         // `None` and "tick 0 of a swing" are different states and must hash
         // differently, so the discriminant goes in as well as the value.
@@ -285,13 +303,14 @@ pub(crate) struct Pose {
 pub(crate) fn attack(
     state: &mut Attack,
     pose: Pose,
-    pressed: bool,
+    input: arpg_core::Intent,
     bodies: &[EntityId],
     pos: &[Vec2],
     mut impulses: ImpulseSink<'_>,
     mut damage: DamageSink<'_>,
     mut trace: TraceSink<'_>,
 ) {
+    let channel_requested = state.channels(input.attack_held());
     // **Advance first, then accept a press, then act.** The order is the whole
     // state machine, and the obvious alternative — advancing at the end — is
     // wrong in a way that only shows up when something *observes* the swing.
@@ -318,9 +337,21 @@ pub(crate) fn attack(
         state.swing = None;
     }
 
-    if state.swing.is_none() && pressed {
+    if !channel_requested && state.channel.take().is_some() {
+        trace.emit(Event::ChannelStopped);
+    }
+    if channel_requested {
+        let cadence = state.channel.map_or(0, |tick| (tick + 1) % crate::Beam::HIT_EVERY);
+        if state.channel.is_none() { trace.emit(Event::ChannelStarted); }
+        state.channel = Some(cadence);
+        state.struck.clear();
+        if cadence == 0 {
+            super::beam::strike(crate::Beam::new(pose.pos, pose.facing), bodies, pos, &mut damage, &mut trace);
+        }
+        return;
+    }
+    if state.swing.is_none() && input.attack() && let Some(resolved) = state.resolved {
         let profile = state.profile;
-        let resolved = state.resolved;
         let path = Swing::new(
             resolved.start(),
             resolved.end(),
@@ -445,6 +476,31 @@ mod tests {
     use super::*;
     use crate::trace::Trace;
 
+    #[test]
+    fn channel_presence_and_damage_clock_reach_hash_and_report() {
+        let mut state = Attack::default();
+        state.set_profile(AttackProfile::Disintegrate);
+        let hash = |state: &Attack| {
+            let mut hash = crate::hash::Fnv::default();
+            state.hash(&mut hash);
+            hash.finish()
+        };
+        let idle = hash(&state);
+        state.channel = Some(0);
+        let first = hash(&state);
+        assert_ne!(idle, first);
+        state.channel = Some(1);
+        assert_ne!(first, hash(&state));
+        let status = state.status();
+        assert!(status.channeling);
+        assert_eq!(status.channel_tick, Some(1));
+        assert!(status.resolved.is_none());
+        assert!(status.recovery.is_none());
+        let mut report = arpg_core::Report::default();
+        status.report(&mut report);
+        assert!(report.finish().contains("\"channel_tick\":1"));
+    }
+
     /// The default resolved attack, which is what these tests pin: they check the state
     /// machine's shape against whatever it is configured with, not against a
     /// second copy of the numbers.
@@ -472,7 +528,7 @@ mod tests {
             attack(
                 &mut state,
                 Pose { pos: Vec2::ZERO, facing: 0.0 },
-                press_on.contains(&tick),
+                arpg_core::Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, press_on.contains(&tick)),
                 &[],
                 &[],
                 physics.sink(player),

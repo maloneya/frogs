@@ -1,0 +1,25 @@
+// Beam radius .30 + enemy radius .25: x=.54 touches; x=.56 misses.
+// First pulse at 0; no second damage until 12. Release at 24 cancels that pulse.
+// Holding movement while channeling covers no distance; release allows .15m/tick.
+(
+    description: "Disintegrate pierces, respects width/reach, pulses every 12 ticks, and releases immediately.",
+    setup: (actions: [Place((0.0, 3.0)), Place((0.0, 7.0)), Place((0.54, 9.0)),
+        Place((0.56, 5.0)), Place((0.0, 12.56)), Place((0.0, -3.0))]),
+    attack_profiles: [(at: 0, profile: Disintegrate)],
+    channels: [(at: 0, ticks: 24)],
+    inputs: [(at: 0, ticks: 25, dir: (1.0, 0.0))],
+    aims: [(at: 0, dir: (0.0, 1.0))],
+    checkpoints: [
+        (at: 0, expect: (attack_phase: Active, hitbox: true, player_pos: (x: 0.0, z: 0.0, tol: 0.00001),
+            bodies: [(nth: 0, health: 2), (nth: 1, health: 2), (nth: 2, health: 2),
+                (nth: 3, health: 3), (nth: 4, health: 3), (nth: 5, health: 3)])),
+        (at: 11, expect: (bodies: [(nth: 0, health: 2), (nth: 1, health: 2)])),
+        (at: 12, expect: (bodies: [(nth: 0, health: 1), (nth: 1, health: 1), (nth: 2, health: 1)])),
+        (at: 23, expect: (hitbox: true, player_pos: (x: 0.0, z: 0.0, tol: 0.00001))),
+    ],
+    budget: (ticks: 25),
+    expect: (attack_phase: Idle, hitbox: false, enemy_count: 6,
+        player_pos: (x: 0.15, z: 0.0, tol: 0.00001),
+        bodies: [(nth: 0, health: 1, velocity: (x: 0.0, z: 0.0, tol: 0.00001)), (nth: 1, health: 1),
+            (nth: 2, health: 1), (nth: 3, health: 3), (nth: 4, health: 3), (nth: 5, health: 3)]),
+)

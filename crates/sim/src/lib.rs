@@ -13,6 +13,8 @@ use arpg_core::{Intent, Report};
 
 mod angle;
 mod attack;
+mod beam;
+pub use beam::Beam;
 mod contact;
 mod hash;
 mod grid;
@@ -744,6 +746,14 @@ impl World {
         // cannot show a window, so these say where in the window the sample
         // fell; `trace` is what shows the window itself.
         attack.status().report(out);
+        out.object("beam", |out| {
+            if let Some(beam) = attack.beam(self.bodies.pos[0], self.player.facing) {
+                out.vec3("start", on_ground(beam.start(), 0.0));
+                out.vec3("end", on_ground(beam.end(), 0.0));
+                out.num("radius", Beam::RADIUS);
+                out.int("hit_every_ticks", u64::from(Beam::HIT_EVERY));
+            }
+        });
         out.int("trace_events", trace.len() as u64);
         out.int("trace_dropped", trace.dropped() as u64);
 
@@ -793,7 +803,7 @@ impl World {
 
     /// Run the same schedule with read-only diagnostic phase notifications.
     pub fn step_observed(&mut self, dt: Dt, intent: Intent, observer: &mut impl StepObserver) {
-        let move_dir = intent.move_dir();
+        let move_dir = pass::beam::movement(&self.player.attack, intent);
         // Bound to the tick being run, so no pass can stamp an event with the
         // wrong one. See `trace::TraceSink`.
         let mut trace = self.trace.sink(self.tick);
@@ -885,7 +895,7 @@ impl World {
                 pos: self.bodies.pos[0],
                 facing: self.player.facing,
             },
-            intent.attack(),
+            intent,
             &self.bodies.slots.ids()[1..],
             &self.bodies.pos[1..],
             self.bodies.physics.sink(self.bodies.slots.ids()[0]),
@@ -1102,8 +1112,12 @@ impl World {
             })
     }
 
-    /// Committed attack geometry at the last completed tick: the startup path,
-    /// the single active sample, or no discs during idle and recovery.
+    /// Active channel capsule at the last completed tick, absent after release.
+    pub fn beam(&self) -> Option<Beam> {
+        self.player.attack.beam(self.bodies.pos[0], self.player.facing)
+    }
+
+    /// Committed swing discs (channels expose a capsule through `beam`).
     pub fn attack_discs(&self) -> impl Iterator<Item = AttackDisc> + '_ {
         self.player.attack.debug_discs(self.bodies.pos[0], self.player.facing)
     }

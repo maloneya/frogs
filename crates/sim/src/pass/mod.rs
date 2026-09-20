@@ -55,7 +55,7 @@
 //! 10. [`motion::settle`] — damp carried velocity and snap its small tail to
 //!     rest. After contact response, before a new attack impulse.
 //! 11. [`face`] — follow independent aim before placing a hitbox; snap on an accepted
-//!     attack and hold that facing through recovery. Walking is unaffected.
+//!     swing and hold that facing through recovery. Channels follow aim each tick.
 //! 12. [`attack`] — test final positions, apply an impulse and subtract one hit
 //!     point once per target per swing. Velocity changes now; displacement
 //!     begins on the next tick.
@@ -72,6 +72,10 @@
 //! identity and mechanisms as every other physical body.
 
 pub(crate) mod attack;
+/// Channel admission suppresses powered walk before movement, leaving carried
+/// physics intact. Attack resolves its damage pulses after final positions and
+/// facing, before defeated bodies are removed. Release ends it on that tick.
+pub(crate) mod beam;
 pub(crate) mod contain;
 pub(crate) mod face;
 pub(crate) mod health;

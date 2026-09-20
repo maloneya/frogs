@@ -149,6 +149,10 @@ pub enum Event {
     /// early leaves final state indistinguishable from a correct swing; the
     /// only place the mistake exists is between two samples.
     Swung,
+    /// A held beam began.
+    ChannelStarted,
+    /// Release or selection change ended a beam.
+    ChannelStopped,
     /// The hitbox came into existence. Startup is over.
     HitboxOpened,
     /// The hitbox stopped existing. Anything arriving now is too late.
@@ -219,6 +223,8 @@ impl fmt::Display for Event {
             Self::Fired { source } => write!(f, "fired source={source}"),
             Self::Refused { count } => write!(f, "refused count={count}"),
             Self::Removed { id } => write!(f, "removed id={id}"),
+            Self::ChannelStarted => write!(f, "channel started"),
+            Self::ChannelStopped => write!(f, "channel stopped"),
             Self::Swung => write!(f, "swung"),
             Self::HitboxOpened => write!(f, "hitbox opened"),
             Self::HitboxClosed => write!(f, "hitbox closed"),

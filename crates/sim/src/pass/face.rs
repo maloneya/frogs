@@ -20,7 +20,7 @@ const _: () = assert!(PLAYER_TURN_RATE > 0.0);
 /// continuing swings retain the direction they started with.
 pub(crate) fn aim(facing: &mut f32, attack: &super::attack::Attack, intent: arpg_core::Intent, dt: Dt) {
     if attack.holds_facing() { return; }
-    if intent.attack() {
+    if intent.attack() || attack.channels(intent.attack_held()) {
         let dir = intent.aim().as_vec3();
         *facing = f32::atan2(dir.x, dir.z);
     } else {

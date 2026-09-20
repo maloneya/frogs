@@ -296,6 +296,7 @@ fn every_attack_profile_resolves_to_its_own_presentation_clip() {
     let expected = [
         "AttackCleave",
         "AttackSlam",
+        "AttackSlam",
     ];
     for (profile, expected) in AttackProfile::ALL.into_iter().zip(expected) {
         let id = character.clips.for_role(PresentationRole::Attack(profile));
@@ -340,7 +341,7 @@ fn authoritative_player_facts_drive_direct_roles() {
 fn recovery_tuning_cannot_move_an_active_phase_sample() {
     let mut character = loaded_character_from(default_character_path());
     for profile in AttackProfile::ALL {
-        let base = profile.resolve();
+        let Some(base) = profile.resolve() else { continue };
         let longer = arpg_sim::ResolvedAttack::try_new(
             base.startup(),
             base.active(),
@@ -379,10 +380,10 @@ fn recovery_tuning_cannot_move_an_active_phase_sample() {
 fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
     let mut character = loaded_character_from(default_character_path());
     let tip = |character: &mut LoadedCharacter<()>, profile, phase, elapsed, alpha| {
-        weapon_tip_at(character, profile, phase, elapsed, alpha, profile.resolve())
+        weapon_tip_at(character, profile, phase, elapsed, alpha, profile.resolve().unwrap())
     };
     for profile in AttackProfile::ALL {
-        let resolved = profile.resolve();
+        let Some(resolved) = profile.resolve() else { continue };
         let ready = tip(
             &mut character,
             profile,
@@ -431,7 +432,7 @@ fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
     }
 
     let profile = AttackProfile::Cleave;
-    let resolved = profile.resolve();
+    let resolved = profile.resolve().unwrap();
     let wound = tip(
         &mut character, profile, AttackPhase::Active,
         resolved.startup(), Alpha::ZERO,

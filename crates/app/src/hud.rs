@@ -85,7 +85,7 @@ pub(crate) fn draw(
         .expect("line capacity");
         write!(lines[FOOTER + 2], "Enter: select/close   R: Cleave   F1/Esc: cancel")
             .expect("line capacity");
-        write!(lines[FOOTER + 3], "Resolved values are captured when the swing begins")
+        write!(lines[FOOTER + 3], "Hold click/Space for beams; release to move")
             .expect("line capacity");
         let selected = AttackProfile::ALL
             .iter()
@@ -94,17 +94,22 @@ pub(crate) fn draw(
         (lines.len(), Some(1 + selected))
     } else {
         write!(lines[0], "F1: attack profiles   F2: scenes").expect("line capacity");
-        write!(
-            lines[1],
-            "HP {}/{} / {} / {} / tick {} / struck {}",
-            player_health,
-            arpg_game::PLAYER_MAX_HEALTH,
-            attack.profile,
-            attack.phase,
-            attack.elapsed,
-            attack.struck
-        )
-        .expect("line capacity");
+        if attack.channeling {
+            write!(lines[1], "HP {}/{} / Disintegrate / Channeling / Release to move",
+                player_health, arpg_game::PLAYER_MAX_HEALTH).expect("line capacity");
+        } else {
+            write!(
+                lines[1],
+                "HP {}/{} / {} / {} / tick {} / struck {}",
+                player_health,
+                arpg_game::PLAYER_MAX_HEALTH,
+                attack.profile,
+                attack.phase,
+                attack.elapsed,
+                attack.struck
+            )
+            .expect("line capacity");
+        }
         (2, None)
     };
     let lines = &lines[..count];
@@ -152,7 +157,11 @@ fn encounter_line(line: &mut Text, name: &str, state: arpg_game::EncounterState)
 }
 
 fn profile_line(line: &mut Text, profile: AttackProfile) {
-    let resolved = profile.resolve();
+    let Some(resolved) = profile.resolve() else {
+        write!(line, "Disintegrate: hold attack, aim cursor / {}m / {} hits per second",
+            arpg_sim::Beam::LENGTH, arpg_sim::TICK_HZ / arpg_sim::Beam::HIT_EVERY).expect("line capacity");
+        return;
+    };
     write!(
         line,
         "{:<13} {:>2}/{:>2}/{:>2}t ({:.1},{:.1})->({:.1},{:.1}) r{:.2}/{:.2} kb{:.1}",

@@ -142,6 +142,7 @@ impl PresentationRole {
             Self::Run => "run",
             Self::Attack(AttackProfile::Cleave) => "attack_cleave",
             Self::Attack(AttackProfile::Slam) => "attack_slam",
+            Self::Attack(AttackProfile::Disintegrate) => "channel",
         }
     }
 }
@@ -182,6 +183,7 @@ impl CharacterClips {
         match profile {
             AttackProfile::Cleave => "AttackCleave",
             AttackProfile::Slam => "AttackSlam",
+            AttackProfile::Disintegrate => "AttackSlam",
         }
     }
 
@@ -258,7 +260,9 @@ impl<T> LoadedCharacter<T> {
 
     fn role(player: PlayerPresentation) -> PresentationRole {
         let attack = player.attack();
-        if attack.phase != AttackPhase::Idle {
+        if attack.channeling {
+            PresentationRole::Attack(AttackProfile::Disintegrate)
+        } else if attack.phase != AttackPhase::Idle {
             PresentationRole::Attack(
                 attack
                     .swing_profile
@@ -284,6 +288,8 @@ impl<T> LoadedCharacter<T> {
             PresentationRole::Idle | PresentationRole::Run => {
                 metadata.loop_time(presentation_seconds)
             }
+            // Hold the existing forward casting pose for this prototype.
+            PresentationRole::Attack(AttackProfile::Disintegrate) => metadata.duration_seconds() * 0.5,
             PresentationRole::Attack(_) => {
                 let attack = player.attack();
                 let resolved = attack

@@ -44,6 +44,10 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) attacks: Vec<u64>,
 
+    /// Half-open spans during which attack is held, independently of press edges.
+    #[serde(default)]
+    pub(crate) channels: Vec<ChannelSpan>,
+
     /// Ticks on which the interaction button is pressed.
     #[serde(default)]
     pub(crate) interactions: Vec<u64>,
@@ -140,6 +144,14 @@ pub(crate) struct SourceExpect {
 pub(crate) struct RecoveryAt {
     pub(crate) at: u64,
     pub(crate) recovery: RecoveryTicks,
+}
+
+/// A bounded hold; validated against the scenario budget before setup.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChannelSpan {
+    pub(crate) at: u64,
+    pub(crate) ticks: u64,
 }
 
 /// The same authored attack identity selected by the in-game panel.
