@@ -44,9 +44,6 @@ impl Chests {
     pub(crate) fn for_body(&self, body: EntityId) -> Option<ChestState> {
         self.rows.iter().find(|row| row.body == body).map(|row| row.state)
     }
-    pub(crate) fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
     pub(crate) fn validate(
         &self,
         specs: &[ChestSpec],

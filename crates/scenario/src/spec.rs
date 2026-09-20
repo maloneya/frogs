@@ -359,8 +359,6 @@ pub(crate) struct Expect {
     #[serde(default)]
     pub(crate) source_states: Vec<SourceExpect>,
     #[serde(default)]
-    pub(crate) controls: Vec<ControlExpect>,
-    #[serde(default)]
     pub(crate) encounters: Vec<EncounterExpect>,
     #[serde(default)]
     pub(crate) doors: Vec<DoorExpect>,
@@ -535,15 +533,6 @@ pub(crate) struct SceneAt {
 pub(crate) enum SceneAction {
     Load(SceneRef),
     Evict(usize),
-}
-
-/// Exact game-owned relationship observation, including authoritative source state.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ControlExpect {
-    pub(crate) scene: usize,
-    pub(crate) control: usize,
-    pub(crate) state: Option<arpg_game::ControlState>,
 }
 
 /// A removal uses the same placement identity binding as body assertions.

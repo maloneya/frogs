@@ -1,6 +1,5 @@
 //! Compatibility at the adapter boundary: the game must preserve the engine's
-//! tick history and physical output. The restart report is the explicit new
-//! game-owned state; the engine fingerprint remains unchanged by that addition.
+//! tick history and physical output. Gameplay reports are checked by lifecycle tests.
 
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::Game;
@@ -10,7 +9,7 @@ use arpg_sim::{
 };
 use glam::{Vec2, Vec3};
 
-fn assert_same(game: &Game, world: &World, restart: Option<(&str, u64)>) {
+fn assert_same(game: &Game, world: &World) {
     assert_eq!(game.tick(), world.tick());
     assert_eq!(game.engine_hash(), world.hash(), "state differs at tick {}", game.tick());
     assert_eq!(game.trace().render(), world.trace().render());
@@ -18,52 +17,20 @@ fn assert_same(game: &Game, world: &World, restart: Option<(&str, u64)>) {
     let mut engine_report = Report::default();
     game.report(&mut game_report);
     world.report(&mut engine_report);
-    engine_report.object("source_controls", |_| {});
-    // Lighting is checked independently; this comparison still pins all engine output.
-    engine_report.int("torch_count", game.torch_count() as u64);
-    engine_report.object("torches", |out| {
-        for (scene, _) in game.scene_instances() {
-            let mut nth = 0;
-            while let Some(torch) = game.scene_torch(scene, nth) {
-                let light = torch.light();
-                out.object(&format!("{scene}/{nth}"), |out| {
-                    out.text("scene", &scene.to_string());
-                    out.vec3("position", light.position());
-                    out.vec3("colour", light.colour());
-                    out.num("intensity", light.intensity());
-                    out.num("range", light.range());
-                });
-                nth += 1;
-            }
-        }
-    });
-    engine_report.object("doors", |_| {});
-    engine_report.object("chests", |_| {});
-    engine_report.object("encounters", |_| {});
-    engine_report.object("player_health", |out| {
-        out.int("remaining", u64::from(game.player_health()));
-        out.int("maximum", u64::from(arpg_game::PLAYER_MAX_HEALTH));
-    });
-    engine_report.object("enemy_attack", |out| out.bool("active", false));
-    engine_report.int("encounter_events_dropped", 0);
-    engine_report.int("control_events_dropped", 0);
-    engine_report.object("restart", |out| {
-        out.bool("available", restart.is_some());
-        if let Some((name, initial_hash)) = restart {
-            out.text("name", name);
-            out.text("initial_hash", &format!("{initial_hash:016x}"));
-        }
-    });
-    assert_eq!(game_report.finish(), engine_report.finish());
+    // Game reports the complete engine object first, then appends gameplay
+    // fields. Compare that prefix without mirroring the gameplay schema.
+    let engine = engine_report.finish();
+    let prefix = format!("{},", engine.strip_suffix('}').unwrap());
+    assert!(game_report.finish().starts_with(&prefix));
 }
 
 #[test]
 fn construction_matches_the_engine_scene_loading_path() {
-    assert_same(&Game::default(), &World::default(), None);
-    assert_same(&Game::empty(), &World::empty(), None);
+    assert_same(&Game::default(), &World::default());
+    assert_same(&Game::empty(), &World::empty());
     let scene = Scene::boot();
     let world = World::from_scene(&scene).unwrap();
-    assert_same(&Game::from_scene(&scene.clone().into()).unwrap(), &world, Some((&scene.name, world.hash())));
+    assert_same(&Game::from_scene(&scene.clone().into()).unwrap(), &world);
 }
 
 #[test]
@@ -83,8 +50,7 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
     };
     let mut game = Game::from_scene(&scene.clone().into()).unwrap();
     let mut world = World::from_scene(&scene).unwrap();
-    let restart = Some((scene.name.as_str(), world.hash()));
-    assert_same(&game, &world, restart);
+    assert_same(&game, &world);
     let mut clock = Accumulator::default();
     let mut stepped = 0;
 
@@ -110,7 +76,7 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
             game.step(dt, intent);
             world.step(dt, intent);
             stepped += 1;
-            assert_same(&game, &world, restart);
+            assert_same(&game, &world);
         }
 
         let before = game.hash();

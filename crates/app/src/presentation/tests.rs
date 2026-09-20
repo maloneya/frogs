@@ -551,7 +551,7 @@ fn chest_presentation_follows_opening_and_eviction_without_drawing_a_plinth() {
     // A one-tick timeout exercises the same unlock effect without a combat fixture.
     scene.encounters = vec![EncounterSpec { name: "View test".into(), start: EncounterStart::Activated(0),
         objective: EncounterObjective::Defeat(DefeatObjective { sources: vec![0], count: 1.try_into().unwrap(), within_ticks: 1.try_into().unwrap() }),
-        on_start: vec![EncounterAction::EnableSource(0)], on_success: vec![], on_failure: vec![EncounterAction::UnlockChest(0)] }];
+        on_start: vec![], on_success: vec![], on_failure: vec![EncounterAction::UnlockChest(0)] }];
     let mut game = Game::from_scene(&scene).unwrap();
     let owner = game.scene_instances().next().unwrap().0;
     let mut view = WorldAssets::load(|_| Ok(())).unwrap();

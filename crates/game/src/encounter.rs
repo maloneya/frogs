@@ -39,11 +39,9 @@ pub enum EncounterObjective {
     Defeat(DefeatObjective),
 }
 
-/// Typed effects. Targets are scene-local source, door or chest indices.
+/// Typed effects. Targets are scene-local door or chest indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub enum EncounterAction {
-    /// Enable an owned source at encounter start.
-    EnableSource(usize),
     /// Unlock a gameplay door; opening still needs a fresh interaction.
     UnlockDoor(usize),
     /// Unlock a chest; a fresh interaction opens its lid.
@@ -61,6 +59,7 @@ pub struct EncounterSpec {
     /// Objective rule and tuning.
     pub objective: EncounterObjective,
     /// Effects applied before the first active simulation tick.
+    #[serde(default)]
     pub on_start: Vec<EncounterAction>,
     /// Effects after a successful final simulation tick.
     #[serde(default)]
@@ -164,7 +163,6 @@ impl std::fmt::Display for EncounterEvent {
 
 #[derive(Clone, Copy)]
 enum Action {
-    EnableSource(SourceId),
     Door(usize),
     Chest(usize),
 }
@@ -186,9 +184,6 @@ pub(crate) struct Encounters {
 }
 
 impl Encounters {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
     pub(crate) fn validate_add(&self, scene: &GameScene) -> Result<(), SceneError> {
         let invalid = |reason| Err(SceneError::Encounter(reason));
         if scene.encounters.len() > MAX_ENCOUNTERS - self.rows.len() {
@@ -231,44 +226,19 @@ impl Encounters {
                 }
                 if objective.sources[..index].contains(&source)
                     || owned_sources.contains(&source)
-                    || scene
-                        .source_controls
-                        .iter()
-                        .any(|control| control.source == source)
                 {
-                    return invalid(
-                        "a source may have only one encounter or activation controller",
-                    );
-                }
-                if !spec
-                    .on_start
-                    .contains(&EncounterAction::EnableSource(source))
-                {
-                    return invalid("each objective source must be enabled on start");
+                    return invalid("a source may have only one encounter");
                 }
                 owned_sources.push(source);
             }
             let mut local_doors = Vec::new();
             let mut local_chests = Vec::new();
-            for (stage, actions) in [&spec.on_start, &spec.on_success, &spec.on_failure]
-                .into_iter()
-                .enumerate()
-            {
+            for actions in [&spec.on_start, &spec.on_success, &spec.on_failure] {
                 for (index, action) in actions.iter().enumerate() {
                     if actions[..index].contains(action) {
                         return invalid("duplicate or conflicting action target in one transition");
                     }
                     match *action {
-                        EncounterAction::EnableSource(source) => {
-                            if !objective.sources.contains(&source) {
-                                return invalid(
-                                    "source actions must target the encounter's source group",
-                                );
-                            }
-                            if stage != 0 {
-                                return invalid("terminal encounters cannot enable sources");
-                            }
-                        }
                         EncounterAction::UnlockChest(chest) => {
                             if chest >= scene.chests.len() || owned_chests.contains(&chest) {
                                 return invalid("chest action must bind an exclusively owned scene chest");
@@ -307,9 +277,6 @@ impl Encounters {
                 actions
                     .iter()
                     .map(|action| match *action {
-                        EncounterAction::EnableSource(index) => {
-                            Action::EnableSource(sources[index])
-                        }
                         EncounterAction::UnlockDoor(index) => Action::Door(index),
                         EncounterAction::UnlockChest(index) => Action::Chest(index),
                     })
@@ -402,10 +369,6 @@ impl Encounters {
                 out.usize(actions.len());
                 for action in actions {
                     match action {
-                        Action::EnableSource(id) => {
-                            out.usize(0);
-                            id.hash_into(out);
-                        }
                         Action::Chest(index) => { out.usize(2); out.usize(*index); }
                         Action::Door(index) => {
                             out.usize(1);
@@ -452,9 +415,6 @@ fn effects(
 ) {
     for action in actions {
         match *action {
-            Action::EnableSource(id) => {
-                let _ = access.set_source(id, true);
-            }
             Action::Chest(index) => chests.unlock(owner, index, access, trace),
             Action::Door(index) => doors.unlock(owner, index, access, trace),
         }
@@ -501,6 +461,11 @@ pub(crate) fn begin(
                 && access.interaction(row.start) == Some(InteractionState::Activated)
             {
                 row.state.phase = EncounterPhase::Running;
+                // The objective owns the source group. Start it once, in authored
+                // group order, before this tick's engine source evaluation.
+                for &source in &row.sources {
+                    let _ = access.set_source(source, true);
+                }
                 effects(row.owner, &row.on_start, doors, chests, access, trace);
             } else {
                 continue;

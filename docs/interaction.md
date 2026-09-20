@@ -1,8 +1,8 @@
 # Static props and interaction
 
-Open F2, select `activate_horde.ron`, and press Enter. Press E beside the blue
-block: it turns green once and starts a capped source of seekers. Restart
-current restores Ready. See [the playtest](source-control-playtest.md).
+Open F2, select `soul_trial.ron`, and press Enter. Press E beside the blue
+block: it turns green once and starts the timed encounter. Restart current
+restores Ready. See [encounters](encounters.md).
 The block uses the [plinth asset](../assets/world/README.md) and a circular
 collision footprint; visible geometry does not define its physical shape.
 

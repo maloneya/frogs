@@ -305,29 +305,13 @@ fn gameplay_content_and_relationship_assertions_fail_closed() {
     let scene = r#"engine: (name: "trial",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
         sources: [(pos: (20.0, 0.0), enabled: false)])"#;
-    for connection in [
-        "[(body: 1, source: 0)]", "[(body: 0, source: 1)]",
-        "[(body: 0, source: 0), (body: 0, source: 0)]",
-        "[(body: 0, soruce: 0)]",
-    ] {
-        let fixture = Fixture::new(&format!(
-            "(setup: (scenes: [Inline(({scene}, source_controls: {connection}))]), budget: (ticks: 2))"
-        ));
-        for flags in [&[][..], &["--bless"][..]] {
-            let (output, text) = fixture.run(flags);
-            assert_eq!(output.status.code(), Some(1), "{connection}: {text}");
-        }
-    }
     for fields in [
-        "expect: (controls: [(scene: 0, control: 1, state: None)])",
-        "expect: (controls: [(scene: 1, control: 0, state: None)])",
         "source_switches: [(at: 0, scene: 0, source: 1, enabled: true)]",
         "remove_sources: [(at: 0, scene: 1, source: 0)]",
         "despawns: [(at: 0, body: 99)]",
-        "checkpoints: [(at: 0, expect: (controls: [(scene: 0, control: 0, state: Some((phase: Started, source: Some((enabled: true, countdown: 0, emitted: 1)))))]))], interactions: [0]",
     ] {
         let fixture = Fixture::new(&format!(
-            "(setup: (scenes: [Inline(({scene}, source_controls: [(body: 0, source: 0)]))]), budget: (ticks: 2), {fields})"
+            "(setup: (scenes: [Inline(({scene}))]), budget: (ticks: 2), {fields})"
         ));
         for flags in [&[][..], &["--bless"][..]] {
             let (output, text) = fixture.run(flags);
@@ -356,7 +340,7 @@ fn encounter_admission_and_observation_errors_cannot_be_blessed() {
     doors: [(body:1)],
     encounters: [(name:"Trial", start:Activated(0),
         objective:Defeat((sources:[0], count:1, within_ticks:10)),
-        on_start:[EnableSource(0)], on_success:[UnlockDoor(0)])]"#;
+        on_success:[UnlockDoor(0)])]"#;
     for (content,expect) in [
         (scene.to_owned(), "encounters:[(scene:0, encounter:1, state:None)]"),
         (scene.to_owned(), "doors:[(scene:0, door:1, state:None)]"),

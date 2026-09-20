@@ -57,7 +57,7 @@ use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, TICK_HZ, Ticks};
 pub use trace::{Event, Trace, TraceSink};
 mod access;
-pub use access::{GameplayAccess, InteractionView, MeleeView, SourceEnablement};
+pub use access::{GameplayAccess, MeleeView};
 
 /// One tick of walking, in world units. Re-exported because a scenario or a
 /// harness reading a position is almost always trying to work out how many

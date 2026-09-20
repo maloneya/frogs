@@ -2,7 +2,7 @@
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{
     DefeatObjective, DoorSpec, DoorState, EncounterAction as Action, EncounterObjective,
-    EncounterPhase as Phase, EncounterSpec, EncounterStart, Game, GameScene, SourceControlSpec,
+    EncounterPhase as Phase, EncounterSpec, EncounterStart, Game, GameScene,
 };
 use arpg_sim::{Accumulator, AttackProfile, Condition, Dt, Placed, SourceSpec, Template};
 use glam::{Vec2, Vec3};
@@ -26,7 +26,7 @@ fn trial(name: &str, body: usize, source: usize, door: usize, ticks: u32) -> Enc
             count: 1.try_into().unwrap(),
             within_ticks: ticks.try_into().unwrap(),
         }),
-        on_start: vec![Action::EnableSource(source)],
+        on_start: vec![],
         on_success: vec![Action::UnlockDoor(door)],
         on_failure: vec![],
     }
@@ -184,13 +184,15 @@ fn load_rejection_is_atomic_even_with_pending_spawns_and_activation() {
     s.encounters[0].on_success = vec![Action::UnlockDoor(100)];
     invalid.push(s);
     let mut s = scene();
-    s.encounters[0].on_start.push(Action::EnableSource(0));
+    s.encounters[0].on_start = vec![Action::UnlockDoor(0), Action::UnlockDoor(0)];
     invalid.push(s);
     let mut s = scene();
-    s.encounters[0].on_start.clear();
+    let EncounterObjective::Defeat(o) = &mut s.encounters[0].objective;
+    o.sources.push(0);
     invalid.push(s);
     let mut s = scene();
-    s.encounters[0].on_failure.push(Action::EnableSource(0));
+    let EncounterObjective::Defeat(o) = &mut s.encounters[0].objective;
+    o.sources = vec![100];
     invalid.push(s);
     let mut s = scene();
     s.engine.sources[0].enabled = true;
@@ -199,8 +201,7 @@ fn load_rejection_is_atomic_even_with_pending_spawns_and_activation() {
     s.engine.sources[0].what = Template::BLOCK;
     invalid.push(s);
     let mut s = scene();
-    s.source_controls
-        .push(SourceControlSpec { body: 0, source: 0 });
+    s.engine.bodies[0].what = Template::BLOCK;
     invalid.push(s);
     let mut s = scene();
     let EncounterObjective::Defeat(o) = &mut s.encounters[1].objective;
@@ -217,6 +218,8 @@ fn load_rejection_is_atomic_even_with_pending_spawns_and_activation() {
     }
     step(&mut game, 1, false);
     assert_eq!(game.enemy_count(), 2);
+    game.restart().unwrap();
+    assert_eq!(observed(&game), observed(&Game::from_scene(&scene()).unwrap()));
 }
 
 #[test]
@@ -294,9 +297,6 @@ fn a_source_group_accepts_either_producer_and_stops_both_on_success() {
     authored.engine.sources.swap(0, 1);
     let EncounterObjective::Defeat(objective) = &mut authored.encounters[0].objective;
     objective.sources.push(1);
-    authored.encounters[0]
-        .on_start
-        .push(Action::EnableSource(1));
     let mut game = Game::from_scene(&authored).unwrap();
     let id = game.scene_instances().next().unwrap().0;
     let sources = game.scene_sources(id).unwrap().to_vec();
@@ -353,4 +353,61 @@ fn live_capacity_rejection_preserves_instances_and_is_released_on_eviction() {
     assert_eq!(observed(&game), before);
     assert!(game.evict_scene(ids[0]));
     assert!(game.load_scene(&authored).is_ok());
+}
+
+#[test]
+fn source_group_starts_once_and_pending_activation_is_discarded_by_restart() {
+    // Prediction: activation completes on tick 0; both sources start on tick 1
+    // in objective order. Disabling one externally is not undone by the pass.
+    let mut authored = scene();
+    authored.encounters.truncate(1);
+    authored.encounters[0].on_start = vec![Action::UnlockDoor(0)];
+    let EncounterObjective::Defeat(objective) = &mut authored.encounters[0].objective;
+    objective.sources = vec![1, 0];
+    let mut game = Game::from_scene(&authored).unwrap();
+    let owner = game.scene_instances().next().unwrap().0;
+    let sources = game.scene_sources(owner).unwrap().to_vec();
+    step(&mut game, 0, true);
+    assert_eq!(game.enemy_count(), 0);
+    assert_eq!(game.encounter_state(owner, 0).unwrap().phase, Phase::Ready);
+    assert_eq!(game.door_state(owner, 0), Some(DoorState::Locked));
+    game.restart().unwrap();
+    step(&mut game, 0, false);
+    step(&mut game, 1, false);
+    assert_eq!(game.enemy_count(), 0, "restart discards pending activation");
+    step(&mut game, 2, true);
+    game.clear_trace();
+    step(&mut game, 3, false);
+    assert_eq!(game.enemy_count(), 2);
+    assert_eq!(game.door_state(owner, 0), Some(DoorState::Unlocked));
+    let enabled: Vec<_> = game.trace().iter().filter_map(|(_, event)| match event {
+        arpg_sim::Event::SourceEnablementChanged { id, enabled: true } => Some(id),
+        _ => None,
+    }).collect();
+    assert_eq!(enabled, vec![sources[1], sources[0]]);
+    assert!(game.set_source_enabled(sources[0], false));
+    step(&mut game, 4, true);
+    step(&mut game, 5, false);
+    assert!(!game.source_state(sources[0]).unwrap().enabled);
+    assert!(game.source_state(sources[1]).unwrap().enabled);
+    game.restart().unwrap();
+    assert_eq!(observed(&game), observed(&Game::from_scene(&authored).unwrap()));
+}
+
+#[test]
+fn encounter_endpoints_and_cached_relationships_affect_hash_without_changing_physics() {
+    let mut authored = scene();
+    authored.encounters.truncate(1);
+    let mut other = authored.clone();
+    other.encounters[0].start = EncounterStart::Activated(1);
+    let mut a = Game::from_scene(&authored).unwrap();
+    let mut b = Game::from_scene(&other).unwrap();
+    assert_eq!(a.engine_hash(), b.engine_hash());
+    assert_ne!(a.hash(), b.hash());
+    for game in [&mut a, &mut b] {
+        let owner = game.scene_instances().next().unwrap().0;
+        assert!(game.evict_scene(owner));
+    }
+    assert_eq!(a.engine_hash(), b.engine_hash());
+    assert_ne!(a.hash(), b.hash(), "cached encounter endpoint changes restart behavior");
 }

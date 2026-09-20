@@ -125,12 +125,6 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
                 failures.push(Failure::new("chests", "an authored scene chest".into(), format!("scene {} chest {}", item.scene, item.chest)));
             }
         }
-        for control in &expect.controls {
-            if !scenes.get(control.scene).is_some_and(|scene| control.control < scene.source_controls.len()) {
-                failures.push(Failure::new("controls", "an authored scene control".into(),
-                    format!("scene {} control {}", control.scene, control.control)));
-            }
-        }
         for source in &expect.source_states {
             if !source_exists(source.scene, source.source) {
                 failures.push(Failure::new(
@@ -569,7 +563,6 @@ fn check_state(
         seekers,
         sources,
         source_states,
-        controls,
         encounters,
         doors,
         chests,
@@ -670,14 +663,6 @@ fn check_state(
         let actual = instances.get(expected.scene).copied().flatten().and_then(|id| game.chest_state(id, expected.chest));
         if actual != expected.state {
             failures.push(Failure::new(&format!("chests[{}/{}]", expected.scene, expected.chest), format!("{:?}", expected.state), format!("{actual:?}")));
-        }
-    }
-    for expected in controls {
-        let actual = instances.get(expected.scene).copied().flatten()
-            .and_then(|id| game.source_control_state(id, expected.control));
-        if actual != expected.state {
-            failures.push(Failure::new(&format!("controls[{}/{}]", expected.scene, expected.control),
-                format!("{:?}", expected.state), format!("{actual:?}")));
         }
     }
     check_eq("torch_count", torch_count, game.torch_count(), &mut failures);

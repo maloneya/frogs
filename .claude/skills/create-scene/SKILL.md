@@ -30,10 +30,10 @@ definitions: [Scene, Placed and BodyGrid](../../../crates/sim/src/scene.rs),
 schema; use them over remembered fields or older examples. Read tuning constants
 at their definition when calculating a prediction.
 
-For gameplay relationships, also read [source control](../../../docs/source-control.md)
+For gameplay relationships, also read [encounters](../../../docs/encounters.md)
 and the owning definitions in `crates/game/src/scene.rs` and
-`crates/game/src/source_control.rs`. A complete `GameScene` wraps physical fields
-under `engine` and optionally adds `source_controls`. Every scene file uses
+`crates/game/src/encounter.rs`. A complete `GameScene` wraps physical fields
+under `engine` and optionally adds `encounters`. Every scene file uses
 this complete definition.
 Do not duplicate the engine schema to add a gameplay relationship.
 

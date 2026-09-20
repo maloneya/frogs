@@ -344,7 +344,7 @@ impl App {
         out.push_str(&events);
         out.push_str(&format!(
             "# {} event(s)",
-            self.game.trace().since(tick).count() + self.game.control_trace().since(tick).count()
+            self.game.trace().since(tick).count() + self.game.encounter_trace().since(tick).count()
         ));
         out
     }

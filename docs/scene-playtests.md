@@ -31,7 +31,7 @@ Launch from the repository:
 Send one command per connection:
 
 ```sh
-echo 'scene start scenes/activate_horde.ron' | nc -U /tmp/arpg.sock
+echo 'scene start scenes/soul_trial.ron' | nc -U /tmp/arpg.sock
 echo 'scene start scenes/seekers.ron' | nc -U /tmp/arpg.sock
 echo 'scene restart' | nc -U /tmp/arpg.sock
 echo 'state' | nc -U /tmp/arpg.sock
@@ -101,7 +101,7 @@ F2 offers **Default horde** (1,024 stationary enemies) and these files:
 |---|---|
 | `single_enemy.ron` | One seeker deals contact damage without interrupting movement |
 | `seekers.ron` | Three approaching seekers |
-| `activate_horde.ron` | An interaction starts a source that replenishes up to eight seekers |
+| `soul_trial.ron` | A timed defeat encounter rewards a chest unlock |
 | `three_enemy_spawners.ron` | Three approach directions build toward twelve seekers |
 | `two_torches.ron` | Warm and cool pools overlap around stationary monsters |
 
@@ -200,7 +200,7 @@ scenes: [
 ```
 
 References resolve relative to the scenario file, once before both replay runs.
-Eviction, source, and control indices refer to load order, starting with setup,
+Eviction, source, and encounter indices refer to load order, starting with setup,
 then ascending tick order, preserving file order at equal ticks. Validation and
 execution share this order. Placed body numbering includes authored bodies,
 then ordinary setup actions, then later loads and emissions in execution order.
@@ -235,8 +235,8 @@ will need to revisit that storage assumption.
 ## Gameplay scene composition
 
 All scenes wrap physical content in `GameScene.engine` and optionally add
-`source_controls`. Inline scenario references use `Inline(...)` with the same
-complete `GameScene` definition as file references.
-See [source control](source-control.md) for validation and lifecycle rules;
-`scenes/activate_horde.ron` is the playable connected scene; minimal fixtures
-are inline in the regression scenarios.
+encounters, doors, chests, lights and an enemy attack relationship. Inline scenario
+references use `Inline(...)` with the same complete definition as file references.
+See [encounters](encounters.md) for validation and lifecycle rules;
+`scenes/soul_trial.ron` is the playable encounter, with dedicated completion
+and timeout scenarios.

@@ -2,7 +2,7 @@
 
 The engine owns whether a source can advance. Gameplay can request a change
 without owning a second enabled flag or reaching body storage. The
-[source-control mechanic](source-control.md) uses this boundary.
+[encounter mechanic](encounters.md) uses this boundary.
 
 Sources start enabled and ready unless authored with `enabled: false`.
 Disabling freezes both the remaining countdown and the emission count used for

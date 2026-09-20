@@ -1,5 +1,4 @@
 use crate::scene::{GameScene, LiveSceneState, RestartError, RestartScene, SceneError, fingerprint};
-use crate::source_control::{self, ControlEvent, ControlState, SourceControls};
 use arpg_core::{Intent, Report};
 use crate::torch::{Torches, TorchSpec};
 use crate::chest::{self, Chests};
@@ -26,13 +25,11 @@ use glam::{Vec2, Vec3};
 pub struct Game {
     world: World,
     restart: Option<RestartScene>,
-    controls: SourceControls,
     torches: Torches,
     doors: Doors,
     chests: Chests,
     encounters: Encounters,
     encounter_trace: Trace<EncounterEvent>,
-    control_trace: Trace<ControlEvent>,
     attacks: EnemyAttacks,
 }
 
@@ -52,30 +49,26 @@ impl Game {
         Self {
             world: World::empty(),
             restart: None,
-            controls: SourceControls::default(),
             torches: Torches::default(),
             doors: Doors::default(),
             chests: Chests::default(),
             encounters: Encounters::default(),
             encounter_trace: Trace::default(),
-            control_trace: Trace::default(),
             attacks: EnemyAttacks::default(),
         }
     }
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
-        let crate::scene::PreparedScene { world, controls, torches, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
+        let crate::scene::PreparedScene { world, torches, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
         Ok(Self {
             world,
             restart: Some(restart),
-            controls,
             torches,
             doors,
             chests,
             encounters,
             encounter_trace: Trace::default(),
-            control_trace: Trace::default(),
             attacks,
         })
     }
@@ -121,18 +114,14 @@ impl Game {
         let Self {
             world,
             restart: _,
-            controls,
             torches: _,
             doors,
             chests,
             encounters,
             encounter_trace,
-            control_trace,
             attacks,
         } = self;
         let tick = world.tick();
-        let (interactions, sources) = world.interaction_sources();
-        source_control::advance(controls, interactions, sources, control_trace.sink(tick));
         let (mut access, _) = world.encounter_access();
         let mut trace = encounter_trace.sink(tick);
         door::advance(doors, &mut access, &mut trace);
@@ -150,17 +139,15 @@ impl Game {
         let Self {
             world,
             restart,
-            controls,
             torches,
             doors,
             chests,
             encounters,
             encounter_trace: _,
-            control_trace: _,
             attacks,
         } = self;
         let mut hash = Fnv::default();
-        hash.u64(fingerprint(world, controls, torches, doors, chests, encounters, attacks));
+        hash.u64(fingerprint(world, torches, doors, chests, encounters, attacks));
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
             snapshot.hash(&mut hash);
@@ -179,24 +166,20 @@ impl Game {
         let Self {
             world,
             restart,
-            controls,
             torches,
             doors,
             chests,
             encounters,
             encounter_trace,
-            control_trace,
             attacks,
         } = self;
         world.report(out);
-        controls.report(out);
         torches.report(out);
         doors.report(out);
         chests.report(out);
         encounters.report(out);
         attacks.report(out);
         out.int("encounter_events_dropped", encounter_trace.dropped() as u64);
-        out.int("control_events_dropped", control_trace.dropped() as u64);
         out.object("restart", |out| {
             out.bool("available", restart.is_some());
             if let Some(snapshot) = restart {
@@ -210,16 +193,14 @@ impl Game {
         let Self {
             world,
             restart: _,
-            controls,
             torches,
             doors,
             chests,
             encounters,
             encounter_trace: _,
-            control_trace: _,
             attacks,
         } = self;
-        scene.install(world, LiveSceneState { controls, torches, doors, chests, encounters, attacks })
+        scene.install(world, LiveSceneState { torches, doors, chests, encounters, attacks })
     }
 
     /// Evicts a live instance and its descendants; preserves the restart snapshot.
@@ -229,19 +210,16 @@ impl Game {
         let Self {
             world,
             restart: _,
-            controls,
             torches,
             doors,
             chests,
             encounters,
             encounter_trace: _,
-            control_trace: _,
             attacks,
         } = self;
         if !world.evict_scene(id) {
             return false;
         }
-        controls.evict(id);
         torches.evict(id);
         doors.evict(id);
         chests.evict(id);
@@ -332,7 +310,6 @@ impl Game {
     /// Clears diagnostic history without changing simulation state or its hash.
     pub fn clear_trace(&mut self) {
         self.world.clear_trace();
-        self.control_trace.clear();
         self.encounter_trace.clear();
     }
 
@@ -514,26 +491,16 @@ impl Game {
     pub fn all_positions_finite(&self) -> bool {
         self.world.all_positions_finite()
     }
-    /// Reads a scene-local relationship and its source's authoritative state.
-    #[must_use]
-    pub fn source_control_state(&self, scene: SceneId, nth: usize) -> Option<ControlState> {
-        self.controls.state(scene, nth, &self.world)
-    }
-
     /// Sources in current installation order; removals prune this list.
     #[must_use]
     pub fn scene_sources(&self, scene: SceneId) -> Option<&[SourceId]> {
         self.world.scene_sources(scene)
     }
 
-    /// Gameplay diagnostics are separate typed events, never pass input.
-    #[must_use]
-    pub fn control_trace(&self) -> &Trace<ControlEvent> { &self.control_trace }
-
     /// Dropped events across all bounded diagnostic streams.
     #[must_use]
     pub fn trace_dropped(&self) -> usize {
-        self.world.trace().dropped() + self.control_trace.dropped() + self.encounter_trace.dropped()
+        self.world.trace().dropped() + self.encounter_trace.dropped()
     }
 
     /// Engine diagnostics followed by a labelled gameplay stream. Each stream
@@ -545,11 +512,6 @@ impl Game {
         let mut out = String::new();
         for (tick, event) in self.world.trace().since(since) {
             let _ = writeln!(out, "{tick} {event}");
-        }
-        let mut gameplay = self.control_trace.since(since).peekable();
-        if gameplay.peek().is_some() {
-            out.push_str("# gameplay transitions\n");
-            for (tick, event) in gameplay { let _ = writeln!(out, "{tick} {event}"); }
         }
         let mut encounters = self.encounter_trace.since(since).peekable();
         if encounters.peek().is_some() {

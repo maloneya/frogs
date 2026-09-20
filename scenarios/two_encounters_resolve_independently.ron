@@ -19,8 +19,8 @@
         ),
         doors: [(body: 2), (body: 3)],
         encounters: [
-            (name: "East", start: Activated(0), objective: Defeat((sources: [0], count: 1, within_ticks: 699)), on_start: [EnableSource(0)], on_success: [UnlockDoor(0)]),
-            (name: "West", start: Activated(1), objective: Defeat((sources: [1], count: 1, within_ticks: 697)), on_start: [EnableSource(1)], on_success: [UnlockDoor(1)]),
+            (name: "East", start: Activated(0), objective: Defeat((sources: [0], count: 1, within_ticks: 699)), on_success: [UnlockDoor(0)]),
+            (name: "West", start: Activated(1), objective: Defeat((sources: [1], count: 1, within_ticks: 697)), on_success: [UnlockDoor(1)]),
         ],
     ))]),
     interactions: [0, 2, 699, 701],

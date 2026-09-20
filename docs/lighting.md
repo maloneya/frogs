@@ -1,7 +1,7 @@
 # Scene lighting
 
 Scenes can author stationary torches under `torches`, alongside `engine` and
-`source_controls`. See [the two-torch scene](../scenes/two_torches.ron) for a
+`encounters`. See [the two-torch scene](../scenes/two_torches.ron) for a
 complete editable example. Run `cargo run`, open F2, and select **Two torches:
 warm and cool**. Walk between their pools to see colours mix and brightness add.
 
@@ -19,7 +19,7 @@ The shader's array capacity is generated from this constant. Renderer upload
 also refuses overflow rather than silently truncating the list.
 
 Game owns torches in scene-installation and authored order. Additive loading
-checks total capacity before installing any physical content or controls.
+checks total capacity before installing any physical content or gameplay relationships.
 Refused loads leave live state, pending work, and the selected restart snapshot
 unchanged. Eviction removes just that instance's torches; restart reconstructs
 the cached scene, including its lights. Torches have no collider or tick-time

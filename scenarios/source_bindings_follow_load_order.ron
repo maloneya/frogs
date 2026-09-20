@@ -1,15 +1,15 @@
 (
-    description: "Source and control indices follow actual load order: setup first, then tick order, with file order breaking ties. Removal retains original bindings.",
+    description: "Source and encounter indices follow actual load order: setup first, then tick order, with file order breaking ties. Removal retains original bindings.",
     setup: (scenes: [Inline((engine: (name: "setup")))]),
     scenes: [
         (at: 3, action: Load(Inline((engine: (name: "late"))))),
         (at: 0, action: Load(Inline((
     engine: (
-        name: "Source control",
+        name: "Encounter",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
         sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
     ),
-    source_controls: [(body: 0, source: 0)],
+    encounters: [(name: "Trial", start: Activated(0), objective: Defeat((sources: [0], count: 1, within_ticks: 10)))],
 )))),
         (at: 0, action: Load(Inline((engine: (name: "external source",
             sources: [(pos: (-20.0, 0.0), enabled: false)]))))),
@@ -19,20 +19,18 @@
     source_switches: [(at: 1, scene: 2, source: 0, enabled: true)],
     remove_sources: [(at: 2, scene: 2, source: 0)],
     checkpoints: [
-        (at: 0, expect: (enemy_count: 0, controls: [
-            (scene: 1, control: 0, state: Some((phase: Pending,
-                source: Some((enabled: false, countdown: 0, emitted: 0))))),
+        (at: 0, expect: (enemy_count: 0, encounters: [
+            (scene: 1, encounter: 0, state: Some((phase: Ready, defeated: 0, target: 1, remaining_ticks: 10))),
         ])),
-        (at: 1, expect: (enemy_count: 2, controls: [
-            (scene: 1, control: 0, state: Some((phase: Started,
-                source: Some((enabled: true, countdown: 3, emitted: 1))))),
+        (at: 1, expect: (enemy_count: 2, encounters: [
+            (scene: 1, encounter: 0, state: Some((phase: Running, defeated: 0, target: 1, remaining_ticks: 9))),
         ], source_states: [
             (scene: 2, source: 0, state: Some((enabled: true, countdown: 0, emitted: 1))),
         ])),
     ],
     budget: (ticks: 4),
     expect: (scene_count: 3, enemy_count: 1, sources: 0,
-        controls: [(scene: 1, control: 0, state: None)],
+        encounters: [(scene: 1, encounter: 0, state: None)],
         source_states: [(scene: 1, source: 0, state: None),
                         (scene: 2, source: 0, state: None)]),
 )

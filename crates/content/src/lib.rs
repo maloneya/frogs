@@ -60,7 +60,7 @@ mod tests {
         ).unwrap();
         assert_eq!(scene.engine.name, "trial");
         assert!(!scene.engine.sources[0].enabled);
-        assert!(scene.source_controls.is_empty());
+        assert!(scene.encounters.is_empty());
     }
 
     #[test]
@@ -85,9 +85,9 @@ mod tests {
     fn scenes_reject_legacy_content_and_unknown_fields() {
         for source in [
             r#"(name: "trial", sources: [])"#,
-            r#"(engine: (name: "game"), source_contorls: [])"#,
+            r#"(engine: (name: "game"), encoutners: [])"#,
             r#"(engine: (name: "game", bodys: []))"#,
-            r#"(engine: (name: "game"), source_controls: [(body: 0, source: "wrong")])"#,
+            r#"(engine: (name: "game"), source_controls: [])"#,
         ] {
             assert!(parse_scene(source).is_err(), "invalid scene passed: {source}");
         }

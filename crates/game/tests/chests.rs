@@ -21,7 +21,7 @@ fn scene() -> GameScene {
             name: "Chest trial".into(), start: EncounterStart::Activated(0),
             objective: EncounterObjective::Defeat(DefeatObjective { sources: vec![0],
                 count: 1.try_into().unwrap(), within_ticks: 300.try_into().unwrap() }),
-            on_start: vec![Action::EnableSource(0)], on_success: vec![Action::UnlockChest(0)],
+            on_start: vec![], on_success: vec![Action::UnlockChest(0)],
             on_failure: vec![],
         }],
         ..Default::default()
@@ -107,7 +107,7 @@ fn refused_chests_preserve_live_state_and_pending_work() {
     let mut s = scene(); s.engine.sources.push(s.engine.sources[0]);
     let mut other = s.encounters[0].clone(); other.name = "Other".into();
     let EncounterObjective::Defeat(objective) = &mut other.objective; objective.sources = vec![1];
-    other.on_start = vec![Action::EnableSource(1)]; s.encounters.push(other); invalid.push(s);
+    s.encounters.push(other); invalid.push(s);
     for s in invalid {
         assert!(game.load_scene(&s).is_err()); assert_eq!(observed(&game), before);
         assert!(game.start_scene(&s).is_err()); assert_eq!(observed(&game), before);

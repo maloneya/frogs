@@ -27,8 +27,6 @@
         name: "Soul trial",
         start: Activated(0),
         objective: Defeat((sources: [0,1,2,3,4,5,6,7], count: 30, within_ticks: 1800)),
-        on_start: [EnableSource(0), EnableSource(1), EnableSource(2), EnableSource(3),
-                   EnableSource(4), EnableSource(5), EnableSource(6), EnableSource(7)],
         on_success: [UnlockChest(0)],
     )],
     torches: [

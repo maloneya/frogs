@@ -86,9 +86,9 @@ commands must fail rather than silently disappear.
   Powered walking and seeking are separate from carried velocity.
 - [Source enablement](../../../docs/source-enablement.md): switches run before
   source evaluation; assertions consume the engine-owned `SourceState`.
-- [Source control](../../../docs/source-control.md): complete inline scenes use
+- [Encounters](../../../docs/encounters.md): complete inline scenes use
   `Inline(...)` with the same `GameScene` definition as scene files. Assert activation
-  on N and permitted emission on N+1, as well as one-shot consumption and lifetime.
+  on N and permitted emission on N+1, as well as one-shot start, deadline, reward and lifetime.
 - [Scene authoring](../create-scene/SKILL.md): load the playable file through
   `File(...)` so the tested content is the content the user plays.
 

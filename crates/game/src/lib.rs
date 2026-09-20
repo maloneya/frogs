@@ -10,12 +10,10 @@ mod game;
 mod scene;
 mod torch;
 pub use torch::TorchSpec;
-mod source_control;
 mod enemy_attack;
 
 pub use game::Game;
 pub use scene::{GameScene, RestartError, SceneError};
-pub use source_control::{ControlEvent, ControlPhase, ControlState, SourceControlSpec};
 pub use enemy_attack::{EnemyAttackSpec, PLAYER_MAX_HEALTH};
 
 mod door;

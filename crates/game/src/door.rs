@@ -38,9 +38,6 @@ pub(crate) struct Doors {
 }
 
 impl Doors {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
     pub(crate) fn validate(
         specs: &[DoorSpec],
         bodies: &[arpg_sim::Placed],

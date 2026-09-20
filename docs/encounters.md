@@ -17,15 +17,13 @@ encounters: [(
     name: "Soul trial",
     start: Activated(0),
     objective: Defeat((sources: [0,1,2,3,4,5,6,7], count: 30, within_ticks: 1800)),
-    on_start: [EnableSource(0), EnableSource(1), EnableSource(2), EnableSource(3),
-               EnableSource(4), EnableSource(5), EnableSource(6), EnableSource(7)],
     on_success: [UnlockChest(0)],
 )],
 ```
 
 The numbers bind to **authored scene entries**, never current dense storage rows:
-`Activated` addresses an explicit engine body; source actions and the objective
-address engine sources; `UnlockDoor` addresses `doors`; `UnlockChest` addresses `chests`.
+`Activated` addresses an explicit engine body; the objective
+addresses engine sources; `UnlockDoor` addresses `doors`; `UnlockChest` addresses `chests`.
 References are resolved once to generational body IDs and monotonic source IDs.
 Reordering valid authored entries can change their meaning: keep a short label
 comment beside endpoints and review bindings when reordering. This first version
@@ -36,9 +34,10 @@ registry. Names on encounters are display labels, unique within a scene.
 
 - `Activated` waits for the existing one-shot interaction mechanism.
 - `Defeat` counts combat defeats from a group of one or more sources.
-- `EnableSource` uses engine enablement, including its normal
-  cadence and placement rules. Sources must initially be disabled and produce
-  enemies. Every objective source must be enabled in `on_start`.
+- Starting an encounter enables its objective source group once, in authored
+  group order, using normal engine cadence and placement rules. Sources must
+  initially be disabled and produce enemies. Optional `on_start` effects can
+  unlock doors or chests.
 - `UnlockDoor` grants interaction to a locked static prop. A later nearby E press
   opens it; the next gameplay pass removes the blocking prop. Opening is a
   greybox removal, with no animated rectangular door asset yet.
@@ -59,10 +58,10 @@ encounter cannot hold its source closed through that global condition.
 
 
 Every source and controlled door or chest has one gameplay controller within the scene.
-Admission rejects conflicting encounters, conflicts with legacy source controls,
+Admission rejects conflicting encounters,
 invalid endpoints, duplicate effects, zero targets/durations and excess live
-encounters before installation mutates anything. A source action cannot target
-another encounter's source group. Terminal effects cannot re-enable sources.
+encounters before installation mutates anything. Only the encounter's objective group is enabled at start. Terminal effects
+unlock doors or chests; they cannot re-enable sources.
 
 All terminal outcomes automatically stop the encounter's sources. Existing enemies remain. Success runs
 `on_success`; timeout runs `on_failure`. A missing required endpoint produces

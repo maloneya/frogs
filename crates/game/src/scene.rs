@@ -8,7 +8,6 @@ use crate::door::{DoorSpec, Doors};
 use crate::encounter::{EncounterSpec, Encounters};
 use crate::enemy_attack::{EnemyAttackSpec, EnemyAttacks};
 use crate::torch::{Torches, TorchSpec};
-use crate::source_control::{SourceControlSpec, SourceControls};
 
 /// Authored gameplay wraps the engine definition without copying its fields.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -16,9 +15,6 @@ use crate::source_control::{SourceControlSpec, SourceControls};
 pub struct GameScene {
     /// Physical content, still defined and validated by sim.
     pub engine: arpg_sim::Scene,
-    /// Scene-local one-shot connections, validated before any engine mutation.
-    #[serde(default)]
-    pub source_controls: Vec<SourceControlSpec>,
     /// Stationary lights owned by this scene instance. Omitted means no lights.
     #[serde(default)]
     pub torches: Vec<TorchSpec>,
@@ -38,7 +34,7 @@ pub struct GameScene {
 
 impl From<arpg_sim::Scene> for GameScene {
     fn from(engine: arpg_sim::Scene) -> Self {
-        Self { engine, source_controls: Vec::new(), torches: Vec::new(), doors: Vec::new(), chests: Vec::new(), encounters: Vec::new(), enemy_attack: None }
+        Self { engine, torches: Vec::new(), doors: Vec::new(), chests: Vec::new(), encounters: Vec::new(), enemy_attack: None }
     }
 }
 
@@ -52,17 +48,13 @@ impl GameScene {
     /// The only installation path, shared by fresh runs and additive loads.
     /// Validate relationships before physical admission can mutate the world.
     pub(crate) fn install(&self, world: &mut World, live: LiveSceneState<'_>) -> Result<SceneId, SceneError> {
-        let LiveSceneState { controls, torches, doors, chests, encounters, attacks } = live;
-        self.validate_controls()?;
+        let LiveSceneState { torches, doors, chests, encounters, attacks } = live;
         Doors::validate(&self.doors, &self.engine.bodies)?;
         chests.validate(&self.chests, &self.engine.bodies, &self.doors)?;
         encounters.validate_add(self)?;
         torches.validate_add(&self.torches)?;
         attacks.validate_add(self.enemy_attack, &self.engine.bodies)?;
         let owner = world.load_scene(&self.engine)?;
-        controls.install(owner, &self.source_controls,
-            world.scene_bodies(owner).expect("admitted scene owns its bodies"),
-            world.scene_sources(owner).expect("admitted scene owns its sources"));
         doors.install(owner, &self.doors, world.scene_bodies(owner).expect("admitted scene"));
         chests.install(owner, &self.chests, world.scene_bodies(owner).expect("admitted scene"));
         encounters.install(owner, &self.encounters, world.scene_bodies(owner).expect("admitted scene"), world.scene_sources(owner).expect("admitted scene"));
@@ -70,29 +62,11 @@ impl GameScene {
         torches.install(owner, &self.torches);
         Ok(owner)
     }
-
-    fn validate_controls(&self) -> Result<(), SceneError> {
-        let Self { engine, source_controls, torches: _, doors: _, chests: _, encounters: _, enemy_attack: _ } = self;
-        for (nth, spec) in source_controls.iter().enumerate() {
-            let SourceControlSpec { body, source } = *spec;
-            if !engine.bodies.get(body).is_some_and(|body| body.what.interactable()) {
-                return Err(SceneError::Control("control body must name an explicit interactable body"));
-            }
-            if !engine.sources.get(source).is_some_and(|source| !source.enabled) {
-                return Err(SceneError::Control("control source must name an initially disabled source"));
-            }
-            if source_controls[..nth].iter().any(|other| other.source == source) {
-                return Err(SceneError::Control("a source may have only one activation controller"));
-            }
-        }
-        Ok(())
-    }
 }
 
 /// The complete set of gameplay stores that participate in scene admission.
 /// Keeping this private prevents ordinary passes from using it as mutable Game.
 pub(crate) struct LiveSceneState<'a> {
-    pub(crate) controls: &'a mut SourceControls,
     pub(crate) torches: &'a mut Torches,
     pub(crate) doors: &'a mut Doors,
     pub(crate) chests: &'a mut Chests,
@@ -105,8 +79,6 @@ pub(crate) struct LiveSceneState<'a> {
 pub enum SceneError {
     /// Engine content or capacity admission failed.
     Engine(arpg_sim::SceneError),
-    /// A gameplay relationship was invalid.
-    Control(&'static str),
     /// The complete scene would exceed the shared light capacity.
     Lighting(&'static str),
     /// Invalid encounter or door composition.
@@ -123,7 +95,7 @@ impl std::fmt::Display for SceneError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Engine(error) => error.fmt(out),
-            Self::Control(reason) | Self::Lighting(reason) | Self::Encounter(reason)
+            Self::Lighting(reason) | Self::Encounter(reason)
             | Self::EnemyAttack(reason) => out.write_str(reason),
         }
     }
@@ -141,7 +113,6 @@ pub(crate) struct RestartScene {
 /// Complete validated replacement, ready for atomic installation by Game.
 pub(crate) struct PreparedScene {
     pub(crate) world: World,
-    pub(crate) controls: SourceControls,
     pub(crate) torches: Torches,
     pub(crate) doors: Doors,
     pub(crate) chests: Chests,
@@ -154,19 +125,18 @@ impl RestartScene {
     /// Prepare a complete replacement before either the run or snapshot changes.
     pub(crate) fn prepare(scene: &GameScene) -> Result<PreparedScene, SceneError> {
         let mut world = World::empty();
-        let mut controls = SourceControls::default();
         let mut torches = Torches::default();
         let mut doors = Doors::default();
         let mut chests = Chests::default();
         let mut encounters = Encounters::default();
         let mut attacks = EnemyAttacks::default();
         scene.install(&mut world, LiveSceneState {
-            controls: &mut controls, torches: &mut torches, doors: &mut doors,
+            torches: &mut torches, doors: &mut doors,
             chests: &mut chests, encounters: &mut encounters, attacks: &mut attacks,
         })?;
-        let initial_hash = fingerprint(&world, &controls, &torches, &doors, &chests, &encounters, &attacks);
+        let initial_hash = fingerprint(&world, &torches, &doors, &chests, &encounters, &attacks);
         let snapshot = Self { scene: scene.clone(), initial_hash };
-        Ok(PreparedScene { world, controls, torches, doors, chests, encounters, attacks, restart: snapshot })
+        Ok(PreparedScene { world, torches, doors, chests, encounters, attacks, restart: snapshot })
     }
 
     pub(crate) fn description(&self) -> &GameScene {
@@ -208,18 +178,15 @@ impl std::fmt::Display for RestartError {
 
 impl std::error::Error for RestartError {}
 
-/// No relationship means exactly the established physical fingerprint.
-pub(crate) fn fingerprint(world: &World, controls: &SourceControls, torches: &Torches, doors: &Doors, chests: &Chests, encounters: &Encounters, attacks: &EnemyAttacks) -> u64 {
-    if controls.is_empty() && torches.len() == 0 && doors.is_empty() && chests.is_empty()
-        && encounters.is_empty() && attacks.is_pristine() { return world.hash(); }
+/// Hash every gameplay store in a fixed order, including empty stores.
+/// Each store encodes its length or presence, so adjacent stores stay distinct.
+pub(crate) fn fingerprint(world: &World, torches: &Torches, doors: &Doors, chests: &Chests, encounters: &Encounters, attacks: &EnemyAttacks) -> u64 {
     let mut hash = Fnv::default();
-    controls.hash(&mut hash);
-    if torches.len() > 0 { torches.hash(&mut hash); }
-    if !doors.is_empty() { doors.hash(&mut hash); }
-    // Distinguish chest relationships from otherwise identical door rows.
-    if !chests.is_empty() { hash.u64(0x6368_6573_7473); chests.hash(&mut hash); }
-    if !encounters.is_empty() { encounters.hash(&mut hash); }
-    if !attacks.is_pristine() { attacks.hash(&mut hash); }
+    torches.hash(&mut hash);
+    doors.hash(&mut hash);
+    chests.hash(&mut hash);
+    encounters.hash(&mut hash);
+    attacks.hash(&mut hash);
     hash.u64(world.hash());
     hash.finish()
 }

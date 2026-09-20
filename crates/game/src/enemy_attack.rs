@@ -101,9 +101,6 @@ impl EnemyAttacks {
         self.player_health
     }
 
-    pub(crate) fn is_pristine(&self) -> bool {
-        self.attacker.is_none() && self.player_health == PLAYER_MAX_HEALTH
-    }
 
     pub(crate) fn hash(&self, out: &mut Fnv) {
         out.usize(usize::from(self.player_health));
