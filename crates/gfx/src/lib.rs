@@ -1027,8 +1027,7 @@ mod tests {
     /// Blender's channels, joint indices and weights, CPU sampling, the uniform
     /// upload and WGSL skinning. A missing palette upload collapses these vertices
     /// to the origin, while a layout disagreement reaches the validation scope.
-    #[test]
-    fn a_character_pose_bucket_draws_its_instances() {
+    fn render_character_bucket(white_mix: f32) -> Vec<u8> {
         const N: u32 = 256;
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1072,7 +1071,7 @@ mod tests {
             .clip_named("Idle")
             .expect("fixture carries its Idle clip");
         assert!(cpu.sample(idle, 0.5, &mut pose));
-        let instances = [Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)];
+        let instances = [Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE).with_white_mix(white_mix)];
         let empty = CharacterBucket::new(&pose, &[]);
         let mut buckets = [empty; MAX_HORDE_POSE_BUCKETS];
         buckets[3] = CharacterBucket::new(&pose, &instances);
@@ -1140,6 +1139,33 @@ mod tests {
             height > width && height >= 70 && width >= 45,
             "expected a 1.9m upright sampled pose, got {width}x{height} from {bounds:?}"
         );
+        rgba
+    }
+
+    #[test]
+    fn a_character_pose_bucket_draws_its_instances_and_blends_to_white() {
+        let normal = render_character_bucket(0.0);
+        let half = render_character_bucket(0.5);
+        let white = render_character_bucket(1.0);
+        let restored = render_character_bucket(0.0);
+        assert_eq!(normal, restored, "clearing the blend restores the original surface");
+        let mut checked = 0;
+        for ((normal, half), white) in normal.as_chunks::<4>().0.iter()
+            .zip(half.as_chunks::<4>().0).zip(white.as_chunks::<4>().0) {
+            if white[..3] == [0, 0, 0] {
+                assert_eq!(normal, white, "flash must not change the silhouette");
+                assert_eq!(half, white);
+            } else {
+                assert_eq!(&white[..3], &[255, 255, 255], "full blend ignores texture and lighting");
+                for channel in 0..3 {
+                    if normal[channel] < 200 {
+                        assert!(half[channel] > normal[channel] && half[channel] < 255);
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 1000, "exercise the fade across the rendered surface");
     }
 
     /// Renders one overlay frame offscreen and hands back its pixels.

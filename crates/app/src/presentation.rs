@@ -513,6 +513,7 @@ impl<T> LoadedHorde<T> {
         &mut self,
         enemies: impl Iterator<Item = EnemyPresentation>,
         presentation_seconds: f64,
+        flash: impl Fn(arpg_sim::EntityId) -> f32,
     ) {
         for bucket in &mut self.buckets {
             bucket.instances.clear();
@@ -541,7 +542,8 @@ impl<T> LoadedHorde<T> {
                     Vec3::splat(HORDE_SCALE),
                     Vec3::splat(shade),
                 )
-                .with_yaw(yaw),
+                .with_yaw(yaw)
+                .with_white_mix(flash(enemy.id())),
             );
         }
         self.headings
@@ -648,6 +650,9 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("pose_buckets", MAX_HORDE_POSE_BUCKETS as u64);
         out.int("occupied_buckets", preview.occupied_buckets() as u64);
         out.int("instances", preview.instance_count() as u64);
+        out.int("flashing_instances", preview.buckets.iter()
+            .flat_map(|bucket| &bucket.instances)
+            .filter(|instance| instance.white_mix() > 0.0).count() as u64);
         out.int(
             "idle_instances",
             preview.buckets[..HORDE_PHASES_PER_ROLE]
@@ -668,6 +673,7 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("pose_buckets", 0);
         out.int("occupied_buckets", 0);
         out.int("instances", 0);
+        out.int("flashing_instances", 0);
         out.int("idle_instances", 0);
         out.int("run_instances", 0);
     }

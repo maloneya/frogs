@@ -15,20 +15,9 @@ pub const MAX_INSTANCES: usize = 200_000;
 /// and nothing whatsoever about enemies, health, or attacks. Imported mesh
 /// geometry reaches `gfx` through the separate asset boundary.
 ///
-/// 48 bytes, laid out as three `vec4`s. It could be packed to 36 (vertex
-/// buffers have no 16-byte alignment requirement, unlike uniforms), but the
-/// trailing floats are deliberate headroom for things we already know are
-/// coming, and a 48-byte stride keeps the offset arithmetic trivial. The first
-/// of the three is now spent: `yaw` moved into it, which is exactly what the
-/// headroom was for — the layout, the vertex attributes and the shader's
-/// `@location` slots did not have to change to gain a rotation.
-///
-/// The remaining two are still reserved for hit-flash intensity and team id.
-/// The fields are private, and the padding is why: they are reserved space, not
-/// storage anyone should write. A struct literal could set `_pad1: 3.0` and ship
-/// garbage to the GPU in a slot something is going to occupy later. `new` and
-/// [`Instance::with_yaw`] are the only doors, and between them they write every
-/// field that means something and zero every field that does not.
+/// 48 bytes, laid out as three `vec4`s. Yaw occupies `pos.w`; the blend
+/// toward unlit linear white occupies `scale.w`. The final float is reserved
+/// padding. Private fields and validated builders protect this GPU contract.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Instance {
@@ -37,7 +26,7 @@ pub struct Instance {
     /// `pos`, so the shader reads it as `i_pos.w`.
     yaw: f32,
     scale: [f32; 3],
-    _pad1: f32,
+    white_mix: f32,
     color: [f32; 3],
     _pad2: f32,
 }
@@ -64,7 +53,7 @@ impl Instance {
             pos: pos.into(),
             yaw: 0.0,
             scale: scale.into(),
-            _pad1: 0.0,
+            white_mix: 0.0,
             color: color.into(),
             _pad2: 0.0,
         }
@@ -81,6 +70,22 @@ impl Instance {
         self.yaw = yaw;
         self
     }
+
+    /// Blends the shaded surface toward unlit linear white without changing opacity.
+    ///
+    /// # Panics
+    /// Panics unless the amount is finite and in `0..=1`.
+    #[must_use]
+    pub fn with_white_mix(mut self, amount: f32) -> Self {
+        assert!(amount.is_finite() && (0.0..=1.0).contains(&amount),
+            "white blend must be finite and between zero and one");
+        self.white_mix = amount;
+        self
+    }
+
+    /// Blend toward white, independent of textures and lighting.
+    #[must_use]
+    pub fn white_mix(&self) -> f32 { self.white_mix }
 
     /// Where this instance will be drawn.
     ///
@@ -168,6 +173,16 @@ impl InstanceSink<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn white_blend_rejects_invalid_values_at_the_instance_boundary() {
+        let instance = Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE);
+        assert_eq!(instance.white_mix(), 0.0);
+        assert_eq!(instance.with_white_mix(1.0).white_mix(), 1.0);
+        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert!(std::panic::catch_unwind(|| instance.with_white_mix(value)).is_err());
+        }
+    }
 
     /// The cap is a number, and no type can hold a number to a value. This is
     /// the backstop for the case the signature cannot cover: something emitting

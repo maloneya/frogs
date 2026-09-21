@@ -28,6 +28,7 @@ struct VsOut {
     @location(3) normal: vec3<f32>,
     @location(1) tint: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(4) @interpolate(flat) white_mix: f32,
 };
 
 fn rotate_y(v: vec3<f32>, yaw: f32) -> vec3<f32> {
@@ -46,6 +47,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.world_pos = world_pos;
     out.normal = normal;
     out.tint = in.i_color.xyz;
+    out.white_mix = in.i_scale.w;
     out.uv = in.uv;
     return out;
 }
@@ -56,5 +58,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // performs the matching linear-to-sRGB encode on output.
     let texel = textureSample(base_color_texture, base_color_sampler, in.uv);
     let linear = texel.rgb * material.base_color_factor.rgb * in.tint * illumination(in.world_pos, in.normal);
-    return vec4<f32>(linear, 1.0);
+    return vec4<f32>(mix(linear, vec3<f32>(1.0), in.white_mix), 1.0);
 }

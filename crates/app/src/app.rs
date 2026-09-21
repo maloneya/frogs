@@ -47,7 +47,7 @@ pub(crate) struct App {
     game: Game,
     collision_debug: crate::collision_debug::CollisionDebug,
     attack_effects: crate::attack_effects::AttackEffects,
-    enemy_health: crate::enemy_health::EnemyHealth,
+    enemy_feedback: crate::enemy_feedback::EnemyFeedback,
     audio: crate::audio::Audio,
     /// Game ids and ticks are scoped to this playtest generation.
     run_id: u64,
@@ -237,7 +237,7 @@ impl App {
         }
         self.capture.finish(Err("cancelled by playtest restart".into()));
         self.attack_effects.clear();
-        self.enemy_health.clear();
+        self.enemy_feedback.clear();
         self.audio.reset(&self.game);
         self.input.restart();
         self.run_id = run_id;
@@ -383,8 +383,10 @@ impl App {
         );
         camera.follow(player.ground_position(), facing, frame);
 
+        self.enemy_feedback.observe(&self.game);
         if let Some(horde) = &mut self.horde_preview {
-            horde.rebuild(self.game.enemy_presentations(alpha), presentation_seconds);
+            horde.rebuild(self.game.enemy_presentations(alpha), presentation_seconds,
+                |id| self.enemy_feedback.flash(id, self.game.tick(), alpha));
         }
         if let Some(character) = &mut self.character_preview {
             character.sample(player, alpha, presentation_seconds);
@@ -401,7 +403,7 @@ impl App {
         {
             let mut sink = self.quads.sink();
             let size = self.window.as_ref().expect("rendering has a window").inner_size();
-            self.enemy_health.draw(&self.game, alpha, camera,
+            self.enemy_feedback.draw(&self.game, alpha, camera,
                 Vec2::new(size.width as f32, size.height as f32), &mut sink);
             hud::draw(
                 renderer.glyphs(),

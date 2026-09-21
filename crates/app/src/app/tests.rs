@@ -418,3 +418,33 @@ fn successful_restart_cancels_performance_trial_but_failed_load_preserves_it() {
     assert!(app.trial.is_none());
     assert_eq!(response.try_recv().unwrap(), "error: cancelled by playtest restart");
 }
+
+#[test]
+fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() {
+    let mut scene = pair();
+    scene.engine.bodies[0].pos = (0.0, 4.0);
+    let mut app = App::default();
+    app.start_playtest(scene.clone()).unwrap();
+    let dt = arpg_sim::Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    let hit = |app: &mut App| {
+        app.game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
+        app.game.step(dt, Intent::new(MoveDir::NONE, arpg_core::AimDir::FORWARD, false)
+            .with_attack_held(true));
+        app.enemy_feedback.observe(&app.game);
+        let id = app.game.enemy_presentations(Alpha::ZERO).next().unwrap().id();
+        assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 1.0);
+        id
+    };
+    let id = hit(&mut app);
+    let mut invalid = scene;
+    invalid.engine.bodies[0].pos.0 = f32::NAN;
+    assert!(app.start_playtest(invalid).is_err());
+    assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 1.0);
+    app.restart_playtest().unwrap();
+    assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 0.0);
+    let id = hit(&mut app);
+    let owner = app.game.scene_instances().next().unwrap().0;
+    assert!(app.game.evict_scene(owner));
+    app.enemy_feedback.observe(&app.game);
+    assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 0.0);
+}

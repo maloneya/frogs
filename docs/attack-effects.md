@@ -39,6 +39,28 @@ unchanged game hashes, and the app's restart boundary. A headless GPU pixel test
 checks alpha blending, depth occlusion, and clearing the stream. The existing
 attack scenarios continue to verify the authoritative collision behaviour.
 
+## Contact flash
+
+A surviving enemy flashes white when presentation observes its health drop,
+then fades back over 0.1 seconds. Cleave, Slam and beam pulses share the same
+health observation as temporary enemy health bars. Misses and undamaged enemies
+stay unchanged. Defeated enemies are removed immediately; this effect does not
+retain a death image.
+
+`app::enemy_feedback` owns the duration and damage history, keyed by stable
+identity. Observation runs before character preparation each drawn frame;
+catch-up ticks collapse to the latest health, so feedback starts when the damage
+can first be shown. Repeated redraws do not refresh it. Tick age plus render
+interpolation controls the fade. Removal and scene eviction discard history;
+successful start/restart clears it, while rejected loads preserve it.
+
+The instance's validated white blend occupies an existing padding float. Asset
+shaders blend the lit surface toward unlit linear white before sRGB output,
+keeping silhouettes and depth unchanged. No extra draw or animation bucket is
+needed, and presentation never changes Game state or reads diagnostic traces.
+The horde preview report includes `flashing_instances`, derived from the instances
+prepared for rendering.
+
 ## Disintegrate prototype
 
 Hold **3** for Disintegrate and aim with the cursor. Release to stop. The channel pauses powered walking, while shared physics
