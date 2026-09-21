@@ -29,6 +29,7 @@ fontdue = "0.9"
 glam = "0.33"
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
 log = "0.4"
+kira = { version = "0.12.4", default-features = false, features = ["cpal", "wav", "pcm"] }
 png = "0.18.1"
 pollster = "1.0.1"
 wgpu = "30.0.1"

@@ -14,6 +14,7 @@ arpg-content.workspace = true
 env_logger.workspace = true
 glam.workspace = true
 log.workspace = true
+kira.workspace = true
 pollster.workspace = true
 winit.workspace = true
 

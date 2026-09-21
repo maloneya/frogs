@@ -58,6 +58,7 @@ impl App {
                         .map_err(|error| error.to_string())
                 }) {
                     Ok(id) => {
+                        self.audio.sync_loops(&self.game);
                         self.perf.reset();
                         format!(
                             "ready run={} scene={id} tick={}",
@@ -69,6 +70,7 @@ impl App {
                 },
                 Command::EvictScene(id) => {
                     if self.game.evict_scene(id) {
+                        self.audio.sync_loops(&self.game);
                         self.perf.reset();
                         format!("evicted run={} scene={id}", self.run_id)
                     } else {
@@ -266,6 +268,7 @@ impl App {
         });
 
         out.object("attack_effects", |out| self.attack_effects.report(out));
+        out.object("audio", |out| self.audio.report(out));
         out.object("collision_debug", |out| self.collision_debug.report(out));
         out.object("render", |r| {
             let target = self

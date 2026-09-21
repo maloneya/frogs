@@ -17,7 +17,7 @@ use glam::Vec2;
 
 use arpg_core::{Action, Intent, MoveDir};
 use arpg_game::{Game, GameScene as Scene};
-use arpg_gfx::{CharacterMesh, FrameOutcome, MeshAsset, OrthoCamera, QuadBuffer, Renderer};
+use arpg_gfx::{CharacterMesh, FrameOutcome, MeshAsset, OrthoCamera, QuadBuffer, RenderFrame, Renderer};
 use arpg_sim::{Accumulator, Alpha};
 
 use crate::harness::{self, Request};
@@ -48,6 +48,7 @@ pub(crate) struct App {
     collision_debug: crate::collision_debug::CollisionDebug,
     attack_effects: crate::attack_effects::AttackEffects,
     enemy_health: crate::enemy_health::EnemyHealth,
+    audio: crate::audio::Audio,
     /// Game ids and ticks are scoped to this playtest generation.
     run_id: u64,
     /// Numbers keyboard screenshots within this process; paths may exist from an earlier run.
@@ -237,6 +238,7 @@ impl App {
         self.capture.finish(Err("cancelled by playtest restart".into()));
         self.attack_effects.clear();
         self.enemy_health.clear();
+        self.audio.reset(&self.game);
         self.input.restart();
         self.run_id = run_id;
         self.accumulator = Accumulator::default();
@@ -290,6 +292,7 @@ impl App {
     /// Everything below the `alpha` line is presentation. Nothing there may
     /// write simulation state, and nothing there may consume an input edge.
     fn redraw(&mut self) {
+        self.audio.sync_loops(&self.game);
         if let Some(trial) = &mut self.trial
             && trial.begin_frame(self.game.tick(), self.game.enemy_count())
         {
@@ -352,6 +355,7 @@ impl App {
             game_step += step_start.elapsed();
             ticks += 1;
             self.attack_effects.observe(&self.game);
+            self.audio.observe(&self.game, intent);
             if let Some(trial) = &mut self.trial {
                 trial.stepped(self.game.enemy_count());
                 if trial.boundary(self.game.tick()) { break; }
@@ -425,14 +429,16 @@ impl App {
             .map(|preview| preview.draw(player));
         let horde = self.horde_preview.as_ref().map(LoadedHorde::draw);
         let presented = match renderer.render(
-            camera,
-            world_assets.torches.lights(),
-            &meshes,
-            character,
-            horde,
-            self.quads.as_slice(),
-            self.collision_debug.drawings(),
-            world_assets.torches.effects(),
+            RenderFrame {
+                camera,
+                lights: world_assets.torches.lights(),
+                meshes: &meshes,
+                character,
+                horde,
+                overlay: self.quads.as_slice(),
+                debug_discs: self.collision_debug.drawings(),
+                effects: world_assets.torches.effects(),
+            },
             self.capture.path(),
         ) {
             FrameOutcome::Presented { capture } => {
@@ -518,6 +524,7 @@ impl ApplicationHandler for App {
             .expect("load default player character");
         self.show_horde(default_horde_path())
             .expect("load default horde character");
+        self.audio.initialize(&self.game);
         let size = window.inner_size();
 
         // Start framed on the character without a camera fly-in.

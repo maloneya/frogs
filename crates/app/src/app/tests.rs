@@ -192,9 +192,22 @@ fn restart_resets_the_complete_playtest_boundary() {
             .step(dt, Intent::new(MoveDir::new(glam::Vec3::X), arpg_core::AimDir::new(glam::Vec3::X).unwrap(), true));
     }
     for dt in app.accumulator.pending(arpg_sim::Dt::SECS * 8.0) {
-        app.game.step(dt, Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
+        let intent = Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false);
+        app.game.step(dt, intent);
         app.attack_effects.observe(&app.game);
+        app.audio.observe(&app.game, intent);
     }
+    let audio_report = |app: &App| {
+        let mut out = arpg_core::Report::default();
+        app.audio.report(&mut out);
+        out.finish()
+    };
+    assert!(audio_report(&app).contains("\"cleave\":1"));
+    let before_audio = audio_report(&app);
+    let mut invalid = pair();
+    invalid.engine.bodies[0].pos.0 = f32::NAN;
+    assert!(app.start_playtest(invalid).is_err());
+    assert_eq!(audio_report(&app), before_audio, "rejected replacement preserves audio history");
     app.attack_effects.rebuild(app.game.tick(), Alpha::ZERO);
     assert!(!app.attack_effects.vertices().is_empty());
     app.game
@@ -212,6 +225,7 @@ fn restart_resets_the_complete_playtest_boundary() {
     assert_eq!(app.accumulator.pending(arpg_sim::Dt::SECS * 0.5).count(), 0);
 
     app.restart_playtest().unwrap();
+    assert!(audio_report(&app).contains("\"cleave\":0"));
     assert!(app.attack_effects.vertices().is_empty());
     assert_eq!(app.run_id, 2);
     assert_eq!(

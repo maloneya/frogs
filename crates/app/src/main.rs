@@ -7,6 +7,7 @@
 //! that sees both sides.
 
 mod app;
+mod audio;
 mod collision_debug;
 mod attack_effects;
 mod harness;

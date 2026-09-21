@@ -16,6 +16,7 @@ mod character;
 mod instance;
 mod debug;
 mod effect;
+mod frame;
 mod material;
 mod lighting;
 mod mesh;
@@ -27,6 +28,7 @@ pub use camera::OrthoCamera;
 pub use arpg_core::PointLight;
 pub use debug::DebugDisc;
 pub use effect::{EffectVertex, MAX_EFFECT_VERTICES};
+pub use frame::RenderFrame;
 pub use character::{
     CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
 };
@@ -338,19 +340,15 @@ impl Renderer {
     /// Distinguishes skipped frames from presentation, including capture errors.
     /// `capture_path` requests a synchronous PNG write of this frame. On a
     /// skipped frame no write is attempted; the caller owns retry and timeout.
-    #[expect(clippy::too_many_arguments, reason = "independent presentation streams share one world render pass")]
     pub fn render(
         &mut self,
-        camera: &OrthoCamera,
-        lights: &[PointLight],
-        meshes: &[MeshBatch<'_>],
-        character: Option<CharacterPreview<'_>>,
-        horde: Option<CharacterHorde<'_>>,
-        overlay: &[Quad],
-        debug_discs: &[DebugDisc],
-        effects: &[EffectVertex],
+        input: RenderFrame<'_>,
         capture_path: Option<&std::path::Path>,
     ) -> FrameOutcome {
+        let RenderFrame {
+            camera, lights, meshes, character, horde, overlay, debug_discs, effects,
+        } = input;
+
         // Acquiring a swapchain image can fail in several recoverable ways —
         // the window resized behind our back, the display changed, the GPU
         // dropped the surface. Each wants a slightly different response, and
