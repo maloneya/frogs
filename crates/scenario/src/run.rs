@@ -92,6 +92,11 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
         None => source < scenario.setup.sources.len(),
         Some(nth) => scenes.get(nth).is_some_and(|scene| source < scene.engine.sources.len()),
     };
+    for command in &scenario.set_pieces {
+        if command.at >= scenario.budget.ticks || command.scene >= scenes.len() {
+            failures.push(Failure::new("set_pieces", "an authored scene and reachable tick".into(), format!("{command:?}")));
+        }
+    }
     for command in &scenario.source_switches {
         if command.at >= scenario.budget.ticks || !source_exists(command.scene, command.source) {
             failures.push(Failure::new(
@@ -104,6 +109,18 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     for expect in std::iter::once(&scenario.expect)
         .chain(scenario.checkpoints.iter().map(|checkpoint| &checkpoint.expect))
     {
+        for item in &expect.set_pieces {
+            if item.scene >= scenes.len() {
+                failures.push(Failure::new("set_pieces", "an authored scene".into(), item.scene.to_string()));
+            }
+        }
+        if let Some(lights) = &expect.directional_lights {
+            for value in lights {
+                if !value.value.is_finite() || value.value < 0.0 || !value.tol.is_finite() || value.tol < 0.0 {
+                    failures.push(Failure::new("directional_lights", "finite nonnegative intensity and tolerance".into(), format!("{value:?}")));
+                }
+            }
+        }
         for torch in &expect.torches {
             if !scenes.get(torch.scene).is_some_and(|scene| torch.torch < scene.torches.len()) {
                 failures.push(Failure::new("torches", "an authored scene torch".into(),
@@ -316,6 +333,13 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                             ));
                         }
                     }
+                }
+            }
+            for command in scenario.set_pieces.iter().filter(|command| command.at == tick) {
+                let accepted = instances.get(command.scene).copied().flatten()
+                    .is_some_and(|scene| game.trigger_set_piece(scene, &command.name));
+                if accepted != command.accepted {
+                    command_failures.push(Failure::new("set_pieces", format!("accepted={}", command.accepted), format!("accepted={accepted} at tick {tick}")));
                 }
             }
             for command in scenario.attack_recovery.iter().filter(|command| command.at == tick) {
@@ -575,6 +599,8 @@ fn check_state(
         scene_count,
         torch_count,
         torches,
+        set_pieces,
+        directional_lights,
         bodies,
         trace: _,
     } = expect;
@@ -669,6 +695,19 @@ fn check_state(
         let actual = instances.get(expected.scene).copied().flatten().and_then(|id| game.chest_state(id, expected.chest));
         if actual != expected.state {
             failures.push(Failure::new(&format!("chests[{}/{}]", expected.scene, expected.chest), format!("{:?}", expected.state), format!("{actual:?}")));
+        }
+    }
+    for expected in set_pieces {
+        let actual = instances.get(expected.scene).copied().flatten()
+            .and_then(|scene| game.set_piece_state(scene, &expected.name));
+        if actual != expected.state {
+            failures.push(Failure::new("set_pieces", format!("{:?}", expected.state), format!("{actual:?}")));
+        }
+    }
+    if let Some(expected) = directional_lights {
+        let actual: Vec<_> = game.directional_lights().map(|light| light.intensity()).collect();
+        if expected.len() != actual.len() || expected.iter().zip(&actual).any(|(want, got)| !got.is_finite() || (want.value - got).abs() > want.tol) {
+            failures.push(Failure::new("directional_lights", format!("{expected:?}"), format!("{actual:?}")));
         }
     }
     check_eq("torch_count", torch_count, game.torch_count(), &mut failures);

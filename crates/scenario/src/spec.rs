@@ -24,6 +24,9 @@ pub(crate) struct Scenario {
     /// Lifecycle operations before their named tick, in file order.
     #[serde(default)]
     pub(crate) scenes: Vec<SceneAt>,
+    /// Explicit set-piece requests before the named tick, after scene operations.
+    #[serde(default)]
+    pub(crate) set_pieces: Vec<SetPieceAt>,
 
     /// Applied in order, so a later span overwrites an earlier one where they
     /// overlap. Ticks outside every span get no input at all.
@@ -382,6 +385,11 @@ pub(crate) struct Expect {
     pub(crate) torch_count: Option<usize>,
     #[serde(default)]
     pub(crate) torches: Vec<TorchExpect>,
+    #[serde(default)]
+    pub(crate) set_pieces: Vec<SetPieceExpect>,
+    /// Ordered active light intensities; an empty list asserts darkness.
+    #[serde(default)]
+    pub(crate) directional_lights: Option<Vec<Approx>>,
     /// Predictions about individual bodies placed by [`Setup::actions`].
     #[serde(default)]
     pub(crate) bodies: Vec<BodyExpect>,
@@ -588,4 +596,21 @@ pub(crate) struct ChestExpect {
     pub(crate) scene: usize,
     pub(crate) chest: usize,
     pub(crate) state: Option<arpg_game::ChestState>,
+}
+
+/// Scene load index and authored set-piece name; refusal can be asserted explicitly.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SetPieceAt {
+    pub(crate) at: u64,
+    pub(crate) scene: usize,
+    pub(crate) name: String,
+    pub(crate) accepted: bool,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SetPieceExpect {
+    pub(crate) scene: usize,
+    pub(crate) name: String,
+    pub(crate) state: Option<arpg_game::SetPieceState>,
 }

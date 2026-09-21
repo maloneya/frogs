@@ -77,6 +77,13 @@ impl App {
                         format!("error: no live scene {id} in run {}", self.run_id)
                     }
                 }
+                Command::TriggerSetPiece { scene, name } => {
+                    if self.game.trigger_set_piece(scene, &name) {
+                        format!("queued set-piece {scene}/{name}")
+                    } else {
+                        format!("error: no set-piece {scene}/{name} in run {}", self.run_id)
+                    }
+                }
                 Command::ListScenes => {
                     let mut out = Report::default();
                     out.int("run_id", self.run_id);
@@ -347,7 +354,7 @@ impl App {
         out.push_str(&events);
         out.push_str(&format!(
             "# {} event(s)",
-            self.game.trace().since(tick).count() + self.game.encounter_trace().since(tick).count()
+            self.game.trace().since(tick).count() + self.game.encounter_trace().since(tick).count() + self.game.set_piece_trace().since(tick).count()
         ));
         out
     }

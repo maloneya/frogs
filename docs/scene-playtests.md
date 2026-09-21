@@ -103,6 +103,7 @@ F2 offers **Default horde** (1,024 stationary enemies) and these files:
 | `seekers.ron` | Three approaching seekers |
 | `soul_trial.ron` | A timed defeat encounter rewards a chest unlock |
 | `three_enemy_spawners.ron` | Three approach directions build toward twelve seekers |
+| `storm_reveal.ron` | F4 briefly reveals a stationary horde beyond one torch pool |
 | `two_torches.ron` | Warm and cool pools overlap around stationary monsters |
 
 Attacks use fixed bindings, shown in the HUD:
@@ -123,6 +124,8 @@ Mechanism fixtures live inline in `scenarios/`; they are not picker entries.
 
 Scenes may also own [stationary torches](lighting.md). They participate in the
 same admission, eviction and cached-restart boundaries; omission means no lights.
+Optional [set pieces](set-pieces.md) describe named finite moments, activated
+explicitly. Their first supported action is a distant-light pulse.
 
 ```ron
 (

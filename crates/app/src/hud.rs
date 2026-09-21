@@ -61,7 +61,7 @@ pub(crate) fn draw(
     }
     // Stack-backed lines preserve the overlay's no-allocation frame path.
     let mut lines: [Text; 3] = core::array::from_fn(|_| Text::default());
-    write!(lines[0], "F2: scenes").expect("line capacity");
+    write!(lines[0], "F2: scenes   F4: scene set piece").expect("line capacity");
     if attack.channeling {
         write!(lines[1], "HP {}/{} / Disintegrate / Channeling / Release to move",
             player_health, arpg_game::PLAYER_MAX_HEALTH).expect("line capacity");

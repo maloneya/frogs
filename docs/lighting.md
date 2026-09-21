@@ -31,7 +31,8 @@ index identify a torch within a run; no mutable dense index escapes storage.
 and scene ownership, keyed by scene ID and authored index. The app rebuilds its lights, stands and flames from Game's
 read-only observations. `state.world_assets.torch_instances` counts stand pieces;
 render effect counts include flames and attack effects. Removing the final
-scene light leaves the world dark, with no global fallback.
+scene light leaves the world dark, with no global fallback. Scene-owned
+[set pieces](set-pieces.md) may temporarily add distant light.
 
 Both static and skinned surfaces use [one fragment-lighting function](../crates/gfx/src/lighting.wgsl).
 Each pixel sums the lights' direct contributions in linear colour before sRGB
@@ -41,7 +42,8 @@ light's range. Per-pixel calculation lets even the four-vertex floor show
 smooth pools between its distant corners. Cost grows with the number of lights;
 the cap is a bounded starting point, not a performance guarantee.
 
-There is no ambient/bounced light, shadow map, flicker, or bloom. Walls and
+There is no persistent ambient/bounced light, shadow map, flicker, or bloom.
+An active set-piece light pulse can supply explicitly authored diffuse fill. Walls and
 characters do not block light. Faceted flames, attack effects, and UI are unlit
 geometry and do not themselves illuminate surfaces. The remaining playtest
 question is how much darkness feels good while moving and fighting.

@@ -58,6 +58,8 @@ pub(crate) enum Command {
     AddScene(PathBuf),
     EvictScene(arpg_sim::SceneId),
     ListScenes,
+    /// Queue a named scene-owned timeline for the next tick.
+    TriggerSetPiece { scene: arpg_sim::SceneId, name: String },
     /// Hold a key down until told otherwise.
     Press(KeyCode),
     Release(KeyCode),
@@ -155,6 +157,14 @@ fn parse(line: &str) -> Result<Command, String> {
     };
 
     Ok(match verb {
+        "set-piece" => {
+            let usage = "expected: set-piece trigger <scene-id> <name>";
+            if arg != Some("trigger") { return Err(usage.into()); }
+            let scene = it.next().and_then(arpg_sim::SceneId::parse).ok_or(usage)?;
+            let name = it.next().ok_or(usage)?.to_owned();
+            if it.next().is_some() { return Err(usage.into()); }
+            Command::TriggerSetPiece { scene, name }
+        }
         "cursor" => {
             let usage = "expected: cursor <finite physical x> <finite physical y>";
             let x = arg.ok_or(usage)?.parse::<f32>().map_err(|_| usage)?;
@@ -408,6 +418,14 @@ mod tests {
             "horde hide file.glb",
         ] {
             assert!(parse(bad).is_err(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn set_piece_commands_require_explicit_scene_and_name() {
+        assert!(matches!(parse("set-piece trigger c0 reveal_horde"), Ok(Command::TriggerSetPiece { name, .. }) if name == "reveal_horde"));
+        for invalid in ["set-piece", "set-piece trigger", "set-piece trigger c0", "set-piece trigger s0 reveal", "set-piece trigger c0 reveal extra", "set-piece start c0 reveal"] {
+            assert!(parse(invalid).is_err(), "{invalid}");
         }
     }
 

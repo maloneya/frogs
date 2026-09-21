@@ -448,3 +448,34 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
     app.enemy_feedback.observe(&app.game);
     assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 0.0);
 }
+
+#[test]
+fn f4_and_harness_trigger_the_scene_owned_moment_and_respect_menu_capture() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/storm_reveal.ron");
+    let authored = arpg_content::load_scene(&path).unwrap();
+    let mut app = App { game: Game::from_scene(&authored).unwrap(), ..Default::default() };
+    let id = app.game.scene_instances().next().unwrap().0;
+    app.handle_key(KeyCode::F2, true, false);
+    app.handle_key(KeyCode::F4, true, false);
+    assert_eq!(app.game.set_piece_state(id, "reveal_horde"), Some(arpg_game::SetPieceState::Inactive));
+    app.handle_key(KeyCode::F4, false, false);
+    app.handle_key(KeyCode::Escape, true, false);
+    assert!(app.handle_key(KeyCode::F4, true, false));
+    assert_eq!(app.game.set_piece_state(id, "reveal_horde"), Some(arpg_game::SetPieceState::Queued));
+    let dt = arpg_sim::Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    app.game.step(dt, arpg_core::Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
+    assert!(app.handle_key(KeyCode::F4, true, false), "duplicate press is swallowed");
+    assert_eq!(app.game.set_piece_state(id, "reveal_horde"), Some(arpg_game::SetPieceState::Running { elapsed_ticks: 0 }));
+    app.handle_key(KeyCode::F4, false, false);
+    app.game.load_scene(&authored).unwrap();
+    let before = app.game.hash();
+    app.handle_key(KeyCode::F4, true, false);
+    assert_eq!(app.game.hash(), before, "ambiguous shortcut must not choose a scene arbitrarily");
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.harness = Some(rx);
+    let (reply, response) = std::sync::mpsc::channel();
+    tx.send(Request { command: Command::TriggerSetPiece { scene: id, name: "reveal_horde".into() }, reply }).unwrap();
+    assert!(!app.drain_harness());
+    assert!(response.recv().unwrap().starts_with("queued set-piece"));
+    assert_eq!(app.game.set_piece_state(id, "reveal_horde"), Some(arpg_game::SetPieceState::Queued));
+}

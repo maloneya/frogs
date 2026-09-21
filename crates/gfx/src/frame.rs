@@ -25,6 +25,8 @@ pub struct RenderFrame<'a> {
     pub camera: &'a OrthoCamera,
     /// World-space point lights illuminating meshes and characters.
     pub lights: &'a [PointLight],
+    /// Distant illumination; empty when no scene-owned effect contributes.
+    pub directional_lights: &'a [crate::DirectionalLight],
     /// Uploaded static meshes and their instance placements.
     pub meshes: &'a [MeshBatch<'a>],
     /// One independently posed character, if present.

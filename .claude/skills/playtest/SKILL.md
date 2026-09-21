@@ -44,6 +44,7 @@ body lands on a later tick. The game continues stepping between commands.
 | Place or push | `spawn (pos: (<x>, <z>), what: (seeks: true))`, `impulse <player\|#id> <x> <z>` |
 | Sources | `source (pos: (<x>, <z>), every: <ticks>)`, `source remove\|enable\|disable <id>` |
 | Scenes | `scene start <path>`, `scene restart`, `scene add <path>`, `scene evict <id>`, `scene list` |
+| Set pieces | `set-piece trigger <scene-id> <name>` |
 | Assets | `character\|horde show <path.glb>`, `character\|horde clear` |
 | Presentation | `vsync on\|off`, `debug collision on\|off` |
 | Exit | `quit` |
@@ -60,7 +61,8 @@ The live controls are WASD/arrows to move, cursor to aim, left click or Space
 to use attack slot 1; keys 2 and 3 use the other slots. See
 [attack bindings](../../../docs/scene-playtests.md) for the fixed controls.
 A swing holds its starting direction through recovery while walking
-continues freely. `tap space` swings and `tap e` interacts. F2 opens the scene picker. W/S or arrows navigate, Enter confirms,
+continues freely. `tap space` swings and `tap e` interacts. F4 triggers the scene set piece when exactly one is installed; see
+[set pieces](../../../docs/set-pieces.md). F2 opens the scene picker. W/S or arrows navigate, Enter confirms,
 Escape cancels. While a menu is open it captures gameplay input; the world keeps
 running. Use explicit harness commands for debug operations instead of trying
 to inject native debug keys.

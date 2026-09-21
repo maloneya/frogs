@@ -196,6 +196,18 @@ impl App {
             }
             None => {}
         }
+        if !consumed && pressed && !repeat && key == KeyCode::F4 {
+            let target = {
+                let mut pieces = self.game.set_pieces();
+                let first = pieces.next().map(|(scene, name, _)| (scene, name.to_owned()));
+                if pieces.next().is_none() { first } else { None }
+            };
+            if let Some((scene, name)) = target {
+                let accepted = self.game.trigger_set_piece(scene, &name);
+                debug_assert!(accepted, "observed live set piece");
+            }
+            return true;
+        }
         consumed
     }
 
@@ -394,6 +406,8 @@ impl App {
         let world_assets = self.world_assets.as_mut().expect("rendering requires world assets");
         world_assets.rebuild(self.game.prop_presentations(alpha), |id| self.game.chest_state_for_body(id));
         world_assets.torches.rebuild(self.game.torches(), self.attack_effects.vertices());
+        world_assets.directional_lights.clear();
+        world_assets.directional_lights.extend(self.game.directional_lights());
         self.collision_debug.rebuild(&self.game);
 
         // The overlay is built here rather than inside `render` for the same
@@ -434,6 +448,7 @@ impl App {
             RenderFrame {
                 camera,
                 lights: world_assets.torches.lights(),
+                directional_lights: &world_assets.directional_lights,
                 meshes: &meshes,
                 character,
                 horde,

@@ -82,6 +82,28 @@ mod tests {
     }
 
     #[test]
+    fn set_piece_files_use_the_validated_game_vocabulary() {
+        let valid = include_str!("../../../scenes/storm_reveal.ron");
+        assert_eq!(parse_scene(valid).unwrap().set_pieces[0].name(), "reveal_horde");
+        for invalid in [
+            valid.replace("duration_ticks: 15", "duration_ticks: 0"),
+            valid.replace("duration_ticks: 15", "duration_ticks: 3601"),
+            valid.replace("at: 0", "at: 4294967295"),
+            valid.replace("(-0.5, 1.0, 0.3)", "(0.0, 0.0, 0.0)"),
+            valid.replace("(-0.5, 1.0, 0.3)", "(NaN, 1.0, 0.0)"),
+            valid.replace("fill: 0.12", "fill: 1.1"),
+            valid.replace("intensity: 2.0", "intensity: inf"),
+            valid.replace("colour: (0.55, 0.7, 1.0)", "colour: (-1.0, 0.7, 1.0)"),
+            valid.replace("at: 0,", "at: 0, typo: true,"),
+            valid.replace("fill: 0.12,", "fill: 0.12, typo: true,"),
+            valid.replace("name: \"reveal_horde\"", "name: \"bad name\""),
+            valid.replace("LightPulse", "UnknownAction"),
+        ] {
+            assert!(parse_scene(&invalid).is_err(), "invalid timeline admitted: {invalid}");
+        }
+    }
+
+    #[test]
     fn scenes_reject_legacy_content_and_unknown_fields() {
         for source in [
             r#"(name: "trial", sources: [])"#,

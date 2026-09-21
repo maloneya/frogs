@@ -2,9 +2,14 @@ struct PointLight {
     position_range: vec4<f32>,
     colour_intensity: vec4<f32>,
 };
+struct DirectionalLight {
+    toward_source_fill: vec4<f32>,
+    colour_intensity: vec4<f32>,
+};
 struct Lights {
     count: vec4<u32>,
     lights: array<PointLight, MAX_POINT_LIGHTS>,
+    directional: array<DirectionalLight, MAX_DIRECTIONAL_LIGHTS>,
 };
 @group(0) @binding(1) var<uniform> scene_lights: Lights;
 
@@ -26,6 +31,12 @@ fn illumination(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     var total = vec3<f32>(0.0);
     for (var i = 0u; i < scene_lights.count.x; i += 1u) {
         total += contribution(scene_lights.lights[i], world_pos, unit_normal);
+    }
+    for (var i = 0u; i < scene_lights.count.y; i += 1u) {
+        let light = scene_lights.directional[i];
+        let facing = max(dot(unit_normal, light.toward_source_fill.xyz), 0.0);
+        let amount = mix(facing, 1.0, light.toward_source_fill.w);
+        total += light.colour_intensity.rgb * light.colour_intensity.w * amount;
     }
     return total;
 }

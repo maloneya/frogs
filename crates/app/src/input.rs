@@ -49,6 +49,7 @@ const BINDINGS: &[Binding] = &[
     ("3", KeyCode::Digit3, Some(Action::AttackTertiary), None),
     ("space", KeyCode::Space, Some(Action::Attack), None),
     ("e", KeyCode::KeyE, Some(Action::Interact), None),
+    ("f4", KeyCode::F4, None, None),
     ("f2", KeyCode::F2, None, Some(MenuKey::Scenes)),
     ("enter", KeyCode::Enter, None, Some(MenuKey::Accept)),
     ("escape", KeyCode::Escape, None, Some(MenuKey::Close)),
