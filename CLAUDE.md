@@ -55,6 +55,15 @@ large crowds. Understanding the systems matters alongside getting them running.
 8. **Diagnose from evidence.** Search [traps](docs/traps.md) before investigating
    a symptom. After a misleading failure costs over ten minutes, record its
    symptom, cause and check; replace recurring advice with executable safeguards.
+9. **Replace, do not preserve backwards compatibility.** This project has no
+   deployed consumers that need old behaviour. Breaking changes are expected:
+   update all affected callers, authored data, tools, tests and documentation in
+   the same change, then delete the superseded path. Do not add compatibility
+   shims, deprecated aliases, legacy format readers, version branches or
+   fallbacks just to preserve an old interface or behaviour. Rewrite or
+   regenerate repository data instead of maintaining runtime migration code.
+   Keep one current implementation; preserve compatibility only when the user
+   explicitly requires it for a concrete consumer.
 
 ## Ownership
 
