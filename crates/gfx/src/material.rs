@@ -47,19 +47,15 @@ impl MaterialLayout {
     }
 }
 
-pub(crate) struct Material {
-    bind_group: wgpu::BindGroup,
+/// Uploaded once per image. Material bind groups retain the view/sampler handles.
+pub(crate) struct MaterialTexture {
+    view: wgpu::TextureView,
+    sampler: wgpu::Sampler,
 }
 
-impl Material {
-    pub(crate) fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        layout: &MaterialLayout,
-        image: &arpg_assets::BaseColorTexture,
-        base_color_factor: [f32; 4],
-        label: &'static str,
-    ) -> Self {
+impl MaterialTexture {
+    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue,
+        image: &arpg_assets::BaseColorTexture, label: &'static str) -> Self {
         let texture = device.create_texture_with_data(
             queue,
             &wgpu::TextureDescriptor {
@@ -91,6 +87,17 @@ impl Material {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
+        Self { view, sampler }
+    }
+}
+
+pub(crate) struct Material {
+    bind_group: wgpu::BindGroup,
+}
+
+impl Material {
+    pub(crate) fn new(device: &wgpu::Device, layout: &MaterialLayout,
+        texture: &MaterialTexture, base_color_factor: [f32; 4], label: &'static str) -> Self {
         let factor = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label),
             contents: bytemuck::cast_slice(&[base_color_factor]),
@@ -103,11 +110,11 @@ impl Material {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
+                        resource: wgpu::BindingResource::Sampler(&texture.sampler),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,

@@ -11,8 +11,8 @@ fn basic_enemy_satisfies_the_horde_presentation_contract() {
 
     assert!(character.vertex_count() > 250);
     assert!(character.index_count() > 400);
-    assert_eq!(character.base_color_texture().width(), 64);
-    assert_eq!(character.base_color_texture().height(), 64);
+    assert_eq!(character.images()[0].width(), 64);
+    assert_eq!(character.images()[0].height(), 64);
     assert_eq!(character.joint_count(), 7);
     assert!(character.clip_named("Idle").is_some());
     assert!(character.clip_named("Run").is_some());

@@ -12,7 +12,8 @@ mod character;
 pub use character::import_character_glb;
 pub use character::{
     AnimationClip, CharacterAsset, CharacterAssetId, CharacterPose, CharacterVertex, ClipId, JointId, JointMatrix,
-    MAX_JOINTS, PoseMask,
+    MAX_JOINTS, MAX_CHARACTER_PARTS, MAX_CHARACTER_MATERIALS, MAX_CHARACTER_TEXTURE_BYTES,
+    CharacterPart, CharacterMaterial, PoseMask,
 };
 
 /// Largest binary glTF accepted by the first asset path: eight MiB.
@@ -29,7 +30,7 @@ pub const MAX_VERTICES: usize = 262_144;
 /// bounding both CPU and GPU allocation.
 pub const MAX_INDICES: usize = MAX_VERTICES * 3;
 
-/// Largest accepted dimension of the single base-colour texture.
+/// Largest accepted dimension of each base-colour image.
 pub const MAX_TEXTURE_DIMENSION: u32 = 2_048;
 
 /// Decoded RGBA8 storage is bounded independently of compressed file size.
@@ -310,7 +311,7 @@ fn append_mip_levels(
     Ok(rgba8)
 }
 
-fn decode_base_color_png(encoded: &[u8]) -> Result<BaseColorTexture, ImportError> {
+fn decode_base_color_png(encoded: &[u8], remaining_bytes: usize) -> Result<BaseColorTexture, ImportError> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(encoded));
     decoder.set_limits(png::Limits {
         bytes: MAX_TEXTURE_RGBA_BYTES,
@@ -335,6 +336,9 @@ fn decode_base_color_png(encoded: &[u8]) -> Result<BaseColorTexture, ImportError
     if pixels > MAX_TEXTURE_PIXELS {
         return Err(ImportError::Capacity("texture pixels"));
     }
+    if mip_chain_len(header.width, header.height)? > remaining_bytes {
+        return Err(ImportError::Capacity("total character texture bytes"));
+    }
     let expected = pixels * 4;
     let output = reader
         .output_buffer_size()
@@ -358,21 +362,16 @@ fn decode_base_color_png(encoded: &[u8]) -> Result<BaseColorTexture, ImportError
     })
 }
 
-pub(crate) struct ImportedMaterial<'a> {
+/// Validated material references; images are decoded separately so sharing a
+/// texture across character parts does not multiply CPU or GPU allocations.
+pub(crate) struct MaterialSource<'a> {
     pub(crate) base_color_factor: [f32; 4],
-    pub(crate) base_color_texture: BaseColorTexture,
-    pub(crate) image_view: gltf::buffer::View<'a>,
+    pub(crate) texture: gltf::Texture<'a>,
 }
 
-pub(crate) fn import_material<'a>(
-    primitive: &gltf::Primitive<'a>,
-    blob: &[u8],
-) -> Result<ImportedMaterial<'a>, ImportError> {
-    let material = primitive.material();
-    if material.index() != Some(0) {
-        return Err(ImportError::Invalid(
-            "the primitive must reference the sole material",
-        ));
+pub(crate) fn import_material(material: gltf::Material<'_>) -> Result<MaterialSource<'_>, ImportError> {
+    if material.index().is_none() {
+        return Err(ImportError::Invalid("an explicit material is required"));
     }
     if material.alpha_mode() != gltf::material::AlphaMode::Opaque
         || material.alpha_cutoff().is_some()
@@ -413,27 +412,29 @@ pub(crate) fn import_material<'a>(
     let base_color = pbr
         .base_color_texture()
         .ok_or(ImportError::Invalid("baseColorTexture is required"))?;
-    if base_color.tex_coord() != 0 || base_color.texture().index() != 0 {
+    if base_color.tex_coord() != 0 {
         return Err(ImportError::Unsupported(
-            "baseColorTexture must use texture zero and TEXCOORD_0",
+            "baseColorTexture must use TEXCOORD_0",
         ));
     }
     let texture = base_color.texture();
     let sampler = texture.sampler();
-    if sampler.index() != Some(0)
+    if sampler.index().is_none()
         || sampler.mag_filter() != Some(gltf::texture::MagFilter::Linear)
         || sampler.min_filter() != Some(gltf::texture::MinFilter::LinearMipmapLinear)
         || sampler.wrap_s() != gltf::texture::WrappingMode::Repeat
         || sampler.wrap_t() != gltf::texture::WrappingMode::Repeat
     {
         return Err(ImportError::Unsupported(
-            "the sole sampler must use linear magnification, trilinear minification, and repeat wrapping",
+            "samplers must use linear magnification, trilinear minification, and repeat wrapping",
         ));
     }
-    let image = texture.source();
-    if image.index() != 0 {
-        return Err(ImportError::Invalid("texture references the wrong image"));
-    }
+    Ok(MaterialSource { base_color_factor, texture })
+}
+
+pub(crate) fn import_image<'a>(
+    image: gltf::Image<'a>, blob: &[u8], remaining_bytes: usize,
+) -> Result<(BaseColorTexture, gltf::buffer::View<'a>), ImportError> {
     let image_view = match image.source() {
         gltf::image::Source::View {
             view,
@@ -464,12 +465,7 @@ pub(crate) fn import_material<'a>(
         .ok_or(ImportError::Invalid(
             "base-colour image exceeds the embedded buffer",
         ))?;
-    let base_color_texture = decode_base_color_png(encoded_image)?;
-    Ok(ImportedMaterial {
-        base_color_factor,
-        base_color_texture,
-        image_view,
-    })
+    Ok((decode_base_color_png(encoded_image, remaining_bytes)?, image_view))
 }
 
 /// Imports the deliberately small Stage 2 subset of binary glTF 2.0.
@@ -629,7 +625,10 @@ pub fn import_glb(bytes: &[u8]) -> Result<StaticMesh, ImportError> {
         "only POSITION, NORMAL and TEXCOORD_0 vertex attributes are accepted",
     )?;
 
-    let material = import_material(&primitive, blob)?;
+    let material = import_material(primitive.material())?;
+    let (base_color_texture, image_view) = import_image(
+        material.texture.source(), blob, MAX_TEXTURE_MIP_RGBA_BYTES,
+    )?;
 
     let positions = primitive
         .get(&gltf::Semantic::Positions)
@@ -647,7 +646,7 @@ pub fn import_glb(bytes: &[u8]) -> Result<StaticMesh, ImportError> {
         .into_iter()
         .map(|view| view.ok_or(ImportError::Unsupported("sparse accessors are deferred")))
         .collect::<Result<Vec<_>, _>>()?;
-    used_views.push(material.image_view.clone());
+    used_views.push(image_view);
     used_views.sort_by_key(gltf::buffer::View::index);
     used_views.dedup_by_key(|view| view.index());
     exactly(
@@ -761,7 +760,7 @@ pub fn import_glb(bytes: &[u8]) -> Result<StaticMesh, ImportError> {
         vertices,
         indices: imported_indices,
         base_color_factor: material.base_color_factor,
-        base_color_texture: material.base_color_texture,
+        base_color_texture,
     })
 }
 
@@ -773,29 +772,12 @@ mod tests {
     const BLENDER_FIXTURE: &[u8] =
         include_bytes!("../../../assets/fixtures/blender-static-preview.glb");
 
-    fn mutate_json(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
-        let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
-        let json = std::str::from_utf8(&bytes[20..20 + json_len]).unwrap();
+    pub(super) fn mutate_json(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
+        let mut glb = gltf::binary::Glb::from_slice(bytes).unwrap();
+        let json = std::str::from_utf8(&glb.json).unwrap();
         assert!(json.contains(from), "fixture no longer contains {from:?}");
-        let mut json = json.replace(from, to).into_bytes();
-        while !json.len().is_multiple_of(4) {
-            json.push(b' ');
-        }
-        let old_bin = 20 + json_len;
-        let bin_len = u32::from_le_bytes(bytes[old_bin..old_bin + 4].try_into().unwrap()) as usize;
-        let bin = &bytes[old_bin + 8..old_bin + 8 + bin_len];
-        let total = 12 + 8 + json.len() + 8 + bin.len();
-        let mut out = Vec::with_capacity(total);
-        out.extend_from_slice(b"glTF");
-        out.extend_from_slice(&2_u32.to_le_bytes());
-        out.extend_from_slice(&(total as u32).to_le_bytes());
-        out.extend_from_slice(&(json.len() as u32).to_le_bytes());
-        out.extend_from_slice(&0x4e4f_534a_u32.to_le_bytes());
-        out.extend_from_slice(&json);
-        out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
-        out.extend_from_slice(&0x004e_4942_u32.to_le_bytes());
-        out.extend_from_slice(bin);
-        out
+        glb.json = json.replace(from, to).into_bytes().into();
+        glb.to_vec().unwrap()
     }
 
     #[test]
@@ -985,7 +967,7 @@ mod tests {
                 .write_image_data(&vec![0; (MAX_TEXTURE_DIMENSION as usize + 1) * 4])
                 .unwrap();
         }
-        assert!(decode_base_color_png(&png)
+        assert!(decode_base_color_png(&png, MAX_TEXTURE_MIP_RGBA_BYTES)
             .unwrap_err()
             .to_string()
             .contains("texture dimensions"));

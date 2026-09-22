@@ -11,8 +11,11 @@ fn basic_player_satisfies_the_player_presentation_contract() {
 
     assert!(character.vertex_count() > 300);
     assert!(character.index_count() > 500);
-    assert_eq!(character.base_color_texture().width(), 64);
-    assert_eq!(character.base_color_texture().height(), 64);
+    assert_eq!(character.images()[0].width(), 64);
+    assert_eq!(character.images()[0].height(), 64);
+    assert_eq!(character.parts().len(), 1);
+    assert_eq!(character.materials().len(), 1);
+    assert_eq!(character.images().len(), 1);
     assert_eq!(character.joint_count(), 8);
     assert_eq!(character.clip_count(), 7);
     assert!(character.joint_named("Weapon").is_some());

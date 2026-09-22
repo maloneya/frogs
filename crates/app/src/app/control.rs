@@ -320,12 +320,13 @@ impl App {
                     .map_or(0, |world| world.draw_count() as u64),
             );
             r.int("player_character_instances", player_instances);
+            r.int("player_character_draws", self.character_preview.as_ref().map_or(0, |c| c.draw_count() as u64));
             r.int("horde_character_instances", horde_instances);
             r.int(
-                "horde_pose_draws",
+                "horde_character_draws",
                 self.horde_preview
                     .as_ref()
-                    .map_or(0, |horde| horde.occupied_buckets() as u64),
+                    .map_or(0, |horde| horde.draw_count() as u64),
             );
             r.int("frames", self.frames);
             r.int("skipped", self.skipped);

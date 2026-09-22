@@ -5,11 +5,18 @@ use std::sync::Arc;
 
 use super::{
     BaseColorTexture, ImportError, MAX_GLB_BYTES, MAX_INDICES, MAX_VERTICES, exactly,
-    import_material, node_transform,
+    import_material, import_image, node_transform,
 };
 
 /// Largest retained node hierarchy accepted for one character.
 pub(crate) const MAX_CHARACTER_NODES: usize = 128;
+
+/// Total drawable primitives in one character, including every mesh node.
+pub const MAX_CHARACTER_PARTS: usize = 32;
+/// Total material/image/texture catalog entries in one character.
+pub const MAX_CHARACTER_MATERIALS: usize = 32;
+/// Total decoded image bytes including all mip levels, counted once per image.
+pub const MAX_CHARACTER_TEXTURE_BYTES: usize = 64 << 20;
 
 /// Largest joint palette accepted by the first character renderer.
 pub const MAX_JOINTS: usize = 64;
@@ -259,14 +266,54 @@ impl JointMatrix {
     }
 }
 
-/// One validated character mesh, material, node hierarchy and skin.
+/// One authored mesh primitive. Geometry shares buffers but each part keeps its
+/// node name, primitive index and material; source geometry is not rebaked.
+#[derive(Debug)]
+pub struct CharacterPart {
+    node_name: Box<str>,
+    primitive_index: usize,
+    vertices: std::ops::Range<usize>,
+    indices: std::ops::Range<u32>,
+    material: usize,
+}
+
+impl CharacterPart {
+    /// Unique authored node name; multiple primitives can belong to that node.
+    pub fn node_name(&self) -> &str { &self.node_name }
+    /// Primitive index within the node's referenced mesh.
+    pub fn primitive_index(&self) -> usize { self.primitive_index }
+    /// Range in the owning character's vertex storage.
+    pub fn vertices(&self) -> std::ops::Range<usize> { self.vertices.clone() }
+    /// Range in the owning character's index storage. Indices address the shared
+    /// vertex buffer directly, so GPU draws require no per-part base vertex.
+    pub fn indices(&self) -> std::ops::Range<u32> { self.indices.clone() }
+    /// Valid index into the owning character's material catalog.
+    pub fn material_index(&self) -> usize { self.material }
+}
+
+/// One material referring to a decoded image shared by any number of parts.
+#[derive(Debug)]
+pub struct CharacterMaterial {
+    base_color_factor: [f32; 4],
+    image: usize,
+}
+
+impl CharacterMaterial {
+    /// Linear colour multiplier applied after sampling the sRGB texture.
+    pub fn base_color_factor(&self) -> [f32; 4] { self.base_color_factor }
+    /// Valid index into the owning character's image catalog.
+    pub fn image_index(&self) -> usize { self.image }
+}
+
+/// One validated collection of mesh parts and materials sharing a hierarchy and skin.
 #[derive(Debug)]
 pub struct CharacterAsset {
     asset_id: CharacterAssetId,
     vertices: Vec<CharacterVertex>,
     indices: Vec<u32>,
-    base_color_factor: [f32; 4],
-    base_color_texture: BaseColorTexture,
+    parts: Vec<CharacterPart>,
+    materials: Vec<CharacterMaterial>,
+    images: Vec<BaseColorTexture>,
     nodes: Vec<CharacterNode>,
     joints: Vec<SkinJoint>,
     hierarchy_order: Vec<u16>,
@@ -304,16 +351,15 @@ impl CharacterAsset {
         self.indices.len()
     }
 
-    /// Linear multiplier authored on the glTF base-colour material.
-    #[must_use]
-    pub fn base_color_factor(&self) -> [f32; 4] {
-        self.base_color_factor
-    }
-
-    /// Decoded base-colour image and generated mip chain.
-    #[must_use]
-    pub fn base_color_texture(&self) -> &BaseColorTexture {
-        &self.base_color_texture
+    /// Drawable parts in authored hierarchy and primitive order.
+    pub fn parts(&self) -> &[CharacterPart] { &self.parts }
+    /// Validated material catalog in glTF order.
+    pub fn materials(&self) -> &[CharacterMaterial] { &self.materials }
+    /// Decoded images in glTF order; shared images are stored once.
+    pub fn images(&self) -> &[BaseColorTexture] { &self.images }
+    /// Total retained decoded bytes, including mip levels.
+    pub fn texture_bytes(&self) -> usize {
+        self.images.iter().map(|image| image.rgba8_mip_chain().len()).sum()
     }
 
     /// Number of retained nodes in the character hierarchy.
@@ -707,7 +753,7 @@ fn import_animation<'a>(
     ))
 }
 
-/// Imports the bounded one-mesh, one-skin character subset of binary glTF.
+/// Imports bounded mesh parts and materials sharing one skin in binary glTF.
 ///
 /// Unlike [`super::import_glb`], node transforms are retained. The importer
 /// validates one rooted hierarchy, one named joint tree, inverse bind matrices,
@@ -734,7 +780,9 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         1,
         "exactly one scene is required",
     )?;
-    exactly(document.meshes().count(), 1, "exactly one mesh is required")?;
+    if document.meshes().count() == 0 || document.meshes().count() > MAX_CHARACTER_PARTS {
+        return Err(ImportError::Capacity("character mesh count"));
+    }
     exactly(document.skins().count(), 1, "exactly one skin is required")?;
     let animation_count = document.animations().count();
     if animation_count == 0 || animation_count > MAX_ANIMATION_CLIPS {
@@ -745,26 +793,12 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         1,
         "exactly one embedded buffer is required",
     )?;
-    exactly(
-        document.images().count(),
-        1,
-        "exactly one image is required",
-    )?;
-    exactly(
-        document.materials().count(),
-        1,
-        "exactly one material is required",
-    )?;
-    exactly(
-        document.samplers().count(),
-        1,
-        "exactly one sampler is required",
-    )?;
-    exactly(
-        document.textures().count(),
-        1,
-        "exactly one texture is required",
-    )?;
+    for count in [document.images().count(), document.materials().count(),
+        document.samplers().count(), document.textures().count()] {
+        if count == 0 || count > MAX_CHARACTER_MATERIALS {
+            return Err(ImportError::Capacity("character material catalog"));
+        }
+    }
     if document.cameras().next().is_some() {
         return Err(ImportError::Unsupported("cameras are deferred"));
     }
@@ -809,7 +843,8 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         None,
         Mat4::IDENTITY,
     )];
-    let mut mesh_node = None;
+    let mut mesh_nodes = Vec::new();
+    let mut used_meshes = vec![false; document.meshes().count()];
     while let Some((node, parent, parent_global)) = stack.pop() {
         let index = node.index();
         if nodes[index].is_some() {
@@ -856,11 +891,8 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
             ));
         }
         if let Some(mesh) = node.mesh() {
-            if mesh.index() != 0 || mesh_node.replace(index).is_some() {
-                return Err(ImportError::Invalid(
-                    "exactly one node must reference the sole mesh",
-                ));
-            }
+            mesh_nodes.push((index, mesh.clone()));
+            used_meshes[mesh.index()] = true;
             if node.skin().map(|skin| skin.index()) != Some(0) {
                 return Err(ImportError::Invalid(
                     "the mesh node must reference the sole skin",
@@ -895,114 +927,17 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         ));
     }
     let nodes: Vec<CharacterNode> = nodes.into_iter().map(Option::unwrap).collect();
-    let mesh_node = mesh_node.ok_or(ImportError::Invalid(
-        "one node must reference the character mesh",
-    ))?;
-    if !globals[mesh_node].abs_diff_eq(Mat4::IDENTITY, 1.0e-6) {
-        return Err(ImportError::Unsupported(
-            "the skinned mesh node must have an identity global transform",
-        ));
+    if mesh_nodes.is_empty() || used_meshes.contains(&false) {
+        return Err(ImportError::Invalid("every character mesh must be referenced"));
     }
-
-    let mesh = document.meshes().next().expect("count checked");
-    exactly(
-        mesh.primitives().count(),
-        1,
-        "exactly one mesh primitive is required",
-    )?;
-    let primitive = mesh.primitives().next().expect("count checked");
-    if primitive.mode() != gltf::mesh::Mode::Triangles {
-        return Err(ImportError::Unsupported(
-            "only TRIANGLES primitives are accepted",
-        ));
+    // All parts share one bind space and joint palette. Other mesh bind spaces
+    // and additional skins are outside this character contract.
+    if mesh_nodes.iter().any(|(node, _)| !globals[*node].abs_diff_eq(Mat4::IDENTITY, 1.0e-6)) {
+        return Err(ImportError::Unsupported("skinned mesh nodes must have identity global transforms"));
     }
-    if primitive.morph_targets().next().is_some() {
-        return Err(ImportError::Unsupported("morph targets are deferred"));
-    }
-    exactly(
-        primitive.attributes().count(),
-        5,
-        "only POSITION, NORMAL, TEXCOORD_0, JOINTS_0 and WEIGHTS_0 are accepted",
-    )?;
-    let material = import_material(&primitive, blob)?;
-
-    let positions = primitive
-        .get(&gltf::Semantic::Positions)
-        .ok_or(ImportError::Invalid("POSITION is required"))?;
-    let normals = primitive
-        .get(&gltf::Semantic::Normals)
-        .ok_or(ImportError::Invalid("NORMAL is required"))?;
-    let uvs = primitive
-        .get(&gltf::Semantic::TexCoords(0))
-        .ok_or(ImportError::Invalid("TEXCOORD_0 is required"))?;
-    let joint_indices = primitive
-        .get(&gltf::Semantic::Joints(0))
-        .ok_or(ImportError::Invalid("JOINTS_0 is required"))?;
-    let weights = primitive
-        .get(&gltf::Semantic::Weights(0))
-        .ok_or(ImportError::Invalid("WEIGHTS_0 is required"))?;
-    let indices = primitive
-        .indices()
-        .ok_or(ImportError::Unsupported("indices are required"))?;
-    let attribute_count = positions.count();
-    if attribute_count == 0
-        || [
-            normals.count(),
-            uvs.count(),
-            joint_indices.count(),
-            weights.count(),
-        ]
-        .into_iter()
-        .any(|count| count != attribute_count)
-    {
-        return Err(ImportError::Invalid(
-            "all character vertex attribute counts must be equal and nonzero",
-        ));
-    }
-    if attribute_count > MAX_VERTICES {
-        return Err(ImportError::Capacity("vertex count"));
-    }
-    if uvs.data_type() != gltf::accessor::DataType::F32
-        || uvs.dimensions() != gltf::accessor::Dimensions::Vec2
-        || uvs.normalized()
-    {
-        return Err(ImportError::Unsupported(
-            "TEXCOORD_0 must be unnormalized FLOAT VEC2",
-        ));
-    }
-    if !matches!(
-        joint_indices.data_type(),
-        gltf::accessor::DataType::U8 | gltf::accessor::DataType::U16
-    ) || joint_indices.dimensions() != gltf::accessor::Dimensions::Vec4
-        || joint_indices.normalized()
-    {
-        return Err(ImportError::Unsupported(
-            "JOINTS_0 must be unnormalized unsigned-byte or unsigned-short VEC4",
-        ));
-    }
-    if weights.data_type() != gltf::accessor::DataType::F32
-        || weights.dimensions() != gltf::accessor::Dimensions::Vec4
-        || weights.normalized()
-    {
-        return Err(ImportError::Unsupported(
-            "WEIGHTS_0 must be unnormalized FLOAT VEC4",
-        ));
-    }
-    if indices.count() == 0 || !indices.count().is_multiple_of(3) {
-        return Err(ImportError::Invalid(
-            "index count must describe complete triangles",
-        ));
-    }
-    if indices.count() > MAX_INDICES {
-        return Err(ImportError::Capacity("index count"));
-    }
-    if !matches!(
-        indices.data_type(),
-        gltf::accessor::DataType::U16 | gltf::accessor::DataType::U32
-    ) {
-        return Err(ImportError::Unsupported(
-            "indices must be unsigned 16- or 32-bit",
-        ));
+    let part_count: usize = mesh_nodes.iter().map(|(_, mesh)| mesh.primitives().count()).sum();
+    if part_count == 0 || part_count > MAX_CHARACTER_PARTS {
+        return Err(ImportError::Capacity("character part count"));
     }
 
     let skin = document.skins().next().expect("count checked");
@@ -1063,56 +998,6 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         ));
     }
 
-    let mut used_views = [
-        positions.view(),
-        normals.view(),
-        uvs.view(),
-        joint_indices.view(),
-        weights.view(),
-        indices.view(),
-        inverse_accessor.view(),
-    ]
-    .into_iter()
-    .map(|view| view.ok_or(ImportError::Unsupported("sparse accessors are deferred")))
-    .collect::<Result<Vec<_>, _>>()?;
-    for accessor in &animation_accessors {
-        used_views.push(
-            accessor
-                .view()
-                .ok_or(ImportError::Unsupported("sparse accessors are deferred"))?,
-        );
-    }
-    used_views.push(material.image_view.clone());
-    used_views.sort_by_key(gltf::buffer::View::index);
-    used_views.dedup_by_key(|view| view.index());
-    exactly(
-        document.views().count(),
-        used_views.len(),
-        "unused buffer views are rejected",
-    )?;
-    if used_views.iter().any(|view| view.buffer().index() != 0) {
-        return Err(ImportError::Invalid(
-            "character data must use the embedded buffer",
-        ));
-    }
-    let mut used_accessors = vec![
-        positions.clone(),
-        normals.clone(),
-        uvs.clone(),
-        joint_indices.clone(),
-        weights.clone(),
-        indices.clone(),
-        inverse_accessor.clone(),
-    ];
-    used_accessors.extend(animation_accessors);
-    used_accessors.sort_by_key(gltf::Accessor::index);
-    used_accessors.dedup_by_key(|accessor| accessor.index());
-    exactly(
-        document.accessors().count(),
-        used_accessors.len(),
-        "unused character accessors are rejected",
-    )?;
-
     let inverse_binds: Vec<Mat4> = skin
         .reader(|_| Some(blob))
         .read_inverse_bind_matrices()
@@ -1143,6 +1028,180 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
             inverse_bind,
         })
         .collect();
+
+
+    let mut used_accessors = vec![inverse_accessor];
+    used_accessors.extend(animation_accessors);
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let mut parts = Vec::with_capacity(part_count);
+    let mut used_materials = vec![false; document.materials().count()];
+    for (node, mesh) in mesh_nodes {
+        for primitive in mesh.primitives() {
+            let material = primitive.material().index().ok_or(ImportError::Invalid("an explicit material is required"))?;
+            used_materials[material] = true;
+            let vertex_start = vertices.len();
+            let index_start = indices.len();
+            let primitive_index = primitive.index();
+            let imported = import_part(
+                primitive, blob, &bind_joint_matrices, vertex_start, index_start,
+            )?;
+            vertices.extend(imported.vertices);
+            indices.extend(imported.indices.into_iter().map(|index| index + vertex_start as u32));
+            parts.push(CharacterPart {
+                node_name: nodes[node].name.clone(), primitive_index,
+                vertices: vertex_start..vertices.len(), indices: index_start as u32..indices.len() as u32, material,
+            });
+            used_accessors.extend(imported.accessors);
+        }
+    }
+    if used_materials.contains(&false) {
+        return Err(ImportError::Unsupported("unused character materials are rejected"));
+    }
+    let mut materials = Vec::with_capacity(used_materials.len());
+    let mut used_images = vec![false; document.images().count()];
+    let mut used_textures = vec![false; document.textures().count()];
+    let mut used_samplers = vec![false; document.samplers().count()];
+    for material in document.materials() {
+        let source = import_material(material)?;
+        let image = source.texture.source().index();
+        used_images[image] = true;
+        used_textures[source.texture.index()] = true;
+        used_samplers[source.texture.sampler().index().expect("validated sampler")] = true;
+        materials.push(CharacterMaterial { base_color_factor: source.base_color_factor, image });
+    }
+    if used_images.contains(&false) || used_textures.contains(&false) || used_samplers.contains(&false) {
+        return Err(ImportError::Unsupported("unused character texture resources are rejected"));
+    }
+    let mut images = Vec::with_capacity(used_images.len());
+    let mut remaining_bytes = MAX_CHARACTER_TEXTURE_BYTES;
+    let mut used_views = Vec::new();
+    for image in document.images() {
+        let (image, view) = import_image(image, blob, remaining_bytes)?;
+        remaining_bytes -= image.rgba8_mip_chain().len();
+        images.push(image);
+        used_views.push(view);
+    }
+    used_accessors.sort_by_key(gltf::Accessor::index);
+    used_accessors.dedup_by_key(|accessor| accessor.index());
+    exactly(document.accessors().count(), used_accessors.len(), "unused character accessors are rejected")?;
+    for accessor in used_accessors {
+        used_views.push(accessor.view().ok_or(ImportError::Unsupported("sparse accessors are deferred"))?);
+    }
+    used_views.sort_by_key(gltf::buffer::View::index);
+    used_views.dedup_by_key(|view| view.index());
+    exactly(document.views().count(), used_views.len(), "unused buffer views are rejected")?;
+    if used_views.iter().any(|view| view.buffer().index() != 0) {
+        return Err(ImportError::Invalid("character data must use the embedded buffer"));
+    }
+    Ok(CharacterAsset {
+        asset_id: CharacterAssetId(Arc::new(())), vertices, indices, parts, materials, images,
+        nodes, joints, hierarchy_order, clips,
+    })
+}
+
+struct ImportedPart<'a> {
+    vertices: Vec<CharacterVertex>,
+    indices: Vec<u32>,
+    accessors: Vec<gltf::Accessor<'a>>,
+}
+
+fn import_part<'a>(
+    primitive: gltf::Primitive<'a>, blob: &[u8], bind_joint_matrices: &[JointMatrix],
+    vertex_start: usize, index_start: usize,
+) -> Result<ImportedPart<'a>, ImportError> {
+    if primitive.mode() != gltf::mesh::Mode::Triangles {
+        return Err(ImportError::Unsupported(
+            "only TRIANGLES primitives are accepted",
+        ));
+    }
+    if primitive.morph_targets().next().is_some() {
+        return Err(ImportError::Unsupported("morph targets are deferred"));
+    }
+    exactly(
+        primitive.attributes().count(),
+        5,
+        "only POSITION, NORMAL, TEXCOORD_0, JOINTS_0 and WEIGHTS_0 are accepted",
+    )?;
+
+    let positions = primitive
+        .get(&gltf::Semantic::Positions)
+        .ok_or(ImportError::Invalid("POSITION is required"))?;
+    let normals = primitive
+        .get(&gltf::Semantic::Normals)
+        .ok_or(ImportError::Invalid("NORMAL is required"))?;
+    let uvs = primitive
+        .get(&gltf::Semantic::TexCoords(0))
+        .ok_or(ImportError::Invalid("TEXCOORD_0 is required"))?;
+    let joint_indices = primitive
+        .get(&gltf::Semantic::Joints(0))
+        .ok_or(ImportError::Invalid("JOINTS_0 is required"))?;
+    let weights = primitive
+        .get(&gltf::Semantic::Weights(0))
+        .ok_or(ImportError::Invalid("WEIGHTS_0 is required"))?;
+    let indices = primitive
+        .indices()
+        .ok_or(ImportError::Unsupported("indices are required"))?;
+    let attribute_count = positions.count();
+    if attribute_count == 0
+        || [
+            normals.count(),
+            uvs.count(),
+            joint_indices.count(),
+            weights.count(),
+        ]
+        .into_iter()
+        .any(|count| count != attribute_count)
+    {
+        return Err(ImportError::Invalid(
+            "all character vertex attribute counts must be equal and nonzero",
+        ));
+    }
+    if attribute_count > MAX_VERTICES - vertex_start {
+        return Err(ImportError::Capacity("vertex count"));
+    }
+    if uvs.data_type() != gltf::accessor::DataType::F32
+        || uvs.dimensions() != gltf::accessor::Dimensions::Vec2
+        || uvs.normalized()
+    {
+        return Err(ImportError::Unsupported(
+            "TEXCOORD_0 must be unnormalized FLOAT VEC2",
+        ));
+    }
+    if !matches!(
+        joint_indices.data_type(),
+        gltf::accessor::DataType::U8 | gltf::accessor::DataType::U16
+    ) || joint_indices.dimensions() != gltf::accessor::Dimensions::Vec4
+        || joint_indices.normalized()
+    {
+        return Err(ImportError::Unsupported(
+            "JOINTS_0 must be unnormalized unsigned-byte or unsigned-short VEC4",
+        ));
+    }
+    if weights.data_type() != gltf::accessor::DataType::F32
+        || weights.dimensions() != gltf::accessor::Dimensions::Vec4
+        || weights.normalized()
+    {
+        return Err(ImportError::Unsupported(
+            "WEIGHTS_0 must be unnormalized FLOAT VEC4",
+        ));
+    }
+    if indices.count() == 0 || !indices.count().is_multiple_of(3) {
+        return Err(ImportError::Invalid(
+            "index count must describe complete triangles",
+        ));
+    }
+    if indices.count() > MAX_INDICES - index_start {
+        return Err(ImportError::Capacity("index count"));
+    }
+    if !matches!(
+        indices.data_type(),
+        gltf::accessor::DataType::U16 | gltf::accessor::DataType::U32
+    ) {
+        return Err(ImportError::Unsupported(
+            "indices must be unsigned 16- or 32-bit",
+        ));
+    }
 
     let reader = primitive.reader(|_| Some(blob));
     let source_positions = reader
@@ -1186,7 +1245,7 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
             || weight_sum <= 1.0e-8
             || vertex_joints
                 .iter()
-                .any(|&joint| usize::from(joint) >= joints.len())
+                .any(|&joint| usize::from(joint) >= bind_joint_matrices.len())
         {
             return Err(ImportError::Invalid(
                 "character vertices, normals, UVs, joints and weights must be finite and valid",
@@ -1242,17 +1301,7 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
         }
     }
 
-    Ok(CharacterAsset {
-        asset_id: CharacterAssetId(Arc::new(())),
-        vertices,
-        indices: imported_indices,
-        base_color_factor: material.base_color_factor,
-        base_color_texture: material.base_color_texture,
-        nodes,
-        joints,
-        hierarchy_order,
-        clips,
-    })
+    Ok(ImportedPart { vertices, indices: imported_indices, accessors: vec![positions, normals, uvs, joint_indices, weights, indices] })
 }
 
 fn is_ancestor_of_any_joint(mut node: usize, joints: &[bool], parents: &[Option<usize>]) -> bool {
@@ -1270,6 +1319,7 @@ fn is_ancestor_of_any_joint(mut node: usize, joints: &[bool], parents: &[Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::mutate_json;
 
     const FIXTURE: &[u8] = include_bytes!("../../../assets/fixtures/blender-bind-pose.glb");
     const STATIC_FIXTURE: &[u8] = include_bytes!("../../../assets/fixtures/static-preview.glb");
@@ -1327,31 +1377,6 @@ mod tests {
         assert!(far - near > 0.8, "the authored sword must extend along local +Y");
     }
 
-    fn mutate_json(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
-        let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
-        let json = std::str::from_utf8(&bytes[20..20 + json_len]).unwrap();
-        assert!(json.contains(from), "fixture no longer contains {from:?}");
-        let mut json = json.replace(from, to).into_bytes();
-        while !json.len().is_multiple_of(4) {
-            json.push(b' ');
-        }
-        let old_bin = 20 + json_len;
-        let bin_len = u32::from_le_bytes(bytes[old_bin..old_bin + 4].try_into().unwrap()) as usize;
-        let bin = &bytes[old_bin + 8..old_bin + 8 + bin_len];
-        let total = 12 + 8 + json.len() + 8 + bin.len();
-        let mut out = Vec::with_capacity(total);
-        out.extend_from_slice(b"glTF");
-        out.extend_from_slice(&2_u32.to_le_bytes());
-        out.extend_from_slice(&(total as u32).to_le_bytes());
-        out.extend_from_slice(&(json.len() as u32).to_le_bytes());
-        out.extend_from_slice(&0x4e4f_534a_u32.to_le_bytes());
-        out.extend_from_slice(&json);
-        out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
-        out.extend_from_slice(&0x004e_4942_u32.to_le_bytes());
-        out.extend_from_slice(bin);
-        out
-    }
-
     #[test]
     fn imports_blenders_named_joint_tree_bind_pose_and_clip_catalog() {
         let character = import_character_glb(FIXTURE).unwrap();
@@ -1371,9 +1396,9 @@ mod tests {
         );
         assert_eq!(
             (
-                character.base_color_texture().width(),
-                character.base_color_texture().height(),
-                character.base_color_texture().mip_level_count(),
+                character.images()[0].width(),
+                character.images()[0].height(),
+                character.images()[0].mip_level_count(),
             ),
             (16, 16, 5)
         );
@@ -1531,4 +1556,158 @@ mod tests {
             assert!(import_character_glb(&invalid).is_err());
         }
     }
+    const MULTIPART: &[u8] = include_bytes!("../../../assets/fixtures/blender-multipart.glb");
+    const MULTIPART_REFERENCE: &[u8] = include_bytes!("../../../assets/fixtures/blender-multipart-reference.glb");
+
+    fn edit_glb(bytes: &[u8], edit: impl FnOnce(&mut gltf::json::Value, &mut Vec<u8>)) -> Vec<u8> {
+        let mut glb = gltf::binary::Glb::from_slice(bytes).unwrap();
+        let mut root: gltf::json::Value = gltf::json::deserialize::from_slice(&glb.json).unwrap();
+        let mut bin = glb.bin.take().unwrap().into_owned();
+        edit(&mut root, &mut bin);
+        root["buffers"][0]["byteLength"] = bin.len().into();
+        glb.json = gltf::json::serialize::to_vec(&root).unwrap().into();
+        glb.bin = Some(bin.into());
+        glb.to_vec().unwrap()
+    }
+
+    #[test]
+    fn multipart_ranges_keep_each_index_inside_its_part_and_share_one_pose() {
+        let asset = import_character_glb(MULTIPART).unwrap();
+        assert_eq!(asset.parts().len(), 10);
+        assert_eq!(asset.materials().len(), 3);
+        assert_eq!(asset.images().len(), 3);
+        assert_eq!(asset.joint_count(), 4);
+        let mut next_vertex = 0;
+        let mut next_index = 0;
+        for part in asset.parts() {
+            assert_eq!(part.vertices().start, next_vertex);
+            assert_eq!(part.indices().start, next_index);
+            assert!(part.material_index() < asset.materials().len());
+            for index in &asset.indices()[part.indices().start as usize..part.indices().end as usize] {
+                assert!(part.vertices().contains(&(*index as usize)));
+            }
+            next_vertex = part.vertices().end;
+            next_index = part.indices().end;
+        }
+        assert_eq!(next_vertex, asset.vertex_count());
+        assert_eq!(next_index as usize, asset.index_count());
+        // Source nodes/primitives may be in different orders. Compare the actual
+        // animated triangle positions, not joint indices or storage order.
+        let reference = import_character_glb(MULTIPART_REFERENCE).unwrap();
+        for clip in ["Idle", "Run", "AttackCleave", "AttackSlam"] {
+            for seconds in [0.0, 0.2, 0.5, 0.8] {
+                let triangles = |asset: &CharacterAsset| {
+                    let mut pose = asset.bind_pose();
+                    assert!(asset.sample(asset.clip_named(clip).unwrap(), seconds, &mut pose));
+                    let points: Vec<_> = asset.vertices().iter().map(|vertex| {
+                        vertex.joints().into_iter().zip(vertex.weights()).fold(Vec3::ZERO, |sum, (joint, weight)| {
+                            sum + pose.joint_matrices()[usize::from(joint)].matrix().transform_point3(vertex.position()) * weight
+                        }).to_array().map(|value| (value * 100_000.0).round() as i32)
+                    }).collect();
+                    let mut triangles: Vec<_> = asset.indices().as_chunks::<3>().0.iter().map(|indices| {
+                        let mut corners = [points[indices[0] as usize], points[indices[1] as usize], points[indices[2] as usize]];
+                        corners.sort_unstable();
+                        corners
+                    }).collect();
+                    triangles.sort_unstable();
+                    triangles
+                };
+                assert_eq!(triangles(&asset), triangles(&reference), "{clip} at {seconds}");
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_later_parts_and_materials_refuse_the_whole_asset() {
+        let invalid = edit_glb(MULTIPART, |root, bin| {
+            let meshes = root["meshes"].as_array().unwrap();
+            let accessor = meshes.last().unwrap()["primitives"][0]["indices"].as_u64().unwrap() as usize;
+            let a = &root["accessors"][accessor];
+            let view = &root["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
+            let offset = view["byteOffset"].as_u64().unwrap_or(0) as usize + a["byteOffset"].as_u64().unwrap_or(0) as usize;
+            bin[offset..offset + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+        });
+        assert!(matches!(import_character_glb(&invalid), Err(ImportError::Invalid("indices must stay within the vertex range"))));
+        let invalid = edit_glb(MULTIPART, |root, _| {
+            root["materials"].as_array_mut().unwrap().last_mut().unwrap()["doubleSided"] = true.into();
+        });
+        assert!(matches!(import_character_glb(&invalid), Err(ImportError::Unsupported(_))));
+        let invalid = edit_glb(MULTIPART, |root, _| {
+            let second_skin = root["skins"][0].clone();
+            root["skins"].as_array_mut().unwrap().push(second_skin);
+        });
+        assert!(matches!(import_character_glb(&invalid), Err(ImportError::Unsupported(_))));
+    }
+
+    #[test]
+    fn character_budgets_cover_all_parts_and_materials() {
+        let too_many_parts = edit_glb(MULTIPART_REFERENCE, |root, _| {
+            let primitive = root["meshes"][0]["primitives"][0].clone();
+            root["meshes"][0]["primitives"] = vec![primitive; MAX_CHARACTER_PARTS + 1].into();
+        });
+        assert!(matches!(import_character_glb(&too_many_parts), Err(ImportError::Capacity("character part count"))));
+        let too_many_materials = edit_glb(MULTIPART_REFERENCE, |root, _| {
+            let material = root["materials"][0].clone();
+            root["materials"] = vec![material; MAX_CHARACTER_MATERIALS + 1].into();
+        });
+        assert!(matches!(import_character_glb(&too_many_materials), Err(ImportError::Capacity("character material catalog"))));
+        // Reuse a small buffer in many primitives. Each primitive is legal on
+        // its own, but their combined decoded geometry must exceed the budget.
+        for vertex_budget in [true, false] {
+            let oversized = edit_glb(MULTIPART_REFERENCE, |root, bin| {
+                let primitive = root["meshes"][0]["primitives"][0].clone();
+                let accessors: Vec<usize> = if vertex_budget {
+                    primitive["attributes"].as_object().unwrap().values().map(|v| v.as_u64().unwrap() as usize).collect()
+                } else { vec![primitive["indices"].as_u64().unwrap() as usize] };
+                for index in accessors {
+                    let a = root["accessors"][index].clone();
+                    let view = root["bufferViews"][a["bufferView"].as_u64().unwrap() as usize].clone();
+                    let offset = view["byteOffset"].as_u64().unwrap_or(0) as usize + a["byteOffset"].as_u64().unwrap_or(0) as usize;
+                    let components = match a["type"].as_str().unwrap() { "SCALAR" => 1, "VEC2" => 2, "VEC3" => 3, "VEC4" => 4, _ => unreachable!() };
+                    let width = match a["componentType"].as_u64().unwrap() { 5121 => 1, 5123 => 2, 5125 | 5126 => 4, _ => unreachable!() };
+                    let element = bin[offset..offset + width * components].to_vec();
+                    let count = if vertex_budget { MAX_VERTICES / MAX_CHARACTER_PARTS + 1 } else { (MAX_INDICES / MAX_CHARACTER_PARTS / 3 + 1) * 3 };
+                    while !bin.len().is_multiple_of(4) { bin.push(0); }
+                    let mut new_view = view;
+                    new_view["byteOffset"] = bin.len().into();
+                    new_view["byteLength"] = (count * element.len()).into();
+                    new_view.as_object_mut().unwrap().remove("byteStride");
+                    for _ in 0..count { bin.extend_from_slice(&element); }
+                    root["accessors"][index]["bufferView"] = root["bufferViews"].as_array().unwrap().len().into();
+                    root["accessors"][index]["byteOffset"] = 0.into();
+                    root["accessors"][index]["count"] = count.into();
+                    root["bufferViews"].as_array_mut().unwrap().push(new_view);
+                }
+                root["meshes"][0]["primitives"] = vec![primitive; MAX_CHARACTER_PARTS].into();
+            });
+            let expected = if vertex_budget { "vertex count" } else { "index count" };
+            assert!(matches!(import_character_glb(&oversized), Err(ImportError::Capacity(reason)) if reason == expected), "{expected}");
+        }
+    }
+
+    #[test]
+    fn texture_catalog_budget_counts_images_once_and_refuses_before_decode() {
+        let asset = import_character_glb(MULTIPART).unwrap();
+        assert_eq!(asset.texture_bytes(), asset.images().iter().map(|i| i.rgba8_mip_chain().len()).sum::<usize>());
+        assert!(asset.parts().len() > asset.images().len());
+        let shared = edit_glb(MULTIPART, |root, _| {
+            let mut material = root["materials"][0].clone();
+            material["pbrMetallicRoughness"]["baseColorFactor"] = vec![0.5, 0.25, 0.75, 1.0].into();
+            root["materials"].as_array_mut().unwrap().push(material);
+            root["meshes"][0]["primitives"][0]["material"] = 3.into();
+        });
+        let shared = import_character_glb(&shared).unwrap();
+        assert_eq!(shared.materials().len(), 4);
+        assert_eq!(shared.images().len(), 3);
+        assert_eq!(shared.materials()[0].image_index(), shared.materials()[3].image_index());
+        assert_eq!(shared.materials()[3].base_color_factor(), [0.5, 0.25, 0.75, 1.0]);
+        assert_eq!(shared.texture_bytes(), asset.texture_bytes());
+        let gltf = gltf::Gltf::from_slice(MULTIPART).unwrap();
+        let blob = gltf.blob.as_ref().unwrap();
+        let image = gltf.document.images().next().unwrap();
+        let bytes = asset.images()[0].rgba8_mip_chain().len();
+        assert!(matches!(import_image(image.clone(), blob, bytes - 1), Err(ImportError::Capacity("total character texture bytes"))));
+        assert!(import_image(image, blob, bytes).is_ok());
+    }
+
 }

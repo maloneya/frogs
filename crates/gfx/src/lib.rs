@@ -334,8 +334,8 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Renders each nonempty static mesh batch and occupied character-pose bucket
-    /// in one instanced draw.
+    /// Renders each nonempty static mesh batch in one instanced draw, and each
+    /// character part in one draw per occupied pose bucket.
     ///
     /// Distinguishes skipped frames from presentation, including capture errors.
     /// `capture_path` requests a synchronous PNG write of this frame. On a
@@ -1023,11 +1023,11 @@ mod tests {
         assert!(centres[0] + 20 < centres[1] && centres[1] + 20 < centres[2], "batch offsets mixed placements: {centres:?}");
     }
 
-    /// A sampled non-bind pose bucket crosses every character seam in one real draw:
+    /// A sampled pose crosses every character seam through real GPU draws:
     /// Blender's channels, joint indices and weights, CPU sampling, the uniform
     /// upload and WGSL skinning. A missing palette upload collapses these vertices
     /// to the origin, while a layout disagreement reaches the validation scope.
-    fn render_character_bucket(white_mix: f32) -> Vec<u8> {
+    fn render_character_bucket(bytes: &[u8], white_mix: f32, player: bool, seconds: f32) -> Vec<u8> {
         const N: u32 = 256;
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1039,9 +1039,7 @@ mod tests {
             TEST_FORMAT,
             DEPTH_FORMAT,
         );
-        let cpu = arpg_assets::import_character_glb(include_bytes!(
-            "../../../assets/fixtures/blender-bind-pose.glb"
-        ))
+        let cpu = arpg_assets::import_character_glb(bytes)
         .expect("fixture crosses the character import boundary");
         let gpu = pipeline
             .upload_character(&device, &queue, &cpu)
@@ -1070,13 +1068,18 @@ mod tests {
         let idle = cpu
             .clip_named("Idle")
             .expect("fixture carries its Idle clip");
-        assert!(cpu.sample(idle, 0.5, &mut pose));
+        assert!(cpu.sample(idle, seconds, &mut pose));
         let instances = [Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE).with_white_mix(white_mix)];
         let empty = CharacterBucket::new(&pose, &[]);
         let mut buckets = [empty; MAX_HORDE_POSE_BUCKETS];
         buckets[3] = CharacterBucket::new(&pose, &instances);
         let horde = CharacterHorde::new(&gpu, buckets);
-        let draws = pipeline.upload(&queue, None, Some(horde));
+        let character = CharacterPreview::new(&gpu, &pose, instances[0]);
+        let draws = if player {
+            pipeline.upload(&queue, Some(character), None)
+        } else {
+            pipeline.upload(&queue, None, Some(horde))
+        };
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("character pose bucket"),
@@ -1105,7 +1108,11 @@ mod tests {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pipeline.draw_horde(&mut pass, &camera_binding, &gpu, &draws.horde);
+            if player {
+                pipeline.draw_player(&mut pass, &camera_binding, &gpu, draws.player);
+            } else {
+                pipeline.draw_horde(&mut pass, &camera_binding, &gpu, &draws.horde);
+            }
         }
         let readback = Readback::new(&device, N, N);
         readback.record(&mut encoder, &color);
@@ -1143,11 +1150,32 @@ mod tests {
     }
 
     #[test]
+    fn multipart_character_matches_the_unsplit_geometry_in_both_draw_paths() {
+        let split = include_bytes!("../../../assets/fixtures/blender-multipart.glb");
+        let reference = include_bytes!("../../../assets/fixtures/blender-multipart-reference.glb");
+        for seconds in [0.0, 0.5] {
+            let expected = render_character_bucket(reference, 0.0, true, seconds);
+            for player in [true, false] {
+                let actual = render_character_bucket(split, 0.0, player, seconds);
+                // Equivalent geometry, UVs, material and pose should give the
+                // same pixels despite separate mesh nodes and primitive order.
+                assert_eq!(actual, expected, "split changed the image: player={player} t={seconds}");
+            }
+            for channel in 0..3 {
+                let visible = expected.as_chunks::<4>().0.iter().filter(|pixel| {
+                    pixel[channel] > 32 && (0..3).filter(|&other| other != channel).all(|other| pixel[other] < 4)
+                }).count();
+                assert!(visible > 100, "material {channel} missing: {visible} pixels");
+            }
+        }
+    }
+
+    #[test]
     fn a_character_pose_bucket_draws_its_instances_and_blends_to_white() {
-        let normal = render_character_bucket(0.0);
-        let half = render_character_bucket(0.5);
-        let white = render_character_bucket(1.0);
-        let restored = render_character_bucket(0.0);
+        let normal = render_character_bucket(include_bytes!("../../../assets/fixtures/blender-bind-pose.glb"), 0.0, false, 0.5);
+        let half = render_character_bucket(include_bytes!("../../../assets/fixtures/blender-bind-pose.glb"), 0.5, false, 0.5);
+        let white = render_character_bucket(include_bytes!("../../../assets/fixtures/blender-bind-pose.glb"), 1.0, false, 0.5);
+        let restored = render_character_bucket(include_bytes!("../../../assets/fixtures/blender-bind-pose.glb"), 0.0, false, 0.5);
         assert_eq!(normal, restored, "clearing the blend restores the original surface");
         let mut checked = 0;
         for ((normal, half), white) in normal.as_chunks::<4>().0.iter()

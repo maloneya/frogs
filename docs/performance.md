@@ -79,6 +79,14 @@ other simulation passes are included only in total step time. Read-only observer
 callbacks mark boundaries in sim; the actual clock stays in app. The headless scenario step budget independently measures
 simulation without presentation.
 
+The scene report exposes actual character draw counts as
+`player_character_draws` and `horde_character_draws`: one draw per material
+primitive per occupied pose, independent of how many enemies share that pose.
+Character asset reports include parts, materials, unique images and total decoded
+texture bytes including mips. The benchmark fingerprint uses these resource
+counts and image dimensions so a multipart asset change cannot silently compare
+against a different rendering workload.
+
 ## Reset and lifetime
 
 `perf reset` immediately clears retained and pending samples without changing

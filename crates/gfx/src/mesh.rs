@@ -5,7 +5,7 @@ use wgpu::util::DeviceExt as _;
 
 use crate::camera::CameraBinding;
 use crate::instance::instance_layout;
-use crate::material::{Material, MaterialLayout};
+use crate::material::{Material, MaterialLayout, MaterialTexture};
 
 /// One uploaded static mesh.
 ///
@@ -53,11 +53,11 @@ impl MeshAsset {
             contents: bytemuck::cast_slice(mesh.indices()),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let texture = MaterialTexture::new(device, queue, mesh.base_color_texture(), "static mesh texture");
         let material = Material::new(
             device,
-            queue,
             material_layout,
-            mesh.base_color_texture(),
+            &texture,
             mesh.base_color_factor(),
             "static mesh base colour",
         );

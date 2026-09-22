@@ -50,20 +50,38 @@ training dummy is the authoring-workflow gate. The hand-written
 ## Bind-pose character
 
 The skinned path keeps the same unit, facing, material, UV and texture rules,
-but the mesh must be controlled by one armature. Give every retained object and
-bone a non-empty, unique name. The accepted subset is one mesh primitive, one
-rooted node tree, one skin of at most 64 joints, and exactly four joint-index and
-weight lanes per vertex. Zero-weight lanes are fine; the nonzero weights must be
+but every mesh must be controlled by the same armature. Give every retained object
+and bone a non-empty, unique name. A character may retain multiple mesh objects
+and multiple material primitives within each mesh. They share one rooted node
+tree and one skin of at most 64 joints, with exactly four joint-index and weight
+lanes per vertex. Zero-weight lanes are fine; the nonzero weights must be
 finite and sum to a positive value. The importer normalizes them once.
 
-Apply the mesh object's location, rotation and scale before export so its global
-node transform is identity. Bone transforms remain authored hierarchy data and
-must not be applied to the mesh. This division is deliberate: the skeleton
+Parts preserve their mesh node name, primitive index and material assignment.
+Each material has its own base-colour factor and embedded RGBA PNG; materials
+may share an image, which is decoded and uploaded only once. The importer checks
+aggregate geometry and texture memory before accepting the complete character.
+The part/catalog and decoded-texture budgets are defined in
+[`character.rs`](../crates/assets/src/character.rs); per-image and total geometry
+limits live in [`assets`](../crates/assets/src/lib.rs). Unused catalog entries,
+extra skins and unsupported material features are rejected, including in later
+parts. A refused load leaves the active character intact.
+
+All parts use the same sampled pose. Clothing can bend with the body, while a
+sword can follow one hand by weighting it to a weapon bone. Each material
+primitive adds a draw call per character pose; horde instances still share the
+same bounded pose buckets. This establishes separate authored parts within one
+GLB. Runtime equipment selection and loading items from separate files are not
+implemented yet.
+
+Apply each mesh object's location, rotation and scale before export so every
+mesh's global node transform is identity. Bone transforms remain authored hierarchy
+data and must not be applied to the mesh. This division is deliberate: the skeleton
 produces asset-local poses, while the app's `Instance` is the only placement,
 scale and facing transform used by the renderer.
 
-Export the selected mesh and armature together as a binary GLB with UVs,
-normals, skinning and Actions animation export enabled. Keep shape keys,
+Export all selected character meshes and their armature together as a binary GLB
+with UVs, normals, skinning and Actions animation export enabled. Keep shape keys,
 cameras, lights and glTF extensions disabled. Blender must emit inverse bind matrices;
 the importer rejects a skin whose bind-pose palette does not reproduce every
 authored vertex.
@@ -94,15 +112,15 @@ neutral again. Runtime maps startup to normalized `0.0..0.4`, active to
 `0.4..0.6`, and recovery to `0.6..1.0`; tests sample the exported weapon motion
 at those edges so moving a key pose into the wrong phase fails visibly.
 
-The playable demo sword is part of the single character mesh and is rigidly
+The basic player sword is part of its single mesh and is rigidly
 weighted to its `Weapon` bone. This preserves the full sampled transform through
 the existing skinning path. The importer requires named nodes, but a generic
 character GLB is not required to contain a joint called `Weapon`.
 
 The ordinary-horde contract is a smaller view of the same interchange format:
 it requires only `Idle` and `Run`. `horde show <path.glb>` selects one shared
-mesh and material, then groups live enemies into four stable phases for each
-role. The phase comes from stable entity identity rather than authored or
+character, including all its parts and materials, then groups live enemies into
+four stable phases for each role. The phase comes from stable entity identity rather than authored or
 stored randomness. Startup loads `assets/characters/basic-player/basic-player.glb`
 for the player and `assets/characters/basic-enemy/basic-enemy.glb` for the horde,
 using the existing role scales and tints. Asset paths
@@ -121,7 +139,17 @@ Regenerate it from the repository root with:
 blender --background --python assets/fixtures/generate-blender-bind-pose.py
 ```
 
-The playable low-poly examples and their editable Blender sources live in
+The multipart fixture compares the same training-dummy geometry as one mesh
+and as five meshes, using three independent colour images and one shared rig.
+Importer tests compare animated triangles; GPU tests require identical images
+through both player and instanced horde rendering. Regenerate both files with:
+
+```text
+blender --background --factory-startup --python-exit-code 1 \
+  --python assets/fixtures/generate-blender-multipart.py
+```
+
+The basic placeholder player and its editable Blender source live in
 [`assets/characters/basic-player`](../assets/characters/basic-player/README.md).
 The dedicated horde asset lives in
 [`assets/characters/basic-enemy`](../assets/characters/basic-enemy/README.md).

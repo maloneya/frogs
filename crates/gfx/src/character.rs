@@ -1,15 +1,13 @@
 //! GPU resources and pipeline for one validated skinned character.
 
-use std::num::NonZeroU64;
-
-use std::ops::Range;
+use std::{num::NonZeroU64, ops::Range};
 
 use arpg_core::{Instance, MAX_INSTANCES};
 use wgpu::util::DeviceExt as _;
 
 use crate::camera::CameraBinding;
 use crate::instance::instance_layout;
-use crate::material::{Material, MaterialLayout};
+use crate::material::{Material, MaterialLayout, MaterialTexture};
 use crate::mesh::MeshUploadError;
 
 #[cfg(test)]
@@ -60,13 +58,13 @@ mod tests {
 pub const MAX_HORDE_POSE_BUCKETS: usize = 8;
 const PALETTE_SLOTS: usize = 1 + MAX_HORDE_POSE_BUCKETS;
 
-/// One uploaded character mesh and material.
+/// One uploaded character with shared geometry buffers and per-part materials.
 pub struct CharacterMesh {
     asset_id: arpg_assets::CharacterAssetId,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
-    index_count: u32,
-    material: Material,
+    parts: Vec<(Range<u32>, usize)>,
+    materials: Vec<Material>,
 }
 
 impl CharacterMesh {
@@ -92,20 +90,16 @@ impl CharacterMesh {
             contents: bytemuck::cast_slice(character.indices()),
             usage: wgpu::BufferUsages::INDEX,
         });
-        let material = Material::new(
-            device,
-            queue,
-            material_layout,
-            character.base_color_texture(),
-            character.base_color_factor(),
-            "character base colour",
-        );
+        let textures: Vec<_> = character.images().iter()
+            .map(|image| MaterialTexture::new(device, queue, image, "character texture"))
+            .collect();
+        let materials = character.materials().iter().map(|material| {
+            Material::new(device, material_layout, &textures[material.image_index()],
+                material.base_color_factor(), "character material")
+        }).collect();
         let uploaded = Self {
-            asset_id: character.asset_id(),
-            vertices,
-            indices,
-            index_count: character.index_count() as u32,
-            material,
+            asset_id: character.asset_id(), vertices, indices, materials,
+            parts: character.parts().iter().map(|part| (part.indices(), part.material_index())).collect(),
         };
         let mut failure = None;
         for scope in scopes.into_iter().rev() {
@@ -167,7 +161,7 @@ impl<'a> CharacterBucket<'a> {
     }
 }
 
-/// One uploaded mesh drawn through a fixed set of shared pose buckets.
+/// One uploaded character drawn through a fixed set of shared pose buckets.
 #[derive(Clone, Copy)]
 pub struct CharacterHorde<'a> {
     mesh: &'a CharacterMesh,
@@ -403,12 +397,14 @@ impl CharacterPipeline {
             (arpg_assets::MAX_JOINTS * size_of::<arpg_assets::JointMatrix>()) as u32;
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &camera.bind_group, &[]);
-        pass.set_bind_group(1, mesh.material.bind_group(), &[]);
         pass.set_bind_group(2, &self.joint_bind_group, &[palette as u32 * palette_bytes]);
         pass.set_vertex_buffer(0, mesh.vertices.slice(..));
         pass.set_vertex_buffer(1, self.instance.slice(..));
         pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..mesh.index_count, 0, instances);
+        for (indices, material) in &mesh.parts {
+            pass.set_bind_group(1, mesh.materials[*material].bind_group(), &[]);
+            pass.draw_indexed(indices.clone(), 0, instances.clone());
+        }
     }
 
     pub(crate) fn draw_player(

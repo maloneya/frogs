@@ -260,18 +260,20 @@ impl<T> LoadedCharacter<T> {
             .clip(self.clips.idle)
             .expect("resolved clip remains live");
         format!(
-            "player character vertices={} indices={} nodes={} joints={} clips={} texture={}x{} idle={} path={}",
+            "player character vertices={} indices={} nodes={} joints={} clips={} parts={} materials={} idle={} path={}",
             self.asset.vertex_count(),
             self.asset.index_count(),
             self.asset.node_count(),
             self.asset.joint_count(),
             self.asset.clip_count(),
-            self.asset.base_color_texture().width(),
-            self.asset.base_color_texture().height(),
+            self.asset.parts().len(),
+            self.asset.materials().len(),
             clip.name(),
             self.path.display()
         )
     }
+
+    pub(super) fn draw_count(&self) -> usize { self.asset.parts().len() }
 
     pub(super) fn reset(&mut self) {
         self.sampled_role = PresentationRole::Idle;
@@ -509,6 +511,10 @@ impl<T> LoadedHorde<T> {
         }
     }
 
+    pub(super) fn draw_count(&self) -> usize {
+        self.occupied_buckets() * self.asset.parts().len()
+    }
+
     fn phase_key(id: arpg_sim::EntityId) -> u64 {
         let mut hash = Fnv::default();
         id.hash_into(&mut hash);
@@ -705,7 +711,6 @@ fn report_character_asset(
     out: &mut Report,
 ) {
     let (path, asset) = selected.unzip();
-    let texture = asset.map(arpg_assets::CharacterAsset::base_color_texture);
     out.bool("active", asset.is_some());
     out.text(
         "path",
@@ -719,14 +724,40 @@ fn report_character_asset(
         "indices",
         asset.map_or(0, |asset| asset.index_count() as u64),
     );
-    out.int(
-        "texture_width",
-        texture.map_or(0, |texture| u64::from(texture.width())),
-    );
-    out.int(
-        "texture_height",
-        texture.map_or(0, |texture| u64::from(texture.height())),
-    );
+    out.int("part_count", asset.map_or(0, |a| a.parts().len() as u64));
+    out.int("material_count", asset.map_or(0, |a| a.materials().len() as u64));
+    out.int("image_count", asset.map_or(0, |a| a.images().len() as u64));
+    out.int("texture_bytes", asset.map_or(0, |a| a.texture_bytes() as u64));
+    out.object("parts", |out| {
+        if let Some(asset) = asset {
+            for (index, part) in asset.parts().iter().enumerate() {
+                out.object(&index.to_string(), |out| {
+                    out.text("node", part.node_name());
+                    out.int("primitive", part.primitive_index() as u64);
+                    out.int("material", part.material_index() as u64);
+                    out.int("vertices", part.vertices().len() as u64);
+                    out.int("indices", u64::from(part.indices().end - part.indices().start));
+                });
+            }
+        }
+    });
+    out.object("materials", |out| {
+        if let Some(asset) = asset {
+            for (index, material) in asset.materials().iter().enumerate() {
+                out.object(&index.to_string(), |out| out.int("image", material.image_index() as u64));
+            }
+        }
+    });
+    out.object("images", |out| {
+        if let Some(asset) = asset {
+            for (index, image) in asset.images().iter().enumerate() {
+                out.object(&index.to_string(), |out| {
+                    out.int("width", u64::from(image.width()));
+                    out.int("height", u64::from(image.height()));
+                });
+            }
+        }
+    });
     out.int("nodes", asset.map_or(0, |asset| asset.node_count() as u64));
     out.int(
         "joints",

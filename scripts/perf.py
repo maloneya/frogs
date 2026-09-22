@@ -96,7 +96,7 @@ def environment(perf):
     settings = {key: perf[key] for key in keys}
     for asset in ("horde", "character"):
         settings[asset] = {key: perf[asset][key] for key in
-                           ("active", "vertices", "indices", "texture_width", "texture_height", "nodes", "joints")}
+                           ("active", "vertices", "indices", "part_count", "material_count", "image_count", "texture_bytes", "images", "nodes", "joints")}
     return settings
 
 

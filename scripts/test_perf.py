@@ -33,7 +33,8 @@ def fixture():
     }
     for asset in ("horde", "character"):
         observation.setdefault(asset, {}).update(active=True, vertices=456, indices=684,
-                                                 texture_width=64, texture_height=64, nodes=9, joints=7)
+                                                 part_count=1, material_count=1, image_count=1, texture_bytes=21844,
+                                                 images={"0": {"width": 64, "height": 64}}, nodes=9, joints=7)
     trial = {"trial": {"warmup_ticks": 120, "sample_ticks": 60, "input": "idle",
                        "schedule_version": 1, "invalid": "", "initial_enemies": 100,
                        "start_enemies": 100, "population_sum": 6000},

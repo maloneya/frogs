@@ -10,6 +10,11 @@ fn character_fixture_path() -> std::path::PathBuf {
         .join("../../assets/fixtures/blender-bind-pose.glb")
 }
 
+fn multipart_fixture_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/fixtures/blender-multipart.glb")
+}
+
 #[test]
 fn startup_assets_support_their_presentation_roles() {
     let mut player = None;
@@ -107,7 +112,7 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview::<()>(None, &mut inactive);
     assert_eq!(
         inactive.finish(),
-        r#"{"active":false,"path":"","vertices":0,"indices":0,"texture_width":0,"texture_height":0,"nodes":0,"joints":0,"clips":0,"role":"","clip":"","clip_duration":0.0000,"channels":0,"sample_seconds":0.0000,"locomotion_base":"","locomotion_overlay":"","locomotion_weight":0.0000}"#
+        r#"{"active":false,"path":"","vertices":0,"indices":0,"part_count":0,"material_count":0,"image_count":0,"texture_bytes":0,"parts":{},"materials":{},"images":{},"nodes":0,"joints":0,"clips":0,"role":"","clip":"","clip_duration":0.0000,"channels":0,"sample_seconds":0.0000,"locomotion_base":"","locomotion_overlay":"","locomotion_weight":0.0000}"#
     );
 
     let mut preview = loaded_character("assets/character.glb");
@@ -117,8 +122,9 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview(Some(&preview), &mut active);
     assert_eq!(
         active.finish(),
-        r#"{"active":true,"path":"assets/character.glb","vertices":528,"indices":792,"texture_width":64,"texture_height":64,"nodes":10,"joints":8,"clips":7,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":24,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000}"#
+        r#"{"active":true,"path":"assets/character.glb","vertices":528,"indices":792,"part_count":1,"material_count":1,"image_count":1,"texture_bytes":21844,"parts":{"0":{"node":"BasicPlayer","primitive":0,"material":0,"vertices":528,"indices":792}},"materials":{"0":{"image":0}},"images":{"0":{"width":64,"height":64}},"nodes":10,"joints":8,"clips":7,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":24,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000}"#
     );
+    assert_eq!(preview.draw_count(), 1);
 }
 
 #[test]
@@ -136,7 +142,7 @@ fn horde_replacement_is_atomic_and_its_report_is_derived() {
     );
     assert_eq!(slot.as_ref().unwrap().path, std::path::Path::new("old.glb"));
 
-    replace_horde(&mut slot, character_fixture_path(), |_| Ok(())).unwrap();
+    replace_horde(&mut slot, multipart_fixture_path(), |_| Ok(())).unwrap();
     let mut game = Game::empty();
     for index in 0..32 {
         game.place(glam::Vec2::new(4.0 + index as f32, 4.0), arpg_sim::Template::BODY).unwrap();
@@ -149,6 +155,13 @@ fn horde_replacement_is_atomic_and_its_report_is_derived() {
     let mut active = Report::default();
     report_horde_preview(Some(current), &mut active);
     let report = active.finish();
+    assert_eq!(current.asset.parts().len(), 10);
+    assert_eq!(current.draw_count(), current.occupied_buckets() * 10);
+    assert!(report.contains(r#""part_count":10,"material_count":3,"image_count":3,"texture_bytes":1020"#));
+    for (index, part) in current.asset.parts().iter().enumerate() {
+        assert!(report.contains(&format!("\"{index}\":{{\"node\":\"{}\",\"primitive\":{},\"material\":{},\"vertices\":{},\"indices\":{}}}",
+            part.node_name(), part.primitive_index(), part.material_index(), part.vertices().len(), part.indices().end - part.indices().start)));
+    }
     assert!(report.contains(r#""active":true"#));
     assert!(report.contains(r#""idle_clip":"Idle""#));
     assert!(report.contains(r#""run_clip":"Run""#));
@@ -615,4 +628,43 @@ fn wall_instances_follow_authoritative_footprints_and_scene_lifetime() {
     game.restart().unwrap();
     view.rebuild_walls(game.walls());
     assert_eq!(view.walls.len(), 1);
+}
+
+#[test]
+fn missing_required_joint_refuses_replacement_before_upload() {
+    let mut source = std::fs::read(default_character_path()).unwrap();
+    let offset = source.windows(b"Spine".len()).position(|w| w == b"Spine").unwrap();
+    source[offset..offset + b"Spine".len()].copy_from_slice(b"Wrong");
+    let path = std::env::temp_dir().join(format!("arpg-missing-spine-{}.glb", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let mut slot = Some(loaded_character("current.glb"));
+    let mut uploaded = false;
+    let result = replace_character(&mut slot, path.clone(), |_| { uploaded = true; Ok(()) });
+    std::fs::remove_file(path).unwrap();
+    assert!(result.unwrap_err().contains("missing mask joint"));
+    assert!(!uploaded);
+    assert_eq!(slot.unwrap().path, std::path::Path::new("current.glb"));
+}
+
+#[test]
+fn malformed_last_image_preserves_every_live_part_before_upload() {
+    let mut source = std::fs::read(multipart_fixture_path()).unwrap();
+    let signature = b"\x89PNG\r\n\x1a\n";
+    let offset = source.windows(signature.len()).rposition(|w| w == signature).unwrap();
+    source[offset] = 0;
+    let path = std::env::temp_dir().join(format!("arpg-invalid-last-image-{}.glb", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let mut slot = None;
+    replace_horde(&mut slot, multipart_fixture_path(), |_| Ok(())).unwrap();
+    let mut before = Report::default();
+    report_horde_preview(slot.as_ref(), &mut before);
+    let mut uploaded = false;
+    let result = replace_horde(&mut slot, path.clone(), |_| { uploaded = true; Ok(()) });
+    std::fs::remove_file(path).unwrap();
+    assert!(result.is_err());
+    assert!(!uploaded);
+    let mut after = Report::default();
+    report_horde_preview(slot.as_ref(), &mut after);
+    assert_eq!(before.finish(), after.finish());
+    assert_eq!(slot.unwrap().asset.parts().len(), 10);
 }
