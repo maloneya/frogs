@@ -20,11 +20,13 @@ pub(crate) fn strike(
     beam: Beam,
     ids: &[EntityId],
     positions: &[Vec2],
+    walls: &crate::wall::Walls,
     damage: &mut DamageSink<'_>,
     trace: &mut TraceSink<'_>,
 ) {
     for (&id, &position) in ids.iter().zip(positions) {
         if beam.touches(position, ENEMY_RADIUS)
+            && !walls.obstructs(beam.start(), position)
             && let Some(remaining) = damage.hit(id)
         {
             trace.emit(Event::Hit { id, remaining });

@@ -1145,7 +1145,7 @@ fn grid_matches_brute_force_through_contacts_combat_and_structural_changes() {
             random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             (random % 1201) as f32 * 0.01 - 6.0
         };
-        let mut scene = Scene { name: "grid oracle".into(), bodies: vec![], grids: vec![], sources: vec![] };
+        let mut scene = Scene { walls: Vec::new(), name: "grid oracle".into(), bodies: vec![], grids: vec![], sources: vec![] };
         for i in 0..128 {
             let pos = match seed % 4 {
                 0 => (coordinate(), coordinate()),
@@ -1176,7 +1176,7 @@ fn grid_matches_brute_force_through_contacts_combat_and_structural_changes() {
                     assert!(!world.despawn_body(id));
                 }
                 if tick == 40 {
-                    let id = world.load_scene(&Scene { name: "temporary".into(), bodies: vec![
+                    let id = world.load_scene(&Scene { walls: Vec::new(), name: "temporary".into(), bodies: vec![
                         Placed { pos: (0.49, 0.0), what: Template::BODY },
                         Placed { pos: (0.51, 0.0), what: Template::BODY },
                     ], grids: vec![], sources: vec![] }).unwrap();

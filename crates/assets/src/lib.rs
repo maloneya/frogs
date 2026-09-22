@@ -799,6 +799,17 @@ mod tests {
     }
 
     #[test]
+    fn wall_asset_has_unit_footprint_and_presentation_owned_height() {
+        let mesh = import_glb(include_bytes!("../../../assets/world/wall/wall.glb")).unwrap();
+        let minimum = mesh.vertices().iter().map(|v| v.position()).fold(Vec3::splat(f32::INFINITY), Vec3::min);
+        let maximum = mesh.vertices().iter().map(|v| v.position()).fold(Vec3::splat(f32::NEG_INFINITY), Vec3::max);
+        assert!(minimum.abs_diff_eq(Vec3::new(-0.5, 0.0, -0.5), 0.000001));
+        assert!(maximum.abs_diff_eq(Vec3::new(0.5, 1.5, 0.5), 0.000001));
+        assert_eq!(mesh.index_count(), 36);
+        assert!(mesh.base_color_texture().rgba8().as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255));
+    }
+
+    #[test]
     fn imports_the_asymmetric_fixture() {
         let mesh = import_glb(FIXTURE).unwrap();
         assert_eq!((mesh.vertex_count(), mesh.index_count()), (12, 12));

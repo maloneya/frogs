@@ -404,6 +404,7 @@ impl App {
             character.sample(player, alpha, presentation_seconds);
         }
         let world_assets = self.world_assets.as_mut().expect("rendering requires world assets");
+        world_assets.rebuild_walls(self.game.walls());
         world_assets.rebuild(self.game.prop_presentations(alpha), |id| self.game.chest_state_for_body(id));
         world_assets.torches.rebuild(self.game.torches(), self.attack_effects.vertices());
         world_assets.directional_lights.clear();

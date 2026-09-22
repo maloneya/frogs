@@ -40,3 +40,7 @@ include ground, props and two stand pieces per live scene torch.
 [collision debug drawing](../../docs/collision-debug.md) exposes physical shapes.
 
 The [chest assets](chest/README.md) provide closed and open reward props.
+
+The [wall asset](wall/README.md) is a unit-footprint rectangular box used for
+scene-authored solid walls. Its height belongs to the asset, while app scales
+the ground footprint from simulation geometry.

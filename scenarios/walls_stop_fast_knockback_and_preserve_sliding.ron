@@ -1,0 +1,15 @@
+// Enemy velocity (6,300) would cross the 1 cm wall in one tick.
+// Stop at its near face 1.995 minus radius .25; retain tangential x velocity.
+(
+ description: "A thin rectangle stops a fast impulse and preserves sideways momentum.",
+ setup: (scenes: [Inline((engine: (name: "thin wall",
+   walls: [(centre: (0.0, 2.0), size: (12.0, 0.01))],
+   bodies: [(pos: (2.0, 0.0))],
+ )))]),
+ impulses: [(at: 0, target: Placed(0), value: (6.0, 300.0))],
+ checkpoints: [(at: 0, expect: (bodies: [(nth: 0,
+   pos: (x: 2.1, z: 1.745, tol: 0.0001), velocity: (x: 5.4, z: 0.0, tol: 0.0001))]))],
+ budget: (ticks: 2),
+ expect: (bodies: [(nth: 0, pos: (x: 2.19, z: 1.745, tol: 0.0001),
+   velocity: (x: 4.86, z: 0.0, tol: 0.0001))]),
+)

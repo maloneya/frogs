@@ -12,7 +12,7 @@ use glam::Vec3;
 
 // Static placements include an all-prop world, the ground and two stand pieces per light.
 // This also covers an all-enemy world plus the player in the character buffer.
-const _: () = assert!(arpg_sim::MAX_BODIES + 1 + 2 * arpg_core::MAX_POINT_LIGHTS <= arpg_core::MAX_INSTANCES);
+const _: () = assert!(arpg_sim::MAX_BODIES + arpg_sim::MAX_WALLS + 1 + 2 * arpg_core::MAX_POINT_LIGHTS <= arpg_core::MAX_INSTANCES);
 
 struct LoadedMesh<T> {
     path: std::path::PathBuf,
@@ -45,6 +45,8 @@ impl LoadedMesh<MeshAsset> {
 pub(super) struct WorldAssets<T> {
     ground: LoadedMesh<T>,
     prop: LoadedMesh<T>,
+    wall: LoadedMesh<T>,
+    walls: Vec<Instance>,
     chest_closed: LoadedMesh<T>,
     chest_open: LoadedMesh<T>,
     closed_chests: Vec<Instance>,
@@ -61,10 +63,13 @@ impl<T> WorldAssets<T> {
         let ground = load_static(root.join("ground.glb"), &mut upload)?;
         let prop = load_static(root.join("prop.glb"), &mut upload)?;
         let chest_closed = load_static(root.join("chest/closed.glb"), &mut upload)?;
+        let wall = load_static(root.join("wall/wall.glb"), &mut upload)?;
         let chest_open = load_static(root.join("chest/open.glb"), upload)?;
         Ok(Self {
             ground,
             prop,
+            wall,
+            walls: Vec::with_capacity(arpg_sim::MAX_WALLS),
             chest_closed,
             chest_open,
             closed_chests: Vec::with_capacity(arpg_game::MAX_CHESTS),
@@ -100,11 +105,24 @@ impl<T> WorldAssets<T> {
         }
     }
 
-    pub(super) fn instance_count(&self) -> usize { 1 + self.torches.stand().len() + self.props.as_slice().len() + self.closed_chests.len() + self.open_chests.len() }
+    pub(super) fn rebuild_walls(&mut self, walls: impl Iterator<Item = (arpg_sim::SceneId, usize, arpg_sim::Wall)>) {
+        self.walls.clear();
+        for (_, _, wall) in walls {
+            assert!(self.walls.len() < arpg_sim::MAX_WALLS, "scene wall admission bound");
+            let centre = wall.centre();
+            let size = wall.size();
+            self.walls.push(Instance::new(Vec3::new(centre.x, 0.0, centre.y),
+                Vec3::new(size.x, 1.0, size.y), Vec3::ONE).with_yaw(wall.yaw()));
+        }
+    }
 
-    pub(super) fn draw_count(&self) -> usize { 1 + usize::from(!self.torches.stand().is_empty()) + usize::from(!self.props.as_slice().is_empty()) + usize::from(!self.closed_chests.is_empty()) + usize::from(!self.open_chests.is_empty()) }
+    pub(super) fn instance_count(&self) -> usize { 1 + self.walls.len() + self.torches.stand().len() + self.props.as_slice().len() + self.closed_chests.len() + self.open_chests.len() }
+
+    pub(super) fn draw_count(&self) -> usize { 1 + usize::from(!self.walls.is_empty()) + usize::from(!self.torches.stand().is_empty()) + usize::from(!self.props.as_slice().is_empty()) + usize::from(!self.closed_chests.is_empty()) + usize::from(!self.open_chests.is_empty()) }
 
     pub(super) fn report(&self, out: &mut Report) {
+        out.object("wall", |out| self.wall.report(out));
+        out.int("wall_instances", self.walls.len() as u64);
         out.object("ground", |out| self.ground.report(out));
         out.object("prop", |out| self.prop.report(out));
         out.object("chest_closed", |out| self.chest_closed.report(out));
@@ -119,9 +137,10 @@ impl<T> WorldAssets<T> {
 }
 
 impl WorldAssets<MeshAsset> {
-    pub(super) fn draws(&self) -> [MeshBatch<'_>; 5] {
+    pub(super) fn draws(&self) -> [MeshBatch<'_>; 6] {
         [
             self.ground.draw(&self.ground_instance),
+            self.wall.draw(&self.walls),
             self.prop.draw(self.props.as_slice()),
             self.prop.draw(self.torches.stand()),
             self.chest_closed.draw(&self.closed_chests),

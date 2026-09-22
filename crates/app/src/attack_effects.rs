@@ -23,6 +23,7 @@ struct Sample {
     origin: Vec3,
     radius: f32,
     profile: AttackProfile,
+    end_normal: Option<Vec3>,
 }
 
 pub(crate) struct AttackEffects {
@@ -72,6 +73,7 @@ impl AttackEffects {
                 origin: Vec3::new(beam.start().x, 0.0, beam.start().y),
                 radius: arpg_sim::Beam::RADIUS,
                 profile: AttackProfile::Disintegrate,
+                end_normal: beam.end_normal().map(|n| Vec3::new(n.x, 0.0, n.y)),
             });
             return;
         }
@@ -99,6 +101,7 @@ impl AttackEffects {
                 centre: disc.centre(),
                 origin: game.player_pos() * Vec3::new(1.0, 0.0, 1.0),
                 radius: disc.radius(),
+                end_normal: None,
                 profile: status
                     .swing_profile
                     .expect("active attack has a committed profile"),
@@ -116,24 +119,25 @@ impl AttackEffects {
         let now = tick as f64 - 1.0 + f64::from(alpha.get());
         match last.profile {
             AttackProfile::Disintegrate => {
-                let previous = self.samples.iter().rev().nth(1).copied().unwrap_or(last);
-                let origin = previous.origin.lerp(last.origin, alpha.get()) + Vec3::Y * 0.85;
-                // Interpolate direction as an angle so turning cannot shorten the beam.
-                let a = previous.centre - previous.origin;
-                let b = last.centre - last.origin;
-                let from = a.x.atan2(a.z);
-                let arc = (b.x.atan2(b.z) - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                let angle = from + arc * alpha.get();
-                let direction = Vec3::new(angle.sin(), 0.0, angle.cos());
-                let end = origin + direction * b.length();
+                // Use the completed tick's clipped beam. Interpolating its angle
+                // with an endpoint from another pose can draw through a wall.
+                let origin = last.origin + Vec3::Y * 0.85;
+                let end = last.centre + Vec3::Y * 0.85;
+                let direction = (end - origin).normalize_or_zero();
                 let side = Vec3::new(direction.z, 0.0, -direction.x);
                 for (width, colour, opacity) in [
                     (last.radius * 1.7, Vec3::new(1.0, 0.12, 0.025), 0.4),
                     (last.radius, Vec3::new(1.0, 0.45, 0.06), 0.85),
                     (last.radius * 0.22, Vec3::new(1.0, 0.9, 0.55), 1.0),
                 ] {
-                    band(&mut self.vertices, [origin - side * width, origin, origin + side * width],
-                        [end - side * width, end, end + side * width], colour, [opacity; 2]);
+                    // Trim every band vertex to the blocking face, including
+                    // the glow. A centre-ray cap leaks past diagonal thin walls.
+                    let trim = |point: Vec3| last.end_normal.map_or(point, |normal| {
+                        point + normal * (end - point).dot(normal).max(0.0)
+                    });
+                    band(&mut self.vertices,
+                        [origin - side * width, origin, origin + side * width].map(trim),
+                        [end - side * width, end, end + side * width].map(trim), colour, [opacity; 2]);
                 }
             }
             AttackProfile::Cleave => {
@@ -381,6 +385,7 @@ mod tests {
             origin: Vec3::ZERO,
             radius: 1.1,
             profile: AttackProfile::Cleave,
+            end_normal: None,
         };
         let end = Sample {
             tick: 2,
@@ -403,6 +408,33 @@ mod beam_tests {
     use super::*;
     use arpg_core::{AimDir, Intent, MoveDir};
     use arpg_sim::{Accumulator, Dt};
+
+    #[test]
+    fn beam_bands_and_glow_stop_at_flat_and_diagonal_thin_walls_after_turning() {
+        for yaw in [0.0, std::f32::consts::FRAC_PI_4, -std::f32::consts::FRAC_PI_4] {
+            let wall = arpg_sim::Wall::new(glam::Vec2::new(0.0, 2.0), glam::Vec2::new(6.0, 0.1), yaw).unwrap();
+            let mut game = Game::from_scene(&arpg_sim::Scene { walls: vec![wall], ..Default::default() }.into()).unwrap();
+            game.set_attack_profile(AttackProfile::Disintegrate);
+            let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+            let mut effects = AttackEffects::default();
+            for aim in [AimDir::new(Vec3::X).unwrap(), AimDir::FORWARD] {
+                game.step(dt, Intent::new(MoveDir::NONE, aim, false).with_attack_held(true));
+                effects.observe(&game);
+            }
+            let end = Vec3::new(0.0, 0.0, 2.0 - 0.05 / yaw.cos());
+            assert!(effects.samples.back().unwrap().centre.abs_diff_eq(end, 0.00001));
+            for alpha in [Alpha::ZERO, Alpha::ONE] {
+                effects.rebuild(game.tick(), alpha);
+                assert_eq!(effects.vertices().len(), 36);
+                assert!(effects.vertices().iter().any(|v| (v.position().z - end.z).abs() < 0.00001));
+                for vertex in effects.vertices() {
+                    let point = vertex.position();
+                    let local_z = point.x * yaw.sin() + (point.z - 2.0) * yaw.cos();
+                    assert!(local_z <= -0.05 + 0.00001, "beam glow crossed wall: yaw={yaw}, vertex={point}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn beam_geometry_stays_bounded_tracks_aim_and_clears_on_release() {

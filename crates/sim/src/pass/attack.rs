@@ -308,6 +308,7 @@ pub(crate) fn attack(
     pos: &[Vec2],
     mut impulses: ImpulseSink<'_>,
     mut damage: DamageSink<'_>,
+    walls: &crate::wall::Walls,
     mut trace: TraceSink<'_>,
 ) {
     let channel_requested = state.channels(input.attack_held());
@@ -346,7 +347,7 @@ pub(crate) fn attack(
         state.channel = Some(cadence);
         state.struck.clear();
         if cadence == 0 {
-            super::beam::strike(crate::Beam::new(pose.pos, pose.facing), bodies, pos, &mut damage, &mut trace);
+            super::beam::strike(crate::Beam::new(pose.pos, pose.facing).clipped(walls), bodies, pos, walls, &mut damage, &mut trace);
         }
         return;
     }
@@ -393,6 +394,7 @@ pub(crate) fn attack(
             pos,
             &mut impulses,
             &mut damage,
+            walls,
             &mut trace,
         );
     }
@@ -438,6 +440,7 @@ fn strike(
     pos: &[Vec2],
     impulses: &mut ImpulseSink<'_>,
     damage: &mut DamageSink<'_>,
+    walls: &crate::wall::Walls,
     trace: &mut TraceSink<'_>,
 ) {
     // Place the committed disc using the current authoritative facing.
@@ -459,6 +462,7 @@ fn strike(
             continue;
         }
 
+        if walls.obstructs(pose.pos, *body) { continue; }
         let Some(remaining) = damage.hit(id) else { continue };
         struck.push(id);
         trace.emit(Event::Hit { id, remaining });
@@ -533,6 +537,7 @@ mod tests {
                 &[],
                 physics.sink(player),
                 health.sink(),
+                &crate::wall::Walls::default(),
                 trace.sink(u64::from(tick)),
             );
             seen.push((tick, state.is_swinging(), state.hitbox_is_live()));

@@ -10,6 +10,7 @@ use glam::{Vec2, Vec3};
 
 fn scene() -> GameScene {
     Scene {
+        walls: Vec::new(),
         name: "cached trial".into(),
         bodies: vec![Placed { pos: (1.0, 0.0), what: Template::BLOCK.interactive() }],
         sources: vec![SourceSpec {

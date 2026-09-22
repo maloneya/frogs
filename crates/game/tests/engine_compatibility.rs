@@ -36,6 +36,7 @@ fn construction_matches_the_engine_scene_loading_path() {
 #[test]
 fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
     let scene = Scene {
+        walls: Vec::new(),
         name: "entry point compatibility".into(),
         bodies: vec![
             Placed { pos: (1.0, 0.0), what: Template::BLOCK.interactive() },

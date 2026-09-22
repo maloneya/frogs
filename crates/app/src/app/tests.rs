@@ -73,6 +73,7 @@ fn deferred_replies_wait_for_release_and_preserve_future_deadlines() {
 
 fn pair() -> Scene {
     arpg_sim::Scene {
+        walls: Vec::new(),
         name: "pair".into(),
         bodies: vec![arpg_sim::Placed {
             pos: (20.0, 0.0),

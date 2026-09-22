@@ -82,6 +82,9 @@ impl BodyGrid {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scene {
+    /// Solid static ground rectangles, independent of circular body placements.
+    #[serde(default)]
+    pub walls: Vec<crate::Wall>,
     /// Human-readable content label; never used as runtime identity.
     pub name: String,
     /// Authored order is spawn order, and therefore deterministic id order.
@@ -103,6 +106,7 @@ impl Scene {
     pub fn boot() -> Self {
         Self {
             name: "Default horde".into(),
+            walls: Vec::new(),
             bodies: crate::grid_positions(crate::DEFAULT_ENEMIES)
                 .map(|pos| Placed { pos: pos.into(), what: Template::BODY })
                 .collect(),
@@ -112,7 +116,7 @@ impl Scene {
     }
 
     fn validate(&self) -> Result<usize, SceneError> {
-        let Self { name: _, bodies, grids, sources } = self;
+        let Self { name: _, bodies, grids, sources, walls: _ } = self;
         if bodies.iter().any(|body| !body.what.valid_at(Vec2::from(body.pos))) {
             return Err(SceneError::Invalid("invalid body position or template"));
         }
@@ -208,6 +212,7 @@ struct Resident {
 pub(crate) struct Scenes {
     live: Vec<Resident>,
     next: u64,
+    pub(crate) walls: crate::wall::Walls,
 }
 
 impl Scenes {
@@ -270,7 +275,8 @@ impl Scenes {
     }
 
     pub(crate) fn hash(&self, hash: &mut Fnv) {
-        let Self { live, next } = self;
+        let Self { live, next, walls } = self;
+        walls.hash(hash);
         hash.u64(*next);
         hash.usize(live.len());
         for scene in live {
@@ -292,7 +298,8 @@ impl Scenes {
     }
 
     pub(crate) fn report(&self, out: &mut Report) {
-        let Self { live, next } = self;
+        let Self { live, next, walls } = self;
+        out.object("walls", |out| walls.report(out));
         out.int("next_id", *next);
         for scene in live {
             let Resident { id, name, bodies, sources } = scene;
@@ -339,11 +346,13 @@ impl crate::World {
             return Err(SceneError::Capacity);
         }
         self.scenes.can_add()?;
+        self.scenes.walls.admit(scene.walls.len())?;
         if !self.sources.can_add(scene.sources.len()) {
             return Err(SceneError::IdExhausted);
         }
 
         let owner = self.scenes.add(&scene.name);
+        self.scenes.walls.install(owner, &scene.walls);
         for body in scene.bodies.iter().copied().chain(scene.grids.iter().flat_map(BodyGrid::placements)) {
             let id = self
                 .place(Vec2::from(body.pos), body.what)
@@ -366,6 +375,7 @@ impl crate::World {
         let Some(resident) = self.scenes.take(id) else {
             return false;
         };
+        self.scenes.walls.evict(id);
         self.queue.cancel_scene(id);
         for source in resident.sources {
             self.remove_source(source);
@@ -375,6 +385,11 @@ impl crate::World {
         }
         self.trace.sink(self.tick).emit(crate::Event::SceneEvicted { id });
         true
+    }
+
+    /// Immutable walls in scene/authored order, with stable scene-local indices.
+    pub fn walls(&self) -> impl Iterator<Item = (SceneId, usize, crate::Wall)> + '_ {
+        self.scenes.walls.iter()
     }
 
     /// Number of completely installed scene instances.
@@ -411,6 +426,7 @@ mod tests {
 
     fn scene() -> Scene {
         Scene {
+            walls: Vec::new(),
             name: "pair".into(),
             bodies: vec![Placed { pos: (20.0, 0.0), what: Template::BODY }],
             grids: Vec::new(),
@@ -491,6 +507,7 @@ mod tests {
         assert_eq!(world.hash(), before);
         assert_eq!(world.trace().render(), trace);
         let full = Scene {
+            walls: Vec::new(),
             name: "full".into(),
             bodies: vec![Placed { pos: (1.0, 0.0), what: Template::BODY }; crate::MAX_BODIES],
             sources: vec![],
@@ -592,6 +609,7 @@ mod tests {
         // Origin and spacing are exact in binary, so shorthand and longhand
         // agree bit for bit rather than within a tolerance.
         let shorthand = Scene {
+            walls: Vec::new(),
             name: "grid".into(),
             bodies: vec![lead],
             grids: vec![BodyGrid {
@@ -604,6 +622,7 @@ mod tests {
             sources: Vec::new(),
         };
         let longhand = Scene {
+            walls: Vec::new(),
             name: "grid".into(),
             bodies: [lead.pos, (0.0, 4.0), (1.5, 4.0), (3.0, 4.0), (0.0, 5.5), (1.5, 5.5), (3.0, 5.5)]
                 .map(|pos| Placed { pos, what: Template::BODY })

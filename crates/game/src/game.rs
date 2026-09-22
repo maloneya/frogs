@@ -412,7 +412,10 @@ impl Game {
         self.world.enemy_presentations(alpha)
     }
 
-    /// Read-only active channel capsule at the completed tick's player pose.
+    /// Authored ground-plane wall geometry and scene-local identities.
+    pub fn walls(&self) -> impl Iterator<Item = (SceneId, usize, arpg_sim::Wall)> + '_ { self.world.walls() }
+
+    /// Active beam clipped to the first wall at the completed tick.
     pub fn beam(&self) -> Option<arpg_sim::Beam> { self.world.beam() }
 
     /// Committed swing discs; beam geometry has its own read-only observation.

@@ -54,6 +54,22 @@ mod tests {
     use super::parse_scene;
 
     #[test]
+    fn wall_files_share_typed_validation_and_reject_unknown_height() {
+        for fields in [
+            "centre: (0.0, 2.0), size: (3.0, 0.0)",
+            "centre: (96.0, 2.0), size: (3.0, 0.2)",
+            "centre: (0.0, 2.0), size: (3.0, 0.2), yaw: NaN",
+            "centre: (0.0, 2.0), size: (3.0, 0.2), height: 2.0",
+        ] {
+            let source = format!("(engine: (name: \"bad wall\", walls: [({fields})]))");
+            assert!(parse_scene(&source).is_err(), "{source}");
+        }
+        let content = parse_scene("(engine: (name: \"wall\", walls: [(centre: (0.0, 2.0), size: (3.0, 0.2))]))").unwrap();
+        assert_eq!(content.engine.walls.len(), 1);
+        assert!(arpg_game::Game::from_scene(&content).is_ok());
+    }
+
+    #[test]
     fn scenes_decode_the_game_owned_definition() {
         let scene = parse_scene(
             r#"(engine: (name: "trial", sources: [(pos: (0.0, 0.0), enabled: false)]))"#,

@@ -183,6 +183,11 @@ pub enum Event {
         /// Enemy pairs resolved.
         count: usize,
     },
+    /// Movable bodies touching authored walls in one wall-resolution pass.
+    WallContacts {
+        /// Bodies whose movement or penetration was corrected.
+        count: usize,
+    },
     /// Bodies the arena wall stopped this tick.
     Clamped {
         /// Bodies the wall stopped.
@@ -231,6 +236,7 @@ impl fmt::Display for Event {
             Self::Hit { id, remaining } => write!(f, "hit id={id} remaining={remaining}"),
             Self::Contacts { count } => write!(f, "contacts count={count}"),
             Self::Crowded { count } => write!(f, "crowded count={count}"),
+            Self::WallContacts { count } => write!(f, "wall contacts count={count}"),
             Self::Clamped { count } => write!(f, "clamped count={count}"),
         }
     }

@@ -249,3 +249,5 @@ references use `Inline(...)` with the same complete definition as file reference
 See [encounters](encounters.md) for validation and lifecycle rules;
 `scenes/soul_trial.ron` is the playable encounter, with dedicated completion
 and timeout scenarios.
+
+Rectangular scene walls use `engine.walls`; see [wall geometry and playtesting](walls.md).

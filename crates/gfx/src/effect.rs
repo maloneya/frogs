@@ -13,6 +13,9 @@ pub struct EffectVertex {
 }
 
 impl EffectVertex {
+    /// Read-only world position for inspecting generated presentation geometry.
+    pub fn position(self) -> Vec3 { Vec3::from_array(self.position) }
+
     /// Validates a presentation vertex before it enters the GPU stream.
     #[must_use]
     pub fn new(position: Vec3, colour: glam::Vec4) -> Self {

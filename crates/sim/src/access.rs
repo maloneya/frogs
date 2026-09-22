@@ -10,6 +10,7 @@ use crate::pass::source::Sources;
 pub struct MeleeView<'a> {
     bodies: &'a crate::Bodies,
     seekers: &'a crate::Members,
+    walls: &'a crate::wall::Walls,
 }
 
 impl MeleeView<'_> {
@@ -20,7 +21,8 @@ impl MeleeView<'_> {
         if !self.seekers.contains(id) { return None; }
         let row = self.bodies.slots.index(id)?;
         let reach = PLAYER_ENEMY_CONTACT_DISTANCE;
-        Some(self.bodies.pos[0].distance_squared(self.bodies.pos[row]) <= reach * reach)
+        Some(self.bodies.pos[0].distance_squared(self.bodies.pos[row]) <= reach * reach
+            && !self.walls.obstructs(self.bodies.pos[row], self.bodies.pos[0]))
     }
 }
 
@@ -28,7 +30,7 @@ impl World {
     /// Restricts gameplay melee checks to stable identity and shared geometry.
     #[must_use]
     pub fn melee_view(&self) -> MeleeView<'_> {
-        MeleeView { bodies: &self.bodies, seekers: &self.seekers }
+        MeleeView { bodies: &self.bodies, seekers: &self.seekers, walls: &self.scenes.walls }
     }
 }
 

@@ -14,6 +14,8 @@ use arpg_core::{Intent, Report};
 mod angle;
 mod attack;
 mod beam;
+mod wall;
+pub use wall::{Wall, MAX_WALLS};
 pub use beam::Beam;
 mod contact;
 mod hash;
@@ -747,7 +749,7 @@ impl World {
         // fell; `trace` is what shows the window itself.
         attack.status().report(out);
         out.object("beam", |out| {
-            if let Some(beam) = attack.beam(self.bodies.pos[0], self.player.facing) {
+            if let Some(beam) = self.beam() {
                 out.vec3("start", on_ground(beam.start(), 0.0));
                 out.vec3("end", on_ground(beam.end(), 0.0));
                 out.num("radius", Beam::RADIUS);
@@ -859,6 +861,8 @@ impl World {
             &mut self.bodies.pos,
             dt,
         );
+        pass::walls::resolve(&self.scenes.walls, &self.bodies.prev_pos, &mut self.bodies.pos,
+            self.bodies.slots.ids(), &mut self.bodies.physics, trace.reborrow());
         observer.crowd_started();
         let crowd_work = pass::separate::crowd(
             &mut self.bodies.pos[1..],
@@ -881,6 +885,8 @@ impl World {
             &mut self.bodies.physics,
             trace.reborrow(),
         );
+        pass::walls::resolve(&self.scenes.walls, &self.bodies.prev_pos, &mut self.bodies.pos,
+            self.bodies.slots.ids(), &mut self.bodies.physics, trace.reborrow());
         pass::motion::settle(&mut self.bodies.physics, dt, trace.reborrow());
         pass::face::aim(&mut self.player.facing, &self.player.attack, intent, dt);
 
@@ -900,6 +906,7 @@ impl World {
             &self.bodies.pos[1..],
             self.bodies.physics.sink(self.bodies.slots.ids()[0]),
             self.bodies.health.sink(),
+            &self.scenes.walls,
             trace.reborrow(),
         );
         pass::interact::interact(
@@ -1114,7 +1121,7 @@ impl World {
 
     /// Active channel capsule at the last completed tick, absent after release.
     pub fn beam(&self) -> Option<Beam> {
-        self.player.attack.beam(self.bodies.pos[0], self.player.facing)
+        self.player.attack.beam(self.bodies.pos[0], self.player.facing).map(|beam| beam.clipped(&self.scenes.walls))
     }
 
     /// Committed swing discs (channels expose a capsule through `beam`).

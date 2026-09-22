@@ -71,8 +71,8 @@ The existing Slam animation is held in a forward pose for this prototype.
 one hit immediately and every 12 ticks thereafter. With three-hit enemies this
 kills a stationary target on ticks 0, 12 and 24 of an uninterrupted channel.
 The capsule tests final body positions before defeat removal, includes enemy
-body radius, pierces all enemies, and applies no impulse. Scenery does not block
-it yet; there is no resource cost or damage ramp. Releasing resets the cadence.
+body radius, pierces enemies until the first rectangular wall, and applies no
+impulse. There is no resource cost or damage ramp. Releasing resets the cadence.
 A committed melee swing must finish before channeling can begin; selecting a
 melee profile ends the channel on the next tick.
 
@@ -84,7 +84,8 @@ outline this capsule. Restart clears channel state; scene eviction needs no
 beam target cleanup because pulses retain no target identities.
 
 Presentation draws three orange/gold bands using the existing linear-colour
-triangle stream, interpolating origin and angle between completed ticks. History
+triangle stream using the [wall-clipped](walls.md#attacks) completed-tick pose.
+Interpolating an old angle with a new clipped length could draw through cover. History
 is bounded and release removes the beam immediately. It never feeds geometry
 back into damage. Scenarios use `channels: [(at: 0, ticks: 24)]` for a half-open
 hold; `attacks` still supplies discrete swing press edges.

@@ -44,6 +44,8 @@
 //! 6. [`motion::integrate`] — add carried motion after powered locomotion,
 //!    before testing contacts. Neither steering nor overlap correction writes
 //!    carried velocity, so neither can erase or manufacture a blow.
+//!    [`walls::resolve`] then sweeps circles from their remembered positions to
+//!    stop motion at authored rectangles before bodies exchange momentum.
 //! 7. [`separate::crowd`] — repair enemy overlaps and exchange momentum.
 //!    Rebuild its grid from post-motion rows, then update cell membership as
 //!    each correction lands. Candidate order preserves the original pair sweep.
@@ -52,6 +54,9 @@
 //!    Both responses use the same physics store and mass properties.
 //! 9. [`contain`] — clamp positions and cancel outward wall velocity. After
 //!    separation, so a correction cannot leave a body outside the arena.
+//!    [`walls::resolve`] runs again after containment: crowd/player corrections
+//!    cannot push a circle through a rectangle. Both checks cancel only velocity
+//!    into the contact face; wall contacts are aggregated once per pass.
 //! 10. [`motion::settle`] — damp carried velocity and snap its small tail to
 //!     rest. After contact response, before a new attack impulse.
 //! 11. [`face`] — follow independent aim before placing a hitbox; snap on an accepted
@@ -88,3 +93,6 @@ pub(crate) mod spawn;
 pub(crate) mod walk;
 
 pub(crate) mod motion;
+
+/// Sweep circles against rectangles before crowd contacts and after arena containment.
+pub(crate) mod walls;

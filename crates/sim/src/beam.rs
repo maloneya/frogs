@@ -6,6 +6,7 @@ use glam::Vec2;
 pub struct Beam {
     start: Vec2,
     end: Vec2,
+    end_normal: Option<Vec2>,
 }
 
 impl Beam {
@@ -20,7 +21,15 @@ impl Beam {
         Self {
             start,
             end: start + Vec2::new(facing.sin(), facing.cos()) * Self::LENGTH,
+            end_normal: None,
         }
+    }
+    pub(crate) fn clipped(mut self, walls: &crate::wall::Walls) -> Self {
+        if let Some(hit) = walls.first_hit(self.start, self.end) {
+            self.end = hit.point;
+            self.end_normal = Some(hit.normal);
+        }
+        self
     }
     /// Ground-plane origin, in world X/Z.
     pub fn start(self) -> Vec2 {
@@ -31,8 +40,18 @@ impl Beam {
         self.end
     }
 
+    /// Outward ground-plane normal of the blocking face. Presentation uses it
+    /// to trim the full beam width; a ray alone cannot describe a slanted cap.
+    /// Zero means the origin is inside solid geometry and the beam has no length.
+    pub fn end_normal(self) -> Option<Vec2> {
+        self.end_normal
+    }
+
     pub(crate) fn touches(self, centre: Vec2, radius: f32) -> bool {
         let axis = self.end - self.start;
+        if axis.length_squared() == 0.0 {
+            return false;
+        }
         let t = ((centre - self.start).dot(axis) / axis.length_squared()).clamp(0.0, 1.0);
         centre.distance_squared(self.start + axis * t) <= (Self::RADIUS + radius).powi(2)
     }

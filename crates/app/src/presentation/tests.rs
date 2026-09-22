@@ -595,3 +595,24 @@ fn contact_flash_reaches_instances_without_changing_pose_buckets() {
     assert_eq!(horde.instance_count(), 1);
     assert_eq!(horde.occupied_buckets(), 1);
 }
+
+#[test]
+fn wall_instances_follow_authoritative_footprints_and_scene_lifetime() {
+    let mut view = WorldAssets::load(|_| Ok(())).unwrap();
+    let wall = arpg_sim::Wall::new(glam::Vec2::new(3.0, 4.0), glam::Vec2::new(6.0, 0.2), 0.7).unwrap();
+    let mut game = Game::from_scene(&arpg_sim::Scene { walls: vec![wall], ..Default::default() }.into()).unwrap();
+    let owner = game.walls().next().unwrap().0;
+    view.rebuild_walls(game.walls());
+    assert_eq!(view.walls.len(), 1);
+    assert_eq!(view.walls[0].pos(), Vec3::new(3.0, 0.0, 4.0));
+    assert_eq!(view.walls[0].yaw(), wall.yaw());
+    assert_eq!(view.instance_count(), 2);
+    assert_eq!(view.draw_count(), 2);
+    assert!(game.evict_scene(owner));
+    view.rebuild_walls(game.walls());
+    assert!(view.walls.is_empty());
+    assert_eq!(view.draw_count(), 1);
+    game.restart().unwrap();
+    view.rebuild_walls(game.walls());
+    assert_eq!(view.walls.len(), 1);
+}
