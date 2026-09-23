@@ -1,0 +1,24 @@
+[package]
+name = "levelgen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately independent of the game workspace and its dependency graph.
+[workspace]
+resolver = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "deny"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+[lints.clippy]
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
