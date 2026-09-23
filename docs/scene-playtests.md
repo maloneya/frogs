@@ -106,6 +106,11 @@ F2 offers **Default horde** (1,024 stationary enemies) and these files:
 | `storm_reveal.ron` | F4 briefly reveals a stationary horde beyond one torch pool |
 | `two_torches.ron` | Warm and cool pools overlap around stationary monsters |
 
+The bottom HUD shows current/max player health with a proportional bar and one
+box per bound ability. The ability in progress stays highlighted through its
+startup, hit and recovery; the other boxes read **Busy** until it finishes. A
+held beam reads **Channeling**. The HUD reads game state without changing it.
+
 Attacks use fixed bindings, shown in the HUD:
 
 - **1 / left click / Space:** Cleave, a broad arc.

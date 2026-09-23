@@ -18,7 +18,7 @@
 use crate::ui::Menu;
 use crate::input::ATTACK_BINDINGS;
 use arpg_gfx::{Glyphs, Quad, QuadSink};
-use arpg_sim::AttackStatus;
+use arpg_sim::{AttackProfile, AttackStatus};
 use core::fmt::Write as _;
 use glam::{Vec2, Vec4};
 
@@ -59,37 +59,85 @@ pub(crate) fn draw(
         draw_picker(font, menu, current, viewport, sink);
         return;
     }
-    // Stack-backed lines preserve the overlay's no-allocation frame path.
-    let mut lines: [Text; 3] = core::array::from_fn(|_| Text::default());
-    write!(lines[0], "F2: scenes   F4: scene set piece").expect("line capacity");
-    if attack.channeling {
-        write!(lines[1], "HP {}/{} / Disintegrate / Channeling / Release to move",
-            player_health, arpg_game::PLAYER_MAX_HEALTH).expect("line capacity");
-    } else {
-        write!(
-            lines[1],
-            "HP {}/{} / {} / {} / tick {} / struck {}",
-            player_health,
-            arpg_game::PLAYER_MAX_HEALTH,
-            attack.profile,
-            attack.phase,
-            attack.elapsed,
-            attack.struck
-        )
-        .expect("line capacity");
+    let width = viewport.x - 2.0 * (MARGIN + PADDING);
+    if width < font.measure("...") || viewport.y < 2.0 * (MARGIN + PADDING) + font.line_height() {
+        return;
     }
-    binding_line(&mut lines[2]);
-    let width = lines.iter().map(|line| font.measure(line.as_str())).fold(0.0, f32::max);
-    draw_panel(font, &lines, width, MARGIN, None, sink);
+    let mut hint = Text::default();
+    hint.label(font, "F2: scenes   F4: scene set piece", width);
+    draw_panel(font, &[hint], width.min(font.measure("F2: scenes   F4: scene set piece")), MARGIN, None, sink);
+    draw_player(font, attack, player_health, viewport, sink);
 }
 
-fn binding_line(line: &mut Text) {
-    for &(_, profile, label) in &ATTACK_BINDINGS {
-        write!(line, "{}: {}   ", label, profile.label()).expect("line capacity");
+const HEALTH_FILL: Vec4 = Vec4::new(0.55, 0.035, 0.045, 1.0);
+const ACTIVE_SLOT: Vec4 = Vec4::new(0.025, 0.18, 0.25, 1.0);
+const SLOT: Vec4 = Vec4::new(0.025, 0.03, 0.04, 1.0);
+const GAP: f32 = 4.0;
+const BAR_HEIGHT: f32 = 8.0;
+const PLAYER_PADDING: f32 = 6.0;
+const PLAYER_TEXT_SCALE: f32 = 0.6;
+
+fn player_panel_height(font: &Glyphs) -> f32 {
+    4.0 * font.line_height() * PLAYER_TEXT_SCALE + BAR_HEIGHT + 3.0 * GAP + 4.0 * PLAYER_PADDING
+}
+
+/// Read-only health and fixed bindings. Highlight the committed swing, not the
+/// next requested profile: pressing Slam during Cleave must not light up Slam.
+fn draw_player(font: &Glyphs, attack: AttackStatus, health: u8, viewport: Vec2, sink: &mut QuadSink<'_>) {
+    let height = player_panel_height(font);
+    let minimum_top = MARGIN + font.line_height() + 2.0 * PADDING + GAP;
+    let font = &font.scaled(PLAYER_TEXT_SCALE);
+    let columns = ATTACK_BINDINGS.len() as f32;
+    let widest_label = ATTACK_BINDINGS.iter()
+        .map(|&(_, profile, binding)| font.measure(binding).max(font.measure(profile.label())))
+        .fold(font.measure("Channeling"), f32::max);
+    let gaps = (columns - 1.0) * GAP;
+    let desired_width = columns * (widest_label + 2.0 * PLAYER_PADDING) + gaps + 2.0 * PLAYER_PADDING;
+    let width = (viewport.x - 2.0 * MARGIN).min(desired_width);
+    let top = viewport.y - MARGIN - height;
+    let slot_width = (width - 2.0 * PLAYER_PADDING - gaps) / columns;
+    let text_width = slot_width - 2.0 * PLAYER_PADDING;
+    if text_width < font.measure("...") || top < minimum_top {
+        return;
+    }
+    let left = (viewport.x - width) / 2.0;
+    sink.push(Quad::solid(Vec4::new(left, top, width, height), PANEL));
+    let mut hp = Text::default();
+    write!(hp, "Health {health}/{}", arpg_game::PLAYER_MAX_HEALTH).expect("health fits");
+    font.layout(hp.as_str(), left + PLAYER_PADDING, top + PLAYER_PADDING, INK, sink);
+    let bar = Vec4::new(left + PLAYER_PADDING, top + PLAYER_PADDING + font.line_height() + GAP,
+        width - 2.0 * PLAYER_PADDING, BAR_HEIGHT);
+    sink.push(Quad::solid(bar, SLOT));
+    if health > 0 {
+        let fraction = f32::from(health.min(arpg_game::PLAYER_MAX_HEALTH)) / f32::from(arpg_game::PLAYER_MAX_HEALTH);
+        sink.push(Quad::solid(Vec4::new(bar.x, bar.y, bar.z * fraction, bar.w), HEALTH_FILL));
+    }
+    let active = if attack.channeling { Some(AttackProfile::Disintegrate) } else { attack.swing_profile };
+    let slot_top = bar.y + BAR_HEIGHT + GAP;
+    for (index, &(_, profile, binding)) in ATTACK_BINDINGS.iter().enumerate() {
+        let x = left + PLAYER_PADDING + index as f32 * (slot_width + GAP);
+        let selected = active == Some(profile);
+        sink.push(Quad::solid(Vec4::new(x, slot_top, slot_width,
+            3.0 * font.line_height() + GAP + 2.0 * PLAYER_PADDING), if selected { ACTIVE_SLOT } else { SLOT }));
+        let mut lines: [Text; 3] = core::array::from_fn(|_| Text::default());
+        lines[0].label(font, binding, text_width);
+        lines[1].label(font, profile.label(), text_width);
+        if selected && attack.channeling {
+            lines[2].label(font, "Channeling", text_width);
+        } else if selected {
+            write!(lines[2], "{}", attack.phase).expect("phase fits");
+            lines[2].fit(font, text_width);
+        } else {
+            lines[2].label(font, if active.is_some() { "Busy" } else { "Ready" }, text_width);
+        }
+        for (row, line) in lines.iter().enumerate() {
+            font.layout(line.as_str(), x + PLAYER_PADDING,
+                slot_top + PLAYER_PADDING + row as f32 * font.line_height() + if row == 2 { GAP } else { 0.0 }, INK, sink);
+        }
     }
 }
 
-/// Gameplay progress is a read-only projection, placed below the ordinary HUD.
+/// Gameplay progress sits below the scene hint and above the player HUD.
 /// The number of rows is bounded by both game admission and viewport height.
 pub(crate) fn draw_encounters<'a>(
     font: &Glyphs,
@@ -99,8 +147,9 @@ pub(crate) fn draw_encounters<'a>(
 ) {
     let width = (viewport.x - 2.0 * (MARGIN + PADDING)).min(900.0);
     let line_step = font.line_height() + 8.0;
-    let top = MARGIN + 2.0 * PADDING + 3.0 * line_step;
-    let available = ((viewport.y - top - MARGIN - 2.0 * PADDING) / line_step).max(0.0) as usize;
+    let top = MARGIN + 2.0 * PADDING + line_step;
+    let bottom = viewport.y - MARGIN - player_panel_height(font) - GAP;
+    let available = ((bottom - top - 2.0 * PADDING) / line_step).max(0.0) as usize;
     if available == 0 || width < font.measure("...") { return; }
     let mut lines: [Text; arpg_game::MAX_ENCOUNTERS] = core::array::from_fn(|_| Text::default());
     let mut count = 0;
@@ -340,13 +389,10 @@ mod tests {
         {
             let mut sink = buf.sink();
             let world = arpg_game::Game::default();
-            let menu = Menu::default();
-            draw(
+            draw_player(
                 &Glyphs::system(),
-                &menu,
                 world.attack_status(),
                 world.player_health(),
-                "default",
                 Vec2::new(1280.0, 720.0),
                 &mut sink,
             );
@@ -364,10 +410,9 @@ mod tests {
 
         assert!(quads.len() > 1, "the overlay should draw a panel and some glyphs");
         assert!(quads[0].is_solid(), "the first quad must be the panel");
-        assert!(
-            quads[1..].iter().all(|q| !q.is_solid()),
-            "all glyphs follow the panel"
-        );
+        assert!(!quads[1].is_solid(), "health text follows the panel");
+        assert_eq!(quads.iter().filter(|q| q.is_solid()).count(), 6,
+            "panel, health track/fill and three ability slots");
     }
 
     /// Every glyph must sit inside the panel. An off-by-one in the padding or a
@@ -388,7 +433,7 @@ mod tests {
         }
     }
 
-    /// The readout clears the top-left corner and has area. A sign error in the
+    /// The readout clears the window edges and has area. A sign error in the
     /// margin puts it partly off the window — which a screenshot shows and
     /// nothing else would, since a quad off-screen is silently clipped.
     #[test]

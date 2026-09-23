@@ -258,18 +258,15 @@ impl Font {
 
         Self {
             view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
-            // **Nearest, not linear**, and that is a legibility decision rather
-            // than a shortcut. Glyphs are rasterised at exactly the size they
-            // are drawn, so every texel maps to one pixel and filtering has
-            // nothing to interpolate but blur. It also makes the white texel
-            // exact: linear filtering at uv (0,0) would blend it with whatever
-            // is packed beside it, so a solid bar would come out slightly dim.
+            // Native-size text keeps exact texels; smaller HUD text uses linear
+            // minification to avoid dropping thin strokes from the source glyph.
+            // Solid quads sample the reserved texel at the clamped atlas corner.
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("glyph sampler"),
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
                 mag_filter: wgpu::FilterMode::Nearest,
-                min_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             }),
             glyphs,
@@ -302,6 +299,25 @@ impl Glyphs {
     #[must_use]
     pub fn system() -> Self {
         rasterise().1
+    }
+
+    /// Scaled placement metrics sharing the same atlas regions. This changes
+    /// measurement and drawing together, without allocating or rasterising.
+    ///
+    /// Panics unless `scale` is finite and positive.
+    #[must_use]
+    pub fn scaled(&self, scale: f32) -> Self {
+        assert!(scale.is_finite() && scale > 0.0, "text scale must be finite and positive");
+        Self {
+            glyphs: self.glyphs.map(|glyph| Glyph {
+                size: glyph.size.map(|value| value * scale),
+                offset: glyph.offset.map(|value| value * scale),
+                advance: glyph.advance * scale,
+                ..glyph
+            }),
+            line_height: self.line_height * scale,
+            ascent: self.ascent * scale,
+        }
     }
 
     /// Baseline to baseline, in physical pixels — what to add to `y` for the
