@@ -23,9 +23,9 @@ pub struct Defeat {
     pub source: Option<SourceId>,
 }
 
-/// Starting and maximum health for ordinary enemies, in hits.
+/// Starting and maximum health for ordinary enemies, in health points.
 pub const ENEMY_HIT_POINTS: u8 = 3;
-const _: () = assert!(ENEMY_HIT_POINTS > 0, "an enemy must survive at least one hit");
+const _: () = assert!(ENEMY_HIT_POINTS > 0, "an enemy must spawn alive");
 
 #[derive(Default)]
 pub(crate) struct Health {
@@ -34,7 +34,7 @@ pub(crate) struct Health {
     origins: Vec<Option<SourceId>>,
 }
 
-/// A hit producer may subtract one point, but cannot grant health, heal, or
+/// A hit producer may subtract positive damage, but cannot grant health, heal, or
 /// remove a body while it is iterating the world's dense body slices.
 pub(crate) struct DamageSink<'a> {
     health: &'a mut Health,
@@ -46,11 +46,12 @@ impl DamageSink<'_> {
         self.health.who.index(id).is_some()
     }
 
-    /// Subtracts one hit from a damageable entity; absent membership is immune.
-    pub(crate) fn hit(&mut self, id: EntityId) -> Option<u8> {
+    /// Subtracts positive damage, clamped at zero, from a damageable entity; absent membership is immune.
+    pub(crate) fn hit(&mut self, id: EntityId, amount: core::num::NonZeroU8) -> Option<u8> {
         let row = self.health.who.index(id)?;
         let remaining = &mut self.health.remaining[row];
-        *remaining = remaining.checked_sub(1).expect("a defeated body cannot take another hit");
+        assert!(*remaining > 0, "a defeated body cannot take another hit");
+        *remaining = remaining.saturating_sub(amount.get());
         Some(*remaining)
     }
 }

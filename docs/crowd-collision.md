@@ -103,3 +103,18 @@ piles, overcrowded edge cells and repeated cell crossings can still be costly.
 There is no candidate cap that silently drops contacts and no change to the
 catch-up policy, collision tuning, or physical response. Improvements to those
 mechanisms need their own evidence and behavioural verification.
+
+## Fast crossings
+
+Before integrating physical velocity, the shared contact pass predicts pairs
+that would pass their closest approach within this tick. It exchanges normal
+momentum before movement, so large Slam impulses cannot reverse the contact
+normal simply by crossing a neighbour between endpoint checks. Walls shield
+pairs; misses do not transfer momentum. Ordinary approaching overlaps still use
+the grid-based separation pass afterwards.
+
+This is a conservative, ordered single sweep: the response can happen up to one
+simulation tick early. Ticks with no body travelling more than an enemy radius
+skip the pair scan. Fast ticks scan pairs, so sustained large impulses need the
+same thousand-body performance checks as crowd separation. This models ground
+motion, not vertical flight.

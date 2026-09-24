@@ -87,12 +87,10 @@ impl Swing {
     /// Describes a swing. `const`, so every check below is a compile error at
     /// the definition site rather than a panic on the tick someone swings.
     pub(crate) const fn new(start: Vec2, end: Vec2, radius: (f32, f32)) -> Self {
-        // A hitbox centred on the player has no direction to be placed along,
-        // and its angle is whatever `atan2(0, 0)` happens to return. Cheap to
-        // rule out here, and the alternative is a swing that mysteriously
-        // points north.
-        assert!(start.x != 0.0 || start.y != 0.0, "a swing starting on the player has no direction");
-        assert!(end.x != 0.0 || end.y != 0.0, "a swing ending on the player has no direction");
+        // A centred expanding disc needs no angle. Mixed centred/directed
+        // endpoints still have no defined polar arc and are rejected.
+        assert!((start.x == 0.0 && start.y == 0.0) == (end.x == 0.0 && end.y == 0.0),
+            "a swing must be centred throughout or have two directed endpoints");
         assert!(radius.0 > 0.0 && radius.1 > 0.0, "a hitbox with no radius can never touch anything");
 
         Self { start, end, radius }
@@ -185,6 +183,7 @@ impl<const N: usize> Hitbox<N> {
 /// here and must come out as an angle of zero, which is exactly the rotation
 /// [`Disc::place`] undoes.
 fn polar(offset: Vec2) -> (f32, f32) {
+    if offset == Vec2::ZERO { return (0.0, 0.0); }
     (offset.x.atan2(offset.y), offset.length())
 }
 

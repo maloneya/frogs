@@ -1,6 +1,6 @@
 // Cleave stays committed for 22 ticks; selecting Slam at tick 1 applies at 22.
 // A target 4.3m ahead is beyond Cleave's maximum reach, but enters Slam's
-// final sample at 22+13=35, receiving exactly 40 impulse.
+// final sample at 22+13=35, receiving exactly 72 impulse.
 (
     description: "Selecting Slam during Cleave preserves the committed timing and geometry until the next swing.",
     setup: (actions: [Place((0.0, 4.3))]),
@@ -18,7 +18,7 @@
         (at: 30, expect: (attack_phase: Startup)),
         (at: 31, expect: (attack_phase: Active, struck: 0)),
         (at: 35, expect: (attack_phase: Active, struck: 1, bodies: [
-            (nth: 0, health: 2, velocity: (x: 0.0, z: 40.0, tol: 0.00001)),
+            (nth: 0, health: 1, velocity: (x: 0.0, z: 72.0, tol: 0.00001)),
         ])),
     ],
     budget: (ticks: 37),
@@ -33,8 +33,8 @@
             (12, HitboxClosed),
             (22, Swung),
             (31, HitboxOpened),
-            (35, Hit(id: (1, 1), remaining: 2)),
-            (35, Impulsed(id: (1, 1), value: (0.0000,40.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (35, Hit(id: (1, 1), remaining: 1)),
+            (35, Impulsed(id: (1, 1), value: (0.0000,72.0000), source: Some((0, 1)), tolerance: 0.00005)),
             (36, HitboxClosed),
         ],
     )),

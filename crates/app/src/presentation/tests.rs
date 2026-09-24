@@ -367,6 +367,7 @@ fn recovery_tuning_cannot_move_an_active_phase_sample() {
             )
             .unwrap(),
             base.knockback(),
+            base.damage(),
         )
         .unwrap();
         // The complete wind-up and strike must depict the same motion even
@@ -603,7 +604,7 @@ fn contact_flash_reaches_instances_without_changing_pose_buckets() {
     horde.rebuild(game.enemy_presentations(Alpha::ZERO), 0.2,
         |id| feedback.flash(id, game.tick(), Alpha::ZERO));
     let instance = horde.buckets.iter().flat_map(|bucket| &bucket.instances).next().unwrap();
-    assert_eq!(game.health(id), Some(2));
+    assert_eq!(game.health(id), Some(1));
     assert_eq!(instance.white_mix(), 1.0);
     assert_eq!(horde.instance_count(), 1);
     assert_eq!(horde.occupied_buckets(), 1);

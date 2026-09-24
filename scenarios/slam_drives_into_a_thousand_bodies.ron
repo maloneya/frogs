@@ -1,0 +1,17 @@
+// Only the front body at z=4.3 is inside Slam's 4.45m reach. The 1023
+// bodies behind it receive motion through contact, never through attack damage.
+(
+    description: "A huge Slam launch into a 1024-body crowd stays finite and within the physics budget.",
+    setup: (scenes: [Inline((engine: (name: "Slam horde",
+        bodies: [(pos: (0.0, 4.3))],
+        grids: [(origin: (-10.5, 5.3), columns: 31, rows: 33, spacing: 0.7)],
+    )))]),
+    attack_profiles: [(at: 0, profile: Slam)],
+    attacks: [0],
+    checkpoints: [
+        (at: 12, expect: (struck: 0, enemy_count: 1024)),
+        (at: 13, expect: (struck: 1, bodies: [(nth: 0, health: 1, velocity: (x: 0.0, z: 72.0, tol: 0.00001))])),
+    ],
+    budget: (ticks: 90, max_mean_step_micros: 4000.0),
+    expect: (enemy_count: 1024, struck: 1, attack_phase: Idle),
+)

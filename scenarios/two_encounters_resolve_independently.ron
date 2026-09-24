@@ -1,4 +1,4 @@
-// The player reaches z=94.5 at tick 629. Slams hit on 639, 669, 699.
+// The player reaches z=94.5 at tick 629. Slams hit on 639 and 699; the second defeats the target.
 // A starts at 1 with 699 ticks; B starts at 3 with 697. Both finish at 699.
 // Only A's source produces the target at the wall: A succeeds, B times out.
 (
@@ -25,7 +25,7 @@
     ))]),
     interactions: [0, 2, 699, 701],
     inputs: [(at: 0, ticks: 630, dir: (0.0, 1.0)), (at: 703, ticks: 20, dir: (1.0, 0.0))],
-    attack_profiles: [(at: 0, profile: Slam)], attacks: [630, 660, 690],
+    attack_profiles: [(at: 0, profile: Slam)], attacks: [630, 690],
     checkpoints: [
         (at: 0, expect: (encounters: [
             (scene: 0, encounter: 0, state: Some((phase: Ready, defeated: 0, target: 1, remaining_ticks: 699))),

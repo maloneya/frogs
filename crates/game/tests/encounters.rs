@@ -65,7 +65,7 @@ fn step(game: &mut Game, tick: u64, interact: bool) {
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
     game.step(
         dt,
-        Intent::new(movement, AimDir::FORWARD, [630, 660, 690].contains(&tick))
+        Intent::new(movement, AimDir::FORWARD, [630, 690].contains(&tick))
             .with_interact(interact),
     );
 }

@@ -5,7 +5,7 @@
     "soul_trial_can_be_completed.ron": "Complete authored 30-second encounter",
     "soul_trial_times_out_without_defeats.ron": "Complete authored encounter deadline",
     "two_encounters_resolve_independently.ron": "Two full encounter lifecycles and deadline boundary",
-    "three_hits_defeat_an_enemy.ron": "Long knockback-return and defeat lifecycle",
+    "two_hits_defeat_an_enemy.ron": "Long knockback-return and defeat lifecycle",
     "the_wall_stops_the_player.ron": "Long-duration arena containment"
   }
 }

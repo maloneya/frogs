@@ -41,8 +41,8 @@ fn committed_swings_sound_at_activation_and_misses_have_no_impact() {
 fn a_slam_hitting_multiple_enemies_produces_one_contact_cue() {
     let scene: GameScene = Scene {
         name: "contacts".into(),
-        bodies: vec![Placed { pos: (-0.5, 1.6), what: Template::BODY },
-            Placed { pos: (0.5, 1.6), what: Template::BODY }],
+        bodies: vec![Placed { pos: (-0.5, 1.2), what: Template::BODY },
+            Placed { pos: (0.5, 1.2), what: Template::BODY }],
         ..Default::default()
     }.into();
     let mut game = Game::from_scene(&scene).unwrap();

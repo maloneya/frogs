@@ -35,15 +35,6 @@ use crate::{
 /// Maximum stored discs: one per tick of the longest accepted active window.
 const HITBOX_SAMPLES: usize = ResolvedAttack::MAX_ACTIVE_TICKS as usize;
 
-/// How many bodies one swing is expected to strike.
-///
-/// Only a starting capacity: the list grows if a swing lands in a crowd. It is
-/// reserved up front so that a steady-state tick does not reach the allocator,
-/// which is a property `a_steady_state_frame_allocates_nothing` checks for
-/// both crowd attacks. Sixteen covered the old narrow default, but Cleave
-/// and Slam routinely hit more bodies in the normal horde.
-const EXPECTED_HITS: usize = 64;
-
 /// A swing in the air: how far through it is, and the shape it committed to.
 ///
 /// **The two are one value, so a hitbox cannot exist without a timer to say
@@ -132,8 +123,10 @@ impl Default for Attack {
             channel: None,
             profile: AttackProfile::default(),
             resolved: AttackProfile::default().resolve(),
-            struck: Vec::with_capacity(EXPECTED_HITS),
-            beam_hits: Vec::with_capacity(EXPECTED_HITS),
+            // Match physical admission, as defeat storage does. Neither the
+            // first tick nor a wide hit against an existing crowd may allocate.
+            struck: Vec::with_capacity(crate::MAX_BODIES),
+            beam_hits: Vec::with_capacity(crate::MAX_BODIES),
         }
     }
 }
@@ -396,7 +389,9 @@ pub(crate) fn attack(
             &mut state.struck,
             disc,
             pose,
+            swing.profile == AttackProfile::Slam,
             resolved.knockback(),
+            resolved.damage(),
             bodies,
             pos,
             &mut impulses,
@@ -436,13 +431,15 @@ pub(crate) fn attack(
 /// record what it hit and may not touch the timer or the shape.
 #[expect(
     clippy::too_many_arguments,
-    reason = "`bodies` and `pos` are one parallel pair and `knockback` is the one tuning value this may see; bundling them would hand `strike` more authority than taking positions immutably is meant to allow"
+    reason = "`bodies` and `pos` are one parallel pair and knockback direction, strength and damage are the only tuning values this may see; bundling them would hand `strike` more authority than taking positions immutably is meant to allow"
 )]
 fn strike(
     struck: &mut Vec<EntityId>,
     disc: Disc,
     pose: Pose,
+    radial: bool,
     knockback: f32,
+    hit_damage: core::num::NonZeroU8,
     bodies: &[EntityId],
     pos: &[Vec2],
     impulses: &mut ImpulseSink<'_>,
@@ -470,10 +467,16 @@ fn strike(
         }
 
         if walls.obstructs(pose.pos, *body) { continue; }
-        let Some(remaining) = damage.hit(id) else { continue };
+        let Some(remaining) = damage.hit(id, hit_damage) else { continue };
         struck.push(id);
         trace.emit(Event::Hit { id, remaining });
-        let direction = Vec2::new(pose.facing.sin(), pose.facing.cos()) * knockback;
+        // Normalization preserves equal strength at every angle and distance.
+        // Coincident centres use a fixed axis, independent of player facing.
+        let direction = if radial {
+            (*body - pose.pos).try_normalize().unwrap_or(Vec2::X)
+        } else {
+            Vec2::new(pose.facing.sin(), pose.facing.cos())
+        } * knockback;
         impulses.push(
             id,
             Impulse::try_from((direction.x, direction.y)).expect("finite facing and tuning"),

@@ -171,6 +171,40 @@ fn resolve(a: &mut Vec2, b: &mut Vec2, contact: Contact, a_inv_mass: f32, b_inv_
     *b += contact.normal() * (contact.depth() * b_inv_mass / share);
 }
 
+/// Exchange momentum before integration when fast bodies would pass each other.
+/// Reads current positions and predicted physical travel, writes only velocity.
+/// One ordered sweep, like ordinary contacts; collisions may occur up to one
+/// tick early. Slow ticks skip the pair scan entirely. Walls shield pairs.
+pub(crate) fn prevent_crossings(
+    pos: &[Vec2],
+    ids: &[EntityId],
+    physics: &mut Physics,
+    walls: &crate::wall::Walls,
+    dt: crate::Dt,
+    mut trace: TraceSink<'_>,
+) {
+    let fast = |velocity: Vec2| velocity.length_squared() * dt.secs().powi(2)
+        > ENEMY_RADIUS * ENEMY_RADIUS;
+    if !ids.iter().any(|&id| fast(physics.get(id).expect("physical body").velocity())) {
+        return;
+    }
+    let mut transfers = 0;
+    for i in 0..ids.len() {
+        for j in i + 1..ids.len() {
+            let a = physics.get(ids[i]).expect("physical body").velocity();
+            let b = physics.get(ids[j]).expect("physical body").velocity();
+            if !fast(a) && !fast(b) { continue; }
+            let radius = if i == 0 { PLAYER_ENEMY_CONTACT_DISTANCE } else { 2.0 * ENEMY_RADIUS };
+            if let Some(contact) = contact::crossing(pos[j] - pos[i], (b - a) * dt.secs(), radius)
+                && !walls.obstructs(pos[i], pos[j])
+            {
+                transfers += usize::from(physics.collide(ids[i], ids[j], contact));
+            }
+        }
+    }
+    if transfers > 0 { trace.emit(Event::Momentum { pairs: transfers }); }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

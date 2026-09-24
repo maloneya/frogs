@@ -137,13 +137,11 @@ mod tests {
             assert_eq!(debug.attack.len(), samples.len());
             assert_eq!(debug.drawings.len(), 1 + samples.len());
             let origin = game.player_pos();
-            let (sin, cos) = game.player_facing().sin_cos();
             for (disc, sample) in debug.attack.iter().zip(samples) {
                 assert_eq!(disc.sample(), sample);
-                let reach = 1.6;
-                let expected = Vec3::new(origin.x + sin * reach, 0.0, origin.z + cos * reach);
+                let expected = Vec3::new(origin.x, 0.0, origin.z);
                 assert!(disc.centre().distance(expected) < 1e-5);
-                assert!((disc.radius() - (1.4 + 0.3 * sample as f32)).abs() < 1e-6);
+                assert!((disc.radius() - (1.4 + 0.7 * sample as f32)).abs() < 1e-6);
             }
             let mut report = Report::default();
             debug.report(&mut report);

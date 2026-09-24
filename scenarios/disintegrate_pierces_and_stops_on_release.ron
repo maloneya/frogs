@@ -1,10 +1,10 @@
-// Beam radius .30 + enemy radius .25: x=.54 touches; x=.56 misses.
+// Beam radius 1.2 + enemy radius .25: x=1.44 touches; x=1.46 misses.
 // First pulse at 0; no second damage until 12. Release at 24 cancels that pulse.
 // Holding movement while channeling covers no distance; release allows .15m/tick.
 (
     description: "Disintegrate pierces, respects width/reach, pulses every 12 ticks, and releases immediately.",
-    setup: (actions: [Place((0.0, 3.0)), Place((0.0, 7.0)), Place((0.54, 9.0)),
-        Place((0.56, 5.0)), Place((0.0, 12.56)), Place((0.0, -3.0))]),
+    setup: (actions: [Place((0.0, 3.0)), Place((0.0, 7.0)), Place((1.44, 9.0)),
+        Place((1.46, 5.0)), Place((0.0, 13.46)), Place((0.0, -3.0))]),
     attack_profiles: [(at: 0, profile: Disintegrate)],
     channels: [(at: 0, ticks: 24)],
     inputs: [(at: 0, ticks: 25, dir: (1.0, 0.0))],

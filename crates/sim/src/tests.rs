@@ -525,7 +525,7 @@ fn every_field_of_the_world_reaches_the_hash() {
             w.bodies.interactions.grant(w.bodies.slots.ids()[1])
         }),
         ("enemies.health", |w| {
-            w.bodies.health.sink().hit(w.bodies.slots.ids()[1]);
+            w.bodies.health.sink().hit(w.bodies.slots.ids()[1], core::num::NonZeroU8::MIN);
         }),
         // A pending request is a body that exists in one of two otherwise
         // identical worlds one tick from now.
@@ -1033,7 +1033,7 @@ fn despawning_preserves_a_swapped_survivors_payloads() {
     let impulse = Impulse::try_from((6.0, 0.0)).unwrap();
     assert!(world.apply_impulse(a, impulse));
     assert!(world.apply_impulse(b, impulse));
-    assert_eq!(world.bodies.health.sink().hit(b), Some(2));
+    assert_eq!(world.bodies.health.sink().hit(b, core::num::NonZeroU8::MIN), Some(2));
     assert!(world.despawn_body(a));
     let c = world.place(Vec2::new(30.0, 0.0), Template::BODY).unwrap();
     assert!(!world.apply_impulse(a, impulse));

@@ -1,17 +1,16 @@
-// The x=0 column intersects the beam through z=12.1: fourteen bodies.
-// Other columns start at x=.7, outside radius .3 + body radius .25.
-// All fourteen die on pulse three (tick 24); no remaining target is in reach.
+// Radius 1.2 plus body radius .25 catches columns x=0,.7,1.4.
+// Each column has sixteen targets before the rounded end; 48 die on tick 24.
 (
-    description: "A held beam defeats one column in a 1024-body horde within the existing 4ms physics budget.",
+    description: "A held beam defeats three columns in a 1024-body horde within the existing 4ms physics budget.",
     setup: (scenes: [Inline((engine: (name: "Beam horde", grids: [
-        (origin: (0.0, 3.0), columns: 32, rows: 32, spacing: 0.7),
+        (origin: (0.0, 1.0), columns: 64, rows: 16, spacing: 0.7),
     ])))]),
     attack_profiles: [(at: 0, profile: Disintegrate)],
     channels: [(at: 0, ticks: 120)],
     checkpoints: [
         (at: 23, expect: (enemy_count: 1024)),
-        (at: 24, expect: (enemy_count: 1010)),
+        (at: 24, expect: (enemy_count: 976)),
     ],
     budget: (ticks: 120, max_mean_step_micros: 4000.0),
-    expect: (enemy_count: 1010, hitbox: true, attack_phase: Active),
+    expect: (enemy_count: 976, hitbox: true, attack_phase: Active),
 )

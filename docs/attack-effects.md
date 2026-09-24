@@ -1,6 +1,6 @@
 # Attack effects
 
-Cleave leaves a blue crescent; Slam produces an amber expanding ring with a
+Cleave leaves a blue crescent; Slam produces a player-centred amber expanding ring with a
 faint interior wash. Both use the committed collision samples exposed by
 `Game::attack_discs`, filtered to the active phase. Changing the selected attack
 mid-swing cannot change its effect.
@@ -69,8 +69,8 @@ A dedicated Disintegrate pose extends the sword. The rendered beam starts at
 the sampled `BeamOrigin` sword-tip joint. Damage retains the authoritative
 player-centred capsule, independent of animation.
 
-`sim::Beam` owns reach, radius and pulse cadence: 12 metres, 0.3 metre half-width,
-one hit immediately and every 12 ticks thereafter. With three-hit enemies this
+`sim::Beam` owns reach, radius and pulse cadence: 12 metres, 1.2 metre half-width,
+one hit immediately and every 12 ticks thereafter. With three-health enemies this
 kills a stationary target on ticks 0, 12 and 24 of an uninterrupted channel.
 The capsule tests final body positions before defeat removal, includes enemy
 body radius, pierces enemies until the first rectangular wall, and adds a small forward impulse on every touching simulation tick.
@@ -116,3 +116,7 @@ bounded effect batch, without an additional light or draw call.
 `state.character_preview.channel_weight` reports the actual channel overlay even
 while it eases away over idle or walking. `state.sim.beam.hit_positions` reports
 the completed tick's damage locations independently of the visual markers.
+
+Slam's centred disc expands equally in every direction. Each target receives
+the full authored impulse along its direction away from the player; neither
+facing nor distance reduces its strength. Cleave retains forward knockback.

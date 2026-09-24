@@ -113,7 +113,7 @@ held beam reads **Channeling**. The HUD reads game state without changing it.
 Attacks use fixed bindings, shown in the HUD:
 
 - **1 / left click:** Cleave, a broad arc.
-- **2 / right click:** Slam, an expanding frontal hit with stronger knockback.
+- **2 / right click:** Slam, a centred expanding shockwave with equal outward knockback in every direction.
 - **3 / Space:** Disintegrate, a beam. Hold to channel and release to stop.
 
 Each tick accepts one attack input. New presses win over held buttons; ties

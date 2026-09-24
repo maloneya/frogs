@@ -1,0 +1,14 @@
+// Three nearby enemies survive the first sweep at one health. The short shove
+// keeps them in reach of the next sweep; all three must die without movement.
+(
+    description: "Two stationary Cleaves finish a front rank instead of scattering survivors out of reach.",
+    setup: (actions: [Place((-1.0, 1.2)), Place((0.0, 1.2)), Place((1.0, 1.2))]),
+    attacks: [0, 22],
+    checkpoints: [
+        (at: 11, expect: (enemy_count: 3, bodies: [(nth: 0, health: 1), (nth: 1, health: 1), (nth: 2, health: 1)])),
+        (at: 27, expect: (enemy_count: 3)),
+        (at: 33, expect: (enemy_count: 0)),
+    ],
+    budget: (ticks: 34),
+    expect: (enemy_count: 0, player_pos: (x: 0.0, z: 0.0, tol: 0.0)),
+)

@@ -41,7 +41,10 @@
 //!    accelerate chasers. Reads the player's post-walk position. The motor
 //!    applies drag once and bounds its velocity correction; a blow therefore
 //!    takes time to overcome. It cannot grant behaviours or change positions.
-//! 6. [`motion::integrate`] — integrate physical velocity once before contacts.
+//! 6. [`separate::prevent_crossings`] predicts fast physical crossings and
+//!    exchanges momentum before integration, at most one tick early. Walls
+//!    shield pairs. No positions or membership change in this ordered sweep.
+//!    [`motion::integrate`] — integrate physical velocity once before contacts.
 //!    Enemy running and knockback share velocity, so both transmit momentum.
 //!    Player controls still move directly; their additional knockback integrates
 //!    here. Overlap correction never manufactures velocity.
@@ -63,8 +66,8 @@
 //!     After contact response, before a new attack impulse.
 //! 11. [`face`] — follow independent aim before placing a hitbox; snap on an accepted
 //!     swing and hold that facing through recovery. Channels follow aim each tick.
-//! 12. [`attack`] — test final positions, apply an impulse and subtract one hit
-//!     point once per target per swing. Velocity changes now; displacement
+//! 12. [`attack`] — test final positions, apply an impulse and subtract resolved
+//!     damage once per target per swing. Velocity changes now; displacement
 //!     begins on the next tick. Channels share this boundary: every touching
 //!     tick submits momentum, damage pulses record hit positions before removal.
 //! 13. [`interact`] — activate one ready object using final positions. A press

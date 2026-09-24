@@ -1,0 +1,18 @@
+// Walk to z=94.5, clear of a target at 95.7. The arena wall keeps it
+// within Slam's first sample after knockback. Two 30-tick swings hit at
+// 639 and 669; only the second may retire its stable identity.
+(
+    description: "One slam preserves a damaged enemy; the second retires its stable identity.",
+    setup: (actions: [Place((0.0, 95.7))]),
+    inputs: [(at: 0, ticks: 630, dir: (0.0, 1.0))],
+    attack_profiles: [(at: 0, profile: Slam)], attacks: [630, 660],
+    checkpoints: [
+        (at: 639, expect: (enemy_count: 1, bodies: [
+            (nth: 0, alive: true, health: 1, velocity: (x: 0.0, z: 72.0, tol: 0.00001)),
+        ])),
+        (at: 668, expect: (enemy_count: 1, bodies: [(nth: 0, alive: true, health: 1)])),
+        (at: 669, expect: (enemy_count: 0, bodies: [(nth: 0, alive: false)])),
+    ],
+    budget: (ticks: 670),
+    expect: (enemy_count: 0, bodies: [(nth: 0, alive: false)], trace: "two_hits_defeat_an_enemy.trace"),
+)

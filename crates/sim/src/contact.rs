@@ -94,8 +94,7 @@ impl Contact {
         self.normal
     }
 
-    /// How far the two interpenetrate, in world units. Always positive: a
-    /// `Contact` that exists is an overlap that exists.
+    /// How far the two interpenetrate, in world units. Positive for an overlap, zero for a predicted crossing.
     pub(crate) fn depth(self) -> f32 {
         self.depth
     }
@@ -157,6 +156,28 @@ pub(crate) fn between(a: Vec2, b: Vec2, contact_distance: f32, tiebreak: usize) 
 fn escape_direction(tiebreak: usize) -> Vec2 {
     let angle = tiebreak as f32 * crate::angle::GOLDEN_ANGLE;
     Vec2::new(angle.cos(), angle.sin())
+}
+
+/// Predicts a crossing that endpoint overlap resolution would see too late.
+/// Ordinary approaching endpoint contacts remain the separation pass's job.
+pub(crate) fn crossing(from: Vec2, relative_travel: Vec2, radius: f32) -> Option<Contact> {
+    let from = from.as_dvec2();
+    let relative_travel = relative_travel.as_dvec2();
+    let radius = f64::from(radius);
+    let travel_sq = relative_travel.length_squared();
+    let projection = from.dot(relative_travel);
+    if travel_sq == 0.0 || projection >= 0.0 { return None; }
+    let closest = -projection / travel_sq;
+    if closest >= 1.0 { return None; }
+    let separation_sq = from.length_squared();
+    if separation_sq <= radius * radius {
+        return Some(Contact { normal: from.normalize().as_vec2(), depth: (radius - separation_sq.sqrt()) as f32 });
+    }
+    let discriminant = projection * projection - travel_sq * (separation_sq - radius * radius);
+    if discriminant <= 0.0 { return None; }
+    let impact = (-projection - discriminant.sqrt()) / travel_sq;
+    let normal = (from + relative_travel * impact).normalize_or_zero().as_vec2();
+    (normal != Vec2::ZERO).then_some(Contact { normal, depth: 0.0 })
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! Authored attack content and the validated runtime values swings consume.
 
 use glam::Vec2;
+use core::num::NonZeroU8;
 use serde::Deserialize;
 
 use crate::swing::Swing;
@@ -12,10 +13,10 @@ use crate::swing::Swing;
 /// authors an attack by replaying a sequence of UI increments.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 pub enum AttackProfile {
-    /// A broad, fast arc that drives a front rank back.
+    /// A broad, fast arc with a short shove that keeps survivors in follow-up reach.
     #[default]
     Cleave,
-    /// An expanding frontal slam with enough impulse to clear a crowd.
+    /// An expanding omnidirectional slam with enough impulse to clear a crowd.
     Slam,
     /// A held, piercing beam that follows aim.
     Disintegrate,
@@ -41,11 +42,13 @@ impl AttackProfile {
     pub fn resolve(self) -> Option<ResolvedAttack> {
         let (startup, active, recovery, shape, knockback) = match self {
             Self::Disintegrate => return None,
+            // Melee deals two of an ordinary enemy's three health points.
+            // Cleave keeps survivors nearby; Slam launches them through the crowd.
             // Crowd-control content uses the same impulse and swept-disc doors
             // as other physical producers. At unit enemy mass and 0.9 retention, free travel is
             // roughly impulse / 6 metres; contacts distribute it through the rank.
-            Self::Cleave => (6, 6, 10, shape((-1.8, 1.2, 1.1), (1.8, 1.2, 1.1)), 24.0),
-            Self::Slam => (9, 5, 16, shape((0.0, 1.6, 1.4), (0.0, 1.6, 2.6)), 40.0),
+            Self::Cleave => (6, 6, 10, shape((-1.8, 1.2, 1.1), (1.8, 1.2, 1.1)), 6.0),
+            Self::Slam => (9, 5, 16, shape((0.0, 0.0, 1.4), (0.0, 0.0, 4.2)), 72.0),
         };
         Some(ResolvedAttack::try_new(
             startup,
@@ -53,6 +56,7 @@ impl AttackProfile {
             RecoveryTicks::try_from(recovery).expect("profile recovery is supported"),
             shape,
             knockback,
+            NonZeroU8::new(2).expect("melee deals positive damage"),
         )
         .expect("built-in attack profile is valid"))
     }
@@ -88,7 +92,7 @@ impl AttackShape {
         if !start.is_finite() || !end.is_finite() {
             return Err(AttackResolveError::NonFiniteShape);
         }
-        if start == Vec2::ZERO || end == Vec2::ZERO {
+        if (start == Vec2::ZERO) != (end == Vec2::ZERO) {
             return Err(AttackResolveError::DirectionlessShape);
         }
         if !start_radius.is_finite()
@@ -109,7 +113,7 @@ pub enum AttackResolveError {
     InvalidTiming,
     /// A path endpoint contains NaN or infinity.
     NonFiniteShape,
-    /// A path endpoint is the player origin and therefore has no direction.
+    /// Only one path endpoint is at the player origin, leaving its arc undefined.
     DirectionlessShape,
     /// A hitbox radius is non-finite or non-positive.
     InvalidRadius,
@@ -124,7 +128,7 @@ impl core::fmt::Display for AttackResolveError {
         f.write_str(match self {
             Self::InvalidTiming => "attack timing is outside the supported range",
             Self::NonFiniteShape => "attack path must be finite",
-            Self::DirectionlessShape => "attack path endpoints need a direction",
+            Self::DirectionlessShape => "attack path must be centred throughout or have two directed endpoints",
             Self::InvalidRadius => "attack radii must be finite and positive",
             Self::InvalidKnockback => "attack knockback must have a finite magnitude",
             Self::UncoveredPath => "attack path can skip a body between ticks",
@@ -145,6 +149,7 @@ pub struct ResolvedAttack {
     recovery: RecoveryTicks,
     shape: AttackShape,
     knockback: f32,
+    damage: NonZeroU8,
 }
 
 impl ResolvedAttack {
@@ -159,6 +164,7 @@ impl ResolvedAttack {
         recovery: RecoveryTicks,
         shape: AttackShape,
         knockback: f32,
+        damage: NonZeroU8,
     ) -> Result<Self, AttackResolveError> {
         if !(Self::MIN_TICKS..=Self::MAX_TICKS).contains(&startup)
             || !(Self::MIN_TICKS..=Self::MAX_ACTIVE_TICKS).contains(&active)
@@ -168,7 +174,7 @@ impl ResolvedAttack {
         if !knockback.is_finite() || knockback <= 0.0 || !(knockback * knockback).is_finite() {
             return Err(AttackResolveError::InvalidKnockback);
         }
-        let resolved = Self { startup, active, recovery, shape, knockback };
+        let resolved = Self { startup, active, recovery, shape, knockback, damage };
         if !resolved.path_covers_every_body() {
             return Err(AttackResolveError::UncoveredPath);
         }
@@ -217,10 +223,16 @@ impl ResolvedAttack {
         self.shape.end_radius
     }
 
-    /// Impulse magnitude applied along the facing to a struck body.
+    /// Impulse magnitude: Slam pushes radially; Cleave pushes along facing.
     #[must_use]
     pub fn knockback(self) -> f32 {
         self.knockback
+    }
+
+    /// Positive health points removed once per target per swing.
+    #[must_use]
+    pub fn damage(self) -> NonZeroU8 {
+        self.damage
     }
 
     /// A semantic runtime modifier already used by the recovery playtest.
@@ -232,7 +244,8 @@ impl ResolvedAttack {
     }
 
     pub(crate) fn hash(self, h: &mut crate::hash::Fnv) {
-        let Self { startup, active, recovery, shape, knockback } = self;
+        let Self { startup, active, recovery, shape, knockback, damage } = self;
+        h.u64(u64::from(damage.get()));
         h.u64(u64::from(startup));
         h.u64(u64::from(active));
         h.u64(u64::from(recovery.get()));
@@ -251,7 +264,8 @@ impl ResolvedAttack {
 
     /// Describes every field without asking a control surface to restate them.
     pub fn report(self, out: &mut arpg_core::Report) {
-        let Self { startup, active, recovery, shape, knockback } = self;
+        let Self { startup, active, recovery, shape, knockback, damage } = self;
+        out.int("damage", u64::from(damage.get()));
         out.int("startup_ticks", u64::from(startup));
         out.int("active_ticks", u64::from(active));
         out.int("recovery_ticks", u64::from(recovery.get()));
@@ -447,6 +461,21 @@ mod tests {
     }
 
     #[test]
+    fn damage_is_captured_hashed_and_reported() {
+        let attack = ResolvedAttack::default();
+        let weaker = ResolvedAttack::try_new(attack.startup, attack.active, attack.recovery,
+            attack.shape, attack.knockback, NonZeroU8::MIN).unwrap();
+        let mut a = crate::hash::Fnv::default();
+        let mut b = crate::hash::Fnv::default();
+        attack.hash(&mut a);
+        weaker.hash(&mut b);
+        assert_ne!(a.finish(), b.finish());
+        let mut report = arpg_core::Report::default();
+        attack.report(&mut report);
+        assert!(report.finish().contains("\"damage\":2"));
+    }
+
+    #[test]
     fn complete_runtime_values_are_validated_atomically() {
         let narrow = AttackShape::try_new(
             Vec2::new(-4.0, 0.5),
@@ -456,8 +485,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            ResolvedAttack::try_new(1, 2, RecoveryTicks::default(), narrow, 1.0),
+            ResolvedAttack::try_new(1, 2, RecoveryTicks::default(), narrow, 1.0, NonZeroU8::MIN),
             Err(AttackResolveError::UncoveredPath)
+        );
+        assert!(AttackShape::try_new(Vec2::ZERO, 1.4, Vec2::ZERO, 4.2).is_ok());
+        assert_eq!(
+            AttackShape::try_new(Vec2::Y, 0.5, Vec2::ZERO, 0.5),
+            Err(AttackResolveError::DirectionlessShape)
         );
         assert_eq!(
             AttackShape::try_new(Vec2::ZERO, 0.5, Vec2::Y, 0.5),
@@ -470,6 +504,7 @@ mod tests {
                 RecoveryTicks::default(),
                 shape((0.0, 1.0, 0.5), (0.0, 1.0, 0.5)),
                 1.0,
+                NonZeroU8::MIN,
             ),
             Err(AttackResolveError::InvalidTiming)
         );

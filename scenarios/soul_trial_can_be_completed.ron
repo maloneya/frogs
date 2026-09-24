@@ -5,8 +5,8 @@
 (
     description: "The actual 30-in-30 scene can be won using ordinary attack inputs before the deadline.",
     setup: (scenes: [File("../scenes/soul_trial.ron")]),
-    interactions: [0, 1812],
-    inputs: [(at: 1801, ticks: 8, dir: (0.0, 1.0))],
+    interactions: [0, 1828],
+    inputs: [(at: 1801, ticks: 24, dir: (0.0, 1.0))],
     // Stand in the light and sweep aim around the encircling crowd.
     aims: [
         (at: 0, dir: (0.0, 1.0)),
@@ -39,6 +39,6 @@
         ], chests: [(scene: 0, chest: 0, state: Some(Locked))])),
         (at: 1800, expect: (chests: [(scene: 0, chest: 0, state: Some(Unlocked))])),
     ],
-    budget: (ticks: 1814),
+    budget: (ticks: 1830),
     expect: (chests: [(scene: 0, chest: 0, state: Some(Open))]),
 )

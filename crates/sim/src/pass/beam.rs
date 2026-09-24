@@ -38,7 +38,7 @@ pub(crate) fn strike(
             || !damage.contains(id)
         { continue; }
         impulses.push(id, impulse, trace);
-        if pulse && let Some(remaining) = damage.hit(id) {
+        if pulse && let Some(remaining) = damage.hit(id, core::num::NonZeroU8::MIN) {
             hits.push(position);
             trace.emit(Event::Hit { id, remaining });
         }

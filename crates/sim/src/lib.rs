@@ -905,6 +905,10 @@ impl World {
 
         // Physical velocity moves before contacts. Crowd resolution precedes
         // player resolution, retaining the existing crowd priority.
+        pass::separate::prevent_crossings(
+            &self.bodies.pos, self.bodies.slots.ids(), &mut self.bodies.physics,
+            &self.scenes.walls, dt, trace.reborrow(),
+        );
         pass::motion::integrate(
             &self.bodies.physics,
             &self.bodies.slots,

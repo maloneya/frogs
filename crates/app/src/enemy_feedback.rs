@@ -128,7 +128,7 @@ mod tests {
             assert!((feedback.flash(target, game.tick(), Alpha::ZERO) - expected).abs() < 1e-6);
             assert_eq!(feedback.flash(missed, game.tick(), Alpha::ZERO), 0.0);
             if step == 7 {
-                assert_eq!(game.health(target), Some(2));
+                assert_eq!(game.health(target), Some(1));
                 assert!((feedback.flash(target, game.tick(), Alpha::ONE) - 5.0 / 6.0).abs() < 1e-6);
             }
             assert_eq!(game.hash(), hash);
@@ -173,17 +173,17 @@ mod tests {
         bars.draw(&game, Alpha::ZERO, &camera, viewport, &mut buffer.sink());
         assert!(buffer.as_slice().is_empty(), "full health is invisible");
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
-        // Cleave starts at this enemy and deals exactly one of its three hits.
+        // Cleave starts at this enemy and removes two of its three health points.
         for tick in 0..12 {
             game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, tick == 0));
         }
-        assert_eq!(game.health(id), Some(ENEMY_HIT_POINTS - 1));
+        assert_eq!(game.health(id), Some(ENEMY_HIT_POINTS - 2));
         let hash = game.hash();
         bars.observe(&game);
         bars.draw(&game, Alpha::ZERO, &camera, viewport, &mut buffer.sink());
         assert_eq!(game.hash(), hash, "presentation cannot change the simulation");
         assert_eq!(buffer.as_slice().len(), 2);
-        assert_eq!(buffer.as_slice()[1].rect().z, 20.0);
+        assert_eq!(buffer.as_slice()[1].rect().z, 10.0);
         let first = buffer.as_slice()[0].rect();
         for _ in 0..30 { game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); }
         bars.observe(&game);
@@ -218,16 +218,17 @@ mod tests {
     fn another_hit_reveals_an_expired_bar_and_defeat_removes_it() {
         let mut game = Game::empty();
         let id = game.place(Vec2::new(0.0, 95.7), Template::BODY).unwrap();
-        game.set_attack_profile(arpg_sim::AttackProfile::Slam);
+        game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         let mut bars = EnemyFeedback::default();
         let mut buffer = QuadBuffer::default();
         let mut camera = OrthoCamera::new(1280, 720);
-        // As in the three-hit scenario, the arena wall keeps the enemy in reach.
+        // Separate one-tick beam holds deal one point each at the arena wall.
         // The first wound expires; the second must reveal one-third health.
         for tick in 0..860 {
             let movement = if tick < 630 { MoveDir::new(Vec3::Z) } else { MoveDir::NONE };
-            game.step(dt, Intent::new(movement, AimDir::FORWARD, matches!(tick, 630 | 810 | 840)));
+            game.step(dt, Intent::new(movement, AimDir::FORWARD, false)
+                .with_attack_held(matches!(tick, 630 | 810 | 840)));
             camera.snap_to(game.player_pos());
             bars.observe(&game);
             bars.draw(&game, Alpha::ZERO, &camera, Vec2::new(1280.0, 720.0), &mut buffer.sink());
