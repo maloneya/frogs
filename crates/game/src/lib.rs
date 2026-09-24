@@ -29,3 +29,6 @@ pub use set_piece::{LightPulse, SetPieceAction, SetPieceCue, SetPieceEvent, SetP
 
 mod tree;
 pub use tree::{TreeKind, TreeSpec, MAX_TREES};
+
+mod corpse;
+pub use corpse::{Corpse, MAX_CORPSES, CORPSE_LIFETIME_TICKS};

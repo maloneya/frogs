@@ -364,6 +364,9 @@ pub(crate) struct Expect {
     pub(crate) hitbox: Option<bool>,
     #[serde(default)]
     pub(crate) enemy_count: Option<usize>,
+    /// Nonphysical remains currently retained by Game.
+    #[serde(default)]
+    pub(crate) corpse_count: Option<usize>,
     /// How many bodies chase the player. The cheapest way to assert that two
     /// bodies made from different templates were granted different behaviours.
     #[serde(default)]

@@ -428,6 +428,12 @@ impl World {
     }
 }
 
+/// Final facts retained by the shared removal boundary for gameplay outcomes.
+struct RemovedBody {
+    position: Vec2,
+    scene: Option<SceneId>,
+}
+
 /// The one implementation of non-player body removal, shared by between-tick callers and
 /// the final scheduled defeat pass.
 fn remove_body(
@@ -436,15 +442,13 @@ fn remove_body(
     scenes: &mut Scenes,
     id: EntityId,
     trace: &mut trace::TraceSink<'_>,
-) -> bool {
-    if !bodies.despawn(id) {
-        return false;
-    }
-
+) -> Option<RemovedBody> {
+    let position = bodies.pos_of(id)?;
+    if !bodies.despawn(id) { return None; }
     seekers.remove(id);
-    scenes.forget_body(id);
+    let scene = scenes.forget_body(id);
     trace.emit(Event::Removed { id });
-    true
+    Some(RemovedBody { position, scene })
 }
 
 impl World {
@@ -595,7 +599,7 @@ impl World {
 
         let _ = defeats; // Between-tick removals never manufacture combat outcomes.
         let mut trace = trace.sink(*tick);
-        remove_body(bodies, seekers, scenes, id, &mut trace)
+        remove_body(bodies, seekers, scenes, id, &mut trace).is_some()
     }
 
     /// Remaining hits before defeat, or `None` for props, the player, and
@@ -730,6 +734,9 @@ impl World {
         out.object("defeats", |out| {
             for defeat in defeats {
                 out.object(&defeat.body.to_string(), |out| {
+                    out.num("x", defeat.position.x);
+                    out.num("z", defeat.position.y);
+                    if let Some(scene) = defeat.scene { out.text("scene", &scene.to_string()); }
                     if let Some(source) = defeat.source { out.text("source", &source.to_string()); }
                 });
             }
@@ -1053,6 +1060,10 @@ impl World {
         h.usize(defeats.len());
         for defeat in defeats {
             defeat.body.hash_into(&mut h);
+            h.f32(defeat.position.x);
+            h.f32(defeat.position.y);
+            h.usize(usize::from(defeat.scene.is_some()));
+            if let Some(scene) = defeat.scene { scene.hash_into(&mut h); }
             h.usize(usize::from(defeat.source.is_some()));
             if let Some(source) = defeat.source { source.hash_into(&mut h); }
         }

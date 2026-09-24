@@ -220,6 +220,7 @@ impl App {
         out.int("run_id", self.run_id);
         out.int("current_tick", self.game.tick());
         out.int("current_enemies", self.game.enemy_count() as u64);
+        out.int("current_corpses", self.game.corpses().len() as u64);
         out.bool("vsync", self.renderer.as_ref().is_some_and(Renderer::vsync));
         out.text("selected_scene", self.game.selected_scene_name().unwrap_or(""));
         out.bool("collision_debug", self.collision_debug.enabled());

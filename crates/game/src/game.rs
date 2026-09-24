@@ -35,6 +35,7 @@ pub struct Game {
     encounters: Encounters,
     encounter_trace: Trace<EncounterEvent>,
     attacks: EnemyAttacks,
+    corpses: crate::corpse::Corpses,
 }
 
 impl Default for Game {
@@ -61,6 +62,7 @@ impl Game {
             encounters: Encounters::default(),
             encounter_trace: Trace::default(),
             attacks: EnemyAttacks::default(),
+            corpses: crate::corpse::Corpses::default(),
         }
     }
 
@@ -78,6 +80,7 @@ impl Game {
             encounters,
             encounter_trace: Trace::default(),
             attacks,
+            corpses: crate::corpse::Corpses::default(),
         })
     }
 
@@ -130,6 +133,7 @@ impl Game {
             encounters,
             encounter_trace,
             attacks,
+            corpses,
         } = self;
         let tick = world.tick();
         set_piece::advance(set_pieces, tick);
@@ -139,6 +143,7 @@ impl Game {
         chest::advance(chests, &mut access, &mut trace);
         encounter::begin(encounters, doors, chests, &mut access, &mut trace);
         world.step_observed(dt, intent, observer);
+        crate::corpse::advance(corpses, world.defeats());
         enemy_attack::advance(attacks, world.melee_view(), trace.reborrow());
         let (mut access, defeats) = world.encounter_access();
         encounter::finish(encounters, doors, chests, defeats, &mut access, &mut trace);
@@ -158,9 +163,11 @@ impl Game {
             encounters,
             encounter_trace: _,
             attacks,
+            corpses,
         } = self;
         let mut hash = Fnv::default();
         hash.u64(fingerprint(world, (torches, trees), set_pieces, doors, chests, encounters, attacks));
+        corpses.hash(&mut hash);
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
             snapshot.hash(&mut hash);
@@ -187,6 +194,7 @@ impl Game {
             encounters,
             encounter_trace,
             attacks,
+            corpses,
         } = self;
         world.report(out);
         trees.report(out);
@@ -196,6 +204,7 @@ impl Game {
         chests.report(out);
         encounters.report(out);
         attacks.report(out);
+        corpses.report(out);
         out.int("encounter_events_dropped", encounter_trace.dropped() as u64);
         out.object("restart", |out| {
             out.bool("available", restart.is_some());
@@ -218,6 +227,7 @@ impl Game {
             encounters,
             encounter_trace: _,
             attacks,
+            corpses: _, // Additive loads retain existing corpses.
         } = self;
         scene.install(world, LiveSceneState { trees, torches, set_pieces, doors, chests, encounters, attacks })
     }
@@ -237,6 +247,7 @@ impl Game {
             encounters,
             encounter_trace: _,
             attacks,
+            corpses,
         } = self;
         if !world.evict_scene(id) {
             return false;
@@ -248,6 +259,7 @@ impl Game {
         chests.evict(id);
         encounters.evict(id);
         attacks.evict(id);
+        corpses.evict(id);
         true
     }
 
@@ -264,6 +276,9 @@ impl Game {
     pub fn scene_torch(&self, scene: SceneId, nth: usize) -> Option<TorchSpec> {
         self.torches.state(scene, nth)
     }
+
+    /// Nonphysical remains in admission order.
+    pub fn corpses(&self) -> &[crate::Corpse] { self.corpses.as_slice() }
 
     /// Number of live scene instances.
     #[must_use]

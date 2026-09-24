@@ -206,7 +206,10 @@ def validate_trial(trial, workload):
     elif not 0 < end < start or not end * info["sample_ticks"] <= info["population_sum"] <= start * info["sample_ticks"]:
         raise ValueError("combat did not exercise defeats or has inconsistent population")
     horde = perf["horde"]
-    if horde["instances"] != end or horde[workload["animation"] + "_instances"] <= 0:
+    corpses = number(perf["current_corpses"], "corpse population")
+    if horde["corpse_instances"] != corpses or horde["instances"] != end + corpses:
+        raise ValueError("rendered living and corpse populations disagree with Game")
+    if horde["idle_instances"] + horde["run_instances"] != end or horde[workload["animation"] + "_instances"] <= 0:
         raise ValueError("expected enemy animation was not presented")
     fingerprint(trial["final_hash"], 16)
     for name in METRICS:

@@ -562,6 +562,7 @@ fn check_state(
         struck,
         hitbox,
         enemy_count,
+        corpse_count,
         seekers,
         sources,
         source_states,
@@ -641,6 +642,7 @@ fn check_state(
     check_eq("crowd_contacts", crowd_contacts, game.crowd_contacts(), &mut failures);
     check_eq("struck", struck, game.struck(), &mut failures);
     check_eq("hitbox", hitbox, game.hitbox_is_live(), &mut failures);
+    check_eq("corpse_count", corpse_count, game.corpses().len(), &mut failures);
     check_eq("enemy_count", enemy_count, game.enemy_count(), &mut failures);
     check_eq("seekers", seekers, game.seeker_count(), &mut failures);
     check_eq("sources", sources, game.source_count(), &mut failures);

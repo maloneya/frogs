@@ -12,7 +12,7 @@ use glam::Vec3;
 
 // Static placements include an all-prop world, the ground and one campfire per light and bounded trees.
 // This also covers an all-enemy world plus the player in the character buffer.
-const _: () = assert!(arpg_sim::MAX_BODIES + arpg_sim::MAX_WALLS + 1 + arpg_core::MAX_POINT_LIGHTS + arpg_game::MAX_TREES <= arpg_core::MAX_INSTANCES);
+const _: () = assert!(arpg_sim::MAX_BODIES + arpg_game::MAX_CORPSES + arpg_sim::MAX_WALLS + 1 + arpg_core::MAX_POINT_LIGHTS + arpg_game::MAX_TREES <= arpg_core::MAX_INSTANCES);
 
 struct LoadedMesh<T> {
     path: std::path::PathBuf,
@@ -465,9 +465,10 @@ fn attack_clip_time(
 }
 
 const HORDE_ROLES: [HordeRole; 4] = [HordeRole::Idle, HordeRole::Walk, HordeRole::Run, HordeRole::Sprint];
-const HORDE_PHASES_PER_ROLE: usize = MAX_HORDE_POSE_BUCKETS / HORDE_ROLES.len();
+const CORPSE_BUCKET: usize = MAX_HORDE_POSE_BUCKETS - 1;
+const HORDE_PHASES_PER_ROLE: usize = CORPSE_BUCKET / HORDE_ROLES.len();
 const HORDE_SCALE: f32 = 0.42;
-const _: () = assert!(MAX_HORDE_POSE_BUCKETS > 0 && MAX_HORDE_POSE_BUCKETS.is_multiple_of(HORDE_ROLES.len()));
+const _: () = assert!(MAX_HORDE_POSE_BUCKETS > 0 && CORPSE_BUCKET.is_multiple_of(HORDE_ROLES.len()));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HordeRole {
@@ -580,10 +581,13 @@ impl<T> LoadedHorde<T> {
         clips: HordeClips,
         gpu: T,
     ) -> Self {
-        let buckets = std::array::from_fn(|_| HordeBucket {
+        let mut buckets: [HordeBucket; MAX_HORDE_POSE_BUCKETS] = std::array::from_fn(|_| HordeBucket {
             pose: asset.bind_pose(),
             instances: Vec::new(),
         });
+        // This pose stays frozen for the lifetime of the loaded asset.
+        let sampled = asset.sample(clips.for_role(HordeRole::Idle), 0.0, &mut buckets[CORPSE_BUCKET].pose);
+        debug_assert!(sampled, "resolved idle clip remains live");
         Self {
             path,
             asset,
@@ -654,7 +658,7 @@ impl<T> LoadedHorde<T> {
         self.headings
             .retain(|_, heading| heading.seen_in_rebuild == self.rebuild_id);
 
-        for (index, bucket) in self.buckets.iter_mut().enumerate() {
+        for (index, bucket) in self.buckets[..CORPSE_BUCKET].iter_mut().enumerate() {
             if bucket.instances.is_empty() {
                 continue;
             }
@@ -667,6 +671,21 @@ impl<T> LoadedHorde<T> {
             let time = metadata.loop_time(presentation_seconds * role.playback_rate() + offset);
             let sampled = self.asset.sample(clip, time, &mut bucket.pose);
             debug_assert!(sampled, "resolved clip remains live");
+        }
+    }
+
+    /// A single frozen idle pose supports all nonphysical remains.
+    pub(super) fn rebuild_corpses(&mut self, corpses: &[arpg_game::Corpse]) {
+        let bucket = &mut self.buckets[CORPSE_BUCKET];
+        bucket.instances.clear();
+        for corpse in corpses {
+            let key = Self::phase_key(corpse.id());
+            let yaw = (key & 0xffff) as f32 / 65535.0 * std::f32::consts::TAU;
+            let position = corpse.position();
+            bucket.instances.push(Instance::new(
+                Vec3::new(position.x, 0.24, position.y),
+                Vec3::splat(HORDE_SCALE), Vec3::splat(0.6),
+            ).with_yaw(yaw).with_pitch(std::f32::consts::FRAC_PI_2));
         }
     }
 
@@ -754,6 +773,7 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("pose_buckets", MAX_HORDE_POSE_BUCKETS as u64);
         out.int("occupied_buckets", preview.occupied_buckets() as u64);
         out.int("instances", preview.instance_count() as u64);
+        out.int("corpse_instances", preview.buckets[CORPSE_BUCKET].instances.len() as u64);
         out.int("flashing_instances", preview.buckets.iter()
             .flat_map(|bucket| &bucket.instances)
             .filter(|instance| instance.white_mix() > 0.0).count() as u64);
@@ -766,7 +786,7 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         );
         out.int(
             "run_instances",
-            preview.buckets[HORDE_PHASES_PER_ROLE..]
+            preview.buckets[HORDE_PHASES_PER_ROLE..CORPSE_BUCKET]
                 .iter()
                 .map(|bucket| bucket.instances.len() as u64)
                 .sum(),
@@ -777,6 +797,7 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("pose_buckets", 0);
         out.int("occupied_buckets", 0);
         out.int("instances", 0);
+        out.int("corpse_instances", 0);
         out.int("flashing_instances", 0);
         out.int("idle_instances", 0);
         out.int("run_instances", 0);

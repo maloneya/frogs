@@ -165,7 +165,7 @@ fn horde_replacement_is_atomic_and_its_report_is_derived() {
     assert!(report.contains(r#""active":true"#));
     assert!(report.contains(r#""idle_clip":"Idle""#));
     assert!(report.contains(r#""run_clip":"Run""#));
-    assert!(report.contains(r#""pose_buckets":8"#));
+    assert!(report.contains(r#""pose_buckets":9"#));
     assert!(report.contains(r#""instances":32"#));
     assert!(report.contains(r#""idle_instances":32"#));
     assert!(report.contains(r#""run_instances":0"#));
@@ -806,7 +806,7 @@ fn varied_ground_speeds_use_three_cadences_within_the_existing_pose_budget() {
         assert_eq!(horde.buckets[role * HORDE_PHASES_PER_ROLE..(role + 1) * HORDE_PHASES_PER_ROLE]
             .iter().map(|bucket| bucket.instances.len()).sum::<usize>(), 1);
     }
-    assert_eq!(horde.buckets.len(), 8);
+    assert_eq!(horde.buckets.len(), 9);
     assert!(HordeRole::Walk.playback_rate() < HordeRole::Run.playback_rate());
     assert!(HordeRole::Run.playback_rate() < HordeRole::Sprint.playback_rate());
 }
@@ -839,4 +839,35 @@ fn tree_batches_follow_scene_lifetime_and_keep_game_unchanged() {
     view.rebuild_walls(game.visible_walls());
     assert_eq!(view.instance_count(), 1);
     assert_eq!(view.draw_count(), 1);
+}
+
+#[test]
+fn corpses_use_one_frozen_horizontal_pose_and_clear_with_the_game() {
+    let mut game = arpg_game::Game::empty();
+    game.place(glam::Vec2::new(0.0, 3.0), arpg_sim::Template::BODY).unwrap();
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    for _ in 0..25 {
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));
+    }
+    let mut horde = loaded_horde("corpse.glb");
+    horde.rebuild(game.enemy_presentations(Alpha::ONE), 1.0, |_| 1.0);
+    horde.rebuild_corpses(game.corpses());
+    assert_eq!(horde.instance_count(), 1);
+    assert_eq!(horde.occupied_buckets(), 1);
+    let instance = horde.buckets[CORPSE_BUCKET].instances[0];
+    assert_eq!(instance.pitch(), std::f32::consts::FRAC_PI_2);
+    assert_eq!(instance.white_mix(), 0.0);
+    assert_eq!(instance.pos().z, game.corpses()[0].position().y);
+    let pose = corpse_joint_matrices(&horde);
+    horde.rebuild(game.enemy_presentations(Alpha::ONE), 9.0, |_| 0.0);
+    horde.rebuild_corpses(game.corpses());
+    assert_eq!(pose, corpse_joint_matrices(&horde));
+    game.start_scene(&arpg_game::GameScene::default()).unwrap();
+    horde.rebuild_corpses(game.corpses());
+    assert_eq!(horde.instance_count(), 0);
+}
+
+fn corpse_joint_matrices(horde: &LoadedHorde<()>) -> Vec<glam::Mat4> {
+    horde.buckets[CORPSE_BUCKET].pose.joint_matrices().iter().map(|joint| joint.matrix()).collect()
 }

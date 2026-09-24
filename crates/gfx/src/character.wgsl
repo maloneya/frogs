@@ -36,6 +36,12 @@ struct VsOut {
     @location(4) @interpolate(flat) white_mix: f32,
 };
 
+fn rotate_x(v: vec3<f32>, pitch: f32) -> vec3<f32> {
+    let s = sin(pitch);
+    let c = cos(pitch);
+    return vec3<f32>(v.x, c * v.y - s * v.z, s * v.y + c * v.z);
+}
+
 fn rotate_y(v: vec3<f32>, yaw: f32) -> vec3<f32> {
     let s = sin(yaw);
     let c = cos(yaw);
@@ -53,9 +59,9 @@ fn vs_main(in: VsIn) -> VsOut {
     let skinned_pos = (skin * vec4<f32>(in.pos, 1.0)).xyz;
     let skinned_normal = (skin * vec4<f32>(in.normal, 0.0)).xyz;
     let yaw = in.i_pos.w;
-    let world_pos = rotate_y(skinned_pos * in.i_scale.xyz, yaw) + in.i_pos.xyz;
+    let world_pos = rotate_y(rotate_x(skinned_pos * in.i_scale.xyz, in.i_color.w), yaw) + in.i_pos.xyz;
     out.clip = camera.view_proj * vec4<f32>(world_pos, 1.0);
-    let normal = normalize(rotate_y(skinned_normal / in.i_scale.xyz, yaw));
+    let normal = normalize(rotate_y(rotate_x(skinned_normal / in.i_scale.xyz, in.i_color.w), yaw));
     out.world_pos = world_pos;
     out.normal = normal;
     out.tint = in.i_color.xyz;

@@ -253,10 +253,14 @@ impl Scenes {
             .push(source);
     }
 
-    pub(crate) fn forget_body(&mut self, body: EntityId) {
+    /// Retires membership and returns its owner in the same traversal.
+    pub(crate) fn forget_body(&mut self, body: EntityId) -> Option<SceneId> {
         for scene in &mut self.live {
+            let before = scene.bodies.len();
             scene.bodies.retain(|id| *id != body);
+            if scene.bodies.len() != before { return Some(scene.id); }
         }
+        None
     }
 
     pub(crate) fn forget_source(&mut self, source: SourceId) {

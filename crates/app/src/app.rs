@@ -398,6 +398,7 @@ impl App {
         if let Some(horde) = &mut self.horde_preview {
             horde.rebuild(self.game.enemy_presentations(alpha), presentation_seconds,
                 |id| self.enemy_feedback.flash(id, self.game.tick(), alpha));
+            horde.rebuild_corpses(self.game.corpses());
         }
         if let Some(character) = &mut self.character_preview {
             character.sample(player, alpha, presentation_seconds);

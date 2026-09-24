@@ -23,9 +23,9 @@ def fixture():
         "refresh_millihertz": 60000, "gpu": {"name": "test"},
         "surface_skipped": 0, "unfocused_frames": 0, "occluded_frames": 0,
         "overwritten": 0, "samples": 60, "presented": 60, "ticks": 60,
-        "window_ms": 1020, "current_tick": 180, "current_enemies": 100,
+        "window_ms": 1020, "current_tick": 180, "current_enemies": 100, "current_corpses": 0,
         "mean_step_ms": 10, "presentation_ms": {"mean": 1}, "frame_ms": {"p99": 17},
-        "horde": {"instances": 100, "idle_instances": 100},
+        "horde": {"instances": 100, "idle_instances": 100, "run_instances": 0, "corpse_instances": 0},
         "frames": {str(i): {"ticks": 1, "end_tick": 121 + i, "enemies": 100,
                             "presented": True, "focused": True, "occluded": False, "frame_ms": 17,
                             "game_step_ms": 10, "presentation_ms": 1}
@@ -66,6 +66,18 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result["status"], "regression")
         self.assertEqual(result["metrics"][0]["absolute"], "pass")
         self.assertEqual(result["metrics"][0]["relative"], "regression")
+
+    def test_corpses_cannot_substitute_for_living_animation(self):
+        result = fixture()
+        for trial in result["workloads"]["sparse"]:
+            trial["perf"]["current_corpses"] = 4
+            trial["perf"]["horde"].update(instances=104, corpse_instances=4)
+        self.assertEqual(perf.assess(result)["status"], "pass")
+        for change in (dict(corpse_instances=3), dict(instances=103),
+                       dict(idle_instances=0), dict(run_instances=1)):
+            bad = copy.deepcopy(result)
+            bad["workloads"]["sparse"][0]["perf"]["horde"].update(change)
+            self.assertEqual(perf.assess(bad)["status"], "inconclusive")
 
     def test_absolute_budget_needs_no_baseline(self):
         result = fixture()

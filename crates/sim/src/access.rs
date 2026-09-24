@@ -73,7 +73,7 @@ impl GameplayAccess<'_> {
     /// Removes a live static prop at the between-tick structural boundary.
     pub fn remove(&mut self, id: EntityId) -> bool {
         if !self.contains(id) { return false; }
-        crate::remove_body(self.bodies, self.seekers, self.scenes, id, &mut self.trace)
+        crate::remove_body(self.bodies, self.seekers, self.scenes, id, &mut self.trace).is_some()
     }
 }
 

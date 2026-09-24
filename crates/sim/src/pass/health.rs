@@ -15,10 +15,14 @@ use crate::{Bodies, EntityId, SourceId};
 
 /// An authoritative defeat from the most recently completed simulation tick.
 /// Kept independently of diagnostics, including the producer after body removal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Defeat {
     /// Retired generational body identity.
     pub body: EntityId,
+    /// Final ground position before removal.
+    pub position: glam::Vec2,
+    /// Scene responsible for this body, retained for visual cleanup.
+    pub scene: Option<crate::SceneId>,
     /// Source that actually produced this enemy, if any.
     pub source: Option<SourceId>,
 }
@@ -135,8 +139,9 @@ pub(crate) fn remove_defeated(
         if bodies.health.get(id) != Some(0) {
             continue;
         }
-        defeats.push(Defeat { body: id, source: bodies.health.origins[row] });
-        let removed = crate::remove_body(bodies, seekers, scenes, id, &mut trace);
-        debug_assert!(removed, "a defeated body must still be alive in the final pass");
+        let source = bodies.health.origins[row];
+        let removed = crate::remove_body(bodies, seekers, scenes, id, &mut trace)
+            .expect("a defeated body must still be alive in the final pass");
+        defeats.push(Defeat { body: id, source, position: removed.position, scene: removed.scene });
     }
 }

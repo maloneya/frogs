@@ -16,8 +16,9 @@ pub const MAX_INSTANCES: usize = 200_000;
 /// geometry reaches `gfx` through the separate asset boundary.
 ///
 /// 48 bytes, laid out as three `vec4`s. Yaw occupies `pos.w`; the blend
-/// toward unlit linear white occupies `scale.w`. The final float is reserved
-/// padding. Private fields and validated builders protect this GPU contract.
+/// toward unlit linear white occupies `scale.w`. The final float stores pitch
+/// about the local X axis. Private fields and validated builders protect this
+/// GPU contract.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Instance {
@@ -28,7 +29,7 @@ pub struct Instance {
     scale: [f32; 3],
     white_mix: f32,
     color: [f32; 3],
-    _pad2: f32,
+    pitch: f32,
 }
 
 // The 48-byte stride is a contract with three other places: the vertex
@@ -44,7 +45,7 @@ const _: () = assert!(size_of::<Instance>() == 3 * 4 * size_of::<f32>());
 const _: () = assert!(MAX_INSTANCES * size_of::<Instance>() < 64 << 20);
 
 impl Instance {
-    /// The only constructor, so the reserved padding is always zeroed.
+    /// Constructs an upright instance with no white flash.
     /// Unrotated; most things in the world have no meaningful facing.
     /// `pos` is in metres; `scale` is a dimensionless mesh multiplier. For the
     /// authored mesh, its components multiply the imported dimensions.
@@ -55,7 +56,7 @@ impl Instance {
             scale: scale.into(),
             white_mix: 0.0,
             color: color.into(),
-            _pad2: 0.0,
+            pitch: 0.0,
         }
     }
 
@@ -70,6 +71,18 @@ impl Instance {
         self.yaw = yaw;
         self
     }
+
+    /// Tilts the instance about its local X axis before applying yaw.
+    #[must_use]
+    pub fn with_pitch(mut self, pitch: f32) -> Self {
+        assert!(pitch.is_finite(), "pitch must be finite");
+        self.pitch = pitch;
+        self
+    }
+
+    /// Local X rotation in radians.
+    #[must_use]
+    pub fn pitch(&self) -> f32 { self.pitch }
 
     /// Blends the shaded surface toward unlit linear white without changing opacity.
     ///
@@ -91,7 +104,7 @@ impl Instance {
     ///
     /// Read-only, and that keeps the invariant above intact rather than
     /// weakening it: the fields are private so nothing can *write* garbage into
-    /// the reserved slots, which a getter cannot do. What it buys is the
+    /// the private transform, which a getter cannot do. What it buys is the
     /// ability to check what actually crossed the presentation seam — render
     /// interpolation happens on the way into an `Instance`, so a test that
     /// cannot read one back can only assert that presentation ran, not that
