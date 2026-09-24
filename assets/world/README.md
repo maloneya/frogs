@@ -34,7 +34,7 @@ loads both assets. Runtime paths resolve from the build-time repository location
 
 `state.world_assets` exposes imported paths, geometry/texture counts and live
 prop placements. `state.render.static_mesh_instances` and `static_mesh_draws`
-include ground, props and two stand pieces per live scene torch.
+include ground, props and one campfire per live scene light and scene-owned trees.
 [Lighting](../../docs/lighting.md) describes scene-authored torches and their shared limit.
 [Attack effects](../../docs/attack-effects.md) show committed attack reach;
 [collision debug drawing](../../docs/collision-debug.md) exposes physical shapes.
@@ -44,3 +44,5 @@ The [chest assets](chest/README.md) provide closed and open reward props.
 The [wall asset](wall/README.md) is a unit-footprint rectangular box used for
 scene-authored solid walls. Its height belongs to the asset, while app scales
 the ground footprint from simulation geometry.
+
+The [woodland assets](woodland/README.md) provide the campfire and three solid-trunk tree variants.

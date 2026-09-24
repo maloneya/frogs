@@ -569,6 +569,7 @@ fn check_state(
         doors,
         chests,
         scene_count,
+        tree_count,
         torch_count,
         torches,
         set_pieces,
@@ -683,6 +684,7 @@ fn check_state(
             failures.push(Failure::new("directional_lights", format!("{expected:?}"), format!("{actual:?}")));
         }
     }
+    check_eq("tree_count", tree_count, game.trees().count(), &mut failures);
     check_eq("torch_count", torch_count, game.torch_count(), &mut failures);
     for expected in torches {
         let actual = instances.get(expected.scene).copied().flatten()

@@ -1,3 +1,4 @@
+use crate::tree::{Trees, TreeSpec};
 use crate::set_piece::{self, SetPieces};
 use crate::scene::{GameScene, LiveSceneState, RestartError, RestartScene, SceneError, fingerprint};
 use arpg_core::{Intent, Report};
@@ -26,6 +27,7 @@ use glam::{Vec2, Vec3};
 pub struct Game {
     world: World,
     restart: Option<RestartScene>,
+    trees: Trees,
     torches: Torches,
     set_pieces: SetPieces,
     doors: Doors,
@@ -51,6 +53,7 @@ impl Game {
         Self {
             world: World::empty(),
             restart: None,
+            trees: Trees::default(),
             torches: Torches::default(),
             set_pieces: SetPieces::default(),
             doors: Doors::default(),
@@ -63,10 +66,11 @@ impl Game {
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
-        let crate::scene::PreparedScene { world, torches, set_pieces, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
+        let crate::scene::PreparedScene { world, trees, torches, set_pieces, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
         Ok(Self {
             world,
             restart: Some(restart),
+            trees,
             torches,
             set_pieces,
             doors,
@@ -118,6 +122,7 @@ impl Game {
         let Self {
             world,
             restart: _,
+            trees: _,
             torches: _,
             set_pieces,
             doors,
@@ -145,6 +150,7 @@ impl Game {
         let Self {
             world,
             restart,
+            trees,
             torches,
             set_pieces,
             doors,
@@ -154,7 +160,7 @@ impl Game {
             attacks,
         } = self;
         let mut hash = Fnv::default();
-        hash.u64(fingerprint(world, torches, set_pieces, doors, chests, encounters, attacks));
+        hash.u64(fingerprint(world, (torches, trees), set_pieces, doors, chests, encounters, attacks));
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
             snapshot.hash(&mut hash);
@@ -173,6 +179,7 @@ impl Game {
         let Self {
             world,
             restart,
+            trees,
             torches,
             set_pieces,
             doors,
@@ -182,6 +189,7 @@ impl Game {
             attacks,
         } = self;
         world.report(out);
+        trees.report(out);
         torches.report(out);
         set_pieces.report(out);
         doors.report(out);
@@ -202,6 +210,7 @@ impl Game {
         let Self {
             world,
             restart: _,
+            trees,
             torches,
             set_pieces,
             doors,
@@ -210,7 +219,7 @@ impl Game {
             encounter_trace: _,
             attacks,
         } = self;
-        scene.install(world, LiveSceneState { torches, set_pieces, doors, chests, encounters, attacks })
+        scene.install(world, LiveSceneState { trees, torches, set_pieces, doors, chests, encounters, attacks })
     }
 
     /// Evicts a live instance and its descendants; preserves the restart snapshot.
@@ -220,6 +229,7 @@ impl Game {
         let Self {
             world,
             restart: _,
+            trees,
             torches,
             set_pieces,
             doors,
@@ -231,6 +241,7 @@ impl Game {
         if !world.evict_scene(id) {
             return false;
         }
+        trees.evict(id);
         torches.evict(id);
         set_pieces.evict(id);
         doors.evict(id);
@@ -239,6 +250,9 @@ impl Game {
         attacks.evict(id);
         true
     }
+
+    /// Solid trees in scene-installation and authored order.
+    pub fn trees(&self) -> impl Iterator<Item = TreeSpec> + '_ { self.trees.iter() }
 
     /// Stationary torches in stable scene-installation and authored order.
     pub fn torches(&self) -> impl Iterator<Item = TorchSpec> + '_ { self.torches.iter() }
@@ -459,6 +473,12 @@ impl Game {
 
     /// Authored ground-plane wall geometry and scene-local identities.
     pub fn walls(&self) -> impl Iterator<Item = (SceneId, usize, arpg_sim::Wall)> + '_ { self.world.walls() }
+
+    /// Wall meshes only; tree-owned rectangles are presented by their tree mesh.
+    /// Physical queries and collision observations still include all rectangles.
+    pub fn visible_walls(&self) -> impl Iterator<Item = (SceneId, usize, arpg_sim::Wall)> + '_ {
+        self.world.walls().filter(|(owner, index, _)| !self.trees.owns_wall(*owner, *index))
+    }
 
     /// Active beam clipped to the first wall at the completed tick.
     pub fn beam(&self) -> Option<arpg_sim::Beam> { self.world.beam() }

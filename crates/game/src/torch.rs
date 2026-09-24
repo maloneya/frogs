@@ -4,7 +4,7 @@ use arpg_core::{MAX_POINT_LIGHTS, PointLight, Report};
 use arpg_sim::{Fnv, SceneId};
 use serde::Deserialize;
 
-/// One authored torch. Its position is the flame centre in world metres.
+/// One authored torch. Its position is the illumination centre in world metres.
 /// Construction and deserialization share validation; fields cannot bypass it.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(try_from = "RawTorch")]
@@ -32,7 +32,7 @@ impl TryFrom<RawTorch> for TorchSpec {
 }
 
 impl TorchSpec {
-    /// Requires enough clearance above ground for the flame and stand.
+    /// Requires ground clearance for the illumination centre.
     pub fn new(light: PointLight) -> Result<Self, &'static str> {
         if light.position().y < 0.3 {
             return Err("torch flame must be at least 0.3 metres above ground");

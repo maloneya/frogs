@@ -218,7 +218,33 @@ impl Wall {
                 normal: Vec2::ZERO,
             });
         }
-        self.sweep(start, delta, 0.0)
+        // Intersect the two local slabs directly. Reconstructing a candidate
+        // face point and testing the other coordinate can round an exact
+        // corner hit outside both faces, letting a ray through a rotated box.
+        let p = self.local(offset).as_dvec2();
+        let d = self.local(delta).as_dvec2();
+        let half = self.half.as_dvec2();
+        let mut enter = 0.0_f64;
+        let mut leave = 1.0_f64;
+        let mut normal = Vec2::ZERO;
+        for axis in 0..2 {
+            if d[axis] == 0.0 {
+                if p[axis].abs() > half[axis] { return None; }
+                continue;
+            }
+            let a = (-half[axis] - p[axis]) / d[axis];
+            let b = (half[axis] - p[axis]) / d[axis];
+            let near = a.min(b);
+            if near > enter {
+                enter = near;
+                normal = Vec2::ZERO;
+                normal[axis] = -d[axis].signum() as f32;
+            }
+            leave = leave.min(a.max(b));
+            if enter > leave { return None; }
+        }
+        let t = enter as f32;
+        Some(WallHit { t, point: start + delta * t, normal: self.vector(normal) })
     }
 
     fn offer(self, result: &mut Option<WallHit>, t: f32, point: Vec2, normal: Vec2) {
@@ -438,6 +464,17 @@ mod tests {
         walls.install(owner, &[wall]);
         walls
     }
+    #[test]
+    fn rays_through_rotated_corners_hit_and_adjacent_parallel_rays_miss() {
+        let centre = Vec2::new(0.0, 2.0);
+        let wall = Wall::new(centre, Vec2::splat(0.72), std::f32::consts::FRAC_PI_4).unwrap();
+        let edge = 0.36 * 2.0_f32.sqrt();
+        let hit = wall.ray_hit(Vec2::ZERO, Vec2::new(0.0, 4.0)).unwrap();
+        assert!((hit.point().y - (2.0 - edge)).abs() < 0.00001);
+        assert!(wall.ray_hit(Vec2::new(edge + 0.0001, 0.0), Vec2::new(0.0, 4.0)).is_none());
+        assert!(wall.ray_hit(Vec2::new(0.0, 4.0), Vec2::new(0.0, -4.0)).is_some());
+    }
+
     #[test]
     fn face_corner_and_rotated_sweeps_finish_outside_the_solid() {
         for yaw in [0.0, 0.3, std::f32::consts::FRAC_PI_4, 1.5] {

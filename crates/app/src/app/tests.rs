@@ -469,7 +469,12 @@ fn f4_and_harness_trigger_the_scene_owned_moment_and_respect_menu_capture() {
     assert!(app.handle_key(KeyCode::F4, true, false), "duplicate press is swallowed");
     assert_eq!(app.game.set_piece_state(id, "reveal_horde"), Some(arpg_game::SetPieceState::Running { elapsed_ticks: 0 }));
     app.handle_key(KeyCode::F4, false, false);
-    app.game.load_scene(&authored).unwrap();
+    // Add another moment to test ambiguous selection, without duplicating the
+    // full forest and exhausting the independent tree admission capacity.
+    app.game.load_scene(&arpg_game::GameScene {
+        set_pieces: authored.set_pieces.clone(),
+        ..arpg_game::GameScene::default()
+    }).unwrap();
     let before = app.game.hash();
     app.handle_key(KeyCode::F4, true, false);
     assert_eq!(app.game.hash(), before, "ambiguous shortcut must not choose a scene arbitrarily");

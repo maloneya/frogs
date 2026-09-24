@@ -809,3 +809,33 @@ fn varied_ground_speeds_use_three_cadences_within_the_existing_pose_budget() {
     assert!(HordeRole::Walk.playback_rate() < HordeRole::Run.playback_rate());
     assert!(HordeRole::Run.playback_rate() < HordeRole::Sprint.playback_rate());
 }
+
+#[test]
+fn tree_batches_follow_scene_lifetime_and_keep_game_unchanged() {
+    let mut view = WorldAssets::load(|_| Ok(())).unwrap();
+    let mut game = Game::empty();
+    let scene = game.load_scene(&arpg_game::GameScene {
+        trees: vec![
+            arpg_game::TreeSpec::new(arpg_game::TreeKind::Pine, glam::Vec2::new(12.0, 3.0), 0.5, 1.2).unwrap(),
+            arpg_game::TreeSpec::new(arpg_game::TreeKind::Bare, glam::Vec2::new(-12.0, 0.0), 0.0, 0.8).unwrap(),
+        ],
+        ..arpg_game::GameScene::default()
+    }).unwrap();
+    let hash = game.hash();
+    for _ in 0..2 {
+        view.rebuild_trees(game.trees());
+        view.rebuild_walls(game.visible_walls());
+        assert!(view.walls.is_empty(), "trunk colliders must not draw wall boxes");
+        assert_eq!(view.instance_count(), 3);
+        assert_eq!(view.draw_count(), 3);
+        assert_eq!(view.trees[0].2[0].pos(), Vec3::new(12.0, 0.0, 3.0));
+        assert!(view.trees[1].2.is_empty());
+        assert_eq!(view.trees[2].2[0].pos(), Vec3::new(-12.0, 0.0, 0.0));
+        assert_eq!(game.hash(), hash);
+    }
+    assert!(game.evict_scene(scene));
+    view.rebuild_trees(game.trees());
+    view.rebuild_walls(game.visible_walls());
+    assert_eq!(view.instance_count(), 1);
+    assert_eq!(view.draw_count(), 1);
+}

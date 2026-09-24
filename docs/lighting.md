@@ -4,9 +4,10 @@ Scenes can author stationary torches under `torches`, alongside `engine` and
 `encounters`. The [Jar of Souls scene](../scenes/soul_trial.ron) is the only
 playable scene with a stationary light.
 
-Each torch supplies `position` (flame centre, X/Y/Z in metres), linear RGB
-`colour`, `intensity`, and `range` in metres. The stand extends from the ground
-to the flame. Omitted `torches` selects soft neutral scene lighting, including the built-in boot
+Each light supplies `position` (illumination centre, X/Y/Z in metres), linear RGB
+`colour`, `intensity`, and `range` in metres. Each light is presented as a grounded [campfire](../assets/world/woodland/README.md),
+with a stone ring, logs and a flame above the logs. The light height controls illumination
+independently of the grounded mesh. Omitted `torches` selects soft neutral scene lighting, including the built-in boot
 scene. Its constant fill and broad directional shading keep surfaces readable.
 Any authored torch selects the darker presentation used by Jar of Souls.
 
@@ -28,8 +29,8 @@ engine-only physical hash stays independent of lighting. Scene ID and authored
 index identify a torch within a run; no mutable dense index escapes storage.
 
 `state.sim.torch_count` and `state.sim.torches` report authoritative light settings
-and scene ownership, keyed by scene ID and authored index. The app rebuilds its lights, stands and flames from Game's
-read-only observations. `state.world_assets.torch_instances` counts stand pieces;
+and scene ownership, keyed by scene ID and authored index. The app rebuilds its lights, campfires and flames from Game's
+read-only observations. `state.world_assets.torch_instances` counts campfire meshes;
 render effect counts include flames and attack effects. Removing the final
 scene torch restores neutral scene lighting. Scene-owned
 [set pieces](set-pieces.md) may temporarily add distant light.

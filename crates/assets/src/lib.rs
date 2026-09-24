@@ -781,6 +781,27 @@ mod tests {
     }
 
     #[test]
+    fn woodland_assets_are_grounded_opaque_and_bounded() {
+        for (bytes, min_height, max_height) in [
+            (include_bytes!("../../../assets/world/woodland/campfire.glb").as_slice(), 0.4, 0.6),
+            (include_bytes!("../../../assets/world/woodland/pine.glb").as_slice(), 4.3, 4.4),
+            (include_bytes!("../../../assets/world/woodland/broadleaf.glb").as_slice(), 4.0, 4.6),
+            (include_bytes!("../../../assets/world/woodland/bare.glb").as_slice(), 3.6, 3.8),
+        ] {
+            let mesh = import_glb(bytes).unwrap();
+            let minimum = mesh.vertices().iter().map(|v| v.position()).fold(Vec3::splat(f32::INFINITY), Vec3::min);
+            let maximum = mesh.vertices().iter().map(|v| v.position()).fold(Vec3::splat(f32::NEG_INFINITY), Vec3::max);
+            assert!(minimum.y >= -0.04 && minimum.y <= 0.001, "grounded: {minimum:?}");
+            assert!(maximum.y > min_height && maximum.y < max_height, "metre scale: {maximum:?}");
+            assert!(minimum.x > -2.0 && maximum.x < 2.0 && minimum.z > -2.0 && maximum.z < 2.0);
+            assert!(mesh.index_count() < 2000);
+            let texture = mesh.base_color_texture();
+            assert_eq!((texture.width(), texture.height()), (64, 8));
+            assert!(texture.rgba8().as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255));
+        }
+    }
+
+    #[test]
     fn wall_asset_has_unit_footprint_and_presentation_owned_height() {
         let mesh = import_glb(include_bytes!("../../../assets/world/wall/wall.glb")).unwrap();
         let minimum = mesh.vertices().iter().map(|v| v.position()).fold(Vec3::splat(f32::INFINITY), Vec3::min);

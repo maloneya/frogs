@@ -10,9 +10,9 @@ use arpg_sim::{
 };
 use glam::Vec3;
 
-// Static placements include an all-prop world, the ground and two stand pieces per light.
+// Static placements include an all-prop world, the ground and one campfire per light and bounded trees.
 // This also covers an all-enemy world plus the player in the character buffer.
-const _: () = assert!(arpg_sim::MAX_BODIES + arpg_sim::MAX_WALLS + 1 + 2 * arpg_core::MAX_POINT_LIGHTS <= arpg_core::MAX_INSTANCES);
+const _: () = assert!(arpg_sim::MAX_BODIES + arpg_sim::MAX_WALLS + 1 + arpg_core::MAX_POINT_LIGHTS + arpg_game::MAX_TREES <= arpg_core::MAX_INSTANCES);
 
 struct LoadedMesh<T> {
     path: std::path::PathBuf,
@@ -46,6 +46,8 @@ pub(super) struct WorldAssets<T> {
     ground: LoadedMesh<T>,
     prop: LoadedMesh<T>,
     wall: LoadedMesh<T>,
+    campfire: LoadedMesh<T>,
+    trees: [(arpg_game::TreeKind, LoadedMesh<T>, Vec<Instance>); 3],
     walls: Vec<Instance>,
     chest_closed: LoadedMesh<T>,
     chest_open: LoadedMesh<T>,
@@ -64,11 +66,19 @@ impl<T> WorldAssets<T> {
         let prop = load_static(root.join("prop.glb"), &mut upload)?;
         let chest_closed = load_static(root.join("chest/closed.glb"), &mut upload)?;
         let wall = load_static(root.join("wall/wall.glb"), &mut upload)?;
+        let campfire = load_static(root.join("woodland/campfire.glb"), &mut upload)?;
+        let trees = [
+            (arpg_game::TreeKind::Pine, load_static(root.join("woodland/pine.glb"), &mut upload)?, Vec::with_capacity(arpg_game::MAX_TREES)),
+            (arpg_game::TreeKind::Broadleaf, load_static(root.join("woodland/broadleaf.glb"), &mut upload)?, Vec::with_capacity(arpg_game::MAX_TREES)),
+            (arpg_game::TreeKind::Bare, load_static(root.join("woodland/bare.glb"), &mut upload)?, Vec::with_capacity(arpg_game::MAX_TREES)),
+        ];
         let chest_open = load_static(root.join("chest/open.glb"), upload)?;
         Ok(Self {
             ground,
             prop,
             wall,
+            campfire,
+            trees,
             walls: Vec::with_capacity(arpg_sim::MAX_WALLS),
             chest_closed,
             chest_open,
@@ -116,11 +126,28 @@ impl<T> WorldAssets<T> {
         }
     }
 
-    pub(super) fn instance_count(&self) -> usize { 1 + self.walls.len() + self.torches.stand().len() + self.props.as_slice().len() + self.closed_chests.len() + self.open_chests.len() }
+    pub(super) fn rebuild_trees(&mut self, trees: impl Iterator<Item = arpg_game::TreeSpec>) {
+        for (_, _, instances) in &mut self.trees { instances.clear(); }
+        for (count, tree) in trees.enumerate() {
+            assert!(count < arpg_game::MAX_TREES, "game tree admission bound");
+            let (_, _, instances) = self.trees.iter_mut().find(|(kind, _, _)| *kind == tree.kind()).expect("complete tree catalog");
+            let pos = tree.position();
+            instances.push(Instance::new(Vec3::new(pos.x, 0.0, pos.y), Vec3::splat(tree.scale()), Vec3::ONE).with_yaw(tree.yaw()));
+        }
+    }
 
-    pub(super) fn draw_count(&self) -> usize { 1 + usize::from(!self.walls.is_empty()) + usize::from(!self.torches.stand().is_empty()) + usize::from(!self.props.as_slice().is_empty()) + usize::from(!self.closed_chests.is_empty()) + usize::from(!self.open_chests.is_empty()) }
+    pub(super) fn instance_count(&self) -> usize { 1 + self.trees.iter().map(|(_, _, instances)| instances.len()).sum::<usize>() + self.walls.len() + self.torches.stand().len() + self.props.as_slice().len() + self.closed_chests.len() + self.open_chests.len() }
+
+    pub(super) fn draw_count(&self) -> usize { 1 + self.trees.iter().filter(|(_, _, instances)| !instances.is_empty()).count() + usize::from(!self.walls.is_empty()) + usize::from(!self.torches.stand().is_empty()) + usize::from(!self.props.as_slice().is_empty()) + usize::from(!self.closed_chests.is_empty()) + usize::from(!self.open_chests.is_empty()) }
 
     pub(super) fn report(&self, out: &mut Report) {
+        out.object("campfire", |out| self.campfire.report(out));
+        out.int("tree_instances", self.trees.iter().map(|(_, _, instances)| instances.len()).sum::<usize>() as u64);
+        out.object("trees", |out| {
+            for (kind, mesh, instances) in &self.trees {
+                out.object(&format!("{kind:?}"), |out| { mesh.report(out); out.int("instances", instances.len() as u64); });
+            }
+        });
         out.object("wall", |out| self.wall.report(out));
         out.int("wall_instances", self.walls.len() as u64);
         out.object("ground", |out| self.ground.report(out));
@@ -137,14 +164,17 @@ impl<T> WorldAssets<T> {
 }
 
 impl WorldAssets<MeshAsset> {
-    pub(super) fn draws(&self) -> [MeshBatch<'_>; 6] {
+    pub(super) fn draws(&self) -> [MeshBatch<'_>; 9] {
         [
             self.ground.draw(&self.ground_instance),
             self.wall.draw(&self.walls),
             self.prop.draw(self.props.as_slice()),
-            self.prop.draw(self.torches.stand()),
+            self.campfire.draw(self.torches.stand()),
             self.chest_closed.draw(&self.closed_chests),
             self.chest_open.draw(&self.open_chests),
+            self.trees[0].1.draw(&self.trees[0].2),
+            self.trees[1].1.draw(&self.trees[1].2),
+            self.trees[2].1.draw(&self.trees[2].2),
         ]
     }
 }

@@ -382,6 +382,8 @@ pub(crate) struct Expect {
     #[serde(default)]
     pub(crate) scene_count: Option<usize>,
     #[serde(default)]
+    pub(crate) tree_count: Option<usize>,
+    #[serde(default)]
     pub(crate) torch_count: Option<usize>,
     #[serde(default)]
     pub(crate) torches: Vec<TorchExpect>,

@@ -20,7 +20,7 @@ impl Default for Torches {
     fn default() -> Self {
         Self {
             lights: Vec::with_capacity(MAX_POINT_LIGHTS),
-            stands: Vec::with_capacity(MAX_POINT_LIGHTS * 2),
+            stands: Vec::with_capacity(MAX_POINT_LIGHTS),
             effects: Vec::with_capacity(arpg_gfx::MAX_EFFECT_VERTICES),
         }
     }
@@ -50,26 +50,16 @@ impl Torches {
             let light = torch.light();
             self.lights.push(light);
             let ground = Vec3::new(light.position().x, 0.0, light.position().z);
-            // The shared prop is 0.5 metres high with its origin at ground level.
-            self.stands.push(Instance::new(
-                ground,
-                Vec3::new(1.2, 0.4, 1.2),
-                Vec3::splat(0.18),
-            ));
-            self.stands.push(Instance::new(
-                ground,
-                Vec3::new(0.28, (light.position().y - 0.25) * 2.0, 0.28),
-                Vec3::new(0.22, 0.10, 0.035),
-            ));
+            self.stands.push(Instance::new(ground, Vec3::ONE, Vec3::ONE));
             // A small faceted flame, visible from all sides. Emission is visual;
             // only the PointLight illuminates other surfaces.
-            let centre = light.position();
+            let centre = ground + Vec3::Y * 0.55;
             for (radius, bottom, top, colour) in [
-                (0.20, -0.26, 0.38, light.colour().extend(1.0)),
+                (0.34, -0.20, 0.62, light.colour().extend(1.0)),
                 (
-                    0.11,
-                    -0.27,
-                    0.10,
+                    0.19,
+                    -0.20,
+                    0.30,
                     light.colour().lerp(Vec3::ONE, 0.55).extend(1.0),
                 ),
             ] {
@@ -133,13 +123,13 @@ mod tests {
         for _ in 0..2 {
             view.rebuild(game.torches(), &[]);
             assert_eq!(view.lights(), &[a.light(), b.light()]);
-            assert_eq!(view.stand().len(), 4);
+            assert_eq!(view.stand().len(), 2);
             assert_eq!(view.effects().len(), 2 * FLAME_VERTICES);
         }
         assert!(game.evict_scene(first));
         view.rebuild(game.torches(), &[]);
         assert_eq!(view.lights(), &[b.light()]);
-        assert_eq!(view.stand().len(), 2);
+        assert_eq!(view.stand().len(), 1);
         assert_eq!(view.effects().len(), FLAME_VERTICES);
         assert!(game.evict_scene(second));
         view.rebuild(game.torches(), &[]);
