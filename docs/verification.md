@@ -1,21 +1,46 @@
 # Verification evidence
 
-Run one command from the repository root:
+The completion command is `python3 scripts/verify.py full`. It runs Clippy,
+workspace tests, private Rustdoc and all scenarios with replay. Release benchmarks
+are required every **10 relevant commits**, and agents may run them sooner when
+useful (for example, investigating a slowdown or validating an optimization).
+
+The runner counts commits since each mode's last successful checkpoint on the
+current Git ancestry. Relevant paths are defined once in
+[`scripts/verify.py`](../scripts/verify.py): runtime crates, assets, scenes,
+scripts and build inputs; Markdown edits are excluded. Dirty edits are tested
+but do not increment the commit counter. A dirty run checkpoints its HEAD, so
+its eventual commit still counts toward the next checkpoint.
+
+Headless and live modes have independent counters. Missing, damaged or unavailable
+checkpoint evidence makes that mode due immediately. Failed or inconclusive runs
+do not advance the checkpoint. Checkpoints are local evidence under `target/verify`;
+a new checkout or removal of that evidence requires an initial benchmark run.
+The runner records the counters and required checks in its result. Benchmark
+samples are fresh whenever a mode is selected; this cadence is not a claim that
+intervening changes have measured performance coverage.
 
 ```sh
-python3 scripts/verify.py quick
-python3 scripts/verify.py full
-python3 scripts/verify.py full --live
+python3 scripts/verify.py quick              # partial correctness feedback
+python3 scripts/verify.py full               # correctness + any due benchmarks
+python3 scripts/verify.py full --performance # agent discretion: both modes now
+python3 scripts/verify.py full --live        # agent discretion: live mode now
 ```
 
-`quick` is explicitly partial feedback: Clippy, workspace tests, and the small
-scenario suite. `full` additionally checks private Rust documentation, extended
-scenarios, and unpaced release Game performance. `--live` adds the real-time
-presentation benchmark; headless evidence never certifies frame pacing or GPU
-behaviour. The runner prints omitted or uncertified checks and writes a structured
-result under `target/verify/run-*/verification.json`. Exit 0 means the requested
-checks passed, 1 means a failure, and 2 means inconclusive evidence. Read `complete`
-and coverage before treating a quick or `--only` run as a completion gate.
+`quick` runs Clippy, workspace tests and the small scenario suite; it cannot
+certify completion. `--only` likewise selects an explicitly partial check.
+Headless benchmarks measure Game step cost; live benchmarks measure real-time
+presentation. Headless evidence never certifies frame pacing or GPU behaviour.
+Existing scenario timing assertions remain correctness smoke gates.
+
+The runner prints omitted required checks and writes a structured result under
+`target/verify/run-*/verification.json`. Exit 0 means the requested checks passed,
+1 means failure, and 2 means inconclusive evidence. Read `complete` and coverage
+before claiming completion. A complete result certifies the required checks for
+this change; benchmarks are included only when due or explicitly requested.
+Never widen a budget or replace a baseline merely to clear a failure; see
+[performance evidence](performance.md#agent-maintenance-contract) for measurement
+and baseline requirements.
 
 All scenarios still run and replay in full verification. The explicit
 [extended manifest](../scenarios/suites.json) contains population-scale and long

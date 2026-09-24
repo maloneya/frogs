@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """One verification entry point with immutable evidence and exact-input check reuse.
 
-Quick is explicitly partial. Full includes all correctness checks and headless
-performance; --live adds the display-dependent performance gate. Only successful
+Quick is explicitly partial. Full includes all correctness checks and performance
+when the ten-commit checkpoint is due; --performance forces both benchmark modes. Only successful
 correctness checks are cached. Performance samples are always freshly measured,
 with baseline reuse owned by perf.py. No source edits or commands are inferred.
 """
@@ -19,7 +19,12 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKS = ("clippy", "tests", "docs", "scenarios-fast", "scenarios-extended", "performance-headless")
+CORRECTNESS = ("clippy", "tests", "docs", "scenarios-fast", "scenarios-extended")
+PERFORMANCE = ("performance-headless", "performance-live")
+CHECKS = CORRECTNESS + PERFORMANCE
+PERFORMANCE_INTERVAL = 10
+PERFORMANCE_PATHS = ("crates", "assets", "scenes", "scripts", "Cargo.toml", "Cargo.lock",
+                     "rust-toolchain.toml", ".cargo", ":(exclude)**/*.md")
 
 
 def digest(data):
@@ -177,28 +182,70 @@ def run_check(name, command, source, machine, artifact, cache, fresh=False, root
     return record
 
 
+def performance_checkpoint(root, base):
+    """Only intact successful evidence on this ancestry advances the cadence.
+
+    Dirty runs count at their HEAD, conservatively leaving the eventual commit
+    to count toward the next checkpoint. Modes have independent checkpoints.
+    """
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    distances = {}
+    for path in base.glob("run-*/verification.json"):
+        try:
+            result = json.loads(path.read_text())
+            revision = result["revision"]
+            if result["status"] != "complete_pass":
+                continue
+            if subprocess.run(["git", "merge-base", "--is-ancestor", revision, head],
+                              cwd=root, capture_output=True).returncode:
+                continue
+            distance = int(subprocess.check_output(
+                ["git", "rev-list", "--count", revision + ".." + head, "--", *PERFORMANCE_PATHS],
+                cwd=root, text=True))
+            for row in result["checks"]:
+                name = row["name"]
+                if name not in PERFORMANCE or row["exit_code"] != 0 or not row["evidence"]:
+                    continue
+                if all(digest(Path(item["path"]).read_bytes()) == item["sha256"]
+                       for item in row["evidence"]):
+                    distances[name] = min(distance, distances.get(name, distance))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    due = [name for name in PERFORMANCE
+           if name not in distances or distances[name] >= PERFORMANCE_INTERVAL]
+    return {"revision": head, "commits_since_pass": distances, "due": due}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scope", choices=("quick", "full"), nargs="?", default="full")
-    parser.add_argument("--live", action="store_true", help="also measure real-time presentation")
+    parser.add_argument("--performance", action="store_true", help="run both benchmark modes now")
+    parser.add_argument("--live", action="store_true", help="run live benchmarks now")
     parser.add_argument("--only", choices=CHECKS, help="one explicitly partial check (for hooks)")
     parser.add_argument("--fresh", action="store_true", help="do not reuse correctness results")
     args = parser.parse_args(argv)
-    if args.only and args.live:
-        parser.error("--only and --live cannot be combined")
+    if args.only and (args.live or args.performance):
+        parser.error("--only cannot be combined with --live or --performance")
     base = ROOT / "target/verify"
     base.mkdir(parents=True, exist_ok=True)
     artifact = Path(tempfile.mkdtemp(prefix="run-", dir=base))
-    required = list(CHECKS) + (["performance-live"] if args.live else [])
+    required = list(CHECKS)
     result = {"schema": 1, "scope": args.scope, "checks": [], "coverage": [], "omitted": required.copy()}
     try:
         source = source_identity()
         machine = context()
-        result.update(source=source, context=machine)
-        selected = [args.only] if args.only else list(CHECKS if args.scope == "full" else
+        checkpoint = performance_checkpoint(ROOT, base)
+        requested = list(PERFORMANCE) if args.performance else (["performance-live"] if args.live else [])
+        benchmarks = [name for name in PERFORMANCE if name in checkpoint["due"] or name in requested]
+        required = list(CORRECTNESS) + benchmarks
+        result.update(source=source, context=machine, revision=checkpoint["revision"],
+                      performance_checkpoint=checkpoint, required=required)
+        print("Performance checkpoint: " + (", ".join(benchmarks) if benchmarks else "not due"), flush=True)
+        selected = [args.only] if args.only else list(required if args.scope == "full" else
                                                       ("clippy", "tests", "scenarios-fast"))
-        if args.live:
-            selected.append("performance-live")
+        for name in requested:
+            if name not in selected:
+                selected.append(name)
         for name in selected:
             print("Checking " + name + "…", flush=True)
             row = run_check(name, commands(name, artifact), source, machine, artifact, base / "cache", args.fresh)

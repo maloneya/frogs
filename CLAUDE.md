@@ -102,24 +102,12 @@ Rust may need `. "$HOME/.cargo/env"` before commands. Use the shared verificatio
 runner so agents and hooks reuse successful evidence for the exact same inputs:
 
 ```sh
-python3 scripts/verify.py quick       # explicitly partial feedback
-python3 scripts/verify.py full        # complete correctness + headless performance
-python3 scripts/verify.py full --live # also certify real-time presentation
+python3 scripts/verify.py full
 ```
 
-Full verification runs Clippy with warnings denied, workspace tests, private
-Rustdoc, every scenario with replay, and release Game performance workloads.
-Quick verification omits documentation, extended scenarios and performance; it
-cannot certify completion. Report failures, inconclusive results and omitted
-coverage. See [verification evidence](docs/verification.md) for suites, timing
-reports, exact-input caching and `--fresh`.
-
-For presentation, renderer or integrated performance changes, also run `--live`.
-The performance runner discovers reusable compatible evidence; explicit baseline
-files remain supported. Exit 2 is inconclusive, not a pass. See the
-[performance contract](docs/performance.md#agent-maintenance-contract) for workload
-selection, evidence requirements and intentional baseline changes. Never rewrite a
-baseline or widen a budget merely to clear a failing check.
+[Verification policy](docs/verification.md) owns check selection, the benchmark
+cadence, optional commands and evidence requirements. Report failures,
+inconclusive results and omitted coverage.
 
 Workspace tests include GPU tests and require a real adapter. Scenarios need no
 GPU or window. Use `#[expect(lint, reason = "…")]` for a justified exception,

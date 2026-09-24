@@ -24,6 +24,9 @@ class Workspace(unittest.TestCase):
         self.artifact.mkdir(parents=True)
         self.cache = self.root / "target/cache"
         self.machine = {"toolchain": "test"}
+        subprocess.run(["git", "add", "."], cwd=self.root, check=True)
+        subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                        "commit", "-qm", "initial"], cwd=self.root, check=True)
 
     def run_check(self, script, fresh=False):
         return verify.run_check("tests", [sys.executable, "-c", script],
@@ -169,6 +172,66 @@ class Workspace(unittest.TestCase):
         result = json.loads(result_path.read_text())
         self.assertEqual(result["coverage"], [])
         self.assertEqual(result["omitted"], list(verify.CHECKS))
+
+    def test_not_due_completion_and_discretionary_benchmarks(self):
+        def fake(name, *args):
+            return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
+                    "evidence": [{"path": "test.log"}]}
+        checkpoint = {"revision": "test", "commits_since_pass": {}, "due": []}
+        with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
+             patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(verify.main(["full"]), 0)
+            self.assertEqual([call.args[0] for call in run.call_args_list], list(verify.CORRECTNESS))
+            result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
+            self.assertTrue(result["complete"])
+            self.assertEqual(result["omitted"], [])
+            run.reset_mock()
+            self.assertEqual(verify.main(["full", "--performance"]), 0)
+            self.assertEqual([call.args[0] for call in run.call_args_list], list(verify.CHECKS))
+
+    def test_checkpoint_counts_relevant_commits_and_rejects_damaged_evidence(self):
+        base = self.root / "target/verify"
+        run = base / "run-checkpoint"
+        run.mkdir(parents=True)
+        log = run / "pass.log"
+        log.write_text("passed")
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.root, text=True).strip()
+        record = {"revision": revision, "status": "complete_pass", "checks": [
+            {"name": name, "exit_code": 0, "evidence": [
+                {"path": str(log), "sha256": verify.digest(log.read_bytes())}]}
+            for name in verify.PERFORMANCE]}
+        evidence = run / "verification.json"
+        evidence.write_text(json.dumps(record))
+        def commit(path, value):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(value)
+            subprocess.run(["git", "add", "."], cwd=self.root, check=True)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                            "commit", "-qm", "change"], cwd=self.root, check=True)
+        commit(self.root / "crates/README.md", "documentation only")
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["commits_since_pass"],
+                         dict.fromkeys(verify.PERFORMANCE, 0))
+        for number in range(9):
+            commit(self.root / "crates/example.rs", str(number))
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], [])
+        (self.root / "crates/example.rs").write_text("dirty")
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], [])
+        commit(self.root / "crates/example.rs", "tenth")
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], list(verify.PERFORMANCE))
+        record["revision"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.root, text=True).strip()
+        record["checks"] = record["checks"][:1]
+        evidence.write_text(json.dumps(record))
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], ["performance-live"])
+        record["status"] = "inconclusive"
+        evidence.write_text(json.dumps(record))
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], list(verify.PERFORMANCE))
+        record["status"] = "complete_pass"
+        evidence.write_text(json.dumps(record))
+        log.write_text("damaged")
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], list(verify.PERFORMANCE))
 
     def test_suite_partition_covers_all_files_and_stale_manifest_fails(self):
         directory = self.root / "scenarios"

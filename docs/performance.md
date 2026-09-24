@@ -250,12 +250,10 @@ repeatable hashes. It measures only `mean_step_ms`, using the existing suite's
 step budget. Presentation metrics and frame budgets apply only to live mode;
 headless evidence cannot establish rendering capacity.
 
-Run ordinary workspace checks for changes. Changes to simulation, rendering,
-entity storage, scheduling or benchmark infrastructure additionally require the
-relevant release benchmark workloads against an explicit or automatically selected compatible baseline. Run the full
-suite before claiming an engine-wide capacity improvement. A performance change
-must report the workload, before/after evidence, status/uncertainty and gameplay
-verification. Intentional behavior or workload changes need reviewed new baseline
+[Verification policy](verification.md) defines when benchmarks run. A performance
+claim must report the workload, before/after evidence, status/uncertainty and
+gameplay verification. Run the full suite before claiming an engine-wide capacity
+improvement. Intentional behavior or workload changes need reviewed new baseline
 evidence, not automatic acceptance of a mismatched comparison.
 
 The existing headless scenario budgets remain inexpensive smoke gates and verify
