@@ -379,7 +379,6 @@ impl App {
         // Blend the previous and current snapshots using the fractional tick remainder.
         // Everything below draws; nothing below simulates.
         let alpha = self.accumulator.alpha();
-        self.attack_effects.rebuild(self.game.tick(), alpha);
         let player = self.game.player_presentation(alpha);
         let presentation_seconds = presentation_seconds(self.game.tick(), alpha);
 
@@ -403,6 +402,9 @@ impl App {
         if let Some(character) = &mut self.character_preview {
             character.sample(player, alpha, presentation_seconds);
         }
+        self.attack_effects.rebuild(
+            &self.game, alpha,
+            self.character_preview.as_ref().map(|character| character.beam_emitter(player)));
         let world_assets = self.world_assets.as_mut().expect("rendering requires world assets");
         world_assets.rebuild_walls(self.game.walls());
         world_assets.rebuild(self.game.prop_presentations(alpha), |id| self.game.chest_state_for_body(id));
@@ -579,9 +581,9 @@ impl ApplicationHandler for App {
                 let _ = self.input.on_cursor(Vec2::new(position.x as f32, position.y as f32));
             }
             WindowEvent::CursorLeft { .. } => self.input.cursor_left(),
-            WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
+            WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(trial) = &mut self.trial { trial.invalidate("native mouse input during trial"); }
-                self.input.on_mouse(state == ElementState::Pressed);
+                self.input.on_mouse(button, state == ElementState::Pressed);
             }
             WindowEvent::KeyboardInput { event: key_event, .. } => {
                 if let Some(trial) = &mut self.trial { trial.invalidate("native keyboard input during trial"); }

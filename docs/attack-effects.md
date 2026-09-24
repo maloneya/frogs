@@ -63,16 +63,19 @@ prepared for rendering.
 
 ## Disintegrate prototype
 
-Hold **3** for Disintegrate and aim with the cursor. Release to stop. The channel pauses powered walking, while shared physics
+Hold **Space** (or **3**) for Disintegrate and aim with the cursor. Release to stop. The channel pauses powered walking, while shared physics
 can still displace the player. It follows current aim every simulation tick.
-The existing Slam animation is held in a forward pose for this prototype.
+A dedicated Disintegrate pose extends the sword. The rendered beam starts at
+the sampled `BeamOrigin` sword-tip joint. Damage retains the authoritative
+player-centred capsule, independent of animation.
 
 `sim::Beam` owns reach, radius and pulse cadence: 12 metres, 0.3 metre half-width,
 one hit immediately and every 12 ticks thereafter. With three-hit enemies this
 kills a stationary target on ticks 0, 12 and 24 of an uninterrupted channel.
 The capsule tests final body positions before defeat removal, includes enemy
-body radius, pierces enemies until the first rectangular wall, and applies no
-impulse. There is no resource cost or damage ramp. Releasing resets the cadence.
+body radius, pierces enemies until the first rectangular wall, and adds a small forward impulse on every touching simulation tick.
+Damage still pulses every twelve ticks; movement from each impulse begins on
+the next tick and obeys ordinary damping, mass and wall contacts. There is no resource cost or damage ramp. Releasing resets the cadence.
 A committed melee swing must finish before channeling can begin; selecting a
 melee profile ends the channel on the next tick.
 
@@ -81,11 +84,35 @@ endpoints and tuning. `channeling` and `channel_tick` report active state and
 pulse clock. Traces emit channel start/stop and individual damage events.
 `attack_discs` continues to describe melee only, so F3's disc overlay does not
 outline this capsule. Restart clears channel state; scene eviction needs no
-beam target cleanup because pulses retain no target identities.
+beam target cleanup because pulses retain no target identities. Completed-tick
+damage positions are historical outcomes: they survive target removal and
+scene eviction until the next step, and restart clears them.
 
 Presentation draws three orange/gold bands using the existing linear-colour
 triangle stream using the [wall-clipped](walls.md#attacks) completed-tick pose.
-Interpolating an old angle with a new clipped length could draw through cover. History
+The sword follows the interpolated pose, so presentation also queries each
+segment of its generated path through the shared wall geometry. It stops at
+the first visual obstruction even when the damage ray misses that wall. History
 is bounded and release removes the beam immediately. It never feeds geometry
 back into damage. Scenarios use `channels: [(at: 0, ticks: 24)]` for a half-open
 hold; `attacks` still supplies discrete swing press edges.
+
+Each beam damage pulse emits a bright, short-lived spark at its actual hit
+position, including lethal hits. Presentation observes each completed tick,
+retains at most 128 markers for six ticks, and clears them on scene start/restart.
+Markers use the existing effect batch and never control damage or physics.
+
+The beam narrows and fades smoothly over its final 1.8 metres. Every band is
+still clipped against the authoritative wall face, including its outer glow.
+The sword attachment is sampled before effect geometry is rebuilt each frame.
+
+Channel entry and release blend the upper body against the current idle/walking
+pose using elapsed-time half-lives (45 ms raising, 60 ms lowering). Damage and
+release remain immediate; only the pose eases. Restart clears the blend.
+A narrow glow builds along the last half-metre of the blade, follows the sampled
+blade axis at the tip, and widens smoothly into the beam. This uses the same
+bounded effect batch, without an additional light or draw call.
+
+`state.character_preview.channel_weight` reports the actual channel overlay even
+while it eases away over idle or walking. `state.sim.beam.hit_positions` reports
+the completed tick's damage locations independently of the visual markers.

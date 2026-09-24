@@ -95,7 +95,9 @@ the bind pose at both ends when the clip should loop without a seam. One asset
 may contain at most 16 clips.
 
 The player presentation contract resolves `Idle`, `Run`, `RunBackward`,
-`RunLeft`, `RunRight`, `AttackCleave` and `AttackSlam` once at load.
+`RunLeft`, `RunRight`, `AttackCleave`, `AttackSlam` and `Disintegrate` once at load.
+The player also requires a `BeamOrigin` joint at the sword tip. Presentation
+reads its sampled transform to attach the beam without changing collision geometry.
 Locomotion clips share a normalized gait phase and blend according to actual
 displacement relative to facing. The attack layer replaces local transforms
 for `Spine`, `Head`, `LeftArm`, `RightArm` and `Weapon`; those joints are required

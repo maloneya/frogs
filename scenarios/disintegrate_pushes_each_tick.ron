@@ -1,0 +1,26 @@
+// Pulse on tick 0: position unchanged, velocity .15. Tick 1 moves .15/60,
+// then .9*.15+.15 = .285. Release on tick 2 moves .285/60 and damps to .2565.
+// The wall-shielded target, off-axis target and fixed prop receive no impulse.
+(
+    description: "Disintegrate pushes on non-damage ticks, stops pushing on release, and respects walls and props.",
+    setup: (scenes: [Inline((engine: (name: "Beam push",
+        walls: [(centre: (0.0, 6.0), size: (6.0, 0.4))],
+        bodies: [(pos: (0.0, 3.0)), (pos: (0.0, 8.0)),
+            (pos: (2.0, 3.0)), (pos: (0.0, 4.0), what: (fixed: true))],
+    )))]),
+    attack_profiles: [(at: 0, profile: Disintegrate)],
+    channels: [(at: 0, ticks: 2)],
+    checkpoints: [
+        (at: 0, expect: (bodies: [(nth: 0, health: 2,
+            pos: (x: 0.0, z: 3.0, tol: 0.00001), velocity: (x: 0.0, z: 0.15, tol: 0.00001))])),
+        (at: 1, expect: (bodies: [(nth: 0, health: 2,
+            pos: (x: 0.0, z: 3.0025, tol: 0.00001), velocity: (x: 0.0, z: 0.285, tol: 0.00001))])),
+    ],
+    budget: (ticks: 3),
+    expect: (hitbox: false, bodies: [
+        (nth: 0, health: 2, pos: (x: 0.0, z: 3.00725, tol: 0.00001), velocity: (x: 0.0, z: 0.2565, tol: 0.00001)),
+        (nth: 1, health: 3, velocity: (x: 0.0, z: 0.0, tol: 0.0)),
+        (nth: 2, health: 3, velocity: (x: 0.0, z: 0.0, tol: 0.0)),
+        (nth: 3, pos: (x: 0.0, z: 4.0, tol: 0.0), velocity: (x: 0.0, z: 0.0, tol: 0.0)),
+    ]),
+)

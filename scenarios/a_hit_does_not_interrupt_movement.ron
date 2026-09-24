@@ -1,12 +1,12 @@
 (
     description: "After taking contact damage, the next movement tick still covers the full player walking distance and leaving reach prevents more damage.",
     setup: (scenes: [File("../scenes/single_enemy.ron")]),
-    inputs: [(at: 60, ticks: 60, dir: (1.0, 0.0))],
+    inputs: [(at: 83, ticks: 60, dir: (1.0, 0.0))],
     checkpoints: [
-        (at: 59, expect: (player_health: 4, player_pos: (x: 0.0, z: 0.0, tol: 0.0001))),
-        (at: 60, expect: (player_health: 4, player_pos: (x: 0.15, z: 0.0, tol: 0.0001))),
+        (at: 82, expect: (player_health: 4, player_pos: (x: 0.0, z: 0.0, tol: 0.0001))),
+        (at: 83, expect: (player_health: 4, player_pos: (x: 0.15, z: 0.0, tol: 0.0001))),
     ],
-    budget: (ticks: 120),
+    budget: (ticks: 143),
     expect: (
         player_health: 4,
         player_pos: (x: 9.0, z: 0.0, tol: 0.001),

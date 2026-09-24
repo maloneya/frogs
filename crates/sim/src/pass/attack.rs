@@ -121,6 +121,8 @@ pub(crate) struct Attack {
     /// handful, and a set would cost more to build each swing than the scan
     /// saves. If a swing ever hits hundreds, this is the line to revisit.
     struck: Vec<EntityId>,
+    /// Damage positions from this completed tick, including defeated targets.
+    beam_hits: Vec<Vec2>,
 }
 
 impl Default for Attack {
@@ -131,6 +133,7 @@ impl Default for Attack {
             profile: AttackProfile::default(),
             resolved: AttackProfile::default().resolve(),
             struck: Vec::with_capacity(EXPECTED_HITS),
+            beam_hits: Vec::with_capacity(EXPECTED_HITS),
         }
     }
 }
@@ -144,6 +147,8 @@ impl Attack {
     pub(crate) fn beam(&self, origin: Vec2, facing: f32) -> Option<crate::Beam> {
         self.channel.map(|_| crate::Beam::new(origin, facing))
     }
+
+    pub(crate) fn beam_hits(&self) -> &[Vec2] { &self.beam_hits }
 
     /// Whether the current swing still owns facing on the upcoming tick.
     /// Retirement happens before new input, matching the attack pass below.
@@ -161,7 +166,7 @@ impl Attack {
 
     /// A fresh observation, never a second maintained copy of attack state.
     pub(crate) fn status(&self) -> AttackStatus {
-        let Self { swing, profile, resolved, channel, struck } = self;
+        let Self { swing, profile, resolved, channel, struck, beam_hits: _ } = self;
         let phase = match swing.as_ref().map(InFlight::phase) {
             None if channel.is_some() => AttackPhase::Active,
             None => AttackPhase::Idle,
@@ -227,7 +232,7 @@ impl Attack {
 
     /// Feeds the swing into the world hash. Exhaustive, as every hash here is.
     pub(crate) fn hash(&self, h: &mut crate::hash::Fnv) {
-        let Self { swing, profile, resolved, channel, struck } = self;
+        let Self { swing, profile, resolved, channel, struck, beam_hits } = self;
         h.usize(*profile as usize);
         if let Some(resolved) = resolved { resolved.hash(h); }
         h.usize(usize::from(channel.is_some()));
@@ -243,6 +248,8 @@ impl Attack {
             hitbox.hash(h);
         }
 
+        h.usize(beam_hits.len());
+        for point in beam_hits { h.f32(point.x); h.f32(point.y); }
         h.usize(struck.len());
         for id in struck {
             id.hash_into(h);
@@ -311,6 +318,7 @@ pub(crate) fn attack(
     walls: &crate::wall::Walls,
     mut trace: TraceSink<'_>,
 ) {
+    state.beam_hits.clear();
     let channel_requested = state.channels(input.attack_held());
     // **Advance first, then accept a press, then act.** The order is the whole
     // state machine, and the obvious alternative — advancing at the end — is
@@ -346,9 +354,8 @@ pub(crate) fn attack(
         if state.channel.is_none() { trace.emit(Event::ChannelStarted); }
         state.channel = Some(cadence);
         state.struck.clear();
-        if cadence == 0 {
-            super::beam::strike(crate::Beam::new(pose.pos, pose.facing).clipped(walls), bodies, pos, walls, &mut damage, &mut trace);
-        }
+        super::beam::strike(crate::Beam::new(pose.pos, pose.facing).clipped(walls),
+            cadence == 0, bodies, pos, walls, &mut damage, &mut impulses, &mut state.beam_hits, &mut trace);
         return;
     }
     if state.swing.is_none() && input.attack() && let Some(resolved) = state.resolved {
@@ -495,6 +502,9 @@ mod tests {
         assert_ne!(idle, first);
         state.channel = Some(1);
         assert_ne!(first, hash(&state));
+        let before_hits = hash(&state);
+        state.beam_hits.push(Vec2::new(0.0, 3.0));
+        assert_ne!(before_hits, hash(&state), "completed damage positions enter the hash");
         let status = state.status();
         assert!(status.channeling);
         assert_eq!(status.channel_tick, Some(1));

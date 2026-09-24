@@ -215,16 +215,16 @@ fn a_transient_failure_survives_recovery_and_blessing() {
 
 #[test]
 fn checkpoints_observe_new_spawns_at_both_budget_edges_in_any_order() {
-    // First seeker step is 3.5/60, and each checkpoint observes the step just
+    // First seeker step is 2.5/60, and each checkpoint observes the step just
     // completed. Also checks that new placement IDs are registered before it.
     let fixture = Fixture::new(
         r#"(
         spawns: [(at: 0, pos: (10.0, 0.0), what: (seeks: true))],
         checkpoints: [
             (at: 1, expect: (bodies: [(nth: 0, alive: true,
-                pos: (x: 9.8833333, z: 0.0, tol: 0.00001))])),
+                pos: (x: 9.9166667, z: 0.0, tol: 0.00001))])),
             (at: 0, expect: (enemy_count: 1, seekers: 1, bodies: [(nth: 0, seeking: true,
-                pos: (x: 9.9416667, z: 0.0, tol: 0.00001),
+                pos: (x: 9.9583333, z: 0.0, tol: 0.00001),
                 velocity: (x: 0.0, z: 0.0, tol: 0.0))])),
             (at: 0, expect: (player_pos: (x: 0.0, z: 0.0, tol: 0.0))),
         ],

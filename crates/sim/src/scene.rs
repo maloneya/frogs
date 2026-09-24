@@ -387,6 +387,23 @@ impl crate::World {
         true
     }
 
+    /// Read-only segment query shared with presentation. Uses the same wall
+    /// geometry and ordered nearest-hit rule as physical beam clipping.
+    /// Invalid endpoints are refused before any intersection arithmetic.
+    pub fn wall_hit(
+        &self,
+        start: glam::Vec2,
+        end: glam::Vec2,
+    ) -> Result<Option<crate::WallHit>, &'static str> {
+        if !start.length_squared().is_finite()
+            || !end.length_squared().is_finite()
+            || !(end - start).length_squared().is_finite()
+        {
+            return Err("wall query endpoints must have finite positions and separation");
+        }
+        Ok(self.scenes.walls.first_hit(start, end))
+    }
+
     /// Immutable walls in scene/authored order, with stable scene-local indices.
     pub fn walls(&self) -> impl Iterator<Item = (SceneId, usize, crate::Wall)> + '_ {
         self.scenes.walls.iter()

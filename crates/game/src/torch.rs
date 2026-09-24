@@ -2,7 +2,6 @@
 
 use arpg_core::{MAX_POINT_LIGHTS, PointLight, Report};
 use arpg_sim::{Fnv, SceneId};
-use glam::Vec3;
 use serde::Deserialize;
 
 /// One authored torch. Its position is the flame centre in world metres.
@@ -46,16 +45,6 @@ impl TorchSpec {
         self.0
     }
 
-    /// The torch explicitly authored into the built-in boot scene.
-    pub(crate) fn boot() -> Self {
-        Self::new(PointLight::new(
-            Vec3::new(2.5, 2.2, 1.5),
-            Vec3::new(1.0, 0.52, 0.18),
-            24.0,
-            14.0,
-        ))
-        .expect("boot torch")
-    }
 }
 
 struct Torch {

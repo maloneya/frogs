@@ -20,6 +20,6 @@
     budget: (ticks: 25),
     expect: (attack_phase: Idle, hitbox: false, enemy_count: 6,
         player_pos: (x: 0.15, z: 0.0, tol: 0.00001),
-        bodies: [(nth: 0, health: 1, velocity: (x: 0.0, z: 0.0, tol: 0.00001)), (nth: 1, health: 1),
+        bodies: [(nth: 0, health: 1, velocity: (x: 0.0, z: 1.242315, tol: 0.00001)), (nth: 1, health: 1),
             (nth: 2, health: 1), (nth: 3, health: 3), (nth: 4, health: 3), (nth: 5, health: 3)]),
 )

@@ -3,7 +3,7 @@
 //! This is the layer `arpg-core` deliberately does not have and `arpg-sim`
 //! deliberately cannot reach: winit is named here and nowhere downstream.
 
-use winit::keyboard::KeyCode;
+use winit::{event::MouseButton, keyboard::KeyCode};
 
 use crate::ui::{Menu, MenuKey};
 use arpg_core::{Action, ActionMask, Actions, InputState};
@@ -12,9 +12,9 @@ use arpg_sim::AttackProfile;
 /// Fixed attacks, in deterministic input priority order. HUD and input use
 /// this same table; there is no mutable loadout or menu selection to reset.
 pub(crate) const ATTACK_BINDINGS: [(Action, AttackProfile, &str); 3] = [
-    (Action::Attack, AttackProfile::Cleave, "1/Click/Space"),
-    (Action::AttackSecondary, AttackProfile::Slam, "2"),
-    (Action::AttackTertiary, AttackProfile::Disintegrate, "3"),
+    (Action::Attack, AttackProfile::Cleave, "1/LMB"),
+    (Action::AttackSecondary, AttackProfile::Slam, "2/RMB"),
+    (Action::AttackTertiary, AttackProfile::Disintegrate, "3/Space"),
 ];
 
 /// Which physical keys mean which action, and what each key is called.
@@ -47,7 +47,7 @@ const BINDINGS: &[Binding] = &[
     ("1", KeyCode::Digit1, Some(Action::Attack), None),
     ("2", KeyCode::Digit2, Some(Action::AttackSecondary), None),
     ("3", KeyCode::Digit3, Some(Action::AttackTertiary), None),
-    ("space", KeyCode::Space, Some(Action::Attack), None),
+    ("space", KeyCode::Space, Some(Action::AttackTertiary), None),
     ("e", KeyCode::KeyE, Some(Action::Interact), None),
     ("f4", KeyCode::F4, None, None),
     ("f2", KeyCode::F2, None, Some(MenuKey::Scenes)),
@@ -67,8 +67,8 @@ pub(crate) struct Controls {
     menu: Menu,
     /// Physical keys, including those swallowed by the menu.
     down: u32,
-    mouse_down: bool,
-    mouse_accepted: bool,
+    mouse_down: [bool; 2],
+    mouse_accepted: [bool; 2],
     aim: CursorAim,
 }
 
@@ -118,7 +118,7 @@ impl Controls {
     /// physical buttons that still need a release before their next press.
     fn clear_gameplay(&mut self) {
         self.accepted = 0;
-        self.mouse_accepted = false;
+        self.mouse_accepted = [false; 2];
         self.state = InputState::default();
     }
 
@@ -133,16 +133,21 @@ impl Controls {
     /// Focus loss discards held keys and unsampled edges, but preserves the menu.
     pub(crate) fn release_all(&mut self) {
         self.down = 0;
-        self.mouse_down = false;
+        self.mouse_down = [false; 2];
         self.aim.cursor = CursorPosition::Retained;
         self.clear_gameplay();
     }
 
     /// Physical mouse buttons share the action latch with keyboard attacks.
-    pub(crate) fn on_mouse(&mut self, pressed: bool) {
-        if self.mouse_down == pressed { return; }
-        self.mouse_down = pressed;
-        self.mouse_accepted = pressed && !self.menu.open();
+    pub(crate) fn on_mouse(&mut self, button: MouseButton, pressed: bool) {
+        let index = match button {
+            MouseButton::Left => 0,
+            MouseButton::Right => 1,
+            _ => return,
+        };
+        if self.mouse_down[index] == pressed { return; }
+        self.mouse_down[index] = pressed;
+        self.mouse_accepted[index] = pressed && !self.menu.open();
         self.sync();
     }
 
@@ -195,7 +200,9 @@ impl Controls {
                 held.insert(*action);
             }
         }
-        if self.mouse_accepted { held.insert(Action::Attack); }
+        for (accepted, action) in self.mouse_accepted.into_iter().zip([Action::Attack, Action::AttackSecondary]) {
+            if accepted { held.insert(action); }
+        }
         self.state.set_held(held);
     }
 
@@ -294,11 +301,16 @@ mod tests {
             let mut hashes = Vec::new();
             for tick in 0..55 {
                 match tick {
-                    0 => tap(&mut controls, "1"),
-                    1 | 22 => tap(&mut controls, "2"),
-                    52 => { controls.on_key(KeyCode::Digit3, true, false); }
-                    53 => { controls.on_key(KeyCode::Digit3, false, false); }
-                    54 => tap(&mut controls, "space"),
+                    0 | 54 => {
+                        controls.on_mouse(MouseButton::Left, true);
+                        controls.on_mouse(MouseButton::Left, false);
+                    },
+                    1 | 22 => {
+                        controls.on_mouse(MouseButton::Right, true);
+                        controls.on_mouse(MouseButton::Right, false);
+                    },
+                    52 => { controls.on_key(KeyCode::Space, true, false); }
+                    53 => { controls.on_key(KeyCode::Space, false, false); }
                     _ => {}
                 }
                 step_controls(&mut controls, &mut game);
@@ -333,7 +345,7 @@ mod tests {
         controls.on_key(KeyCode::Digit3, false, false);
         controls.on_key(KeyCode::Space, true, false);
         let actions = controls.sample();
-        assert_eq!(controls.attack_input(actions), (Some(AttackProfile::Cleave), true, true));
+        assert_eq!(controls.attack_input(actions), (Some(AttackProfile::Disintegrate), true, true));
     }
 
     #[test]
@@ -373,7 +385,7 @@ mod tests {
         tap(&mut controls, "f2");
         assert!(controls.menu().open());
         let actions = controls.sample();
-        assert!(!actions.just_pressed(Action::Attack));
+        assert!(!actions.just_pressed(Action::AttackTertiary));
         assert_eq!(actions.move_axis(), glam::Vec2::ZERO);
         tap(&mut controls, "right");
         for key in ["space", "1", "2", "3"] {
@@ -395,8 +407,8 @@ mod tests {
         controls.on_key(KeyCode::KeyW, true, false);
         assert!(controls.sample().held(Action::MoveUp));
         tap(&mut controls, "space");
-        assert!(controls.sample().just_pressed(Action::Attack));
-        assert!(!controls.sample().just_pressed(Action::Attack));
+        assert!(controls.sample().just_pressed(Action::AttackTertiary));
+        assert!(!controls.sample().just_pressed(Action::AttackTertiary));
     }
 
     #[test]
@@ -406,7 +418,7 @@ mod tests {
         controls.on_key(KeyCode::KeyD, true, false);
         controls.release_all();
         let actions = controls.sample();
-        assert!(!actions.just_pressed(Action::Attack));
+        assert!(!actions.just_pressed(Action::AttackTertiary));
         assert_eq!(actions.move_axis(), glam::Vec2::ZERO);
     }
 
@@ -539,10 +551,10 @@ mod aiming_tests {
     fn menu_captures_mouse_and_aim_and_keyboard_release_does_not_cancel_mouse() {
         let camera = arpg_gfx::OrthoCamera::new(800, 600);
         let mut controls = Controls::default();
-        controls.on_mouse(true);
+        controls.on_mouse(MouseButton::Left, true);
         assert!(controls.sample().just_pressed(Action::Attack));
-        controls.on_key(KeyCode::Space, true, false);
-        controls.on_key(KeyCode::Space, false, false);
+        controls.on_key(KeyCode::Digit1, true, false);
+        controls.on_key(KeyCode::Digit1, false, false);
         assert!(controls.held().contains(Action::Attack));
         controls.on_key(KeyCode::F2, true, false);
         controls.on_cursor(Vec2::new(750.0, 300.0)).unwrap();
@@ -550,8 +562,8 @@ mod aiming_tests {
         assert!(!controls.sample().just_pressed(Action::Attack));
         controls.on_key(KeyCode::Escape, true, false);
         assert!(!controls.held().contains(Action::Attack));
-        controls.on_mouse(false);
-        controls.on_mouse(true);
+        controls.on_mouse(MouseButton::Left, false);
+        controls.on_mouse(MouseButton::Left, true);
         assert!(controls.sample().just_pressed(Action::Attack));
         controls.release_all();
         assert!(!controls.sample().just_pressed(Action::Attack));

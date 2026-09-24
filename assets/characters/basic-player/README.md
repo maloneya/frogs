@@ -2,7 +2,7 @@
 
 This is the first deliberately simple Blender-authored player: a two-metre,
 low-poly adventurer built from boxes, joined into one mesh, rigidly weighted to
-an eight-joint armature, and exported with the player presentation clip catalog.
+a nine-joint armature, and exported with the player presentation clip catalog.
 
 Regenerate both checked-in artifacts from the repository root:
 
@@ -31,7 +31,7 @@ authored interval to the simulation's committed active ticks.
 Cleave winds the torso left, carries the sword across the front from left to
 right during frames 13–19, then recovers. The exported-asset presentation test
 checks the direction throughout the active interval and rejects a path behind
-the player. This first pass retains the eight-joint rig; elbow and wrist
+the player. This rig retains straight arms; elbow and wrist
 articulation are a separate improvement. The broad damage disc remains a
 simulation shape, not a literal outline of the blade.
 
@@ -40,3 +40,8 @@ all with a 15-frame gait period. App blends their local poses for diagonal
 movement. Attacks replace the spine/arms/head/weapon pose while keeping the
 root and legs from locomotion. The rig still has rigid legs without knees;
 this is a functional control/animation baseline, not finished footwork.
+
+`Disintegrate` holds the right arm extended and the blade horizontal. The
+`BeamOrigin` child of `Weapon` sits at the authored blade tip; app samples that
+attachment from the same pose used by skinning. The extra joint has no weights
+and adds no mesh geometry or draw calls.

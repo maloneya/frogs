@@ -7,18 +7,16 @@ mutation. The first supported action is a fading distant-light pulse.
 
 ## Try the storm reveal
 
-Run `cargo run`, open F2 and select **Storm: reveal the horde**. Stand in the
-single torch pool and press **F4**. A cold flash reveals 65 stationary enemies
-beyond the torch's range, then fades to darkness over 15 fixed ticks (250 ms).
-Press F4 again to restart the moment. Judge whether the glimpse gives enough
-time to register the crowd before it disappears.
+Open **Soul trial - circle in the dark** (Jar of Souls) from F2 and press **F4**.
+A cold lightning flash adds distant illumination to the central torch, then
+fades over 15 fixed ticks (250 ms). Press F4 again to restart the moment.
 
-[The playable scene](../scenes/storm_reveal.ron) is the editable example.
+[Jar of Souls](../scenes/soul_trial.ron) is the editable example.
 F4 triggers only when exactly one set piece is installed across all live scenes;
 menus consume the shortcut. For explicit selection, the harness accepts:
 
 ```text
-scene start scenes/storm_reveal.ron
+scene start scenes/soul_trial.ron
 scene list
 set-piece trigger c0 reveal_horde
 state

@@ -14,6 +14,8 @@ impl Beam {
     pub const LENGTH: f32 = 12.0;
     /// Half width in metres; enemy body radius also counts for contact.
     pub const RADIUS: f32 = 0.3;
+    /// Momentum added along the beam every touching simulation tick.
+    pub const KNOCKBACK: f32 = 0.15;
     /// One damage point immediately, then every twelve ticks while held.
     pub const HIT_EVERY: u32 = 12;
 
@@ -56,4 +58,6 @@ impl Beam {
         centre.distance_squared(self.start + axis * t) <= (Self::RADIUS + radius).powi(2)
     }
 }
-const _: () = assert!(Beam::LENGTH > 0.0 && Beam::RADIUS > 0.0 && Beam::HIT_EVERY > 0);
+const _: () = assert!(Beam::LENGTH > 0.0 && Beam::RADIUS > 0.0 && Beam::HIT_EVERY > 0 && Beam::KNOCKBACK > 0.0
+        && Beam::KNOCKBACK.is_finite()
+);

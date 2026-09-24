@@ -143,7 +143,7 @@ impl Wall {
 
     // Cast a circle against the rectangle's rounded expansion: four faces and
     // four circular corners. A square expansion would snag near the corners.
-    fn sweep(self, start: Vec2, delta: Vec2, radius: f32) -> Option<Hit> {
+    fn sweep(self, start: Vec2, delta: Vec2, radius: f32) -> Option<WallHit> {
         let end = start + delta;
         let low = start.min(end) - Vec2::splat(radius);
         let high = start.max(end) + Vec2::splat(radius);
@@ -152,7 +152,7 @@ impl Wall {
         }
         let p = self.local(start - self.centre);
         let d = self.local(delta);
-        let mut result: Option<Hit> = None;
+        let mut result: Option<WallHit> = None;
         for axis in 0..2 {
             let other = 1 - axis;
             for sign in [-1.0, 1.0] {
@@ -208,11 +208,11 @@ impl Wall {
     }
     // Share segment intersection between nearest-hit beam clipping and the
     // early-exit cover query. An origin inside the solid hits immediately.
-    fn ray_hit(self, start: Vec2, delta: Vec2) -> Option<Hit> {
+    fn ray_hit(self, start: Vec2, delta: Vec2) -> Option<WallHit> {
         let offset = start - self.centre;
         if offset.abs().cmple(self.bounds).all() && self.local(offset).abs().cmple(self.half).all()
         {
-            return Some(Hit {
+            return Some(WallHit {
                 t: 0.0,
                 point: start,
                 normal: Vec2::ZERO,
@@ -221,9 +221,9 @@ impl Wall {
         self.sweep(start, delta, 0.0)
     }
 
-    fn offer(self, result: &mut Option<Hit>, t: f32, point: Vec2, normal: Vec2) {
+    fn offer(self, result: &mut Option<WallHit>, t: f32, point: Vec2, normal: Vec2) {
         if result.is_none_or(|hit| t < hit.t) {
-            *result = Some(Hit {
+            *result = Some(WallHit {
                 t,
                 point: self.centre + self.vector(point),
                 normal: self.vector(normal),
@@ -244,11 +244,29 @@ impl Wall {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct Hit {
+
+/// First ground-plane contact with a wall along a segment. Only the geometry
+/// owner can construct it; a zero normal means the segment starts inside solid.
+#[derive(Clone, Copy, Debug)]
+pub struct WallHit {
     t: f32,
     pub(crate) point: Vec2,
     pub(crate) normal: Vec2,
+}
+
+impl WallHit {
+    /// Fraction along the queried segment, from zero through one.
+    pub fn fraction(self) -> f32 {
+        self.t
+    }
+    /// Ground-plane contact point in world X/Z.
+    pub fn point(self) -> Vec2 {
+        self.point
+    }
+    /// Outward unit face normal, or zero for an origin inside solid.
+    pub fn normal(self) -> Vec2 {
+        self.normal
+    }
 }
 
 /// Geometry stays in scene creation/authored order. The pair (scene, index)
@@ -312,7 +330,7 @@ impl Walls {
         }
     }
     /// Earliest surface on the centre ray, including an origin inside a wall.
-    pub(crate) fn first_hit(&self, start: Vec2, end: Vec2) -> Option<Hit> {
+    pub(crate) fn first_hit(&self, start: Vec2, end: Vec2) -> Option<WallHit> {
         let delta = end - start;
         self.rows
             .iter()
@@ -386,8 +404,8 @@ impl Walls {
 // Sliding along a rotated rectangle can redirect a displacement toward an
 // arena edge even when its originally requested endpoint was inside. Include
 // arena faces in the same earliest-contact decision to preserve both solids.
-fn arena_hit(start: Vec2, delta: Vec2, limit: f32) -> Option<Hit> {
-    let mut nearest: Option<Hit> = None;
+fn arena_hit(start: Vec2, delta: Vec2, limit: f32) -> Option<WallHit> {
+    let mut nearest: Option<WallHit> = None;
     for axis in 0..2 {
         if delta[axis] == 0.0 {
             continue;
@@ -399,7 +417,7 @@ fn arena_hit(start: Vec2, delta: Vec2, limit: f32) -> Option<Hit> {
             point[axis] = sign * limit;
             let mut normal = Vec2::ZERO;
             normal[axis] = -sign;
-            nearest = Some(Hit { t, point, normal });
+            nearest = Some(WallHit { t, point, normal });
         }
     }
     nearest

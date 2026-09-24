@@ -12,7 +12,7 @@
 //
 // The template rides along — the source makes chasers, so `seekers: 4` says the
 // grants flow through a source exactly as they do through a direct placement.
-// Thirty units out at 3.5 units/sec, none of them gets anywhere near the player
+// Thirty units out at 2.5 units/sec, none of them gets anywhere near the player
 // inside the budget, so nothing here is about the solver.
 (
     description: "A source at every=10 fires on ticks 0, 10, 20 and 30, and what it makes chases.",

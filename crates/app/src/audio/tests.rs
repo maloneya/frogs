@@ -109,3 +109,19 @@ fn health_loss_sounds_once_and_restart_resets_observations() {
     step(&mut game, &mut audio, intent(Vec3::ZERO, false));
     assert_eq!(audio.cues[Cue::Hurt as usize], 1, "a reused tick is fresh after restart");
 }
+
+#[test]
+fn beam_pulses_sound_once_for_many_targets_including_defeat_and_misses_are_silent() {
+    let mut game = Game::empty();
+    let mut audio = Audio::default();
+    for z in [3.0, 6.0] { game.place(glam::Vec2::new(0.0, z), Template::BODY).unwrap(); }
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    for tick in 0..30 {
+        step(&mut game, &mut audio, intent(Vec3::ZERO, false).with_attack_held(true));
+        assert_eq!(audio.cues[Cue::Impact as usize], (tick / arpg_sim::Beam::HIT_EVERY + 1).min(3) as u64);
+        assert_eq!(audio.cues[Cue::Cleave as usize], 0);
+    }
+    assert_eq!(game.enemy_count(), 0);
+    step(&mut game, &mut audio, intent(Vec3::ZERO, false));
+    assert_eq!(audio.cues[Cue::Impact as usize], 3);
+}

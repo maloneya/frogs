@@ -3,8 +3,8 @@
 //
 // **The position is the assertion about timing, not the count.** `enemy_count`
 // at the end says a body arrived; it cannot say when. A chaser placed 10.0 out
-// closes at 3.5 units/sec, so 60 ticks of seeking put it at exactly 6.5 — and a
-// drain that ran a tick late would leave it at 6.5583, which is outside the
+// closes at 2.5 units/sec, so 60 ticks of seeking put it at exactly 7.5 — and a
+// drain that ran a tick late would leave it at 7.5417, which is outside the
 // tolerance by a factor of fifty. That is what pins the latency: a request made
 // between ticks is granted by the first pass of the *next* tick, and the body
 // then walks on that tick like anything else.
@@ -26,7 +26,7 @@
         contacts: 0,
         crowd_contacts: 0,
         bodies: [
-            (nth: 0, seeking: true, pos: (x: 6.5, z: 0.0, tol: 0.001)),
+            (nth: 0, seeking: true, pos: (x: 7.5, z: 0.0, tol: 0.001)),
         ],
         trace: "a_queued_spawn_lands_on_its_own_tick.trace",
     ),

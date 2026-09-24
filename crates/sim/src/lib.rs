@@ -15,7 +15,7 @@ mod angle;
 mod attack;
 mod beam;
 mod wall;
-pub use wall::{Wall, MAX_WALLS};
+pub use wall::{Wall, WallHit, MAX_WALLS};
 pub use beam::Beam;
 mod contact;
 mod hash;
@@ -753,6 +753,13 @@ impl World {
                 out.vec3("start", on_ground(beam.start(), 0.0));
                 out.vec3("end", on_ground(beam.end(), 0.0));
                 out.num("radius", Beam::RADIUS);
+                out.num("knockback_per_tick", Beam::KNOCKBACK);
+                out.int("hits", self.beam_hits().len() as u64);
+                out.object("hit_positions", |out| {
+                    for (index, point) in self.beam_hits().iter().enumerate() {
+                        out.vec3(&index.to_string(), on_ground(*point, 0.0));
+                    }
+                });
                 out.int("hit_every_ticks", u64::from(Beam::HIT_EVERY));
             }
         });
@@ -1118,6 +1125,10 @@ impl World {
                 ))
             })
     }
+
+    /// Damage positions from the completed tick, preserved across target removal.
+    /// These are historical points, not live entity references. The next step clears them.
+    pub fn beam_hits(&self) -> &[Vec2] { self.player.attack.beam_hits() }
 
     /// Active channel capsule at the last completed tick, absent after release.
     pub fn beam(&self) -> Option<Beam> {

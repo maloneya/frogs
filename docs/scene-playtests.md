@@ -103,8 +103,7 @@ F2 offers **Default horde** (1,024 stationary enemies) and these files:
 | `seekers.ron` | Three approaching seekers |
 | `soul_trial.ron` | A timed defeat encounter rewards a chest unlock |
 | `three_enemy_spawners.ron` | Three approach directions build toward twelve seekers |
-| `storm_reveal.ron` | F4 briefly reveals a stationary horde beyond one torch pool |
-| `two_torches.ron` | Warm and cool pools overlap around stationary monsters |
+| `two_torches.ron` | Three stationary monsters under neutral lighting |
 
 The bottom HUD shows current/max player health with a proportional bar and one
 box per bound ability. The ability in progress stays highlighted through its
@@ -113,9 +112,9 @@ held beam reads **Channeling**. The HUD reads game state without changing it.
 
 Attacks use fixed bindings, shown in the HUD:
 
-- **1 / left click / Space:** Cleave, a broad arc.
-- **2:** Slam, an expanding frontal hit with stronger knockback.
-- **3:** Disintegrate, a beam. Hold to channel and release to stop.
+- **1 / left click:** Cleave, a broad arc.
+- **2 / right click:** Slam, an expanding frontal hit with stronger knockback.
+- **3 / Space:** Disintegrate, a beam. Hold to channel and release to stop.
 
 Each tick accepts one attack input. New presses win over held buttons; ties
 use slot order (1, then 2, then 3). A press during an active swing is dropped,
@@ -128,7 +127,7 @@ Mechanism fixtures live inline in `scenarios/`; they are not picker entries.
 ### Scene format
 
 Scenes may also own [stationary torches](lighting.md). They participate in the
-same admission, eviction and cached-restart boundaries; omission means no lights.
+same admission, eviction and cached-restart boundaries; omission selects neutral lighting when no live scene owns a torch.
 Optional [set pieces](set-pieces.md) describe named finite moments, activated
 explicitly. Their first supported action is a distant-light pulse.
 

@@ -91,9 +91,9 @@ fn character_replacement_is_atomic_across_import_and_upload_failure() {
     );
     assert_eq!(
         (current.asset.node_count(), current.asset.joint_count()),
-        (10, 8)
+        (11, 9)
     );
-    assert_eq!(current.asset.clip_count(), 7);
+    assert_eq!(current.asset.clip_count(), 8);
     let current = slot.as_mut().unwrap();
     let player = Game::empty().player_presentation(Alpha::ONE);
     current.sample(player, Alpha::ONE, 0.5);
@@ -112,7 +112,7 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview::<()>(None, &mut inactive);
     assert_eq!(
         inactive.finish(),
-        r#"{"active":false,"path":"","vertices":0,"indices":0,"part_count":0,"material_count":0,"image_count":0,"texture_bytes":0,"parts":{},"materials":{},"images":{},"nodes":0,"joints":0,"clips":0,"role":"","clip":"","clip_duration":0.0000,"channels":0,"sample_seconds":0.0000,"locomotion_base":"","locomotion_overlay":"","locomotion_weight":0.0000}"#
+        r#"{"active":false,"path":"","vertices":0,"indices":0,"part_count":0,"material_count":0,"image_count":0,"texture_bytes":0,"parts":{},"materials":{},"images":{},"nodes":0,"joints":0,"clips":0,"role":"","clip":"","clip_duration":0.0000,"channels":0,"sample_seconds":0.0000,"locomotion_base":"","locomotion_overlay":"","locomotion_weight":0.0000,"channel_weight":0.0000}"#
     );
 
     let mut preview = loaded_character("assets/character.glb");
@@ -122,7 +122,7 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview(Some(&preview), &mut active);
     assert_eq!(
         active.finish(),
-        r#"{"active":true,"path":"assets/character.glb","vertices":528,"indices":792,"part_count":1,"material_count":1,"image_count":1,"texture_bytes":21844,"parts":{"0":{"node":"BasicPlayer","primitive":0,"material":0,"vertices":528,"indices":792}},"materials":{"0":{"image":0}},"images":{"0":{"width":64,"height":64}},"nodes":10,"joints":8,"clips":7,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":24,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000}"#
+        r#"{"active":true,"path":"assets/character.glb","vertices":528,"indices":792,"part_count":1,"material_count":1,"image_count":1,"texture_bytes":21844,"parts":{"0":{"node":"BasicPlayer","primitive":0,"material":0,"vertices":528,"indices":792}},"materials":{"0":{"image":0}},"images":{"0":{"width":64,"height":64}},"nodes":11,"joints":9,"clips":8,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":27,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000,"channel_weight":0.0000}"#
     );
     assert_eq!(preview.draw_count(), 1);
 }
@@ -309,7 +309,7 @@ fn every_attack_profile_resolves_to_its_own_presentation_clip() {
     let expected = [
         "AttackCleave",
         "AttackSlam",
-        "AttackSlam",
+        "Disintegrate",
     ];
     for (profile, expected) in AttackProfile::ALL.into_iter().zip(expected) {
         let id = character.clips.for_role(PresentationRole::Attack(profile));
@@ -667,4 +667,121 @@ fn malformed_last_image_preserves_every_live_part_before_upload() {
     report_horde_preview(slot.as_ref(), &mut after);
     assert_eq!(before.finish(), after.finish());
     assert_eq!(slot.unwrap().asset.parts().len(), 10);
+}
+
+#[test]
+fn channel_attachment_matches_the_extended_sword_tip_and_follows_world_aim() {
+    let mut character = loaded_character("channel.glb");
+    let mut game = Game::empty();
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    let dt = arpg_sim::Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    character.sample(game.player_presentation(Alpha::ONE), Alpha::ONE, 0.0);
+    for direction in [Vec3::Z, Vec3::X, Vec3::NEG_Z] {
+        game.step(dt, arpg_core::Intent::new(arpg_core::MoveDir::NONE,
+            arpg_core::AimDir::new(direction).unwrap(), false).with_attack_held(true));
+        let player = game.player_presentation(Alpha::ONE);
+        character.sample(player, Alpha::ONE, 1.0);
+        let weapon = character.asset.joint_named("Weapon").unwrap();
+        let tip = character.asset.joint_transform(&character.pose, weapon).unwrap()
+            .transform_point3(Vec3::Y * 0.96);
+        assert!(tip.z > 1.5 && tip.y > 1.3 && tip.y < 1.6, "extended horizontal sword: {tip:?}");
+        let expected = player.ground_position() + glam::Quat::from_rotation_y(player.facing()) * tip;
+        assert!(character.beam_emitter(player).tip.abs_diff_eq(expected, 0.0001));
+    }
+}
+
+#[test]
+fn channel_pose_blends_by_elapsed_time_on_entry_release_and_restart() {
+    let mut game = Game::empty();
+    let mut whole = loaded_character("whole.glb");
+    let mut split = loaded_character("split.glb");
+    let  reported_weight = |character: &LoadedCharacter<()>| {
+        let mut report = Report::default();
+        report_character_preview(Some(character), &mut report);
+        report.finish()
+    };
+    let idle = game.player_presentation(Alpha::ONE);
+    whole.sample(idle, Alpha::ONE, 0.0);
+    assert!(reported_weight(&whole).contains("\"channel_weight\":0.0000"));
+    split.sample(idle, Alpha::ONE, 0.0);
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    let dt = arpg_sim::Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    game.step(dt, arpg_core::Intent::new(arpg_core::MoveDir::NONE,
+        arpg_core::AimDir::FORWARD, false).with_attack_held(true));
+    let channel = game.player_presentation(Alpha::ONE);
+    let hash = game.hash();
+    whole.sample(channel, Alpha::ONE, 0.045);
+    assert!((whole.channel_weight - 0.5).abs() < 0.00001, "half-raised after 45ms"
+    );
+    assert!(reported_weight(&whole).contains("\"channel_weight\":0.5000"));
+    for time in [0.015, 0.030, 0.045] { split.sample(channel, Alpha::ONE, time); }
+    assert!((split.channel_weight - whole.channel_weight).abs() < 0.00001);
+    assert!(split.beam_emitter(channel).tip.abs_diff_eq(whole.beam_emitter(channel).tip, 0.00001));
+    whole.sample(channel, Alpha::ONE, 0.045);
+    assert!((whole.channel_weight - 0.5).abs() < 0.00001, "duplicate redraw cannot advance blend");
+    assert_eq!(game.hash(), hash, "pose interpolation cannot change damage");
+    game.step(dt, arpg_core::Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
+    assert!(game.beam().is_none(), "release ends gameplay immediately");
+    whole.sample(game.player_presentation(Alpha::ONE), Alpha::ONE, 0.105);
+    assert!((whole.channel_weight - 0.25).abs() < 0.00001, "arm eases down after release");
+
+    assert!(reported_weight(&whole).contains("\"channel_weight\":0.2500"));
+    whole.reset();
+    assert!(reported_weight(&whole).contains("\"channel_weight\":0.0000"));
+    assert_eq!(whole.channel_weight, 0.0);
+    assert!(whole.sampled_at.is_none());
+}
+
+#[test]
+fn channel_geometry_clips_the_interpolated_sword_path_when_the_damage_ray_misses() {
+    // Both +X and +Z damage rays miss this off-axis wall. Immediately after
+    // turning, the displayed sword still points +X; its connector toward +Z
+    // crosses the wall before z=3. The visual must stop there too.
+    let wall = arpg_sim::Wall::new(glam::Vec2::new(1.3, 3.0), glam::Vec2::splat(0.4), 0.0).unwrap();
+    let mut game = Game::from_scene(
+        &arpg_sim::Scene {
+            walls: vec![wall],
+            ..Default::default()
+        }
+        .into(),
+    )
+    .unwrap();
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    let dt = arpg_sim::Accumulator::default()
+        .pending(arpg_sim::Dt::SECS)
+        .next()
+        .unwrap();
+    let mut character = loaded_character("wall-channel.glb");
+    character.sample(game.player_presentation(Alpha::ONE), Alpha::ONE, 0.0);
+    let mut effects = crate::attack_effects::AttackEffects::default();
+    game.step(
+        dt,
+        Intent::new(MoveDir::NONE, AimDir::new(Vec3::X).unwrap(), false).with_attack_held(true),
+    );
+    character.sample(game.player_presentation(Alpha::ONE), Alpha::ONE, 1.0);
+    effects.observe(&game);
+    game.step(
+        dt,
+        Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true),
+    );
+    effects.observe(&game);
+    assert!(game.beam().unwrap().end_normal().is_none());
+    let player = game.player_presentation(Alpha::ZERO);
+    character.sample(player, Alpha::ZERO, 1.0);
+    let emitter = character.beam_emitter(player);
+    let hash = game.hash();
+    effects.rebuild(&game, Alpha::ZERO, Some(emitter));
+    assert!(!effects.vertices().is_empty());
+    assert!(
+        effects
+            .vertices()
+            .iter()
+            .all(|vertex| vertex.position().z <= 2.8 + 0.0001),
+        "displayed connector and glow must stop at the first wall they actually cross"
+    );
+    assert_eq!(
+        game.hash(),
+        hash,
+        "visual obstruction cannot feed back into damage"
+    );
 }

@@ -11,7 +11,8 @@ The current presentation is deliberately small:
   opens. The first contact plays one impact per swing, regardless of enemy count.
   Misses stay silent apart from the swing. There are no individual horde voices.
 - A held beam has one looping hum. Release or an accepted attack selection
-  change stops it with a short fade. It has no separate per-target impact cue.
+  change stops it with a short fade. Each damage pulse that hits plays one impact cue, regardless of target count;
+  misses produce only the hum.
 - Footsteps play every 0.3 seconds of consecutive walking progress. Movement
   intent and actual progress are both required; idle knockback, pushing into a
   wall and beam channeling do not produce steps. This is an approximate cadence,
@@ -53,7 +54,7 @@ mock device checks real WAV decoding, one-shot completion, persistent loops,
 stop fades and voice limits without requiring speakers.
 
 For live checks, use the [playtest guide](../.claude/skills/playtest/SKILL.md).
-Inspect `state.audio`, `hold d 600`, `tap space`, `hold 3 500`, then
+Inspect `state.audio`, `hold d 600`, `tap 1`, `hold space 500`, then
 `scene restart`. Walking should produce steps; a held beam should own one hum
 and release it; restart should reset counts and retain just the fresh ambience.
 Judge clip quality, loudness and exact footstep feel by listening.

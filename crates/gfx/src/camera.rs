@@ -98,7 +98,7 @@ impl OrthoCamera {
         Self {
             target: Vec3::ZERO,
             lead: Vec3::ZERO,
-            zoom: 16.0,
+            zoom: 16.0 * 0.67,
             aspect: aspect_of(width, height),
         }
     }

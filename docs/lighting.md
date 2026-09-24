@@ -1,14 +1,14 @@
 # Scene lighting
 
 Scenes can author stationary torches under `torches`, alongside `engine` and
-`encounters`. See [the two-torch scene](../scenes/two_torches.ron) for a
-complete editable example. Run `cargo run`, open F2, and select **Two torches:
-warm and cool**. Walk between their pools to see colours mix and brightness add.
+`encounters`. The [Jar of Souls scene](../scenes/soul_trial.ron) is the only
+playable scene with a stationary light.
 
 Each torch supplies `position` (flame centre, X/Y/Z in metres), linear RGB
 `colour`, `intensity`, and `range` in metres. The stand extends from the ground
-to the flame. Omitted `torches` means no lights. Existing playtests explicitly
-author their original warm torch; the built-in boot scene authors its own.
+to the flame. Omitted `torches` selects soft neutral scene lighting, including the built-in boot
+scene. Its constant fill and broad directional shading keep surfaces readable.
+Any authored torch selects the darker presentation used by Jar of Souls.
 
 [Game's TorchSpec](../crates/game/src/torch.rs) owns the authored torch schema.
 It wraps [core's validated PointLight](../crates/core/src/lighting.rs), shared
@@ -31,7 +31,7 @@ index identify a torch within a run; no mutable dense index escapes storage.
 and scene ownership, keyed by scene ID and authored index. The app rebuilds its lights, stands and flames from Game's
 read-only observations. `state.world_assets.torch_instances` counts stand pieces;
 render effect counts include flames and attack effects. Removing the final
-scene light leaves the world dark, with no global fallback. Scene-owned
+scene torch restores neutral scene lighting. Scene-owned
 [set pieces](set-pieces.md) may temporarily add distant light.
 
 Both static and skinned surfaces use [one fragment-lighting function](../crates/gfx/src/lighting.wgsl).
@@ -42,14 +42,14 @@ light's range. Per-pixel calculation lets even the four-vertex floor show
 smooth pools between its distant corners. Cost grows with the number of lights;
 the cap is a bounded starting point, not a performance guarantee.
 
-There is no persistent ambient/bounced light, shadow map, flicker, or bloom.
+There is no simulated bounced light, shadow map, flicker, or bloom.
 An active set-piece light pulse can supply explicitly authored diffuse fill. Walls and
 characters do not block light. Faceted flames, attack effects, and UI are unlit
 geometry and do not themselves illuminate surfaces. The remaining playtest
 question is how much darkness feels good while moving and fighting.
 
-[Scene-lifetime scenario](../scenarios/torches_follow_scene_lifetime.ron) loads
-the same playable file and checks intermediate installation/eviction states.
+[Scene-lifetime scenario](../scenarios/torches_follow_scene_lifetime.ron) authors
+an inline two-torch fixture and checks intermediate installation/eviction states.
 Game tests cover refused loads, pending work, stale identities and restart;
 GPU tests cover additive colour/brightness, all eight slots, and clearing the
-light list to black.
+light list back to neutral illumination.

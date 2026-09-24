@@ -41,6 +41,11 @@ pub(crate) struct DamageSink<'a> {
 }
 
 impl DamageSink<'_> {
+    /// Whether this identity is damageable; props and the player are excluded.
+    pub(crate) fn contains(&self, id: EntityId) -> bool {
+        self.health.who.index(id).is_some()
+    }
+
     /// Subtracts one hit from a damageable entity; absent membership is immune.
     pub(crate) fn hit(&mut self, id: EntityId) -> Option<u8> {
         let row = self.health.who.index(id)?;

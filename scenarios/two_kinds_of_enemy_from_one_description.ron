@@ -7,8 +7,8 @@
 // granted every behaviour to everybody, or a pass that walked every body, would
 // satisfy every assertion about the chaser and only fail here.
 //
-// SPEED is 3.5 units/sec and the budget is one second, so the chaser closes
-// 3.5 units: 10.0 - 3.5 = 6.5. Still far outside the 0.55 stopping distance, so
+// SPEED is 2.5 units/sec and the budget is one second, so the chaser closes
+// 2.5 units: 10.0 - 2.5 = 7.5. Still far outside the 0.55 stopping distance, so
 // no arrival clamp and no contact is involved.
 (
     description: "One description places a chaser and a bystander; only the chaser moves.",
@@ -26,7 +26,7 @@
         contacts: 0,
         crowd_contacts: 0,
         bodies: [
-            (nth: 0, seeking: true,  pos: (x: 6.5,   z: 0.0, tol: 0.001)),
+            (nth: 0, seeking: true,  pos: (x: 7.5,   z: 0.0, tol: 0.001)),
             (nth: 1, seeking: false, pos: (x: -10.0, z: 0.0, tol: 0.0001)),
         ],
         trace: "two_kinds_of_enemy_from_one_description.trace",

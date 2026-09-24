@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn set_piece_files_use_the_validated_game_vocabulary() {
-        let valid = include_str!("../../../scenes/storm_reveal.ron");
+        let valid = include_str!("../../../scenes/soul_trial.ron");
         assert_eq!(parse_scene(valid).unwrap().set_pieces[0].name(), "reveal_horde");
         for invalid in [
             valid.replace("duration_ticks: 15", "duration_ticks: 0"),

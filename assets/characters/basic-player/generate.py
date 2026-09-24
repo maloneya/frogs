@@ -6,7 +6,7 @@ Run from the repository root:
 
 The script deliberately mirrors the engine's small character interchange
 contract: one joined mesh (including the sword), one material with a packed
-PNG, one armature, rigid vertex groups, and seven presentation actions.
+PNG, one armature, rigid vertex groups, and eight presentation actions.
 """
 
 from pathlib import Path
@@ -14,7 +14,7 @@ import math
 import sys
 
 import bpy
-from mathutils import Euler
+from mathutils import Euler, Vector
 
 
 OUTPUT_DIRECTORY = Path("assets/characters/basic-player")
@@ -189,7 +189,9 @@ def build_armature():
     bone("RightLeg", (0.17, 0.0, 0.86), (0.17, 0.0, 0.07), root)
     # Bone local +Y runs from head to tail. Pointing its tail toward Blender -Y
     # therefore makes the runtime weapon extend along the character's +Z front.
-    bone("Weapon", (0.46, -0.02, 0.76), (0.46, -0.77, 0.76), right_arm)
+    weapon = bone("Weapon", (0.46, -0.02, 0.76), (0.46, -0.77, 0.76), right_arm)
+    # Named attachment follows the actual blade tip through the sampled pose.
+    bone("BeamOrigin", (0.46, -0.98, 0.76), (0.46, -1.08, 0.76), weapon)
 
     bpy.ops.object.mode_set(mode="OBJECT")
     armature.show_in_front = True
@@ -205,6 +207,7 @@ ANIMATED_BONES = (
     "LeftLeg",
     "RightLeg",
     "Weapon",
+    "BeamOrigin",
 )
 
 
@@ -244,7 +247,7 @@ def build_actions(armature):
     ]))
     # Keep the same 15-frame gait period and foot phase in every direction.
     # Legs rotate about local X for forward/back, local Z for sideways travel.
-    # The deliberately rigid eight-joint rig cannot bend knees yet.
+    # The deliberately rigid rig cannot bend knees yet.
     for name, x, z, lean in (
         ("RunBackward", -22, 0, -4),
         ("RunLeft", 0, -22, 0),
@@ -276,6 +279,18 @@ def build_actions(armature):
         (contact, {"Spine": (30, 0, 0), "LeftArm": (0, 0, 48), "RightArm": (0, 0, -48), "Weapon": (50, 0, 0)}),
         (recovered, {}),
     ]))
+    # Extend the straight arm toward the aim direction; counter-rotate the
+    # weapon so its blade remains horizontal rather than following the old wrist tilt.
+    arm = armature.data.bones["RightArm"]
+    arm_rest = arm.matrix_local.to_quaternion()
+    delta = (arm.tail_local - arm.head_local).rotation_difference(Vector((-0.15, -1.0, 0.0)))
+    arm_local = arm_rest.inverted() @ delta @ arm_rest
+    weapon_rest = armature.data.bones["Weapon"].matrix_local.to_quaternion()
+    weapon_local = (delta @ weapon_rest).inverted() @ weapon_rest
+    degrees = lambda q: tuple(math.degrees(v) for v in q.to_euler("XYZ"))
+    channel = {"RightArm": degrees(arm_local), "Weapon": degrees(weapon_local),
+               "LeftArm": (0, 0, -12)}
+    actions.append(add_action(armature, "Disintegrate", [(1, channel), (31, channel)]))
     armature.animation_data.action = actions[0]
     bpy.context.scene.frame_set(1)
 

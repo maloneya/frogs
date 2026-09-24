@@ -276,3 +276,67 @@ fn wall_recovery_at_an_arena_edge_chooses_an_in_bounds_exit() {
     assert!((game.body_pos(body).unwrap().x - 93.75).abs() < 0.0001);
     assert!(game.body_pos(body).unwrap().x <= arpg_sim::ARENA_HALF - 0.25);
 }
+
+#[test]
+fn read_only_wall_segments_share_nearest_geometry_validation_and_scene_lifetime() {
+    let mut game = Game::empty();
+    let far = game
+        .load_scene(&scene(vec![wall(
+            Vec2::new(0.0, 4.0),
+            Vec2::new(2.0, 0.2),
+            0.0,
+        )]))
+        .unwrap();
+    let near = game
+        .load_scene(&scene(vec![wall(
+            Vec2::new(0.0, 2.0),
+            Vec2::new(2.0, 0.2),
+            0.0,
+        )]))
+        .unwrap();
+    let before = game.hash();
+    let hit = game
+        .wall_hit(Vec2::ZERO, Vec2::new(0.0, 6.0))
+        .unwrap()
+        .unwrap();
+    assert!(hit.point().abs_diff_eq(Vec2::new(0.0, 1.9), 0.00001));
+    assert!(hit.normal().abs_diff_eq(Vec2::NEG_Y, 0.00001));
+    assert!((hit.fraction() - 1.9 / 6.0).abs() < 0.00001);
+    let inside = game
+        .wall_hit(Vec2::new(0.0, 2.0), Vec2::new(0.0, 6.0))
+        .unwrap()
+        .unwrap();
+    assert_eq!(inside.fraction(), 0.0);
+    assert_eq!(inside.normal(), Vec2::ZERO);
+    for invalid in [
+        Vec2::splat(f32::NAN),
+        Vec2::splat(f32::INFINITY),
+        Vec2::splat(f32::MAX),
+    ] {
+        assert!(game.wall_hit(invalid, Vec2::ZERO).is_err());
+        assert!(game.wall_hit(Vec2::ZERO, invalid).is_err());
+    }
+    assert_eq!(
+        game.hash(),
+        before,
+        "queries never mutate state, including refused input"
+    );
+    assert!(game.evict_scene(near));
+    assert!(
+        (game
+            .wall_hit(Vec2::ZERO, Vec2::new(0.0, 6.0))
+            .unwrap()
+            .unwrap()
+            .point()
+            .y
+            - 3.9)
+            .abs()
+            < 0.00001
+    );
+    assert!(game.evict_scene(far));
+    assert!(
+        game.wall_hit(Vec2::ZERO, Vec2::new(0.0, 6.0))
+            .unwrap()
+            .is_none()
+    );
+}

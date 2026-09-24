@@ -209,7 +209,8 @@ fn restart_resets_the_complete_playtest_boundary() {
     invalid.engine.bodies[0].pos.0 = f32::NAN;
     assert!(app.start_playtest(invalid).is_err());
     assert_eq!(audio_report(&app), before_audio, "rejected replacement preserves audio history");
-    app.attack_effects.rebuild(app.game.tick(), Alpha::ZERO);
+    app.attack_effects.rebuild(
+        &app.game, Alpha::ZERO, Some(crate::attack_effects::BeamEmitter { tip: glam::Vec3::Y * 0.85, direction: glam::Vec3::Z }));
     assert!(!app.attack_effects.vertices().is_empty());
     app.game
         .set_attack_recovery(arpg_sim::RecoveryTicks::try_from(1).unwrap());
@@ -452,7 +453,7 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
 
 #[test]
 fn f4_and_harness_trigger_the_scene_owned_moment_and_respect_menu_capture() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/storm_reveal.ron");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/soul_trial.ron");
     let authored = arpg_content::load_scene(&path).unwrap();
     let mut app = App { game: Game::from_scene(&authored).unwrap(), ..Default::default() };
     let id = app.game.scene_instances().next().unwrap().0;

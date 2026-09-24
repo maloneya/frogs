@@ -29,6 +29,12 @@ fn contribution(light: PointLight, world_pos: vec3<f32>, normal: vec3<f32>) -> v
 fn illumination(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     let unit_normal = normalize(normal);
     var total = vec3<f32>(0.0);
+    // Scenes without torches use soft neutral daylight for readable geometry.
+    // Authored torch scenes retain their intentional darkness and light pools.
+    if scene_lights.count.x == 0u {
+        let facing = max(dot(unit_normal, normalize(vec3<f32>(0.4, 1.0, 0.3))), 0.0);
+        total = vec3<f32>(0.22 + 0.35 * facing);
+    }
     for (var i = 0u; i < scene_lights.count.x; i += 1u) {
         total += contribution(scene_lights.lights[i], world_pos, unit_normal);
     }

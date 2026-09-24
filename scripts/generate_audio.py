@@ -48,8 +48,9 @@ def main():
           envelope(t, 0.28, 10) * (0.30*math.sin(tau*(240*t - 170*t*t)) + 0.13*n))
     # Integer numbers of cycles over each loop avoid a discontinuity at wrap.
     write("beam.wav", 1.0, lambda t, n, c:
-          (0.12*math.sin(tau*110*t) + 0.07*math.sin(tau*223*t))
-          * (0.8 + 0.2*math.cos(tau*7*t)))
+          (0.19*math.sin(tau*110*t) + 0.13*math.sin(tau*330*t)
+           + 0.09*math.sin(tau*660*t + 1.5*math.sin(tau*13*t)))
+          * (0.75 + 0.25*math.cos(tau*12*t)))
     write("ambience.wav", 4.0, lambda t, n, c:
           sum(0.015 * math.sin(tau*f*t + c*(j+1)*0.4)
               for j, f in enumerate((41, 59.25, 83.5, 117.75, 167, 233.25)))

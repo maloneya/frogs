@@ -6,15 +6,23 @@ use arpg_core::Report;
 use arpg_game::Game;
 use arpg_gfx::{EffectVertex, MAX_EFFECT_VERTICES};
 use arpg_sim::{Alpha, AttackPhase, AttackProfile};
-use glam::{Vec3, Vec4};
+use glam::{Vec3,  Vec3Swizzles, Vec4};
 
 // Eight ticks of history plus an interpolation endpoint, bounded independently
 // of the configured attack duration. Old samples remain at their observed pose.
 const LIFE: f32 = 8.0;
 const CAPACITY: usize = 10;
 const RING_SEGMENTS: usize = 64;
-pub(crate) const MAX_ATTACK_VERTICES: usize = CAPACITY * 8 * 12 + RING_SEGMENTS * 18;
+const THROAT_SEGMENTS: usize = 4;
+const TAIL_SEGMENTS: usize = 8;
+const MAX_MARKERS: usize = 128;
+const MARKER_LIFE: f32 = 6.0;
+pub(crate) const MAX_ATTACK_VERTICES: usize = CAPACITY * 8 * 12 + RING_SEGMENTS * 18 + MAX_MARKERS * 24;
 const _: () = assert!(MAX_ATTACK_VERTICES <= MAX_EFFECT_VERTICES);
+// Three bands: blade glow, throat, body and tapered tail; each band segment is 12 vertices.
+const _: () = assert!(
+    (THROAT_SEGMENTS + TAIL_SEGMENTS + 2) * 3 * 12 + MAX_MARKERS * 24 <= MAX_ATTACK_VERTICES
+);
 
 #[derive(Clone, Copy)]
 struct Sample {
@@ -26,7 +34,21 @@ struct Sample {
     end_normal: Option<Vec3>,
 }
 
+/// Sampled sword attachment: both position and blade axis come from the drawn pose.
+#[derive(Clone, Copy)]
+pub(crate) struct BeamEmitter {
+    pub tip: Vec3,
+    pub direction: Vec3,
+}
+
+struct HitMarker {
+    tick: u64,
+    centre: Vec3,
+    side: Vec3,
+}
+
 pub(crate) struct AttackEffects {
+    markers: VecDeque<HitMarker>,
     samples: VecDeque<Sample>,
     vertices: Vec<EffectVertex>,
     observed: Option<u64>,
@@ -36,6 +58,7 @@ pub(crate) struct AttackEffects {
 impl Default for AttackEffects {
     fn default() -> Self {
         Self {
+            markers: VecDeque::with_capacity(MAX_MARKERS),
             samples: VecDeque::with_capacity(CAPACITY),
             vertices: Vec::with_capacity(MAX_EFFECT_VERTICES),
             observed: None,
@@ -46,6 +69,7 @@ impl Default for AttackEffects {
 
 impl AttackEffects {
     pub(crate) fn clear(&mut self) {
+        self.markers.clear();
         self.samples.clear();
         self.vertices.clear();
         self.observed = None;
@@ -62,9 +86,24 @@ impl AttackEffects {
             self.clear();
         }
         self.observed = Some(tick);
+        while self.markers.front().is_some_and(|m| tick.saturating_sub(m.tick) > MARKER_LIFE as u64) {
+            self.markers.pop_front();
+        }
+
+        let beam = game.beam();
+        if let Some(beam) = beam {
+            let direction = (beam.end() - beam.start()).normalize_or_zero();
+            for point in game.beam_hits() {
+                if self.markers.len() == MAX_MARKERS { self.markers.pop_front(); }
+                self.markers.push_back(HitMarker {
+                    tick, centre: Vec3::new(point.x, 1.1, point.y),
+                    side: Vec3::new(direction.y, 0.0, -direction.x),
+                });
+            }
+        }
         let status = game.attack_status();
         self.active = status.phase == AttackPhase::Active;
-        if let Some(beam) = game.beam() {
+        if let Some(beam) = beam {
             if self.samples.back().is_some_and(|s| s.profile != AttackProfile::Disintegrate) { self.samples.clear(); }
             if self.samples.len() == CAPACITY { self.samples.pop_front(); }
             self.samples.push_back(Sample {
@@ -109,8 +148,28 @@ impl AttackEffects {
         }
     }
 
-    pub(crate) fn rebuild(&mut self, tick: u64, alpha: Alpha) {
+    pub(crate) fn rebuild(&mut self, game: &Game, alpha: Alpha, beam_emitter: Option<BeamEmitter>) {
+
+        let tick = game.tick();
         self.vertices.clear();
+        for marker in &self.markers {
+            let age = tick.saturating_sub(marker.tick) as f32 + alpha.get();
+            let opacity = (1.0 - age / MARKER_LIFE).clamp(0.0, 1.0);
+            if opacity == 0.0 { continue; }
+            let colour = Vec4::new(1.0, 0.95, 0.7, opacity);
+            // Four bright diamond rays sit above each actual contact, including
+            // lethal hits whose body has already left the simulation.
+            for (axis, width) in [(marker.side, Vec3::Y), (-marker.side, Vec3::Y),
+                (Vec3::Y, marker.side), (-Vec3::Y, marker.side)] {
+                let inner = marker.centre + axis * 0.08;
+                let middle = marker.centre + axis * 0.22;
+                let outer = marker.centre + axis * (0.42 + age * 0.02);
+                for tip in [inner, outer] {
+                    triangle(&mut self.vertices,
+                        [middle - width * 0.055, tip, middle + width * 0.055], [colour; 3]);
+                }
+            }
+        }
         let Some(last) = self.samples.back().copied() else {
             return;
         };
@@ -119,25 +178,10 @@ impl AttackEffects {
         let now = tick as f64 - 1.0 + f64::from(alpha.get());
         match last.profile {
             AttackProfile::Disintegrate => {
-                // Use the completed tick's clipped beam. Interpolating its angle
-                // with an endpoint from another pose can draw through a wall.
-                let origin = last.origin + Vec3::Y * 0.85;
-                let end = last.centre + Vec3::Y * 0.85;
-                let direction = (end - origin).normalize_or_zero();
-                let side = Vec3::new(direction.z, 0.0, -direction.x);
-                for (width, colour, opacity) in [
-                    (last.radius * 1.7, Vec3::new(1.0, 0.12, 0.025), 0.4),
-                    (last.radius, Vec3::new(1.0, 0.45, 0.06), 0.85),
-                    (last.radius * 0.22, Vec3::new(1.0, 0.9, 0.55), 1.0),
-                ] {
-                    // Trim every band vertex to the blocking face, including
-                    // the glow. A centre-ray cap leaks past diagonal thin walls.
-                    let trim = |point: Vec3| last.end_normal.map_or(point, |normal| {
-                        point + normal * (end - point).dot(normal).max(0.0)
-                    });
-                    band(&mut self.vertices,
-                        [origin - side * width, origin, origin + side * width].map(trim),
-                        [end - side * width, end, end + side * width].map(trim), colour, [opacity; 2]);
+                if
+                let Some(emitter) = beam_emitter  { beam_geometry(&mut self.vertices,
+                        game, last, emitter, now);
+
                 }
             }
             AttackProfile::Cleave => {
@@ -227,6 +271,7 @@ impl AttackEffects {
     }
 
     pub(crate) fn report(&self, out: &mut Report) {
+        out.int("hit_markers", self.markers.len() as u64);
         out.int("sample_count", self.samples.len() as u64);
         out.int("vertex_count", self.vertices.len() as u64);
         out.bool("active", self.active);
@@ -238,6 +283,112 @@ impl AttackEffects {
             out.vec3("centre", sample.centre);
             out.num("radius", sample.radius);
             out.int("last_sample_tick", sample.tick);
+        }
+    }
+}
+
+
+
+// The centreline has a short curved throat followed by a straight beam and
+// tapered end. Query every generated segment, since the interpolated sword can
+// cross a wall that the authoritative player-centred damage ray misses.
+fn beam_geometry(
+    out: &mut Vec<EffectVertex>,
+    game: &Game,
+    sample: Sample,
+    emitter: BeamEmitter,
+    now: f64,
+) {
+    const SECTIONS: usize = THROAT_SEGMENTS + TAIL_SEGMENTS + 2;
+    let origin = emitter.tip;
+    let end = sample.centre + Vec3::Y * origin.y;
+    if (end - origin).dot(sample.centre - sample.origin) <= 0.0 {
+        return;
+    }
+    let cast = |a: Vec3, b: Vec3| {
+        game.wall_hit(a.xz(), b.xz())
+            .expect("finite sampled geometry")
+    };
+    // An animated sword can protrude through nearby solid geometry. Do not
+    // start a visual beam on the far side of that obstacle.
+    if cast(sample.origin, origin).is_some() {
+        return;
+    }
+    let direction = (end - origin).normalize_or_zero();
+    let side = Vec3::new(direction.z, 0.0, -direction.x);
+    let length = origin.distance(end);
+    let emergence_end = origin + direction * length.min(1.0) * 0.5;
+    let taper_start = end - direction * (length * 0.5).min(1.8);
+    let control = origin + emitter.direction * origin.distance(emergence_end) * 0.5;
+    let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+    // Position, width fraction, opacity fraction; fixed storage is reused on the stack.
+    let mut sections = [(Vec3::ZERO, 0.0, 0.0); SECTIONS];
+    for (i, section) in sections[..=THROAT_SEGMENTS].iter_mut().enumerate() {
+        let t = i as f32 / THROAT_SEGMENTS as f32;
+        *section = (
+            origin
+                .lerp(control, t)
+                .lerp(control.lerp(emergence_end, t), t),
+            0.12 + 0.88 * smooth(t),
+            1.0,
+        );
+    }
+    for (i, section) in sections[THROAT_SEGMENTS + 1..].iter_mut().enumerate() {
+        let t = i as f32 / TAIL_SEGMENTS as f32;
+        let fade = 1.0 - smooth(t);
+        *section = (taper_start.lerp(end, t), fade, fade);
+    }
+    let mut count = SECTIONS;
+    let mut cap = sample.end_normal.map(|normal| (end, normal));
+    for i in 0..SECTIONS - 1 {
+        let a = sections[i];
+        let b = sections[i + 1];
+        if let Some(hit) = cast(a.0, b.0) {
+            if hit.normal() == glam::Vec2::ZERO {
+                return;
+            }
+            let point = a.0.lerp(b.0, hit.fraction());
+            sections[i + 1] = (point, a.1 + (b.1 - a.1) * hit.fraction(), 0.0);
+            cap = Some((point, Vec3::new(hit.normal().x, 0.0, hit.normal().y)));
+            count = i + 2;
+            break;
+        }
+    }
+    let trim = |point: Vec3| {
+        cap.map_or(point, |(end, normal)| {
+            point + normal * (end - point).dot(normal).max(0.0)
+        })
+    };
+    let blade_side = Vec3::Y.cross(emitter.direction).normalize_or_zero();
+    let blade_start = origin - emitter.direction * 0.55;
+    let blade_clear = cast(blade_start, origin).is_none();
+    let glow = 1.0 + 0.12 * (now as f32 * 0.7).sin();
+    for (width, colour, opacity) in [
+        (sample.radius * 1.7, Vec3::new(1.0, 0.12, 0.025), 0.4),
+        (sample.radius, Vec3::new(1.0, 0.45, 0.06), 0.85),
+        (sample.radius * 0.22, Vec3::new(1.0, 0.9, 0.55), 1.0),
+    ] {
+        let section = |point: Vec3, axis: Vec3, radius: f32| {
+            [point - axis * radius, point, point + axis * radius].map(trim)
+        };
+        if blade_clear {
+            band(
+                out,
+                section(blade_start, blade_side, width * 0.08),
+                section(origin, blade_side, width * 0.18 * glow),
+                colour,
+                [0.0, opacity],
+            );
+        }
+        for pair in sections[..count].windows(2) {
+            let [a, b] = [pair[0], pair[1]];
+            band(
+                out,
+                section(a.0, side, width * a.1),
+                section(b.0, side, width * b.1),
+                colour,
+                [opacity * a.2, opacity * b.2],
+            );
         }
     }
 }
@@ -336,7 +487,8 @@ mod tests {
                 }
                 // Simulate multiple ticks between frames: observation must retain all of them.
                 if elapsed % 3 == 0 || elapsed == close {
-                    effects.rebuild(game.tick(), Alpha::ZERO);
+                    effects.rebuild(
+                        &game, Alpha::ZERO, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
                     if elapsed >= resolved.startup() && elapsed < close + 5 {
                         assert!(!effects.vertices().is_empty());
                     }
@@ -347,7 +499,8 @@ mod tests {
                     "presentation cannot change authoritative state"
                 );
             }
-            effects.rebuild(game.tick(), Alpha::ZERO);
+            effects.rebuild(
+                &game, Alpha::ZERO, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
             assert!(effects.samples.is_empty());
             assert!(effects.vertices().is_empty());
         }
@@ -366,14 +519,15 @@ mod tests {
         game.step(dt, Intent::new(MoveDir::new(Vec3::X), arpg_core::AimDir::new(Vec3::X).unwrap(), false));
         effects.observe(&game);
         assert_eq!(effects.samples.front().unwrap().centre, previous);
-        effects.rebuild(game.tick(), Alpha::ZERO);
+        effects.rebuild(
+            &game, Alpha::ZERO, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
         assert!(!effects.vertices().is_empty());
         effects.clear();
         assert!(effects.vertices().is_empty());
         assert!(effects.samples.is_empty());
         assert!(effects.observed.is_none());
         effects.observe(&Game::empty());
-        effects.rebuild(0, Alpha::ZERO);
+        effects.rebuild(&Game::empty(), Alpha::ZERO, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
         assert!(effects.vertices().is_empty());
     }
 
@@ -424,8 +578,9 @@ mod beam_tests {
             let end = Vec3::new(0.0, 0.0, 2.0 - 0.05 / yaw.cos());
             assert!(effects.samples.back().unwrap().centre.abs_diff_eq(end, 0.00001));
             for alpha in [Alpha::ZERO, Alpha::ONE] {
-                effects.rebuild(game.tick(), alpha);
-                assert_eq!(effects.vertices().len(), 36);
+                effects.rebuild(
+                    &game, alpha, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
+                assert!(!effects.vertices().is_empty() && effects.vertices().len()<= 504);
                 assert!(effects.vertices().iter().any(|v| (v.position().z - end.z).abs() < 0.00001));
                 for vertex in effects.vertices() {
                     let point = vertex.position();
@@ -448,17 +603,51 @@ mod beam_tests {
             let hash = game.hash();
             effects.observe(&game);
             effects.observe(&game);
-            effects.rebuild(game.tick(), Alpha::ONE);
+            effects.rebuild(
+                &game, Alpha::ONE, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
             assert_eq!(game.hash(), hash);
             assert!(effects.samples.len() <= CAPACITY);
-            assert_eq!(effects.vertices().len(), 36);
+            assert_eq!(effects.vertices().len(), 504);
             let end = effects.samples.back().unwrap().centre;
             assert!(end.abs_diff_eq(aim.as_vec3() * arpg_sim::Beam::LENGTH, 0.00001));
         }
         game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
         effects.observe(&game);
-        effects.rebuild(game.tick(), Alpha::ZERO);
+        effects.rebuild(
+            &game, Alpha::ZERO, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
         assert!(effects.vertices().is_empty());
         assert!(effects.samples.is_empty());
     }
+    #[test]
+    fn beam_markers_include_lethal_hits_expire_and_reset() {
+        let mut game = Game::empty();
+        game.set_attack_profile(AttackProfile::Disintegrate);
+        let target = game.place(glam::Vec2::new(0.0, 3.0), arpg_sim::Template::BODY).unwrap();
+        let mut effects = AttackEffects::default();
+        let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+        for tick in 0..=24 {
+            game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));
+            effects.observe(&game);
+            effects.observe(&game);
+            if tick % 12 == 0 {
+                assert_eq!(effects.markers.len(), 1);
+                effects.rebuild(
+                    &game, Alpha::ONE, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
+                assert_eq!(effects.vertices().len(), 504 + 24);
+            }
+        }
+        assert!(game.health(target).is_none());
+        assert_eq!(effects.markers.len(), 1, "killing pulse leaves a marker");
+        for _ in 0..8 {
+            game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+            effects.observe(&game);
+        }
+        effects.rebuild(
+            &game, Alpha::ONE, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
+        assert!(effects.markers.is_empty());
+        assert!(effects.vertices().is_empty());
+        effects.clear();
+        assert!(effects.markers.is_empty());
+    }
+
 }

@@ -9,7 +9,7 @@ use glam::Vec3;
 /// Exercise the actual fragment shader on a four-vertex floor: interpolating
 /// illumination at its corners would miss the entire pool of light.
 #[test]
-fn floor_has_a_warm_pool_distance_falloff_and_no_ambient() {
+fn torch_pools_preserve_darkness_and_torchless_scenes_have_neutral_light() {
     const N: u32 = 256;
     let (device, queue) = crate::tests::headless_device();
     let binding = CameraBinding::new(&device);
@@ -148,31 +148,45 @@ fn floor_has_a_warm_pool_distance_falloff_and_no_ambient() {
             "{count} lights must add before sRGB encoding: {red_pixel:?} to {accumulated:?}"
         );
     }
+    // A zero-intensity authored torch selects the dark presentation while
+    // isolating directional-light maths from torchless scene illumination.
+    let render_authored = |lights: &[PointLight], directional: &[DirectionalLight]| {
+        if lights.is_empty() {
+            render_with(&[PointLight::new(Vec3::Y, Vec3::ONE, 0.0, 1.0)], directional)
+        } else { render_with(lights, directional) }
+    };
     // Distant light reaches beyond the torch radius, composes with its pool,
     // preserves orientation, and fades in linear colour before output encoding.
     let flash = DirectionalLight::try_new(Vec3::Y, Vec3::Z, 0.8, 0.0).unwrap();
-    let distant = sample(&render_with(&[], &[flash]), Vec3::X * 9.0);
+    let distant = sample(&render_authored(&[], &[flash]), Vec3::X * 9.0);
     assert!(distant[2] > 40 && distant[0] == 0 && distant[1] == 0, "distant light: {distant:?}");
-    let combined = sample(&render_with(&[red], &[flash]), Vec3::ZERO);
-    let flash_centre = sample(&render_with(&[], &[flash]), Vec3::ZERO);
+    let combined = sample(&render_authored(&[red], &[flash]), Vec3::ZERO);
+    let flash_centre = sample(&render_authored(&[], &[flash]), Vec3::ZERO);
     assert_eq!(combined, [red_pixel[0], 0, flash_centre[2]]);
-    let half = sample(&render_with(&[], &[flash.faded(0.5)]), Vec3::X * 9.0);
+    let half = sample(&render_authored(&[], &[flash.faded(0.5)]), Vec3::X * 9.0);
     assert!((linear(half[2]) - linear(distant[2]) * 0.5).abs() < 0.006);
     let below = DirectionalLight::try_new(-Vec3::Y, Vec3::Z, 0.8, 0.0).unwrap();
-    assert_eq!(sample(&render_with(&[], &[below]), Vec3::ZERO), [0; 3]);
+    assert_eq!(sample(&render_authored(&[], &[below]), Vec3::ZERO), [0; 3]);
     let fill = DirectionalLight::try_new(-Vec3::Y, Vec3::Z, 0.8, 0.5).unwrap();
-    assert_eq!(sample(&render_with(&[], &[fill]), Vec3::X * 9.0), half);
+    assert_eq!(sample(&render_authored(&[], &[fill]), Vec3::X * 9.0), half);
     let faint = flash.faded(0.1);
-    let all_slots = sample(&render_with(&[], &[faint; MAX_DIRECTIONAL_LIGHTS]), Vec3::X * 9.0);
+    let all_slots = sample(&render_authored(&[], &[faint; MAX_DIRECTIONAL_LIGHTS]), Vec3::X * 9.0);
     assert!((linear(all_slots[2]) - linear(distant[2]) * 0.8).abs() < 0.006);
-    // A shorter list must clear all previously uploaded slots, including the eighth.
-    let dark = render(&[]);
-    assert!(
-        dark.as_chunks::<4>()
-            .0
-            .iter()
-            .all(|pixel| pixel[..3] == [0; 3])
-    );
+    // Removing the final torch returns to visible neutral lighting, with no
+    // stale coloured slots. It also covers distant floor pixels uniformly.
+    let daylight = render(&[]);
+    let centre = sample(&daylight, Vec3::ZERO);
+    assert!(centre[0] > 50 && centre[0] < 230, "readable floor: {centre:?}");
+    let neutral = DirectionalLight::try_new(Vec3::Y, Vec3::ONE,
+        0.22 + 0.35 / 1.25_f32.sqrt(), 0.0).unwrap();
+    assert_eq!(centre, sample(&render_authored(&[], &[neutral]), Vec3::ZERO),
+        "neutral illumination preserves the floor material colour");
+    assert_eq!(sample(&daylight, Vec3::X * 9.0), centre);
+    let blue_daylight = sample(&render_with(&[], &[flash]), Vec3::ZERO);
+    assert_eq!(blue_daylight[0], centre[0]);
+    assert_eq!(blue_daylight[1], centre[1]);
+    assert!(blue_daylight[2] > centre[2], "set pieces add to neutral lighting");
+
 }
 
 #[test]

@@ -1,7 +1,8 @@
+// F4 triggers a brief cold lightning flash.
 // Can attacks from all directions stay readable as enemies emerge into one light?
-// Press E by the blue switch, aim with the cursor, and attack with Space/left click.
+// Press E by the blue switch, aim with the cursor, and attack with left click (Cleave), right click (Slam), or Space (Disintegrate).
 // Defeat 30 in 30 seconds to unlock the chest; press E beside it to open its lid.
-// Eight sources sit 9 m from the centre, outside the light's 8 m range even
+// Eight sources sit 9 m from the centre, within the expanded central light
 // with their 0.5 m spawn radius. Every 144 ticks per source preserves the old
 // aggregate rate (8/144 = 1/18), now arriving in eight-enemy waves.
 (
@@ -30,6 +31,16 @@
         on_success: [UnlockChest(0)],
     )],
     torches: [
-        (position: (0.0, 2.2, 0.0), colour: (1.0, 0.65, 0.3), intensity: 55.0, range: 8.0),
+        (position: (0.0, 2.2, 0.0), colour: (1.0, 0.65, 0.3), intensity: 27.5, range: 16.0),
     ],
+    set_pieces: [(
+        name: "reveal_horde",
+        cues: [(
+            at: 0,
+            action: LightPulse((
+                toward_source: (-0.5, 1.0, 0.3), colour: (0.55, 0.7, 1.0),
+                intensity: 2.0, fill: 0.12, duration_ticks: 15,
+            )),
+        )],
+    )],
 )

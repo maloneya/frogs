@@ -46,7 +46,7 @@ impl GameScene {
     /// The built-in engine horde without gameplay connections.
     #[must_use]
     pub fn boot() -> Self {
-        Self { torches: vec![TorchSpec::boot()], ..arpg_sim::Scene::boot().into() }
+        arpg_sim::Scene::boot().into()
     }
 
     /// The only installation path, shared by fresh runs and additive loads.

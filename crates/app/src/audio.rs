@@ -33,7 +33,7 @@ impl Cue {
             Self::Cleave | Self::Slam | Self::Impact => -6.0,
             Self::Hurt => -3.0,
             Self::Footstep => -15.0,
-            Self::Beam => -14.0,
+            Self::Beam => -3.0,
             Self::Ambience => -12.0,
         }
     }
@@ -76,6 +76,7 @@ impl Observations {
             emit(Cue::Impact);
             self.contact_played = true;
         }
+        if !game.beam_hits().is_empty() { emit(Cue::Impact); }
         let health = game.player_health();
         if health < self.health { emit(Cue::Hurt); }
         self.health = health;

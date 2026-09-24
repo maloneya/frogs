@@ -30,7 +30,7 @@ use crate::{Dt, EntityId, PLAYER_ENEMY_CONTACT_DISTANCE};
 /// horde, it is a countdown: kiting, spacing and the decision of when to stand
 /// and fight all stop existing at the moment this reaches
 /// [`crate::pass::walk::PLAYER_SPEED`].
-const SPEED: f32 = 3.5;
+const SPEED: f32 = 2.5;
 const _: () = assert!(SPEED > 0.0);
 const _: () = assert!(
     SPEED < crate::pass::walk::PLAYER_SPEED,

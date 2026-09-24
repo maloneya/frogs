@@ -16,9 +16,10 @@ fn basic_player_satisfies_the_player_presentation_contract() {
     assert_eq!(character.parts().len(), 1);
     assert_eq!(character.materials().len(), 1);
     assert_eq!(character.images().len(), 1);
-    assert_eq!(character.joint_count(), 8);
-    assert_eq!(character.clip_count(), 7);
+    assert_eq!(character.joint_count(), 9);
+    assert_eq!(character.clip_count(), 8);
     assert!(character.joint_named("Weapon").is_some());
+    assert!(character.joint_named("BeamOrigin").is_some());
 
     for name in [
         "Idle",
@@ -28,6 +29,7 @@ fn basic_player_satisfies_the_player_presentation_contract() {
         "RunRight",
         "AttackCleave",
         "AttackSlam",
+        "Disintegrate",
     ] {
         assert!(character.clip_named(name).is_some(), "missing {name}");
     }

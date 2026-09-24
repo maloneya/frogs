@@ -1,5 +1,5 @@
 // Can the player slide along flat and rotated walls, and attack only exposed enemies?
-// Walk toward the long wall, try Space/2/3, then walk around its right end.
+// Walk toward the long wall, try left click/right click/Space, then walk around its right end.
 // The nearest enemy is shielded; the enemy beside the opening can be attacked.
 (
     engine: (
@@ -15,5 +15,4 @@
             (pos: (-1.5, 4.0), what: (seeks: true)),
         ],
     ),
-    torches: [(position: (0.0, 3.0, 1.0), colour: (1.0, 0.8, 0.6), intensity: 100.0, range: 16.0)],
 )

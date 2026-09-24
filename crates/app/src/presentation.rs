@@ -204,7 +204,7 @@ impl CharacterClips {
         match profile {
             AttackProfile::Cleave => "AttackCleave",
             AttackProfile::Slam => "AttackSlam",
-            AttackProfile::Disintegrate => "AttackSlam",
+            AttackProfile::Disintegrate => "Disintegrate",
         }
     }
 
@@ -247,8 +247,11 @@ pub(super) struct LoadedCharacter<T> {
     scratch: arpg_assets::CharacterPose,
     full_mask: arpg_assets::PoseMask,
     upper_mask: arpg_assets::PoseMask,
+    beam_origin: arpg_assets::JointId,
     sampled_role: PresentationRole,
     sampled_seconds: f32,
+    channel_weight: f32,
+    sampled_at: Option<f64>,
     locomotion: LocomotionSample,
     gpu: T,
 }
@@ -273,11 +276,23 @@ impl<T> LoadedCharacter<T> {
         )
     }
 
+    pub(super) fn beam_emitter(&self, player: PlayerPresentation) -> crate::attack_effects::BeamEmitter {
+        let socket = self.asset.joint_transform(&self.pose, self.beam_origin)
+            .expect("validated attachment belongs to this character");
+        let facing = glam::Quat::from_rotation_y(player.facing());
+        crate::attack_effects::BeamEmitter {
+            tip: player.ground_position() + facing * socket.transform_point3(Vec3::ZERO),
+            direction: (facing * socket.transform_vector3(Vec3::Y)).normalize(),
+        }
+    }
+
     pub(super) fn draw_count(&self) -> usize { self.asset.parts().len() }
 
     pub(super) fn reset(&mut self) {
         self.sampled_role = PresentationRole::Idle;
         self.sampled_seconds = 0.0;
+        self.channel_weight = 0.0;
+        self.sampled_at = None;
         self.locomotion = LocomotionSample::idle(&self.clips);
     }
 
@@ -305,13 +320,20 @@ impl<T> LoadedCharacter<T> {
         presentation_seconds: f64,
     ) {
         let role = Self::role(player);
+        let elapsed = self.sampled_at.map_or(0.0, |last| (presentation_seconds - last).max(0.0) as f32);
+        self.sampled_at = Some(presentation_seconds);
+        let channel = role == PresentationRole::Attack(AttackProfile::Disintegrate);
+        // A time-based half-life keeps the raise/lower consistent at any redraw rate.
+        self.channel_weight = arpg_core::damp(self.channel_weight, if channel { 1.0 } else { 0.0 },
+            if channel { 0.045 } else { 0.06 }, elapsed);
+        if !channel && self.channel_weight < 0.001 { self.channel_weight = 0.0; }
         let clip = self.clips.for_role(role);
         let metadata = self.asset.clip(clip).expect("resolved clip remains live");
         let clip_seconds = match role {
             PresentationRole::Idle | PresentationRole::Run => {
                 metadata.loop_time(presentation_seconds)
             }
-            // Hold the existing forward casting pose for this prototype.
+            // The dedicated channel clip holds an extended arm and horizontal sword.
             PresentationRole::Attack(AttackProfile::Disintegrate) => metadata.duration_seconds() * 0.5,
             PresentationRole::Attack(_) => {
                 let attack = player.attack();
@@ -356,9 +378,16 @@ impl<T> LoadedCharacter<T> {
             let idle = self.asset.clip(self.clips.idle).expect("resolved clip");
             self.asset.sample(self.clips.idle, idle.loop_time(presentation_seconds), &mut self.pose);
         }
-        if matches!(role, PresentationRole::Attack(_)) {
+        if matches!(role, PresentationRole::Attack(_)) && !channel {
+            // Melee keeps its committed contact timing when replacing a channel.
+            self.channel_weight = 0.0;
             self.asset.sample(clip, clip_seconds, &mut self.scratch);
             self.asset.blend(&mut self.pose, &self.scratch, &self.upper_mask, 1.0);
+        } else if self.channel_weight > 0.0 {
+            let channel_clip = self.clips.attack(AttackProfile::Disintegrate);
+            let duration = self.asset.clip(channel_clip).expect("resolved channel").duration_seconds();
+            self.asset.sample(channel_clip, duration * 0.5, &mut self.scratch);
+            self.asset.blend(&mut self.pose, &self.scratch, &self.upper_mask, self.channel_weight);
         }
         self.sampled_role = role;
         self.sampled_seconds = clip_seconds;
@@ -639,6 +668,8 @@ pub(super) fn report_character_preview<T>(preview: Option<&LoadedCharacter<T>>, 
         out.text("locomotion_base", preview.asset.clip(preview.locomotion.base).expect("resolved clip").name());
         out.text("locomotion_overlay", preview.asset.clip(preview.locomotion.overlay).expect("resolved clip").name());
         out.num("locomotion_weight", preview.locomotion.weight);
+
+        out.num("channel_weight", preview.channel_weight);
     } else {
         out.int("clips", 0);
         out.text("role", "");
@@ -649,6 +680,7 @@ pub(super) fn report_character_preview<T>(preview: Option<&LoadedCharacter<T>>, 
         out.text("locomotion_base", "");
         out.text("locomotion_overlay", "");
         out.num("locomotion_weight", 0.0);
+        out.num("channel_weight", 0.0);
     }
 }
 
@@ -832,6 +864,7 @@ pub(super) fn replace_character<T>(
         .map_err(|error| format!("{}: {error}", path.display()))?;
     let clips =
         CharacterClips::resolve(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
+    let beam_origin = asset.joint_named("BeamOrigin").ok_or("missing player sword-tip attachment BeamOrigin")?;
     let upper_mask = player_upper_mask(&asset)?;
     let full_mask = asset.full_mask();
     let scratch = asset.bind_pose();
@@ -847,8 +880,11 @@ pub(super) fn replace_character<T>(
         scratch,
         full_mask,
         upper_mask,
+        beam_origin,
         sampled_role: PresentationRole::Idle,
         sampled_seconds: 0.0,
+        channel_weight: 0.0,
+        sampled_at: None,
         gpu,
     });
     Ok(())

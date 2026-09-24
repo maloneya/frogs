@@ -418,6 +418,18 @@ impl Game {
     /// Active beam clipped to the first wall at the completed tick.
     pub fn beam(&self) -> Option<arpg_sim::Beam> { self.world.beam() }
 
+    /// Read-only nearest wall contact, using the shared physical geometry.
+    pub fn wall_hit(
+        &self,
+        start: Vec2,
+        end: Vec2,
+    ) -> Result<Option<arpg_sim::WallHit>, &'static str> {
+        self.world.wall_hit(start, end)
+    }
+
+    /// Completed-tick beam damage positions, including targets defeated that tick.
+    pub fn beam_hits(&self) -> &[Vec2] { self.world.beam_hits() }
+
     /// Committed swing discs; beam geometry has its own read-only observation.
     pub fn attack_discs(&self) -> impl Iterator<Item = arpg_sim::AttackDisc> + '_ {
         self.world.attack_discs()

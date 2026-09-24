@@ -63,7 +63,8 @@
 //!     swing and hold that facing through recovery. Channels follow aim each tick.
 //! 12. [`attack`] — test final positions, apply an impulse and subtract one hit
 //!     point once per target per swing. Velocity changes now; displacement
-//!     begins on the next tick.
+//!     begins on the next tick. Channels share this boundary: every touching
+//!     tick submits momentum, damage pulses record hit positions before removal.
 //! 13. [`interact`] — activate one ready object using final positions. A press
 //!     changes only interaction state; it cannot spawn or move bodies.
 //! 14. [`health::remove_defeated`] — remove bodies reduced to zero. **Last**, so
@@ -79,7 +80,7 @@
 pub(crate) mod attack;
 /// Channel admission suppresses powered walk before movement, leaving carried
 /// physics intact. Attack resolves its damage pulses after final positions and
-/// facing, before defeated bodies are removed. Release ends it on that tick.
+/// facing, with continuous impulses, before defeated bodies are removed. Release ends it on that tick.
 pub(crate) mod beam;
 pub(crate) mod contain;
 pub(crate) mod face;
