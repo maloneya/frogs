@@ -82,8 +82,9 @@ sock state | jq '.render.frames, .render.skipped'
 sock state | jq '.sim.bodies'
 ```
 
-Body reports are keyed by stable ID and include position, carried velocity and
-inverse mass. State is derived from authoritative data, but reporting changes
+Body reports are keyed by stable ID and include position, physical velocity
+(including enemy locomotion) and inverse mass. The `gaits` object reports each
+chaser's chosen gait and desired speed. State is derived from authoritative data, but reporting changes
 still require verification; adding a storage field does not automatically make
 its value visible. Trace shows transitions between state samples. A dropped
 event count means history was truncated.
@@ -138,9 +139,10 @@ cannot judge whether the combat is satisfying; that needs the user's playtest.
 
 ## Repeatable regression comparisons
 
-For performance changes use `python3 scripts/perf.py run --output target/perf/<new-name>.json`,
-then compare a candidate run with `--baseline <saved-result.json>`. The versioned
-suite drives exact tick schedules, records conditions and rejects invalid evidence.
+For live performance changes use `python3 scripts/perf.py run --mode live --output target/perf/<new-name>.json`.
+The runner discovers compatible saved baselines; `--baseline <saved-result.json>`
+selects one explicitly. The versioned suite drives exact tick schedules, records
+conditions and rejects invalid evidence.
 Read [the benchmark contract](../../../docs/performance.md#repeatable-benchmark-suite)
 for workload selection, exit statuses and baseline handling. Exit 2 means
 inconclusive; do not report it as a pass or adjust thresholds to make it pass.

@@ -41,7 +41,7 @@ fn failed_start_and_additive_load_preserve_the_complete_run() {
     let mut control = Game::from_scene(&selected).unwrap();
     for run in [&mut game, &mut control] {
         step(run, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true));
-        assert!(run.request_spawn(Vec2::new(-20.0, 0.0), Template::BODY));
+        assert!(run.request_spawn(Vec2::new(-20.0, 0.0), Template::BODY).is_some());
         run.set_attack_profile(AttackProfile::Slam);
     }
     let before = (game.hash(), report(&game), game.trace().render());
@@ -87,7 +87,7 @@ fn restart_uses_its_snapshot_and_replaces_all_live_state_and_pending_work() {
     game.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
     assert!(game.apply_impulse(game.player_id(), Impulse::try_from((6.0, 0.0)).unwrap()));
     step(&mut game, Intent::new(MoveDir::new(Vec3::Z), AimDir::new(Vec3::Z).unwrap(), true));
-    assert!(game.request_spawn(Vec2::new(-50.0, 0.0), Template::BODY));
+    assert!(game.request_spawn(Vec2::new(-50.0, 0.0), Template::BODY).is_some());
     assert!(game.evict_scene(original));
     assert!(game.scene_bodies(extra).is_some());
     // Changing caller-owned content and evicting its live instance must not
@@ -125,7 +125,7 @@ fn eviction_is_local_and_preserves_the_restart_choice() {
     let retired = game.scene_bodies(a).unwrap().to_vec();
     let survivors = game.scene_bodies(b).unwrap().to_vec();
     assert_eq!(retired.len(), 2, "one authored prop and one emitted body");
-    assert!(game.request_spawn(Vec2::new(-40.0, 0.0), Template::BODY));
+    assert!(game.request_spawn(Vec2::new(-40.0, 0.0), Template::BODY).is_some());
     assert!(game.evict_scene(a));
     assert!(!game.evict_scene(a));
     assert!(retired.iter().all(|id| !game.is_alive(*id)));
@@ -204,4 +204,82 @@ fn source_enablement_is_instance_local_and_restart_restores_authored_state() {
     assert_eq!(game.hash(), fresh_hash);
     step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(game.enemy_count(), 0, "restart must restore authored dormancy");
+}
+
+/// Before stepping, tickets name requests, not bodies. At the boundary an
+/// invalid request must leave a refusal between successes, even with no log.
+#[test]
+fn spawn_results_are_lossless_when_diagnostics_are_disabled_or_overflow() {
+    let mut reference = None;
+    for retention in [0, 1, 16_384] {
+        let mut game = Game::empty();
+        game.set_trace_retention(retention).unwrap();
+        let first = game.request_spawn(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
+        let invalid = game.request_spawn(Vec2::splat(f32::NAN), Template::BODY).unwrap();
+        let last = game.request_spawn(Vec2::new(20.0, 0.0), Template::BODY).unwrap();
+        assert_ne!(first, invalid);
+        assert_ne!(invalid, last);
+        assert!(game.spawn_outcomes().is_empty());
+        step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+        let outcomes = game.spawn_outcomes().to_vec();
+        assert_eq!(outcomes.iter().map(|result| result.ticket).collect::<Vec<_>>(), [first, invalid, last]);
+        assert!(outcomes[0].entity.is_some());
+        assert!(outcomes[1].entity.is_none());
+        assert!(outcomes[2].entity.is_some());
+        let state = report(&game);
+        assert!(state.contains(&format!("\"{invalid}\":{{\"spawned\":false}}")));
+        for result in [&outcomes[0], &outcomes[2]] {
+            assert!(state.contains(&format!("\"{}\":{{\"spawned\":true,\"entity\":\"{}\"", result.ticket, result.entity.unwrap())));
+        }
+        let observed = (outcomes.clone(), game.hash());
+        if let Some(expected) = &reference { assert_eq!(&observed, expected); }
+        else { reference = Some(observed); }
+        if retention == 1 { assert!(game.trace().dropped() > 0); }
+        game.clear_trace();
+        assert_eq!(game.spawn_outcomes(), outcomes);
+        let id = outcomes[0].entity.unwrap();
+        assert!(game.despawn_body(id));
+        assert!(!game.is_alive(id));
+        assert_eq!(game.spawn_outcomes(), outcomes, "results describe the boundary, not current liveness");
+        step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+        assert!(game.spawn_outcomes().is_empty());
+    }
+}
+
+#[test]
+fn switching_to_scoped_capture_cannot_claim_complete_golden_evidence() {
+    let mut game = Game::empty();
+    game.capture_trace(8).unwrap();
+    game.request_spawn(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+    assert!(game.render_captured_trace().unwrap().contains("placed"));
+    let before = game.hash();
+    game.capture_events(8, vec![arpg_sim::EventKind::Placed]).unwrap();
+    assert_eq!(game.hash(), before);
+    assert_eq!(game.render_captured_trace(), None, "a filtered engine stream is not a complete trace");
+    assert_eq!(game.captured_events(), Some([].as_slice()));
+    game.request_spawn(Vec2::new(20.0, 0.0), Template::BODY).unwrap();
+    step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+    assert_eq!(game.captured_events().unwrap().len(), 1);
+    assert_eq!(game.render_captured_trace(), None);
+    let before = game.hash();
+    game.capture_trace(8).unwrap();
+    assert_eq!(game.hash(), before);
+    assert_eq!(game.render_captured_trace(), Some(String::new()));
+}
+
+#[test]
+fn rejected_trace_limits_preserve_complete_game_capture() {
+    let mut game = Game::empty();
+    game.capture_trace(8).unwrap();
+    game.set_attack_profile(arpg_sim::AttackProfile::Slam);
+    let before = game.render_captured_trace().unwrap();
+    let history = game.render_trace_since(0);
+    for invalid in [arpg_sim::MAX_TRACE_EVENTS + 1, usize::MAX] {
+        assert!(game.capture_trace(invalid).is_err());
+        assert!(game.capture_events(invalid, vec![arpg_sim::EventKind::Hit]).is_err());
+        assert!(game.set_trace_retention(invalid).is_err());
+        assert_eq!(game.render_captured_trace().as_deref(), Some(before.as_str()));
+        assert_eq!(game.render_trace_since(0), history);
+    }
 }

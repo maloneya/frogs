@@ -396,16 +396,17 @@ pub(crate) struct Expect {
     /// A checked-in trace file, relative to the scenario, that the run's own
     /// trace must match exactly.
     ///
-    /// For behaviour too broad to enumerate as assertions. A tuning change then
-    /// produces a reviewable *diff* rather than a claim — which is the only
-    /// form in which "this changed the timing of everything by one tick" is
-    /// visible at all.
+    /// Reserved for diagnostic serialization/order and gameplay event streams.
+    /// Mechanics prefer scoped typed `events`, independent of log formatting.
     ///
     /// Regenerate with `--bless`, and **read the diff before committing it**. A
     /// blessed golden file nobody looked at is a test that has been deleted
     /// without anyone noticing.
     #[serde(default)]
     pub(crate) trace: Option<String>,
+    /// Exact sequence among explicitly selected event kinds; other diagnostics do not matter.
+    #[serde(default)]
+    pub(crate) events: Option<crate::events::Events>,
 }
 
 /// A predicted scalar and how far off it may be.
@@ -490,6 +491,10 @@ pub(crate) struct BodyExpect {
     /// about the chaser and only fail here.
     #[serde(default)]
     pub(crate) seeking: Option<bool>,
+
+    /// Simulation-owned locomotion choice for the latest tick.
+    #[serde(default)]
+    pub(crate) gait: Option<arpg_sim::Gait>,
 
     /// Whether the body should still exist.
     ///

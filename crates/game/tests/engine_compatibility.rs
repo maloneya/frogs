@@ -64,8 +64,8 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
                 let impulse = Impulse::try_from((2.0, -1.0)).unwrap();
                 assert!(game.apply_impulse(game.player_id(), impulse));
                 assert!(world.apply_impulse(world.player_id(), impulse));
-                assert!(game.request_spawn(Vec2::new(-3.0, 2.0), Template::BODY));
-                assert!(world.request_spawn(Vec2::new(-3.0, 2.0), Template::BODY));
+                assert!(game.request_spawn(Vec2::new(-3.0, 2.0), Template::BODY).is_some());
+                assert!(world.request_spawn(Vec2::new(-3.0, 2.0), Template::BODY).is_some());
             }
             if stepped == 20 {
                 game.set_attack_profile(AttackProfile::Slam);

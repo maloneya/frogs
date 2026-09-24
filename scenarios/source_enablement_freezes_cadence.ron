@@ -47,6 +47,22 @@
             (nth: 0, pos: (x: 22.0, z: 0.0, tol: 0.0001)),
             (nth: 1, pos: (x: 18.52526, z: 1.35098, tol: 0.0001)),
         ],
-        trace: "source_enablement_freezes_cadence.trace",
+        events: (
+        kinds: [SourceEnablementChanged, Fired, Placed, SourceRemoved, Refused],
+        sequence: [
+            (2, SourceEnablementChanged(id: "s0", enabled: true)),
+            (2, Fired(source: "s0")),
+            (2, Placed(id: (1, 1))),
+            (4, SourceEnablementChanged(id: "s0", enabled: false)),
+            (8, SourceEnablementChanged(id: "s0", enabled: true)),
+            (10, Fired(source: "s0")),
+            (10, Placed(id: (2, 1))),
+            (11, SourceEnablementChanged(id: "s0", enabled: false)),
+            (12, SourceEnablementChanged(id: "s0", enabled: true)),
+            (15, Fired(source: "s0")),
+            (15, Placed(id: (3, 1))),
+            (16, SourceRemoved(id: "s0")),
+        ],
+    ),
     ),
 )

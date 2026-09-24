@@ -66,6 +66,6 @@ checkpoints: [
 ```
 
 Use `state: None` to assert removal of a previously installed setup source.
-The cadence scenario pins transition and emission ticks in its golden trace;
+The cadence scenario pins transition and emission ticks with typed event assertions;
 the population and proximity scenarios verify that enabling still respects
 those conditions. These all run through `Game::step` and replay checks.

@@ -6,4 +6,11 @@
  expect: (bodies: [
  (nth: 0, velocity: (x: 2.7, z: 0.0, tol: 0.00001)),
  (nth: 1, velocity: (x: 1.35, z: 0.0, tol: 0.00001)),
- (nth: 2, velocity: (x: 1.35, z: 0.0, tol: 0.00001))], trace: "momentum_reaches_a_third_body.trace"))
+ (nth: 2, velocity: (x: 1.35, z: 0.0, tol: 0.00001))], events: (
+        kinds: [Impulsed, Crowded, Momentum],
+        sequence: [
+            (0, Impulsed(id: (1, 1), value: (6.0000,0.0000), source: None, tolerance: 0.00005)),
+            (0, Crowded(count: 2)),
+            (0, Momentum(pairs: 2)),
+        ],
+    )))

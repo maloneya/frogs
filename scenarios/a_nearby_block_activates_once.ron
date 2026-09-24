@@ -17,6 +17,11 @@
         player_pos: (x: 0.0, z: 0.6, tol: 0.000001),
         bodies: [(nth: 0, interaction: Activated, damageable: false,
             pos: (x: 0.0, z: 2.0, tol: 0.0))],
-        trace: "a_nearby_block_activates_once.trace",
+        events: (
+        kinds: [Activated],
+        sequence: [
+            (3, Activated(id: (1, 1))),
+        ],
+    ),
     ),
 )

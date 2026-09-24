@@ -530,7 +530,7 @@ fn every_field_of_the_world_reaches_the_hash() {
         // A pending request is a body that exists in one of two otherwise
         // identical worlds one tick from now.
         ("queue", |w| {
-            assert!(w.request_spawn(Vec2::ZERO, Template::BODY))
+            assert!(w.request_spawn(Vec2::ZERO, Template::BODY).is_some())
         }),
         // A source's own state decides when and where the next body appears,
         // so two worlds agreeing on every body still diverge from here.
@@ -855,7 +855,7 @@ fn nothing_is_pushed_out_of_the_arena() {
 fn a_request_becomes_a_body_on_the_next_tick_and_not_before() {
     let mut world = World::empty();
 
-    assert!(world.request_spawn(Vec2::new(3.0, 0.0), Template::BODY));
+    assert!(world.request_spawn(Vec2::new(3.0, 0.0), Template::BODY).is_some());
     assert_eq!(world.enemy_count(), 0, "the request was granted without a tick running");
 
     world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
@@ -872,14 +872,16 @@ fn a_full_queue_refuses_out_loud() {
     let mut world = World::empty();
     world.clear_trace();
 
-    for i in 0..QUEUE_CAPACITY {
-        assert!(world.request_spawn(Vec2::ZERO, Template::BODY), "request {i} refused early");
-    }
-    assert!(!world.request_spawn(Vec2::ZERO, Template::BODY), "the queue accepted past capacity");
+    let tickets: Vec<_> = (0..QUEUE_CAPACITY).map(|i| {
+        world.request_spawn(Vec2::ZERO, Template::BODY).unwrap_or_else(|| panic!("request {i} refused early"))
+    }).collect();
+    assert!(world.request_spawn(Vec2::ZERO, Template::BODY).is_none(), "the queue accepted past capacity");
 
     world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
 
     assert_eq!(world.enemy_count(), QUEUE_CAPACITY, "the accepted requests were not all granted");
+    assert_eq!(world.spawn_outcomes().iter().map(|result| result.ticket).collect::<Vec<_>>(), tickets);
+    assert!(world.spawn_outcomes().iter().all(|result| result.entity.is_some()));
     let refusals: Vec<_> = world
         .trace()
         .iter()
@@ -1167,7 +1169,7 @@ fn grid_matches_brute_force_through_contacts_combat_and_structural_changes() {
                     let id = world.bodies.slots.ids()[1 + tick % world.body_count()];
                     assert!(world.apply_impulse(id, Impulse::try_from((12.0, -8.0)).unwrap()));
                 }
-                if tick % 17 == 0 { assert!(world.request_spawn(Vec2::new(0.49, 0.49), Template::BODY.seeking())); }
+                if tick % 17 == 0 { assert!(world.request_spawn(Vec2::new(0.49, 0.49), Template::BODY.seeking()).is_some()); }
                 if tick == 25 {
                     let id = world.bodies.slots.ids()[10];
                     assert!(world.despawn_body(id));
@@ -1208,6 +1210,6 @@ fn rebuilding_the_grid_uses_reserved_storage_even_after_population_changes() {
     assert_eq!(allocations, 0, "the grid must not allocate, even on its first step");
     let id = world.bodies.slots.ids()[10];
     world.despawn_body(id);
-    assert!(world.request_spawn(Vec2::new(0.49, 0.49), Template::BODY));
+    assert!(world.request_spawn(Vec2::new(0.49, 0.49), Template::BODY).is_some());
     assert_eq!(alloc_counter::allocations(|| world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false))), 0);
 }

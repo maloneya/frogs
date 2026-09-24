@@ -80,7 +80,7 @@ fn refused_lighting_loads_preserve_live_state_snapshot_and_pending_work() {
     let mut game = Game::from_scene(&authored).unwrap();
     let mut control = Game::from_scene(&authored).unwrap();
     for game in [&mut game, &mut control] {
-        assert!(game.request_spawn(Vec2::new(40.0, 0.0), Template::BODY));
+        assert!(game.request_spawn(Vec2::new(40.0, 0.0), Template::BODY).is_some());
     }
     let before = observed(&game);
     assert!(game.load_scene(&scene(1, 50.0)).is_err());

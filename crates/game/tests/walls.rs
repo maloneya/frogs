@@ -39,12 +39,12 @@ fn wall_admission_is_atomic_and_lifetime_preserves_stable_scene_indices() {
     let survivor = game.walls().next().unwrap();
     assert_eq!((survivor.0, survivor.1), (second, 0));
     assert!(report(&game).contains(&format!("\"{second}/0\"")));
-    assert!(game.request_spawn(Vec2::new(10.0, 0.0), Template::BODY));
+    assert!(game.request_spawn(Vec2::new(10.0, 0.0), Template::BODY).is_some());
     let mut control = Game::from_scene(&content).unwrap();
     let control_first = control.walls().next().unwrap().0;
     control.load_scene(&content).unwrap();
     assert!(control.evict_scene(control_first));
-    assert!(control.request_spawn(Vec2::new(10.0, 0.0), Template::BODY));
+    assert!(control.request_spawn(Vec2::new(10.0, 0.0), Template::BODY).is_some());
     let before = (game.hash(), report(&game), game.trace().render());
     let full = scene(vec![content.engine.walls[0]; MAX_WALLS]);
     assert!(game.load_scene(&full).is_err());

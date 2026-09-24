@@ -286,11 +286,15 @@ impl Game {
         self.world.add_seek(id)
     }
 
-    /// Requests a spawn at the next structural boundary; false means queue refusal.
+    /// Requests a spawn at the next structural boundary; `None` means queue refusal.
     #[must_use]
-    pub fn request_spawn(&mut self, at: Vec2, what: Template) -> bool {
+    pub fn request_spawn(&mut self, at: Vec2, what: Template) -> Option<arpg_sim::SpawnTicket> {
         self.world.request_spawn(at, what)
     }
+
+    /// Authoritative queued spawn results from the latest completed tick.
+    #[must_use]
+    pub fn spawn_outcomes(&self) -> &[arpg_sim::SpawnOutcome] { self.world.spawn_outcomes() }
 
     /// Installs a source between ticks and returns its stable identity.
     #[must_use]
@@ -317,6 +321,47 @@ impl Game {
     /// Sets validated recovery for the next swing through the shared tuning door.
     pub fn set_attack_recovery(&mut self, recovery: RecoveryTicks) {
         self.world.set_attack_recovery(recovery);
+    }
+
+    /// Configure engine diagnostic history; zero disables recent history.
+    /// Unsupported limits leave every stream unchanged.
+    pub fn set_trace_retention(&mut self, capacity: usize) -> Result<(), &'static str> {
+        Trace::<arpg_sim::Event>::validate_limit(capacity)?;
+        self.world.set_trace_retention(capacity)?;
+        self.encounter_trace.set_retention(capacity)?;
+        self.set_pieces.set_trace_retention(capacity)
+    }
+
+    /// Collect all diagnostic streams independently of their retention rings.
+    /// Unsupported limits preserve all existing capture and history.
+    pub fn capture_trace(&mut self, limit: usize) -> Result<(), &'static str> {
+        Trace::<arpg_sim::Event>::validate_limit(limit)?;
+        self.world.capture_trace(limit)?;
+        self.encounter_trace.capture(limit, |_| true)?;
+        self.set_pieces.capture_trace(limit)
+    }
+
+    /// Render complete captured streams, or fail closed on any overflow.
+    pub fn render_captured_trace(&self) -> Option<String> {
+        Some(render_events(
+            self.world.trace().captured()?.iter().copied(),
+            self.encounter_trace.captured()?.iter().copied(),
+            self.set_pieces.trace().captured()?.iter().copied(),
+        ))
+    }
+
+    /// Collect selected engine transitions separately from recent history.
+    pub fn capture_events(&mut self, limit: usize, kinds: Vec<arpg_sim::EventKind>) -> Result<(), &'static str> {
+        self.world.capture_events(limit, kinds)?;
+        // A filtered engine stream cannot be rendered as a complete multi-stream log.
+        self.encounter_trace.stop_capture();
+        self.set_pieces.stop_capture();
+        Ok(())
+    }
+
+    /// Complete selected evidence, or `None` if its bound was exceeded.
+    pub fn captured_events(&self) -> Option<&[(u64, arpg_sim::Event)]> {
+        self.world.trace().captured()
     }
 
     /// Clears diagnostic history without changing simulation state or its hash.
@@ -493,6 +538,12 @@ impl Game {
         self.world.motion(id)
     }
 
+    /// Ground gait currently selected by a live chaser.
+    #[must_use]
+    pub fn gait(&self, id: EntityId) -> Option<arpg_sim::Gait> {
+        self.world.gait(id)
+    }
+
     /// Whether a live identity has seeking membership.
     #[must_use]
     pub fn is_seeker(&self, id: EntityId) -> bool {
@@ -539,22 +590,7 @@ impl Game {
     /// a chronology between external commands and the gameplay pass.
     #[must_use]
     pub fn render_trace_since(&self, since: u64) -> String {
-        use std::fmt::Write as _;
-        let mut out = String::new();
-        for (tick, event) in self.world.trace().since(since) {
-            let _ = writeln!(out, "{tick} {event}");
-        }
-        let mut encounters = self.encounter_trace.since(since).peekable();
-        if encounters.peek().is_some() {
-            out.push_str("# encounters\n");
-            for (tick, event) in encounters { let _ = writeln!(out, "{tick} {event}"); }
-        }
-        let mut pieces = self.set_pieces.trace().since(since).peekable();
-        if pieces.peek().is_some() {
-            out.push_str("# set pieces\n");
-            for (tick, event) in pieces { let _ = writeln!(out, "{tick} {event}"); }
-        }
-        out
+        render_events(self.world.trace().since(since), self.encounter_trace.since(since), self.set_pieces.trace().since(since))
     }
 }
 
@@ -603,4 +639,28 @@ impl Game {
     }
     /// Tick-stamped set-piece transitions, independent of authoritative state.
     pub fn set_piece_trace(&self) -> &Trace<crate::SetPieceEvent> { self.set_pieces.trace() }
+}
+
+/// Streams have an explicit order, rather than inventing cross-stream chronology.
+fn render_events(
+    engine: impl Iterator<Item = (u64, arpg_sim::Event)>,
+    encounters: impl Iterator<Item = (u64, EncounterEvent)>,
+    pieces: impl Iterator<Item = (u64, crate::SetPieceEvent)>,
+) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        for (tick, event) in engine {
+            let _ = writeln!(out, "{tick} {event}");
+        }
+        let mut encounters = encounters.peekable();
+        if encounters.peek().is_some() {
+            out.push_str("# encounters\n");
+            for (tick, event) in encounters { let _ = writeln!(out, "{tick} {event}"); }
+        }
+        let mut pieces = pieces.peekable();
+        if pieces.peek().is_some() {
+            out.push_str("# set pieces\n");
+            for (tick, event) in pieces { let _ = writeln!(out, "{tick} {event}"); }
+        }
+        out
 }

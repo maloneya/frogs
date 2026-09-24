@@ -90,17 +90,23 @@ fn source_checkpoint_failure_survives_a_correct_final_state() {
 }
 
 #[test]
-fn scene_batches_cannot_bind_identities_from_a_truncated_trace() {
-    // Evict before the step, so this tests the observation boundary without
-    // asking the quadratic crowd solver to simulate a large coincident crowd.
+fn scene_batches_bind_identities_even_when_diagnostic_history_overflows() {
+    // Two load/evict batches produce over 65,536 placement/removal events.
+    // Evict before stepping so no large coincident crowd reaches the solver.
     let bodies = "(pos: (20.0, 0.0)),".repeat(17_000);
     let fixture = Fixture::new(&format!(
-        "(scenes: [(at: 0, action: Load(Inline((engine: (name: \"large\", bodies: [{bodies}]))))),
-                    (at: 0, action: Evict(0))], budget: (ticks: 1))"
+        r#"(scenes: [
+            (at: 0, action: Load(Inline((engine: (name: "large", bodies: [{bodies}]))))),
+            (at: 0, action: Evict(0)),
+            (at: 0, action: Load(Inline((engine: (name: "large again", bodies: [{bodies}]))))),
+            (at: 0, action: Evict(1)),
+        ], spawns: [(at: 0, pos: (40.0, 0.0))], budget: (ticks: 1),
+        expect: (bodies: [(nth: 0, alive: false), (nth: 16999, alive: false),
+            (nth: 17000, alive: false), (nth: 33999, alive: false),
+            (nth: 34000, alive: true)]))"#
     ));
     let (output, text) = fixture.run(&[]);
-    assert_eq!(output.status.code(), Some(1), "{text}");
-    assert!(text.contains("placement trace"), "{text}");
+    assert!(output.status.success(), "{text}");
 }
 
 #[test]
@@ -215,17 +221,17 @@ fn a_transient_failure_survives_recovery_and_blessing() {
 
 #[test]
 fn checkpoints_observe_new_spawns_at_both_budget_edges_in_any_order() {
-    // First seeker step is 2.5/60, and each checkpoint observes the step just
+    // First seeker speed is .5, then .5*.9+.5=.95; each checkpoint observes the step just
     // completed. Also checks that new placement IDs are registered before it.
     let fixture = Fixture::new(
         r#"(
         spawns: [(at: 0, pos: (10.0, 0.0), what: (seeks: true))],
         checkpoints: [
             (at: 1, expect: (bodies: [(nth: 0, alive: true,
-                pos: (x: 9.9166667, z: 0.0, tol: 0.00001))])),
+                pos: (x: 9.9758333, z: 0.0, tol: 0.00001))])),
             (at: 0, expect: (enemy_count: 1, seekers: 1, bodies: [(nth: 0, seeking: true,
-                pos: (x: 9.9583333, z: 0.0, tol: 0.00001),
-                velocity: (x: 0.0, z: 0.0, tol: 0.0))])),
+                pos: (x: 9.9916667, z: 0.0, tol: 0.00001),
+                velocity: (x: -0.5, z: 0.0, tol: 0.0))])),
             (at: 0, expect: (player_pos: (x: 0.0, z: 0.0, tol: 0.0))),
         ],
         budget: (ticks: 2), expect: (enemy_count: 1),
@@ -273,8 +279,19 @@ fn checkpoint_traces_are_rejected_instead_of_silently_ignored() {
     );
     let (output, text) = fixture.run(&["--bless"]);
     assert_eq!(output.status.code(), Some(1), "{text}");
-    assert!(text.contains("golden traces belong in the final expect.trace"), "{text}");
+    assert!(text.contains("transition evidence belongs in final expect.events or expect.trace"), "{text}");
     assert!(!fixture.0.join("ignored.trace").exists());
+}
+
+#[test]
+fn checkpoint_event_contracts_are_rejected_instead_of_ignored() {
+    let fixture = Fixture::new(r#"(
+        checkpoints: [(at: 0, expect: (events: (kinds: [Hit], sequence: [])))],
+        budget: (ticks: 1),
+    )"#);
+    let (output, text) = fixture.run(&["--bless"]);
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(text.contains("transition evidence belongs in final"), "{text}");
 }
 
 #[test]
@@ -357,4 +374,22 @@ fn encounter_admission_and_observation_errors_cannot_be_blessed() {
             assert_eq!(output.status.code(),Some(1),"invalid encounter passed: {text}");
         }
     }
+}
+
+#[test]
+fn timing_evidence_preserves_results_and_cannot_overwrite_existing_evidence() {
+    let fixture = Fixture::new("(budget: (ticks: 2), expect: (enemy_count: 0))");
+    let (plain, text) = fixture.run(&[]);
+    assert!(plain.status.success(), "{text}");
+    let path = fixture.0.join("timings.json");
+    let (timed, timed_text) = fixture.run(&["--timings", path.to_str().unwrap()]);
+    assert!(timed.status.success(), "{timed_text}");
+    assert_eq!(timed_text, text, "timing must not change scenario or replay outcomes");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    for field in ["first_simulation_ms", "first_hashing_ms", "first_assertions_ms", "replay_ms"] {
+        assert!(saved.contains(field), "missing timing component {field}");
+    }
+    let (repeated, repeated_text) = fixture.run(&["--timings", path.to_str().unwrap()]);
+    assert!(!repeated.status.success(), "existing evidence was overwritten: {repeated_text}");
+    assert_eq!(std::fs::read_to_string(path).unwrap(), saved);
 }

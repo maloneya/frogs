@@ -65,6 +65,8 @@ use crate::MAX_BODIES;
 /// that can ask today, which is what makes hitting it a signal rather than a
 /// routine event: a full queue means something is asking faster than the world
 /// can absorb, and [`SpawnQueue::refused`] is what says so out loud.
+/// Cancelled scene requests retain their slots until the next boundary, so
+/// cancellation cannot create an unbounded number of outstanding outcomes.
 pub(crate) const QUEUE_CAPACITY: usize = 256;
 const _: () = assert!(QUEUE_CAPACITY > 0, "a zero-length queue would refuse everything, silently");
 
@@ -155,9 +157,37 @@ impl Template {
     }
 }
 
+/// Stable identity for an accepted queued spawn, scoped to this world lifetime.
+/// Scene eviction never reuses tickets; restarting creates a fresh lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpawnTicket(u64);
+
+impl core::fmt::Display for SpawnTicket {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(out, "{}", self.0)
+    }
+}
+
+/// Authoritative result of one accepted request at the latest spawn boundary.
+/// `entity` is absent when admission fails or its owning scene was evicted.
+/// Results remain valid observations even if the body is removed later that tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpawnOutcome {
+    /// Ticket returned when the request was accepted.
+    pub ticket: SpawnTicket,
+    /// Body created, or refusal. Never inferred from diagnostic retention.
+    pub entity: Option<EntityId>,
+    /// Scene that owns the request, if any.
+    pub owner: Option<SceneId>,
+    /// Source that produced the request, if any.
+    pub source: Option<crate::SourceId>,
+}
+
 /// One thing asked for, not yet made.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Request {
+    ticket: SpawnTicket,
+    cancelled: bool,
     /// Ground-plane position: `x` is world X and `y` is world **Z**.
     at: Vec2,
     what: Template,
@@ -173,6 +203,9 @@ struct Request {
 /// requests, and slot order is what every id in a replay is keyed to.
 pub(crate) struct SpawnQueue {
     pending: Vec<Request>,
+    next_ticket: u64,
+    /// Bounded by accepted requests; replaced at the next drain.
+    outcomes: Vec<SpawnOutcome>,
     /// Requests dropped since the last drain, because the queue was full.
     ///
     /// Counted rather than ignored, because a dropped spawn is otherwise the
@@ -185,52 +218,75 @@ pub(crate) struct SpawnQueue {
 impl Default for SpawnQueue {
     fn default() -> Self {
         // Allocated once, up front — see [`QUEUE_CAPACITY`].
-        Self { pending: Vec::with_capacity(QUEUE_CAPACITY), refused: 0 }
+        Self { pending: Vec::with_capacity(QUEUE_CAPACITY), next_ticket: 0,
+            outcomes: Vec::with_capacity(QUEUE_CAPACITY), refused: 0 }
     }
 }
 
 impl SpawnQueue {
-    /// Asks for one thing. `false` when the queue is full, in which case the
+    /// Asks for one thing. `None` when the queue is full, in which case the
     /// request is dropped and counted.
     ///
     /// Refusing rather than growing keeps the allocation promise, and refusing
     /// the *newest* rather than the oldest keeps a flood from starving requests
     /// that were already accepted.
-    pub(crate) fn push(&mut self, at: Vec2, what: Template) -> bool {
+    pub(crate) fn push(&mut self, at: Vec2, what: Template) -> Option<SpawnTicket> {
         self.push_owned(at, what, None)
     }
 
-    pub(crate) fn push_owned(&mut self, at: Vec2, what: Template, owner: Option<SceneId>) -> bool {
+    pub(crate) fn push_owned(&mut self, at: Vec2, what: Template, owner: Option<SceneId>) -> Option<SpawnTicket> {
         self.push_from(at, what, owner, None)
     }
 
-    pub(crate) fn push_from(&mut self, at: Vec2, what: Template, owner: Option<SceneId>, source: Option<crate::SourceId>) -> bool {
+    pub(crate) fn push_from(&mut self, at: Vec2, what: Template, owner: Option<SceneId>, source: Option<crate::SourceId>) -> Option<SpawnTicket> {
         if self.pending.len() >= QUEUE_CAPACITY {
             self.refused += 1;
-            return false;
+            return None;
         }
-        self.pending.push(Request { at, what, owner, source });
-        true
+        let ticket = SpawnTicket(self.next_ticket);
+        self.next_ticket = self.next_ticket.checked_add(1).expect("spawn ticket space exhausted");
+        self.pending.push(Request { ticket, cancelled: false, at, what, owner, source });
+        Some(ticket)
     }
 
     /// How many requests are waiting. Reported in `state`, because "the spawn I
     /// asked for has not happened yet" and "the spawn I asked for was refused"
     /// look identical from the outside otherwise.
     pub(crate) fn len(&self) -> usize {
-        self.pending.len()
+        self.pending.iter().filter(|request| !request.cancelled).count()
     }
 
+    pub(crate) fn outcomes(&self) -> &[SpawnOutcome] { &self.outcomes }
+
     pub(crate) fn cancel_scene(&mut self, owner: SceneId) {
-        self.pending.retain(|request| request.owner != Some(owner));
+        // Keep the bounded request slot until the boundary so every accepted
+        // ticket receives a result, even after scene eviction.
+        for request in &mut self.pending {
+            if request.owner == Some(owner) { request.cancelled = true; }
+        }
     }
 
     pub(crate) fn hash(&self, h: &mut Fnv) {
-        let Self { pending, refused } = self;
+        let Self { pending, next_ticket, outcomes, refused } = self;
+        h.u64(*next_ticket);
+        h.usize(outcomes.len());
+        for outcome in outcomes {
+            let SpawnOutcome { ticket, entity, owner, source } = outcome;
+            h.u64(ticket.0);
+            h.usize(usize::from(entity.is_some()));
+            if let Some(id) = entity { id.hash_into(h); }
+            h.usize(usize::from(owner.is_some()));
+            if let Some(id) = owner { id.hash_into(h); }
+            h.usize(usize::from(source.is_some()));
+            if let Some(id) = source { id.hash_into(h); }
+        }
 
         h.usize(pending.len());
         h.usize(*refused);
         for request in pending {
-            let Request { at, what, owner, source } = request;
+            let Request { ticket, cancelled, at, what, owner, source } = request;
+            h.u64(ticket.0);
+            h.usize(usize::from(*cancelled));
             h.f32(at.x);
             h.f32(at.y);
             what.hash_into(h);
@@ -278,11 +334,7 @@ pub(crate) fn place(
         seekers.add(id);
     }
 
-    // Per body rather than summarised. The scenario runner binds placement
-    // numbers from `Placed` events, so a per-tick count would make mid-run
-    // bodies unnameable. `Fired` already says which source asked; this says
-    // which body appeared. The trace's "rare events" rule still holds at the
-    // scale sources exist at — tens of emissions, not a thousand contacts.
+    // Diagnostics describe placement; authoritative outcomes bind request identities.
     trace.emit(Event::Placed { id });
 
     Some(id)
@@ -310,21 +362,22 @@ pub(crate) fn drain(
     // `drain` rather than iterate-then-clear: the queue must be empty
     // afterwards even if the horde is full, or a request refused this tick
     // would be retried on every tick forever.
+    queue.outcomes.clear();
     for request in queue.pending.drain(..) {
-        // Cancellation is eager at eviction; this also guards a stale producer.
-        if request.owner.is_some_and(|id| !scenes.contains(id)) {
+        let entity = if request.cancelled || request.owner.is_some_and(|id| !scenes.contains(id)) {
+            None
+        } else {
+            place(enemies, seekers, request.at, request.what, &mut trace)
+        };
+        if let Some(id) = entity {
+            enemies.health.set_origin(id, request.source);
+            if let Some(owner) = request.owner { scenes.record_body(owner, id); }
+        } else {
             refused += 1;
-            continue;
         }
-        match place(enemies, seekers, request.at, request.what, &mut trace) {
-            Some(id) => {
-                enemies.health.set_origin(id, request.source);
-                if let Some(owner) = request.owner {
-                    scenes.record_body(owner, id);
-                }
-            }
-            None => refused += 1,
-        }
+        queue.outcomes.push(SpawnOutcome {
+            ticket: request.ticket, entity, owner: request.owner, source: request.source,
+        });
     }
 
     if refused > 0 {
@@ -360,13 +413,35 @@ mod tests {
         let mut queue = SpawnQueue::default();
         let mut trace = crate::Trace::default();
 
-        assert!(queue.push(Vec2::ZERO, Template::BODY), "the queue refused before the horde could");
+        assert!(queue.push(Vec2::ZERO, Template::BODY).is_some(), "the queue refused before the horde could");
         drain(&mut queue, &mut enemies, &mut seekers, &mut Scenes::default(), trace.sink(0));
 
         assert_eq!(enemies.len(), MAX_BODIES + 1, "the budget was overrun");
         let events: Vec<_> = trace.iter().map(|(_, e)| e).collect();
         assert_eq!(events, vec![Event::Refused { count: 1 }], "a body was lost without a word");
     }
+    #[test]
+    fn cancelled_requests_keep_bounded_receipts_until_the_boundary() {
+        // Keep the owner live, proving explicit cancellation causes refusal.
+        let mut world = crate::World::empty();
+        let owner = world.load_scene(&crate::Scene::default()).unwrap();
+        let mut scenes = world.scenes;
+        let mut queue = SpawnQueue::default();
+        for _ in 0..QUEUE_CAPACITY {
+            queue.push_owned(Vec2::ZERO, Template::BODY, Some(owner)).unwrap();
+        }
+        queue.cancel_scene(owner);
+        assert_eq!(queue.len(), 0, "cancelled work reserves no body capacity");
+        assert!(queue.push(Vec2::ZERO, Template::BODY).is_none(), "outcome slots remain bounded until drain");
+        let mut enemies = Bodies::default();
+        let mut seekers = Members::default();
+        let mut trace = crate::Trace::default();
+        drain(&mut queue, &mut enemies, &mut seekers, &mut scenes, trace.sink(0));
+        assert_eq!(queue.outcomes().len(), QUEUE_CAPACITY);
+        assert!(queue.outcomes().iter().all(|result| result.entity.is_none()));
+        assert!(queue.push(Vec2::ZERO, Template::BODY).is_some());
+    }
+
     /// Every placement door rejects immovable/chasing contradictions and an
     /// out-of-arena static body before identity or capability storage changes.
     #[test]

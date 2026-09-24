@@ -3,4 +3,9 @@
  setup: (actions: [Place((10.0, 0.0))]),
  impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))],
  budget: (ticks: 1),
- expect: (bodies: [(nth: 0, pos: (x: 10.1, z: 0.0, tol: 0.00001), velocity: (x: 5.4, z: 0.0, tol: 0.00001))], trace: "an_impulse_moves_and_damps.trace"))
+ expect: (bodies: [(nth: 0, pos: (x: 10.1, z: 0.0, tol: 0.00001), velocity: (x: 5.4, z: 0.0, tol: 0.00001))], events: (
+        kinds: [Impulsed],
+        sequence: [
+            (0, Impulsed(id: (1, 1), value: (6.0000,0.0000), source: None, tolerance: 0.00005)),
+        ],
+    )))

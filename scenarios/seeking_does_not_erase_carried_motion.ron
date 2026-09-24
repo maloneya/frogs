@@ -1,5 +1,5 @@
-// Seek travels -2.5/60 along X, carried velocity adds +6/60.
-(description: "Steering and carried motion compose without overwriting one another.",
+// Drag retains 6*.9=5.4m/s; the motor can oppose it by only .5m/s this tick.
+(description: "Steering brakes a knockback gradually instead of overwriting it.",
  setup: (actions: [Place((10.0, 0.0)), Seek(0)]),
  impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))], budget: (ticks: 1),
- expect: (bodies: [(nth: 0, seeking: true, pos: (x: 10.0583333, z: 0.0, tol: 0.00001), velocity: (x: 5.4, z: 0.0, tol: 0.00001))]))
+ expect: (bodies: [(nth: 0, seeking: true, pos: (x: 10.0816667, z: 0.0, tol: 0.00001), velocity: (x: 4.9, z: 0.0, tol: 0.00001))]))

@@ -96,7 +96,7 @@ fn missing_reward_orphans_encounter_and_eviction_releases_only_its_chests() {
 fn refused_chests_preserve_live_state_and_pending_work() {
     let mut game = Game::from_scene(&scene()).unwrap();
     step(&mut game, false, true);
-    assert!(game.request_spawn(Vec2::new(20.0, 20.0), Template::BODY));
+    assert!(game.request_spawn(Vec2::new(20.0, 20.0), Template::BODY).is_some());
     let before = observed(&game);
     let mut invalid = Vec::new();
     for body in [0, 99] { let mut s = scene(); s.chests[0].body = body; invalid.push(s); }

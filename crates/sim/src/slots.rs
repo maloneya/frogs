@@ -54,6 +54,10 @@ pub struct EntityId {
 }
 
 impl EntityId {
+    /// Read-only diagnostic identity. This pair cannot construct a live handle.
+    #[must_use]
+    pub fn diagnostic_identity(self) -> (u32, u32) { (self.index, self.generation) }
+
     /// Which slot this name occupies.
     ///
     /// For indexing a table keyed by entity — see [`crate::members`], where it

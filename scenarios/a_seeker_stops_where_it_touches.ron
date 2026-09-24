@@ -2,11 +2,9 @@
 // Without the arrival clamp, seek walks the body in and separation pushes it
 // back out every tick, for as long as the chase lasts.
 //
-// At 2.5 m/s, 229 full steps from 10.11 m leave less than one step
-// before the 0.55 m contact distance; step 230 must be shortened.
-//
-// **The golden trace is empty, and that is the assertion.** Not one contact in
-// 260 ticks. A body that arrived and then jittered would fill it.
+// The motor brakes using remaining distance before contact. Gait changes
+// remain visible in the trace, but no collision or momentum event is expected.
+
 (
     description: "A chaser arrives at exactly touching distance and stops, without ever registering a contact.",
     setup: (
@@ -24,6 +22,6 @@
         bodies: [
             (nth: 0, seeking: true, pos: (x: 0.55, z: 0.0, tol: 0.001)),
         ],
-        trace: "a_seeker_stops_where_it_touches.trace",
+        events: (kinds: [Contacts, Crowded, Momentum, Clamped, WallContacts], sequence: []),
     ),
 )

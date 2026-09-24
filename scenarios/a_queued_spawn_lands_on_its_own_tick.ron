@@ -1,33 +1,27 @@
-// A body asked for mid-run appears at the tick it was asked for, and the whole
-// of that tick belongs to it.
-//
-// **The position is the assertion about timing, not the count.** `enemy_count`
-// at the end says a body arrived; it cannot say when. A chaser placed 10.0 out
-// closes at 2.5 units/sec, so 60 ticks of seeking put it at exactly 7.5 — and a
-// drain that ran a tick late would leave it at 7.5417, which is outside the
-// tolerance by a factor of fifty. That is what pins the latency: a request made
-// between ticks is granted by the first pass of the *next* tick, and the body
-// then walks on that tick like anything else.
-//
-// The golden trace is the readable half of the same claim: one `placed`, at
-// tick 10, and nothing at tick 9.
+// The spawn receipt identifies each request; exact Placed events assert latency.
+// A seeker and a bystander in one batch also prove template grants stay distinct.
+// Movement on the first tick is checked numerically by the scenario CLI checkpoint
+// test and gait scenarios, so this fixture does not depend on chase-speed tuning.
 (
-    description: "A spawn requested at tick 10 exists from the start of tick 10, and moves on it.",
-    setup: (),
-    inputs: [],
+    description: "Mixed templates requested at tick 10 appear on that tick with their own capabilities.",
     spawns: [
         (at: 10, pos: (10.0, 0.0), what: (seeks: true)),
+        (at: 10, pos: (-10.0, 0.0)),
     ],
-    budget: (ticks: 70),
+    checkpoints: [(at: 9, expect: (enemy_count: 0, seekers: 0))],
+    budget: (ticks: 11),
     expect: (
-        player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
-        enemy_count: 1,
+        enemy_count: 2,
         seekers: 1,
         contacts: 0,
         crowd_contacts: 0,
         bodies: [
-            (nth: 0, seeking: true, pos: (x: 7.5, z: 0.0, tol: 0.001)),
+            (nth: 0, alive: true, seeking: true),
+            (nth: 1, alive: true, seeking: false, pos: (x: -10.0, z: 0.0, tol: 0.0)),
         ],
-        trace: "a_queued_spawn_lands_on_its_own_tick.trace",
+        events: (
+            kinds: [Placed, Refused, Fired],
+            sequence: [(10, Placed(id: (1, 1))), (10, Placed(id: (2, 1)))],
+        ),
     ),
 )

@@ -3,7 +3,8 @@
 This is the first dedicated horde asset: a short, hunched low-poly creature
 built from boxes, joined into one mesh, and rigidly weighted to a seven-joint
 armature. It carries only the two clips the horde presentation consumes:
-`Idle` and `Run`.
+`Idle` and `Run`. Presentation retimes `Run` into walking, running and sprinting
+cadences according to actual movement, sharing two phase buckets per cadence.
 
 Regenerate both checked-in artifacts from the repository root:
 

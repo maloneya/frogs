@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r \".tool_input.file_path // .tool_response.filePath // empty\" | { read -r f; if [ -n \"$f\" ]; then case \"$f\" in */arpg/*.rs|*/arpg/*.toml|*/arpg/*.wgsl) root=\"${f%%/arpg/*}/arpg\" ;; *) exit 0 ;; esac; else root=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; fi; cd \"$root\" 2>/dev/null || exit 0; [ -f Cargo.toml ] || exit 0; . \"$HOME/.cargo/env\" 2>/dev/null; if ! out=$(cargo clippy --workspace --all-targets -- -D warnings 2>&1); then printf \"%s\\n\" \"$out\" | tail -n 40 >&2; exit 2; fi; }",
+            "command": "jq -r \".tool_input.file_path // .tool_response.filePath // empty\" | { read -r f; if [ -n \"$f\" ]; then case \"$f\" in */arpg/*.rs|*/arpg/*.toml|*/arpg/*.wgsl) root=\"${f%%/arpg/*}/arpg\" ;; *) exit 0 ;; esac; else root=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; fi; cd \"$root\" 2>/dev/null || exit 0; [ -f Cargo.toml ] || exit 0; . \"$HOME/.cargo/env\" 2>/dev/null; if ! out=$(python3 scripts/verify.py --only clippy 2>&1); then printf \"%s\\n\" \"$out\" | tail -n 40 >&2; exit 2; fi; }",
             "timeout": 120,
             "statusMessage": "Checking invariants"
           }
@@ -18,9 +18,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "in=$(cat); [ \"$(printf '%s' \"$in\" | jq -r '.stop_hook_active // false')\" = \"true\" ] && exit 0; cd \"${CLAUDE_PROJECT_DIR:-$PWD}\" || exit 0; [ -f Cargo.toml ] || exit 0; . \"$HOME/.cargo/env\" 2>/dev/null; if ! out=$(cargo test --workspace 2>&1); then printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; fi; if ! out=$(cargo doc --workspace --lib --bins --no-deps --document-private-items 2>&1); then printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; fi; if [ -d crates/scenario ]; then if ! out=$(cargo run --quiet -p scenario -- scenarios/ 2>&1); then printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; fi; fi",
-            "timeout": 300,
-            "statusMessage": "Running tests and scenarios"
+            "command": "in=$(cat); [ \"$(printf '%s' \"$in\" | jq -r ' .stop_hook_active // false')\" = \"true\" ] && exit 0; cd \"${CLAUDE_PROJECT_DIR:-$PWD}\" || exit 0; [ -f Cargo.toml ] || exit 0; . \"$HOME/.cargo/env\" 2>/dev/null; if ! out=$(python3 scripts/verify.py full 2>&1); then printf '%s\\n' \"$out\" | tail -n 60 >&2; exit 2; fi",
+            "timeout": 600,
+            "statusMessage": "Verifying exact-input evidence"
           }
         ]
       }

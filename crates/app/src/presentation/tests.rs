@@ -785,3 +785,27 @@ fn channel_geometry_clips_the_interpolated_sword_path_when_the_damage_ray_misses
         "visual obstruction cannot feed back into damage"
     );
 }
+
+#[test]
+fn varied_ground_speeds_use_three_cadences_within_the_existing_pose_budget() {
+    let mut horde = loaded_horde("horde.glb");
+    let mut game = Game::empty();
+    for pos in [glam::Vec2::new(20.0, 0.0), glam::Vec2::new(-20.0, 0.0), glam::Vec2::new(0.0, 20.0)] {
+        game.place(pos, arpg_sim::Template::BODY.seeking()).unwrap();
+    }
+    game.place(glam::Vec2::new(0.0, -20.0), arpg_sim::Template::BODY).unwrap();
+    for _ in 0..24 {
+        game.step(Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap(),
+            Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+    }
+    horde.rebuild(game.enemy_presentations(Alpha::ONE), 0.37, |_| 0.0);
+    assert_eq!(horde.instance_count(), 4);
+    assert_eq!(horde.occupied_buckets(), 4);
+    for role in 0..HORDE_ROLES.len() {
+        assert_eq!(horde.buckets[role * HORDE_PHASES_PER_ROLE..(role + 1) * HORDE_PHASES_PER_ROLE]
+            .iter().map(|bucket| bucket.instances.len()).sum::<usize>(), 1);
+    }
+    assert_eq!(horde.buckets.len(), 8);
+    assert!(HordeRole::Walk.playback_rate() < HordeRole::Run.playback_rate());
+    assert!(HordeRole::Run.playback_rate() < HordeRole::Sprint.playback_rate());
+}

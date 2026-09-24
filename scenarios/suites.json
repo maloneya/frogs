@@ -1,0 +1,11 @@
+{
+  "extended": {
+    "a_dense_crowd_stays_within_the_step_budget.ron": "10,000-body population, compression and step budget",
+    "walls_hold_a_seeking_crowd.ron": "1,024-body wall containment and step budget",
+    "soul_trial_can_be_completed.ron": "Complete authored 30-second encounter",
+    "soul_trial_times_out_without_defeats.ron": "Complete authored encounter deadline",
+    "two_encounters_resolve_independently.ron": "Two full encounter lifecycles and deadline boundary",
+    "three_hits_defeat_an_enemy.ron": "Long knockback-return and defeat lifecycle",
+    "the_wall_stops_the_player.ron": "Long-duration arena containment"
+  }
+}

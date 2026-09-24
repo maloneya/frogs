@@ -282,6 +282,11 @@ impl SetPieces {
     pub(crate) fn trace(&self) -> &Trace<SetPieceEvent> {
         &self.trace
     }
+    pub(crate) fn stop_capture(&mut self) { self.trace.stop_capture(); }
+    pub(crate) fn capture_trace(&mut self, limit: usize) -> Result<(), &'static str> { self.trace.capture(limit, |_| true) }
+    pub(crate) fn set_trace_retention(&mut self, capacity: usize) -> Result<(), &'static str> {
+        self.trace.set_retention(capacity)
+    }
     pub(crate) fn clear_trace(&mut self) {
         self.trace.clear();
     }

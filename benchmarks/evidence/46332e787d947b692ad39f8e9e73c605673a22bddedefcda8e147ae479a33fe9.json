@@ -1,0 +1,76 @@
+{
+  "artifact": "46332e787d947b692ad39f8e9e73c605673a22bddedefcda8e147ae479a33fe9.json.gz",
+  "sha256": "46332e787d947b692ad39f8e9e73c605673a22bddedefcda8e147ae479a33fe9",
+  "source": {
+    "revision": "3035f022d2c24d129a21f1c6e11016324901e327",
+    "dirty": true,
+    "digest": "4ff0f8c7807080fcaf0c8549db8a851fb7714f2b6284d2100ddd9ab56ca94187"
+  },
+  "conditions": {
+    "machine": "Mac16,10",
+    "cpu": "Apple M4",
+    "memory_bytes": "17179869184",
+    "os": "macOS-27.0-arm64-arm-64bit",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)\nbinary: rustc\ncommit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea\ncommit-date: 2026-08-18\nhost: aarch64-apple-darwin\nrelease: 1.98.0\nLLVM version: 22.1.8",
+    "build": "cargo build --release -p scenario --bin perf-headless",
+    "build_environment": {}
+  },
+  "workload_digest": "4677910ca5083c3d370e1ae0f1195b580f1c06e1b0c0a58556f6842f3f7eacc2",
+  "created_utc": "2026-09-24T02:35:52.957650+00:00",
+  "suite": {
+    "version": 1,
+    "repetitions": 3,
+    "relative_tolerance": 0.1,
+    "max_trial_spread": 0.15,
+    "workloads": [
+      {
+        "name": "sparse",
+        "scene": "benchmarks/sparse.ron",
+        "warmup_ticks": 120,
+        "sample_ticks": 180,
+        "input": "idle",
+        "animation": "idle",
+        "budgets_ms": {
+          "mean_step_ms": 13.0,
+          "frame_ms.p99": 25.0
+        }
+      },
+      {
+        "name": "compressed",
+        "scene": "scenes/crowd_stress.ron",
+        "warmup_ticks": 900,
+        "sample_ticks": 180,
+        "input": "idle",
+        "animation": "run",
+        "budgets_ms": {
+          "mean_step_ms": 13.0,
+          "frame_ms.p99": 25.0
+        }
+      },
+      {
+        "name": "combat",
+        "scene": "scenes/crowd_stress.ron",
+        "warmup_ticks": 900,
+        "sample_ticks": 240,
+        "input": "combat",
+        "animation": "run",
+        "budgets_ms": {
+          "mean_step_ms": 13.0,
+          "frame_ms.p99": 25.0
+        }
+      },
+      {
+        "name": "animation",
+        "scene": "benchmarks/animation.ron",
+        "warmup_ticks": 120,
+        "sample_ticks": 180,
+        "input": "idle",
+        "animation": "run",
+        "budgets_ms": {
+          "mean_step_ms": 13.0,
+          "frame_ms.p99": 25.0
+        }
+      }
+    ]
+  }
+}

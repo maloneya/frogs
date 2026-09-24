@@ -1,2 +1,3 @@
+27 gaits walk=0 run=0 sprint=1
 # encounters
-82 enemy hit attacker=#1v1 remaining=4
+71 enemy hit attacker=#1v1 remaining=4

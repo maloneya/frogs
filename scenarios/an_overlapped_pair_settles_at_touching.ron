@@ -26,6 +26,11 @@
             (nth: 0, pos: (x: 2.9, z: 0.0, tol: 0.0001)),
             (nth: 1, pos: (x: 3.4, z: 0.0, tol: 0.0001)),
         ],
-        trace: "an_overlapped_pair_settles_at_touching.trace",
+        events: (
+        kinds: [Crowded],
+        sequence: [
+            (0, Crowded(count: 1)),
+        ],
+    ),
     ),
 )

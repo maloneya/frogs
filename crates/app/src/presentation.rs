@@ -434,14 +434,39 @@ fn attack_clip_time(
     normalized * duration
 }
 
-const HORDE_PHASES_PER_ROLE: usize = MAX_HORDE_POSE_BUCKETS / 2;
+const HORDE_ROLES: [HordeRole; 4] = [HordeRole::Idle, HordeRole::Walk, HordeRole::Run, HordeRole::Sprint];
+const HORDE_PHASES_PER_ROLE: usize = MAX_HORDE_POSE_BUCKETS / HORDE_ROLES.len();
 const HORDE_SCALE: f32 = 0.42;
-const _: () = assert!(MAX_HORDE_POSE_BUCKETS > 0 && MAX_HORDE_POSE_BUCKETS.is_multiple_of(2));
+const _: () = assert!(MAX_HORDE_POSE_BUCKETS > 0 && MAX_HORDE_POSE_BUCKETS.is_multiple_of(HORDE_ROLES.len()));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HordeRole {
     Idle,
+    Walk,
     Run,
+    Sprint,
+}
+
+impl HordeRole {
+    fn from_displacement(displacement: glam::Vec2) -> Self {
+        use arpg_sim::Gait;
+        let speed = displacement.length() / arpg_sim::Dt::SECS;
+        if displacement.length_squared() <= 1.0e-8 { Self::Idle }
+        else if speed < (Gait::Walk.speed() + Gait::Run.speed()) * 0.5 { Self::Walk }
+        else if speed < (Gait::Run.speed() + Gait::Sprint.speed()) * 0.5 { Self::Run }
+        else { Self::Sprint }
+    }
+
+    // Reuse the authored Run clip with bounded cadences. Selection follows real
+    // displacement, so a blocked sprinter does not run in place at full cadence.
+    fn playback_rate(self) -> f64 {
+        use arpg_sim::Gait;
+        match self {
+            Self::Idle | Self::Run => 1.0,
+            Self::Walk => f64::from(Gait::Walk.speed() / Gait::Run.speed()),
+            Self::Sprint => f64::from(Gait::Sprint.speed() / Gait::Run.speed()),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -466,7 +491,7 @@ impl HordeClips {
     fn for_role(self, role: HordeRole) -> arpg_assets::ClipId {
         match role {
             HordeRole::Idle => self.idle,
-            HordeRole::Run => self.run,
+            HordeRole::Walk | HordeRole::Run | HordeRole::Sprint => self.run,
         }
     }
 }
@@ -551,17 +576,11 @@ impl<T> LoadedHorde<T> {
     }
 
     fn bucket(enemy: EnemyPresentation) -> (usize, u64) {
-        let role = if enemy.displacement().length_squared() > 1.0e-8 {
-            HordeRole::Run
-        } else {
-            HordeRole::Idle
-        };
+        let role = HordeRole::from_displacement(enemy.displacement());
         let key = Self::phase_key(enemy.id());
         let phase = (key % HORDE_PHASES_PER_ROLE as u64) as usize;
-        let role_offset = match role {
-            HordeRole::Idle => 0,
-            HordeRole::Run => HORDE_PHASES_PER_ROLE,
-        };
+        let role_offset = HORDE_ROLES.iter().position(|&value| value == role)
+            .expect("all roles have buckets") * HORDE_PHASES_PER_ROLE;
         (role_offset + phase, key)
     }
 
@@ -609,17 +628,13 @@ impl<T> LoadedHorde<T> {
             if bucket.instances.is_empty() {
                 continue;
             }
-            let role = if index < HORDE_PHASES_PER_ROLE {
-                HordeRole::Idle
-            } else {
-                HordeRole::Run
-            };
+            let role = HORDE_ROLES[index / HORDE_PHASES_PER_ROLE];
             let clip = self.clips.for_role(role);
             let metadata = self.asset.clip(clip).expect("resolved clip remains live");
             let phase = index % HORDE_PHASES_PER_ROLE;
             let offset = f64::from(metadata.duration_seconds()) * phase as f64
                 / HORDE_PHASES_PER_ROLE as f64;
-            let time = metadata.loop_time(presentation_seconds + offset);
+            let time = metadata.loop_time(presentation_seconds * role.playback_rate() + offset);
             let sampled = self.asset.sample(clip, time, &mut bucket.pose);
             debug_assert!(sampled, "resolved clip remains live");
         }

@@ -159,7 +159,7 @@ fn despawn_and_recycled_identity_do_not_award_progress_and_endpoint_loss_stops_s
 fn load_rejection_is_atomic_even_with_pending_spawns_and_activation() {
     let mut game = Game::from_scene(&scene()).unwrap();
     step(&mut game, 0, true);
-    assert!(game.request_spawn(Vec2::new(20.0, 20.0), Template::BODY));
+    assert!(game.request_spawn(Vec2::new(20.0, 20.0), Template::BODY).is_some());
     let before = observed(&game);
     let mut invalid = Vec::new();
     let mut s = scene();

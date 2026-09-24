@@ -37,6 +37,22 @@
             (nth: 4, health: 3, pos: (x: 0.0, z: -1.5, tol: 0.0)),
             (nth: 5, health: 3, pos: (x: 4.0, z: 1.6, tol: 0.0)),
         ],
-        trace: "slam_expands_and_launches.trace",
+        events: (
+        kinds: [AttackProfileChanged, Swung, HitboxOpened, Hit, Impulsed, HitboxClosed],
+        sequence: [
+            (0, AttackProfileChanged(profile: Slam)),
+            (0, Swung),
+            (9, HitboxOpened),
+            (9, Hit(id: (1, 1), remaining: 2)),
+            (9, Impulsed(id: (1, 1), value: (0.0000,40.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (13, Hit(id: (2, 1), remaining: 2)),
+            (13, Impulsed(id: (2, 1), value: (0.0000,40.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (13, Hit(id: (3, 1), remaining: 2)),
+            (13, Impulsed(id: (3, 1), value: (0.0000,40.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (13, Hit(id: (4, 1), remaining: 2)),
+            (13, Impulsed(id: (4, 1), value: (0.0000,40.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (14, HitboxClosed),
+        ],
+    ),
     ),
 )

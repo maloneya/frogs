@@ -216,6 +216,168 @@ class EvidenceTests(unittest.TestCase):
                 (root / "code.rs").write_text("changed during measurement")
                 self.assertNotEqual(perf.source_identity([log]), before)
 
+    def test_noisy_metric_keeps_other_metrics_and_workloads(self):
+        result = fixture()
+        other = copy.deepcopy(result["suite"]["workloads"][0])
+        other["name"] = "other"
+        result["suite"]["workloads"].append(other)
+        result["workloads"]["other"] = copy.deepcopy(result["workloads"]["sparse"])
+        set_step_ms(result["workloads"]["sparse"][1], 20)
+        verdict = perf.assess(result)
+        rows = {(r["workload"], r["metric"]): r for r in verdict["metrics"]}
+        self.assertEqual(rows["sparse", "mean_step_ms"]["status"], "inconclusive")
+        self.assertEqual(rows["sparse", "frame_ms.p99"]["absolute"], "pass")
+        self.assertEqual(rows["other", "mean_step_ms"]["absolute"], "pass")
+        self.assertEqual(verdict["rerun_workloads"], ["sparse"])
+        result["workloads"]["sparse"][0]["finite"] = False
+        verdict = perf.assess(result)
+        self.assertEqual(verdict["absolute_status"], "inconclusive")
+        self.assertTrue(any(r["workload"] == "other" for r in verdict["metrics"]))
+
+    def test_changed_gameplay_preserves_absolute_evidence(self):
+        result = fixture()
+        for trial in result["workloads"]["sparse"]:
+            trial["final_hash"] = "f" * 16
+        verdict = perf.assess(result, fixture())
+        self.assertEqual(verdict["absolute_status"], "pass")
+        self.assertEqual(verdict["relative_status"], "inconclusive")
+        self.assertTrue(all(r["relative"] == "incompatible" for r in verdict["metrics"]))
+
+    def test_focused_workload_reuses_full_baseline(self):
+        base = fixture()
+        workload = copy.deepcopy(base["suite"]["workloads"][0])
+        workload["name"] = "other"
+        base["suite"]["workloads"].append(workload)
+        base["workloads"]["other"] = copy.deepcopy(base["workloads"]["sparse"])
+        self.assertEqual(perf.assess(fixture(), base)["status"], "pass")
+
+    def test_dirty_head_is_not_evidence_of_ancestor_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            result = fixture()
+            result["source"].update(revision=perf.command(["git", "rev-parse", "HEAD"]), dirty=True)
+            path = directory / "input.json"
+            perf.save(path, result)
+            perf.archive(path, directory / "store")
+            changed = copy.deepcopy(result)
+            changed["source"]["digest"] = "e" * 64
+            self.assertEqual(perf.discover(changed, directory / "store"), (None, None))
+            self.assertIsNotNone(perf.discover(result, directory / "store")[0])
+
+    def test_headless_requires_complete_raw_ticks_and_matching_build(self):
+        result = fixture()
+        result["conditions"]["build"] = "cargo build --release -p scenario --bin perf-headless"
+        trial = {"schedule_version": 1, "warmup_ticks": 120, "sample_ticks": 60,
+                 "input": "idle", "debug_build": False, "finite": True, "current_tick": 180,
+                 "initial_enemies": 100, "start_enemies": 100, "end_enemies": 100,
+                 "population_sum": 6000, "final_hash": "a" * 16,
+                 "step_ns": {str(i): 1000000 for i in range(60)}}
+        result["workloads"]["sparse"] = [copy.deepcopy(trial) for _ in range(3)]
+        self.assertEqual(perf.assess(result, result)["status"], "pass")
+        del result["workloads"]["sparse"][0]["step_ns"]["0"]
+        self.assertEqual(perf.assess(result)["status"], "inconclusive")
+
+    def test_archive_is_immutable_integrity_checked_and_reuses_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            result = fixture()
+            result["source"]["revision"] = perf.command(["git", "rev-parse", "HEAD"])
+            path = directory / "input.json"
+            perf.save(path, result)
+            store = directory / "store"
+            artifact = perf.archive(path, store)
+            with self.assertRaises(FileExistsError):
+                perf.archive(path, store)
+            discovered, manifest = perf.discover(result, store)
+            self.assertEqual(discovered, result)
+            self.assertTrue(manifest)
+            different = copy.deepcopy(result)
+            different["conditions"]["cpu"] = "another machine"
+            self.assertEqual(perf.discover(different, store), (None, None))
+            artifact.write_bytes(b"corrupt")
+            with self.assertRaises(OSError):
+                perf.discover(result, store)
+
+    def test_discovery_prefers_nearest_ancestor_then_newest_measurement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
+            git("init", "-q")
+            revisions = []
+            for index in range(3):
+                (root / "source").write_text(str(index))
+                git("add", "source")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", str(index))
+                revisions.append(git("rev-parse", "HEAD"))
+            store = root / "evidence"
+            with patch.object(perf, "ROOT", root):
+                for index, (revision, date) in enumerate([
+                    (revisions[0], "2026-09-30"),
+                    (revisions[1], "2026-09-20"),
+                    (revisions[1], "2026-09-21"),
+                ]):
+                    result = fixture()
+                    result["source"]["revision"] = revision
+                    result["created_utc"] = date
+                    path = root / f"result-{index}.json"
+                    perf.save(path, result)
+                    perf.archive(path, store)
+                current = fixture()
+                current["source"]["revision"] = revisions[2]
+                selected, _ = perf.discover(current, store)
+                self.assertEqual(selected["source"]["revision"], revisions[1])
+                self.assertEqual(selected["created_utc"], "2026-09-21")
+
+    def test_archive_preserves_measured_source_identity_and_discovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            def git(*args):
+                subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+            git("init", "-q")
+            (root / ".gitignore").write_text("/target\n")
+            (root / "code.rs").write_text("original")
+            git("add", ".")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture")
+            (root / "code.rs").write_text("dirty source measured")
+            evidence = root / "benchmarks/evidence"
+            local = root / "target/perf/evidence"
+            with patch.object(perf, "ROOT", root), patch.object(perf, "EVIDENCE", evidence), \
+                 patch.object(perf, "LOCAL_EVIDENCE", local):
+                result = fixture()
+                result["source"] = before = perf.source_identity()
+                path = root / "target/result.json"
+                perf.save(path, result)
+                perf.archive(path)
+                self.assertEqual(perf.source_identity(), before)
+                self.assertEqual(perf.discover(result)[0], result)
+                perf.archive(path, local)
+                self.assertEqual(perf.source_identity(), before)
+                self.assertEqual(perf.discover(result)[0], result)
+                (root / "code.rs").write_text("different source")
+                self.assertNotEqual(perf.source_identity(), before)
+
+    def test_run_automatically_saves_and_reuses_local_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            source = fixture()
+            source["source"]["revision"] = perf.command(["git", "rev-parse", "HEAD"])
+            with patch.object(perf, "EVIDENCE", directory / "published"), \
+                 patch.object(perf, "LOCAL_EVIDENCE", directory / "local"), \
+                 patch.object(perf, "run", side_effect=lambda args: copy.deepcopy(source)), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                outputs = []
+                for index in range(2):
+                    output = directory / f"run-{index}.json"
+                    with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]):
+                        self.assertEqual(perf.main(), 0)
+                    outputs.append(perf.load(output))
+                self.assertEqual(outputs[0]["assessment"]["relative_status"], "missing")
+                self.assertEqual(outputs[1]["assessment"]["relative_status"], "pass")
+                self.assertTrue(outputs[1]["baseline"])
+                self.assertEqual(len(list((directory / "local").glob("*.json.gz"))), 2)
+                self.assertFalse((directory / "published").exists())
+
     def test_baseline_files_are_never_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "baseline.json"

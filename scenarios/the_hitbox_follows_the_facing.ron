@@ -12,5 +12,15 @@
         struck: 1, hitbox: false, bodies: [
             (nth: 0, health: 2, pos: (x: 13.3745960, z: 0.0, tol: 0.0001)),
             (nth: 1, health: 3, pos: (x: 4.5, z: 4.3, tol: 0.0001)),
-        ], trace: "the_hitbox_follows_the_facing.trace"),
+        ], events: (
+        kinds: [AttackProfileChanged, Swung, HitboxOpened, Hit, Impulsed, HitboxClosed],
+        sequence: [
+            (0, AttackProfileChanged(profile: Slam)),
+            (30, Swung),
+            (39, HitboxOpened),
+            (43, Hit(id: (1, 1), remaining: 2)),
+            (43, Impulsed(id: (1, 1), value: (40.0000,-0.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (44, HitboxClosed),
+        ],
+    )),
 )

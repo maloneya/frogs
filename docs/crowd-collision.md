@@ -6,6 +6,35 @@ separation/momentum response. The player still has a separate linear pass.
 Cell width derives from the shared non-player collision diameter in
 [the grid owner](../crates/sim/src/grid.rs); it is not an authored tuning copy.
 
+## Gaits and pushing
+
+Seeking enemies choose Walk, Run or Sprint from stable identity and simulation
+tick. Choices last three seconds with staggered boundaries; the initial partial
+interval varies by identity. Restart repeats the choices, and removing another
+body cannot reroll a survivor. [The movement owner](../crates/sim/src/pass/seek.rs)
+defines speeds and selection. `Game::gait` and the `gaits` state report expose
+individual choices; traces aggregate switches by gait each tick.
+
+A gait requests velocity through the shared [physics motor](../crates/sim/src/pass/motion.rs).
+The motor applies drag and bounded acceleration before integration. Contacts
+then exchange that same velocity: a sprinter gives up momentum to a walker,
+and a stationary bystander can be shoved without an attack. Incoming knockback
+also survives and is opposed gradually. Passive bodies apply drag after contacts;
+a private tick marker prevents driven bodies from damping twice. Player controls
+remain immediate, with knockback added through physics.
+
+Approaching the player reduces requested speed using the remaining stopping
+distance. Isolated arrivals settle without repeatedly colliding. In a crowd,
+other bodies can still push an arrived enemy. Walls and fixed props use the
+existing shared contact response. Bodies remain on the floor; jumping and
+climbing need a separate vertical-motion change.
+
+Horde animation retains eight shared poses: two phases each for idle, walking,
+running and sprinting cadence. Moving cadences reuse the authored Run clip,
+selected from actual displacement and retimed against the sim-owned gait speeds.
+This adds visible pace variation without adding skeleton evaluations per frame;
+it does not provide distinct authored walk/sprint animations.
+
 ## Preserve the physical sweep
 
 The previous solver visited every `(i, j)` in ascending dense-row order, with

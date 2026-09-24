@@ -9,6 +9,16 @@
         struck: 0,
         hitbox: false,
         enemy_count: 0,
-        trace: "a_press_during_a_swing_is_dropped.trace",
+        events: (
+        kinds: [Swung, HitboxOpened, HitboxClosed, Hit],
+        sequence: [
+            (0, Swung),
+            (6, HitboxOpened),
+            (12, HitboxClosed),
+            (22, Swung),
+            (28, HitboxOpened),
+            (34, HitboxClosed),
+        ],
+    ),
     ),
 )

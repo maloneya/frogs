@@ -69,8 +69,20 @@ is supplied.
 
 Use intermediate checkpoints on both sides of a transition. See
 [attack timing](../../../scenarios/the_hitbox_opens_and_shuts_on_schedule.ron).
-Golden traces belong in final `expect.trace`, never a checkpoint. Pointwise
-trace-assertion syntax is not supported.
+Whole-run transition assertions belong in final `expect.events`, never a checkpoint.
+Use explicit kinds and an exact sequence, including kinds expected to be absent:
+
+```ron
+events: (
+    kinds: [Swung, HitboxOpened, HitboxClosed, Hit],
+    sequence: [(0, Swung), (6, HitboxOpened), (12, HitboxClosed)],
+),
+```
+
+This predicts exactly one attack window and no hits; extra, missing, early or
+late events fail. Events outside the selected kinds are irrelevant. Payloads
+are typed and checked, including diagnostic identities `(slot, generation)`;
+these read-only pairs cannot be turned into engine handles.
 
 Body assertions refer to placement order via `nth`; the runner resolves stable
 identities so removals do not redirect an assertion to a swapped row. Scene
@@ -82,8 +94,9 @@ commands must fail rather than silently disappear.
 
 - [Physical motion](../../../scenarios/an_impulse_moves_and_damps.ron):
   `impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))]` submits momentum;
-  `Player` targets the player. Assert carried velocity and later displacement.
-  Powered walking and seeking are separate from carried velocity.
+  `Player` targets the player. Assert physical velocity and later displacement.
+  Player control movement is separate; seeking uses a bounded motor on the same
+  velocity as impulses. See [crowd motion](../../../docs/crowd-collision.md#gaits-and-pushing).
 - [Source enablement](../../../docs/source-enablement.md): switches run before
   source evaluation; assertions consume the engine-owned `SourceState`.
 - [Encounters](../../../docs/encounters.md): complete inline scenes use
@@ -98,11 +111,18 @@ Rejection, stale IDs, eviction and restart need checks when the change touches
 those boundaries. Restart is tested through public Game lifecycle tests; the
 scenario timeline does not offer a restart command.
 
-## Golden traces and performance
+## Transition evidence and performance
 
-Set `expect.trace` to a trace filename relative to the scenario. The runner
-clears setup events before recording the run and refuses truncated trace
-comparison. To regenerate a deliberately changed expectation:
+Prefer `expect.events` for mechanics. The collector selects events as they are
+emitted and keeps only the expected count plus one, failing explicitly on any
+additional overflow. Clearing, disabling, or wrapping recent diagnostic history
+cannot affect assertions. A selected kind with no sequence entries asserts absence.
+
+The remaining `expect.trace` goldens check diagnostic serialization and gameplay
+streams. They use independent bounded capture of every stream and reject overflow;
+they do not read the live history ring. Do not combine `events` and `trace`.
+Set `expect.trace` to a filename relative to the scenario. Setup events are excluded.
+To regenerate a deliberately changed serialization expectation:
 
 ```sh
 cargo run --quiet -p scenario -- scenarios/the_hitbox_opens_and_shuts_on_schedule.ron --bless

@@ -17,8 +17,10 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod events;
 mod run;
 mod spec;
+mod timing;
 
 #[expect(
     clippy::print_stdout,
@@ -33,6 +35,19 @@ fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let bless = args.iter().any(|a| a == "--bless");
     args.retain(|a| a != "--bless");
+
+    let timings = if let Some(index) = args.iter().position(|arg| arg == "--timings") {
+        args.remove(index);
+        if index == args.len() {
+            report::error("--timings requires an output path");
+            return ExitCode::FAILURE;
+        }
+        Some(PathBuf::from(args.remove(index)))
+    } else { None };
+    if timings.as_ref().is_some_and(|path| path.exists()) {
+        report::error("timings output already exists; choose a new path");
+        return ExitCode::FAILURE;
+    }
 
     if args.is_empty() {
         report::usage();
@@ -56,7 +71,22 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let failed = files.iter().filter(|f| !run_one(f, bless)).count();
+    files.dedup();
+    let mut samples = Vec::new();
+    let failed = files.iter().filter(|file| {
+        let started = std::time::Instant::now();
+        let mut sample = timing::Sample { file: file.display().to_string(), ..Default::default() };
+        let passed = run_one(file, bless, &mut sample);
+        sample.passed = passed;
+        sample.total = started.elapsed();
+        samples.push(sample);
+        !passed
+    }).count();
+    if let Some(path) = timings
+        && let Err(error) = timing::write(&path, &samples) {
+        report::error(&format!("cannot write timings: {error}"));
+        return ExitCode::FAILURE;
+    }
     report::summary(failed, files.len());
 
     if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
@@ -82,7 +112,8 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
 }
 
 /// Runs one file and reports it. Returns whether it passed.
-fn run_one(path: &Path, bless: bool) -> bool {
+fn run_one(path: &Path, bless: bool, sample: &mut timing::Sample) -> bool {
+    let setup_started = std::time::Instant::now();
     let name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
 
     let source = match std::fs::read_to_string(path) {
@@ -128,11 +159,21 @@ fn run_one(path: &Path, bless: bool) -> bool {
         return false;
     }
 
+    let setup = setup_started.elapsed();
     let outcome = run::run(&scenario);
+    let assertions = std::time::Instant::now();
     let mut failures = run::check(&scenario, &outcome);
+    let checking = assertions.elapsed();
+    let replay = std::time::Instant::now();
     failures.extend(run::check_replay(&scenario, &outcome));
+    sample.replay = replay.elapsed();
+    let assertions = std::time::Instant::now();
     failures.extend(run::check_trace(&scenario, &outcome, path, bless));
+    let final_assertions = checking + assertions.elapsed();
 
+    sample.first = outcome.timing;
+    sample.first.setup += setup;
+    sample.first.assertions += final_assertions;
     if failures.is_empty() {
         // The world's own count, not the setup's. They part company the moment
         // a scenario places or despawns bodies, and a summary line that says

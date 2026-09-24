@@ -43,6 +43,7 @@ use pass::interact::Interactions;
 pub use pass::interact::{INTERACTION_REACH, InteractionState};
 use pass::motion::Physics;
 pub use pass::motion::{Impulse, Motion};
+pub use pass::seek::Gait;
 /// Read-only snapshot of a source's enablement, cadence, and emission progress.
 pub use pass::source::SourceState;
 use pass::source::Sources;
@@ -52,14 +53,14 @@ pub use pass::source::{Condition, Placement, Source, SourceId, SourceSpec};
 use pass::spawn::SpawnQueue;
 /// What to make, and what behaviours it should be granted. See
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
-pub use pass::spawn::Template;
+pub use pass::spawn::{SpawnOutcome, SpawnTicket, Template};
 pub use presentation::{AttackDisc, CollisionDisc, EnemyPresentation, PlayerPresentation, PropPresentation};
 use scene::Scenes;
 pub use scene::{BodyGrid, Placed, Scene, SceneError, SceneId};
 pub use slots::EntityId;
 use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, TICK_HZ, Ticks};
-pub use trace::{Event, Trace, TraceSink};
+pub use trace::{Event, EventKind, MAX_TRACE_EVENTS, Trace, TraceSink};
 mod access;
 pub use access::{GameplayAccess, MeleeView};
 
@@ -549,14 +550,19 @@ impl World {
     /// a row under a pass that is mid-iteration. The request is granted by
     /// `pass::spawn::drain`, before anything else in the next schedule holds a row.
     ///
-    /// Returns `false` when the queue is full, in which case the request is
+    /// Returns a stable ticket, or `None` when the queue is full. A refused request is
     /// dropped and counted — a `Refused` trace event follows on the next tick.
     /// A caller that ignores this gets a warning; a caller that never saw it
     /// would get a body that silently never appears.
     #[must_use]
-    pub fn request_spawn(&mut self, at: Vec2, what: Template) -> bool {
+    pub fn request_spawn(&mut self, at: Vec2, what: Template) -> Option<SpawnTicket> {
         self.queue.push(at, what)
     }
+
+    /// Results of all accepted queued requests drained in the latest tick, in FIFO order.
+    /// Replaced by the next step; independent of diagnostic trace retention.
+    #[must_use]
+    pub fn spawn_outcomes(&self) -> &[SpawnOutcome] { self.queue.outcomes() }
 
     /// Removes one non-player body and its capabilities. Returns whether it existed.
     ///
@@ -623,6 +629,13 @@ impl World {
     #[must_use]
     pub fn is_seeker(&self, id: EntityId) -> bool {
         self.seekers.contains(id)
+    }
+
+    /// Gait chosen for the latest completed tick (or the initial choice at spawn).
+    /// Derived from stable identity and tick, so row moves cannot reroll it.
+    #[must_use]
+    pub fn gait(&self, id: EntityId) -> Option<Gait> {
+        self.is_seeker(id).then(|| Gait::at(id, self.tick.saturating_sub(1)))
     }
 
     /// Whether the hitbox exists right now.
@@ -734,11 +747,31 @@ impl World {
         out.int("enemies", bodies.health.len() as u64);
         out.int("props", (bodies.len() - 1 - bodies.health.len()) as u64);
         out.int("seekers", seekers.len() as u64);
+        out.object("gaits", |out| {
+            for &id in seekers.ids() {
+                let gait = self.gait(id).expect("live seeker");
+                out.object(&id.to_string(), |out| {
+                    out.text("gait", gait.label());
+                    out.num("desired_speed", gait.speed());
+                });
+            }
+        });
 
         // Asked for and not yet made. Without it, "the spawn has not happened
         // yet" and "the spawn was refused" look identical from out here — and
         // one of those is a bug.
         out.int("queued", queue.len() as u64);
+        out.object("spawn_outcomes", |out| {
+            for result in queue.outcomes() {
+                let SpawnOutcome { ticket, entity, owner, source } = result;
+                out.object(&ticket.to_string(), |out| {
+                    out.bool("spawned", entity.is_some());
+                    if let Some(id) = entity { out.text("entity", &id.to_string()); }
+                    if let Some(id) = owner { out.text("owner", &id.to_string()); }
+                    if let Some(id) = source { out.text("source", &id.to_string()); }
+                });
+            }
+        });
         out.int("sources", sources.len() as u64);
         out.object("source_states", |out| sources.report(out));
         out.int("scene_count", scenes.len() as u64);
@@ -781,10 +814,19 @@ impl World {
         self.trace.clear();
     }
 
+    /// Configure recent diagnostic history without changing simulation state.
+    pub fn set_trace_retention(&mut self, capacity: usize) -> Result<(), &'static str> { self.trace.set_retention(capacity) }
+
+    /// Capture all engine events for diagnostic serialization checks.
+    pub fn capture_trace(&mut self, limit: usize) -> Result<(), &'static str> { self.trace.capture(limit, |_| true) }
+
+    /// Capture selected engine transitions independently of diagnostic history.
+    pub fn capture_events(&mut self, limit: usize, kinds: Vec<EventKind>) -> Result<(), &'static str> {
+        self.trace.capture(limit, move |event| kinds.contains(&event.kind()))
+    }
+
     /// What the simulation has done recently, oldest first.
-    ///
-    /// Read-only, like [`World::player_presentation`]: perception must never be able to
-    /// change what it observes.
+    /// Read-only: perception cannot change simulation state.
     #[must_use]
     pub fn trace(&self) -> &Trace {
         &self.trace
@@ -849,18 +891,19 @@ impl World {
             &mut self.bodies.prev_pos,
         );
         pass::walk::walk(&mut self.bodies.pos[0], move_dir, dt);
-        // After `walk`, so chasers steer at where the player is *now* rather
-        // than where it stood at the start of the tick. Before the solvers, so
-        // the pile-up that chasing creates is what they resolve.
+        // Chasers read post-walk positions, then request bounded acceleration.
+        // Integration and contacts below carry their running momentum onward.
         pass::seek::seek(
             &self.seekers,
             &self.bodies.slots,
-            &mut self.bodies.pos,
-            self.bodies.slots.ids()[0],
+            &self.bodies.pos,
+            self.bodies.physics.drive(),
+            self.tick,
             dt,
+            trace.reborrow(),
         );
 
-        // Carried motion moves before contacts. Crowd resolution precedes
+        // Physical velocity moves before contacts. Crowd resolution precedes
         // player resolution, retaining the existing crowd priority.
         pass::motion::integrate(
             &self.bodies.physics,

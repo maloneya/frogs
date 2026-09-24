@@ -226,9 +226,9 @@ The lifecycle scenario asserts surviving identities and positions, source
 descendants, reload, and load-then-evict before a source's first tick. Unit tests
 cover capacity refusal, stale queued ownership, slot reuse, hashing,
 and the app's complete restart boundary. CLI tests reject bad or unreachable
-commands even with blessing enabled. Runtime placement tracking requires an
-untruncated trace; a batch that overflows it fails explicitly rather than
-renumbering the bodies an assertion refers to.
+commands even with blessing enabled. Runtime placement tracking uses spawn
+request tickets and authoritative completed-tick outcomes; clearing or wrapping
+diagnostic history cannot renumber the bodies an assertion refers to.
 
 Public game lifecycle tests also cover failed replacement preserving its
 snapshot and accepted pending work, restart after additive loading and eviction,

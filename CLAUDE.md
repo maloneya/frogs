@@ -98,19 +98,25 @@ and its tests before changing these choices.
 
 ## Checks and commands
 
-Rust may need `. "$HOME/.cargo/env"` before commands. Run these checks before
-finishing a change; report any failure or check you could not run:
+Rust may need `. "$HOME/.cargo/env"` before commands. Use the shared verification
+runner so agents and hooks reuse successful evidence for the exact same inputs:
 
 ```sh
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo doc --workspace --lib --bins --no-deps --document-private-items
-cargo run --quiet -p scenario -- scenarios/
+python3 scripts/verify.py quick       # explicitly partial feedback
+python3 scripts/verify.py full        # complete correctness + headless performance
+python3 scripts/verify.py full --live # also certify real-time presentation
 ```
 
-For performance-sensitive changes, also run the relevant release workloads with
-`python3 scripts/perf.py run --baseline <saved-result.json> --output <new-result.json>`.
-Keep the baseline explicit; exit 2 is inconclusive, not a pass. See the
+Full verification runs Clippy with warnings denied, workspace tests, private
+Rustdoc, every scenario with replay, and release Game performance workloads.
+Quick verification omits documentation, extended scenarios and performance; it
+cannot certify completion. Report failures, inconclusive results and omitted
+coverage. See [verification evidence](docs/verification.md) for suites, timing
+reports, exact-input caching and `--fresh`.
+
+For presentation, renderer or integrated performance changes, also run `--live`.
+The performance runner discovers reusable compatible evidence; explicit baseline
+files remain supported. Exit 2 is inconclusive, not a pass. See the
 [performance contract](docs/performance.md#agent-maintenance-contract) for workload
 selection, evidence requirements and intentional baseline changes. Never rewrite a
 baseline or widen a budget merely to clear a failing check.
@@ -119,10 +125,11 @@ Workspace tests include GPU tests and require a real adapter. Scenarios need no
 GPU or window. Use `#[expect(lint, reason = "…")]` for a justified exception,
 never `#[allow]`. Do not relax lint or dependency policies to get a build through.
 
-Claude Code hooks in [.claude/settings.json](.claude/settings.json) run some of
-these checks automatically. Other agents and shells must run them explicitly;
-the presence of that file does not prove a check ran. Rustdoc needs its own
-command; passing clippy and tests does not validate documentation links.
+Claude Code hooks in [.claude/settings.json](.claude/settings.json) use this same
+runner. Their presence does not prove a check ran: use the saved verification
+result, its coverage and source identity. Other agents and shells run the command
+explicitly. Rustdoc has its own check; passing Clippy and tests does not validate
+documentation links.
 
 `cargo run` launches the app. Use `cargo run --release` for performance work.
 Drive live checks through `ARPG_HARNESS`, not OS key injection or desktop capture:

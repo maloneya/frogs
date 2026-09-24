@@ -14,7 +14,7 @@
 use crate::run::Failure;
 
 pub(crate) fn usage() {
-    eprintln!("usage: scenario [--bless] <file.ron | directory>...");
+    eprintln!("usage: scenario [--bless] [--timings output.json] <file.ron | directory>...");
     eprintln!();
     eprintln!("Runs each scenario headlessly against the simulation and exits 0 or 1.");
     eprintln!("Every scenario is also replayed and compared tick by tick, so a loss of");

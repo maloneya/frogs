@@ -1,0 +1,64 @@
+{
+  "artifact": "aaf8b9bb78b1cbe37c55e89dff894f95626a615cc8e97939535ca182e200e449.json.gz",
+  "sha256": "aaf8b9bb78b1cbe37c55e89dff894f95626a615cc8e97939535ca182e200e449",
+  "source": {
+    "revision": "3035f022d2c24d129a21f1c6e11016324901e327",
+    "dirty": true,
+    "digest": "140a80ee4d9d0a17a8ece9d294bb49b439487fca015c294c7aaa5c1e9f96c7f9"
+  },
+  "conditions": {
+    "machine": "Mac16,10",
+    "cpu": "Apple M4",
+    "memory_bytes": "17179869184",
+    "os": "macOS-27.0-arm64-arm-64bit",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)\nbinary: rustc\ncommit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea\ncommit-date: 2026-08-18\nhost: aarch64-apple-darwin\nrelease: 1.98.0\nLLVM version: 22.1.8",
+    "build": "cargo build --release -p arpg",
+    "build_environment": {}
+  },
+  "workload_digest": "3309b788b9e3e05fec19e9422a5a2c3a3689a8d32281d2070119a7e36f151082",
+  "created_utc": "2026-09-24T01:43:00.018190+00:00",
+  "suite": {
+    "version": 1,
+    "repetitions": 3,
+    "relative_tolerance": 0.1,
+    "max_trial_spread": 0.15,
+    "workloads": [
+      {
+        "name": "compressed",
+        "scene": "scenes/crowd_stress.ron",
+        "warmup_ticks": 900,
+        "sample_ticks": 180,
+        "input": "idle",
+        "animation": "run",
+        "budgets_ms": {
+          "mean_step_ms": 13.0,
+          "frame_ms.p99": 25.0
+        }
+      },
+      {
+        "name": "combat",
+        "scene": "scenes/crowd_stress.ron",
+        "warmup_ticks": 900,
+        "sample_ticks": 240,
+        "input": "combat",
+        "animation": "run",
+        "budgets_ms": {
+          "mean_step_ms": 13.0,
+          "frame_ms.p99": 25.0
+        }
+      },
+      {
+        "name": "animation",
+        "scene": "benchmarks/animation.ron",
+        "warmup_ticks": 120,
+        "sample_ticks": 180,
+        "input": "idle",
+        "animation": "run",
+        "budgets_ms": {
+          "mean_step_ms": 13.0,
+          "frame_ms.p99": 25.0
+        }
+      }
+    ]
+  }
+}

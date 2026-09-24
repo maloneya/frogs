@@ -32,6 +32,12 @@
         bodies: [
             (nth: 0, seeking: false, pos: (x: 10.0, z: 0.0, tol: 0.0001)),
         ],
-        trace: "a_source_waits_for_the_player_to_arrive.trace",
+        events: (
+        kinds: [Fired, Placed, Refused],
+        sequence: [
+            (34, Fired(source: "s0")),
+            (34, Placed(id: (1, 1))),
+        ],
+    ),
     ),
 )

@@ -1,0 +1,20 @@
+// #2 sprints and #3 walks. Both initially accelerate equally. On tick 3,
+// sprinter velocity is -(1.355*.9+.5)=-1.7195, walker velocity is -1.5.
+// Equal-mass contact leaves both at -1.60975: the walker exceeds its desired
+// speed because of the physical push, and the sprinter gives up momentum.
+(
+    description: "A faster chaser physically pushes a slower chaser instead of passing through it.",
+    setup: (actions: [Place((0.0, -20.0)), Place((10.5, 0.0)), Seek(1),
+        Place((10.0, 0.0)), Seek(2)]),
+    checkpoints: [(at: 2, expect: (bodies: [
+        (nth: 1, gait: Sprint, velocity: (x: -1.355, z: 0.0, tol: 0.00001)),
+        (nth: 2, gait: Walk, velocity: (x: -1.355, z: 0.0, tol: 0.00001)),
+    ]))],
+    budget: (ticks: 4),
+    expect: (contacts: 0, crowd_contacts: 1, bodies: [
+        (nth: 1, gait: Sprint, pos: (x: 10.42642083, z: 0.0, tol: 0.00001),
+            velocity: (x: -1.60975, z: 0.0, tol: 0.00001)),
+        (nth: 2, gait: Walk, pos: (x: 9.92642083, z: 0.0, tol: 0.00001),
+            velocity: (x: -1.60975, z: 0.0, tol: 0.00001)),
+    ]),
+)

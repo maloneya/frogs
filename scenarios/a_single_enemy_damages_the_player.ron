@@ -1,14 +1,15 @@
-// At 2.5 m/s, contact starts on step 83 (tick 82); the next hit is 60 ticks later.
+// Run switches to Sprint at tick 27. Motor integration and braking reach
+// contact on tick 71; the next hit is 60 ticks later.
 (
     description: "One registered seeker removes one health on arrival and once per second while it remains in reach.",
     setup: (scenes: [File("../scenes/single_enemy.ron")]),
     checkpoints: [
-        (at: 81, expect: (player_health: 5)),
-        (at: 82, expect: (player_health: 4)),
-        (at: 141, expect: (player_health: 4)),
-        (at: 142, expect: (player_health: 3)),
+        (at: 70, expect: (player_health: 5)),
+        (at: 71, expect: (player_health: 4)),
+        (at: 130, expect: (player_health: 4)),
+        (at: 131, expect: (player_health: 3)),
     ],
-    budget: (ticks: 143),
+    budget: (ticks: 132),
     expect: (
         player_health: 3,
         enemy_count: 1,

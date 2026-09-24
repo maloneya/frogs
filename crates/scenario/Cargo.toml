@@ -1,5 +1,6 @@
 [package]
 name = "scenario"
+default-run = "scenario"
 version.workspace = true
 edition.workspace = true
 build = "build.rs"

@@ -1,86 +1,120 @@
-//! Walks the bodies that chase toward the thing they are chasing.
+//! Chasers choose a sustained gait and ask physics to accelerate toward the player.
 //!
-//! **The first behaviour that only some bodies have**, and the shape every one
-//! after it should copy. It is three things and no more: a [`Members`] set
-//! saying who has it, a pass that walks that set, and the constants the pass
-//! tunes itself with. Adding it required a field on `World` and a line in the
-//! schedule; it changed no existing type, and a body that does not seek pays
-//! nothing for the fact that seeking exists.
-//!
-//! That last part is what the sparse set buys. The pass iterates *membership*,
-//! not the horde, so three chasers among a thousand bodies cost three
-//! iterations. The wide-table alternative would cost a thousand iterations and
-//! a thousand branches to find the same three.
-//!
-//! A behaviour that needs per-member data keeps its own arrays beside the set
-//! and pushes to them at the row [`Members::add`] hands back. This one needs
-//! none: every chaser runs at the same speed, and inventing a per-body speed
-//! nothing varies would be storage built for an imagined requirement.
+//! Choices derive from stable identity and simulation tick, including an individual
+//! phase offset. There is no wall-clock RNG or mutable random stream whose result
+//! depends on iteration order. Membership, identity and tick already participate
+//! in removal, scene eviction, restart and hashing; gait is derived from them.
 
 use glam::Vec2;
+use serde::Deserialize;
 
+use super::motion::{DriveSink, stopping_speed};
 use crate::members::Members;
 use crate::slots::Slots;
-use crate::{Dt, EntityId, PLAYER_ENEMY_CONTACT_DISTANCE};
+use crate::{Dt, EntityId, Event, Fnv, TraceSink, PLAYER_ENEMY_CONTACT_DISTANCE};
 
-/// How fast a chaser moves, in world units per second.
-///
-/// Slower than the player, and that is the single most important thing about
-/// this number rather than a detail of it. A horde you cannot outrun is not a
-/// horde, it is a countdown: kiting, spacing and the decision of when to stand
-/// and fight all stop existing at the moment this reaches
-/// [`crate::pass::walk::PLAYER_SPEED`].
-const SPEED: f32 = 2.5;
-const _: () = assert!(SPEED > 0.0);
-const _: () = assert!(
-    SPEED < crate::pass::walk::PLAYER_SPEED,
-    "a horde that cannot be outrun deletes kiting, which is most of ARPG movement"
-);
+/// Ground locomotion selected by a chaser. Actual speed also depends on contacts
+/// and acceleration; this describes what the creature is trying to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub enum Gait {
+    /// Slow approach.
+    Walk,
+    /// Ordinary pursuit.
+    Run,
+    /// Fast burst, still slower than the player.
+    Sprint,
+}
 
-/// How close a chaser gets before it stops walking.
-///
-/// Exactly the distance at which it is touching, so a chaser arrives against
-/// the player and stands there rather than grinding into them. Without it the
-/// two passes fight every tick — seek walks the body in, separation pushes it
-/// out, forever — which costs a contact per chaser per tick and fills the trace
-/// with a crowd that is not going anywhere.
-///
-/// Walks every chaser toward `target`.
-///
-/// **Takes the membership and the bodies separately**, which is the pass
-/// contract doing real work: it declares that it reads who chases, reads where
-/// everything is, and writes only positions. It cannot grant the behaviour to
-/// anything, and it cannot spawn or kill.
-///
-/// Ids that no longer resolve are skipped rather than treated as a bug. A
-/// behaviour set holding a name whose body has died is the ordinary case — it
-/// is what a generational id makes safe to ask about — and `World::despawn_body`
-/// revokes eagerly anyway, so this is the belt to that pair of braces.
-pub(crate) fn seek(seekers: &Members, bodies: &Slots, pos: &mut [Vec2], target: EntityId, dt: Dt) {
-    let Some(target_row) = bodies.index(target) else { return };
-    let target = pos[target_row];
-    let full_step = SPEED * dt.secs();
+impl Gait {
+    /// Desired free-space speed in metres per second.
+    #[must_use]
+    pub const fn speed(self) -> f32 {
+        match self {
+            Self::Walk => 1.5,
+            Self::Run => 2.5,
+            Self::Sprint => 4.0,
+        }
+    }
 
+    /// Stable label shared by reports and scenario diagnostics.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Walk => "walk",
+            Self::Run => "run",
+            Self::Sprint => "sprint",
+        }
+    }
+
+    /// Stateless seeded choice, held for three seconds with staggered boundaries.
+    /// Whole identity includes generation: recycling a slot does not repeat its
+    /// old occupant's sequence. Dense-row swaps do not affect it.
+    pub(crate) fn at(id: EntityId, tick: u64) -> Self {
+        Self::sample(id, tick).0
+    }
+
+    fn sample(id: EntityId, tick: u64) -> (Self, bool) {
+        let mut hash = Fnv::default();
+        id.hash_into(&mut hash);
+        let seed = hash.finish();
+        let period = u64::from(crate::TICK_HZ) * 3;
+        let phased_tick = tick.saturating_add(seed % period);
+        let epoch = phased_tick / period;
+        let gait = Self::choose(seed, epoch);
+        let changed = tick > 0 && phased_tick.is_multiple_of(period)
+            && gait != Self::choose(seed, epoch - 1);
+        (gait, changed)
+    }
+
+    fn choose(seed: u64, epoch: u64) -> Self {
+        // SplitMix64's output mixer diffuses neighbouring epochs and identities.
+        let mut value = seed.wrapping_add(epoch.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^= value >> 31;
+        match value % 3 {
+            0 => Self::Walk,
+            1 => Self::Run,
+            _ => Self::Sprint,
+        }
+    }
+}
+
+const _: () = assert!(Gait::Walk.speed() > 0.0
+    && Gait::Walk.speed() < Gait::Run.speed()
+    && Gait::Run.speed() < Gait::Sprint.speed()
+    && Gait::Sprint.speed() < super::walk::PLAYER_SPEED);
+
+/// Reads post-player-walk positions and grants no structural capabilities.
+/// The motor changes velocity now; motion::integrate moves it later this tick,
+/// before contacts exchange the resulting momentum. Near arrival, braking keeps
+/// an unimpeded chaser from continually walking into the player.
+pub(crate) fn seek(
+    seekers: &Members,
+    bodies: &Slots,
+    pos: &[Vec2],
+    mut drive: DriveSink<'_>,
+    tick: u64,
+    dt: Dt,
+    mut trace: TraceSink<'_>,
+) {
+    let target = pos[0];
+    let mut changed_counts = [0; 3];
     for &id in seekers.ids() {
         let Some(row) = bodies.index(id) else { continue };
-        let body = &mut pos[row];
-
-        let to_target = target - *body;
+        let to_target = target - pos[row];
         let distance = to_target.length();
-
-        // Already arrived, or close enough that the step would carry it past.
-        // Clamping to what is left rather than overshooting and letting
-        // separation clean it up: the same discipline `pass::face` uses when it
-        // clamps a turn to the remaining arc, and for the same reason — an
-        // overshoot corrected elsewhere is a jitter whose cause is two passes
-        // away from where it shows up.
-        let remaining = distance - PLAYER_ENEMY_CONTACT_DISTANCE;
-        if remaining <= 0.0 {
-            continue;
+        let remaining = (distance - PLAYER_ENEMY_CONTACT_DISTANCE).max(0.0);
+        let (gait, changed) = Gait::sample(id, tick);
+        if changed {
+            changed_counts[match gait { Gait::Walk => 0, Gait::Run => 1, Gait::Sprint => 2 }] += 1;
         }
-
-        // `distance` is strictly greater than the contact distance here, which is
-        // positive, so it cannot be zero and this cannot be a divide by it.
-        *body += (to_target / distance) * full_step.min(remaining);
+        let speed = gait.speed().min(stopping_speed(remaining, dt));
+        let desired = if remaining > 0.0 { to_target / distance * speed } else { Vec2::ZERO };
+        drive.toward(id, desired, dt);
+    }
+    let [walking, running, sprinting] = changed_counts;
+    if walking + running + sprinting > 0 {
+        trace.emit(Event::GaitsChanged { walking, running, sprinting });
     }
 }

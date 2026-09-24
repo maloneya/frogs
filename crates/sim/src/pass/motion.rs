@@ -1,10 +1,10 @@
-//! Carried motion: impulses change velocity; contacts exchange momentum.
+//! Physical velocity: motors and impulses share motion and contact response.
 //!
-//! Walk and seek remain powered, kinematic locomotion. Their displacement is
-//! not accumulated into velocity. This store owns the additional motion that
-//! survives a tick, so steering cannot overwrite a blow and overlap correction
-//! cannot create kinetic energy. Every physical body has a membership and a
-//! payload; neither attack nor the renderer owns any of this state.
+//! Chasers use a bounded motor, so collisions can slow them and transmit their
+//! running momentum. Player controls remain instantaneous position movement;
+//! the player's physical velocity is additional knockback. Overlap correction
+//! never manufactures velocity. Passive bodies damp after contacts; motors apply the same drag before
+//! acceleration, then mark it consumed so settle cannot damp them twice.
 
 use glam::Vec2;
 use serde::Deserialize;
@@ -23,6 +23,9 @@ const _: () = assert!(PLAYER_INV_MASS > 0.0 && PLAYER_INV_MASS < ENEMY_INV_MASS)
 /// Retain 90% of carried speed per simulation tick (60 Hz), after collisions.
 /// Geometric decay gives a free body a total travel of v / 6 world units.
 const RETAIN: f32 = 0.9;
+/// Maximum powered acceleration/braking, in metres per second squared.
+const DRIVE_ACCELERATION: f32 = 30.0;
+const _: () = assert!(DRIVE_ACCELERATION > 0.0);
 /// Snap the invisible tail to rest, so a settled body really has zero velocity.
 const REST_SPEED: f32 = 0.001;
 const _: () = assert!(RETAIN > 0.0 && RETAIN < 1.0 && REST_SPEED > 0.0);
@@ -32,6 +35,12 @@ const _: () = assert!(RETAIN > 0.0 && RETAIN < 1.0 && REST_SPEED > 0.0);
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(try_from = "(f32, f32)")]
 pub struct Impulse(Vec2);
+
+impl Impulse {
+    /// Read the momentum components in world X/Z for typed observations.
+    #[must_use]
+    pub fn components(self) -> (f32, f32) { (self.0.x, self.0.y) }
+}
 
 impl TryFrom<(f32, f32)> for Impulse {
     type Error = &'static str;
@@ -57,10 +66,13 @@ impl core::fmt::Display for Impulse {
 pub struct Motion {
     velocity: Vec2,
     inverse_mass: f32,
+    /// Tick-local marker, consumed by settle; never survives a completed step.
+    driven: bool,
 }
 
 impl Motion {
-    /// Carried velocity in world X/Z, excluding powered locomotion.
+    /// Physical velocity in world X/Z, including enemy locomotion.
+    /// Player control displacement is separate from this velocity.
     #[must_use]
     pub fn velocity(self) -> Vec2 {
         self.velocity
@@ -86,6 +98,33 @@ pub(crate) struct ImpulseSink<'a> {
     source: EntityId,
 }
 
+/// A locomotion producer may accelerate existing movable bodies, never teleport,
+/// replace velocity, grant physics or change mass.
+pub(crate) struct DriveSink<'a> {
+    physics: &'a mut Physics,
+}
+
+impl DriveSink<'_> {
+    pub(crate) fn toward(&mut self, id: EntityId, desired: Vec2, dt: Dt) {
+        assert!(desired.is_finite() && desired.length_squared().is_finite());
+        let Some(row) = self.physics.who.index(id) else { return };
+        let motion = &mut self.physics.rows[row];
+        if motion.inverse_mass == 0.0 { return; }
+        assert!(!motion.driven, "a body may receive only one motor request per tick");
+        motion.velocity *= RETAIN;
+        motion.velocity += (desired - motion.velocity).clamp_length_max(DRIVE_ACCELERATION * dt.secs());
+        motion.driven = true;
+    }
+}
+
+/// Conservative discrete braking speed: leave enough distance to stop after
+/// this tick's movement. Rationalized form avoids cancellation near arrival.
+pub(crate) fn stopping_speed(distance: f32, dt: Dt) -> f32 {
+    let step = DRIVE_ACCELERATION * dt.secs();
+    let twice_work = 2.0 * DRIVE_ACCELERATION * distance;
+    twice_work / ((step * step + twice_work).sqrt() + step)
+}
+
 impl ImpulseSink<'_> {
     pub(crate) fn push(&mut self, id: EntityId, impulse: Impulse, trace: &mut TraceSink<'_>) {
         self.physics.impulse(id, impulse, Some(self.source), trace);
@@ -93,6 +132,10 @@ impl ImpulseSink<'_> {
 }
 
 impl Physics {
+    pub(crate) fn drive(&mut self) -> DriveSink<'_> {
+        DriveSink { physics: self }
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.rows.len()
     }
@@ -104,7 +147,7 @@ impl Physics {
         assert!(inverse_mass.is_finite() && inverse_mass >= 0.0);
         if let Some(row) = self.who.add(id) {
             assert_eq!(row, self.rows.len());
-            self.rows.push(Motion { velocity: Vec2::ZERO, inverse_mass });
+            self.rows.push(Motion { velocity: Vec2::ZERO, inverse_mass, driven: false });
         }
     }
 
@@ -174,7 +217,8 @@ impl Physics {
         let Self { who, rows } = self;
         who.hash(h);
         h.usize(rows.len());
-        for Motion { velocity, inverse_mass } in rows {
+        for Motion { velocity, inverse_mass, driven } in rows {
+            debug_assert!(!driven, "motor scratch must be consumed before hashing");
             h.f32(velocity.x);
             h.f32(velocity.y);
             h.f32(*inverse_mass);
@@ -188,7 +232,7 @@ impl Physics {
     pub(crate) fn report(&self, pos: &[Vec2], slots: &Slots, out: &mut Report) {
         let Self { who, rows } = self;
         out.object("bodies", |out| {
-            for (&id, &Motion { velocity, inverse_mass }) in who.ids().iter().zip(rows) {
+            for (&id, &Motion { velocity, inverse_mass, driven: _ }) in who.ids().iter().zip(rows) {
                 let Some(row) = slots.index(id) else { continue };
                 out.object(&id.to_string(), |out| {
                     out.vec3("pos", crate::on_ground(pos[row], 0.0));
@@ -200,7 +244,7 @@ impl Physics {
     }
 }
 
-/// After powered locomotion, before contacts: integrate carried velocity once.
+/// After locomotion requests, before contacts: integrate physical velocity once.
 /// Resolving contacts sees the resulting positions, including a knocked body
 /// entering its neighbour. No correction is ever fed back as velocity.
 pub(crate) fn integrate(physics: &Physics, slots: &Slots, pos: &mut [Vec2], dt: Dt) {
@@ -211,11 +255,13 @@ pub(crate) fn integrate(physics: &Physics, slots: &Slots, pos: &mut [Vec2], dt: 
     }
 }
 
-/// After contacts and walls, before attacks. A new attack impulse retains its
-/// full magnitude until the next tick's integration, so hit latency is explicit.
+/// After contacts and walls, damp bodies whose drag was not consumed by a motor.
+/// Before attacks: a new impulse changes velocity now and moves next tick.
+/// A motor may damp and oppose it before that next integration.
 pub(crate) fn settle(physics: &mut Physics, _dt: Dt, mut trace: TraceSink<'_>) {
     let mut stopped = 0;
     for motion in &mut physics.rows {
+        if core::mem::take(&mut motion.driven) { continue; }
         if motion.velocity == Vec2::ZERO {
             continue;
         }

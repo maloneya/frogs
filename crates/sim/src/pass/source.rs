@@ -565,7 +565,7 @@ pub(crate) fn trigger(
         // refusal and the drain reports it, so nothing is lost; retrying on the
         // next tick instead would turn a saturated world into a source that
         // asks sixty times a second forever.
-        if queue.push_from(at, source.what, *owner, Some(id)) {
+        if queue.push_from(at, source.what, *owner, Some(id)).is_some() {
             source.state.emitted += 1;
             // Per emission rather than summarised, and it is the one event here
             // that names *why* a body exists. `placed` says a body appeared;

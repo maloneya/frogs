@@ -37,13 +37,14 @@
 //!    wrong number: a stale snapshot streaks every body on screen from where
 //!    it used to be.
 //! 4. [`walk`] — integrate the player's input.
-//! 5. [`seek`] — walk the chasers. **After** `walk`, so they steer at where the
-//!    player is now rather than where it stood at the start of the tick, and
-//!    **before** the solvers, so the pile-up chasing creates is what they
-//!    resolve.
-//! 6. [`motion::integrate`] — add carried motion after powered locomotion,
-//!    before testing contacts. Neither steering nor overlap correction writes
-//!    carried velocity, so neither can erase or manufacture a blow.
+//! 5. [`seek`] — choose staggered ground gaits and ask the physics motor to
+//!    accelerate chasers. Reads the player's post-walk position. The motor
+//!    applies drag once and bounds its velocity correction; a blow therefore
+//!    takes time to overcome. It cannot grant behaviours or change positions.
+//! 6. [`motion::integrate`] — integrate physical velocity once before contacts.
+//!    Enemy running and knockback share velocity, so both transmit momentum.
+//!    Player controls still move directly; their additional knockback integrates
+//!    here. Overlap correction never manufactures velocity.
 //!    [`walls::resolve`] then sweeps circles from their remembered positions to
 //!    stop motion at authored rectangles before bodies exchange momentum.
 //! 7. [`separate::crowd`] — repair enemy overlaps and exchange momentum.
@@ -57,8 +58,9 @@
 //!    [`walls::resolve`] runs again after containment: crowd/player corrections
 //!    cannot push a circle through a rectangle. Both checks cancel only velocity
 //!    into the contact face; wall contacts are aggregated once per pass.
-//! 10. [`motion::settle`] — damp carried velocity and snap its small tail to
-//!     rest. After contact response, before a new attack impulse.
+//! 10. [`motion::settle`] — damp passive velocity and snap its small tail to
+//!     rest. Motors already applied drag; consume their tick markers here.
+//!     After contact response, before a new attack impulse.
 //! 11. [`face`] — follow independent aim before placing a hitbox; snap on an accepted
 //!     swing and hold that facing through recovery. Channels follow aim each tick.
 //! 12. [`attack`] — test final positions, apply an impulse and subtract one hit

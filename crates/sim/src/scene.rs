@@ -371,6 +371,8 @@ impl crate::World {
     /// Removes this instance, its source descendants, and its queued emissions.
     /// Player and other instances survive. A retired id is an ordinary no-op.
     /// Destruction completes between ticks, before sources can next evaluate.
+    /// Cancelled request tickets receive refusals at the next spawn boundary;
+    /// their queue slots remain reserved until then to bound outcome storage.
     pub fn evict_scene(&mut self, id: SceneId) -> bool {
         let Some(resident) = self.scenes.take(id) else {
             return false;
@@ -473,14 +475,16 @@ mod tests {
         let old = world.scene_bodies(a).unwrap().to_vec();
         let survivors = world.scene_bodies(b).unwrap().to_vec();
         assert_eq!(old.len(), 2, "the source descendant must inherit ownership");
-        assert!(world.queue.push_owned(Vec2::new(50.0, 0.0), Template::BODY, Some(a)));
-        assert!(world.request_spawn(Vec2::new(-50.0, 0.0), Template::BODY));
+        let cancelled = world.queue.push_owned(Vec2::new(50.0, 0.0), Template::BODY, Some(a)).unwrap();
+        assert!(world.request_spawn(Vec2::new(-50.0, 0.0), Template::BODY).is_some());
         assert!(world.evict_scene(a));
         assert!(!world.evict_scene(a));
         assert_eq!(world.queue.len(), 1, "unowned queued work must survive");
-        for _ in 0..4 {
-            step(&mut world);
-        }
+        step(&mut world);
+        let outcome = world.spawn_outcomes().iter().find(|result| result.ticket == cancelled).unwrap();
+        assert_eq!(outcome.entity, None);
+        assert_eq!(outcome.owner, Some(a));
+        for _ in 0..3 { step(&mut world); }
         assert!(old.iter().all(|id| !world.is_alive(*id)));
         assert!(survivors.iter().all(|id| world.is_alive(*id)));
         assert_eq!(world.source_count(), 1);
@@ -494,7 +498,7 @@ mod tests {
         let mut world = World::empty();
         let a = world.load_scene(&Scene::default()).unwrap();
         world.evict_scene(a);
-        assert!(world.queue.push_owned(Vec2::ZERO, Template::BODY, Some(a)));
+        assert!(world.queue.push_owned(Vec2::ZERO, Template::BODY, Some(a)).is_some());
         step(&mut world);
         assert_eq!(world.enemy_count(), 0);
         assert!(world.trace().iter().any(|(_, e)| e == crate::Event::Refused { count: 1 }));
@@ -530,7 +534,7 @@ mod tests {
             sources: vec![],
             grids: Vec::new(),
         };
-        assert!(world.request_spawn(Vec2::ZERO, Template::BODY));
+        assert!(world.request_spawn(Vec2::ZERO, Template::BODY).is_some());
         let before = world.hash();
         assert_eq!(world.load_scene(&full), Err(SceneError::Capacity));
         assert_eq!(world.hash(), before, "accepted queue capacity is reserved too");
@@ -595,8 +599,8 @@ mod tests {
         let mut a = World::from_scene(&scene()).unwrap();
         let mut b = World::from_scene(&scene()).unwrap();
         let owner = a.scene_instances().next().unwrap().0;
-        assert!(a.queue.push_owned(Vec2::ZERO, Template::BODY, Some(owner)));
-        assert!(b.queue.push_owned(Vec2::ZERO, Template::BODY, None));
+        assert!(a.queue.push_owned(Vec2::ZERO, Template::BODY, Some(owner)).is_some());
+        assert!(b.queue.push_owned(Vec2::ZERO, Template::BODY, None).is_some());
         assert_ne!(a.hash(), b.hash(), "queued ownership changes future eviction");
     }
 

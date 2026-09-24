@@ -2,4 +2,10 @@
 (description: "Damping ends at exact rest, with the analytically predicted travel.",
  setup: (actions: [Place((10.0, 0.0))]),
  impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))], budget: (ticks: 100),
- expect: (bodies: [(nth: 0, pos: (x: 11.0, z: 0.0, tol: 0.00018), velocity: (x: 0.0, z: 0.0, tol: 0.0))], trace: "carried_motion_comes_to_rest.trace"))
+ expect: (bodies: [(nth: 0, pos: (x: 11.0, z: 0.0, tol: 0.00018), velocity: (x: 0.0, z: 0.0, tol: 0.0))], events: (
+        kinds: [Impulsed, Rested],
+        sequence: [
+            (0, Impulsed(id: (1, 1), value: (6.0000,0.0000), source: None, tolerance: 0.00005)),
+            (82, Rested(count: 1)),
+        ],
+    )))

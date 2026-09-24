@@ -15,10 +15,9 @@
 //
 // The second grid carries `seeks: true`, which is how a grid's shared template
 // is checked: `seekers: 2` counts it, and those two bodies are the only ones
-// that move during the single tick. SPEED is 2.5m/s, so each closes 2.5/60 =
-// .0416667m along the unit vector to the player at the origin:
-//   nth 7  (-6, 8), distance 10      -> (-6, 8) + .0416667 * (.6, -.8)
-//   nth 8  (-4, 8), distance 8.94427 -> (-4, 8) + .0416667 * (.44721, -.89443)
+// that move during the single tick. The motor accelerates each to .5m/s,
+// closing .5/60 metres along its unit vector toward the origin.
+
 (
     description: "One scene's authored body, then its two grids in order, expand row by row into nine bodies numbered the way assertions address them.",
     setup: (scenes: [Inline((engine: (
@@ -44,8 +43,8 @@
             (nth: 4, seeking: false, pos: (x:  0.0, z: 5.5, tol: 0.0)),
             (nth: 5, seeking: false, pos: (x:  1.5, z: 5.5, tol: 0.0)),
             (nth: 6, seeking: false, pos: (x:  3.0, z: 5.5, tol: 0.0)),
-            (nth: 7, seeking: true,  pos: (x: -5.975,    z: 7.9666667, tol: 0.00001)),
-            (nth: 8, seeking: true,  pos: (x: -3.9813661, z: 7.9627322, tol: 0.00001)),
+            (nth: 7, seeking: true,  pos: (x: -5.995,    z: 7.9933333, tol: 0.00001)),
+            (nth: 8, seeking: true,  pos: (x: -3.9962732, z: 7.9925464, tol: 0.00001)),
         ],
     ),
 )

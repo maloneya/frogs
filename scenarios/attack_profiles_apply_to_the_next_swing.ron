@@ -24,5 +24,18 @@
     budget: (ticks: 37),
     expect: (attack_phase: Recovery, swing_tick: 14, struck: 1,
         attack_profile: Slam, swing_profile: Slam,
-        trace: "attack_profiles_apply_to_the_next_swing.trace"),
+        events: (
+        kinds: [Swung, AttackProfileChanged, HitboxOpened, HitboxClosed, Hit, Impulsed],
+        sequence: [
+            (0, Swung),
+            (1, AttackProfileChanged(profile: Slam)),
+            (6, HitboxOpened),
+            (12, HitboxClosed),
+            (22, Swung),
+            (31, HitboxOpened),
+            (35, Hit(id: (1, 1), remaining: 2)),
+            (35, Impulsed(id: (1, 1), value: (0.0000,40.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (36, HitboxClosed),
+        ],
+    )),
 )

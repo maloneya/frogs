@@ -149,7 +149,7 @@ fn refusal_preserves_active_timelines_pending_spawns_and_restart() {
         let id = game.scene_instances().next().unwrap().0;
         assert!(game.trigger_set_piece(id, "reveal"));
         step(game);
-        assert!(game.request_spawn(Vec2::new(30.0, 0.0), Template::BODY));
+        assert!(game.request_spawn(Vec2::new(30.0, 0.0), Template::BODY).is_some());
     }
     let before = observed(&game);
     assert!(game.load_scene(&scene(vec![cue(0, 1, 1.0)])).is_err());

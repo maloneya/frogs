@@ -79,10 +79,8 @@ fi
 # --- The gate. ----------------------------------------------------------------
 
 if [ "$gate" -eq 1 ]; then
-    printf '==> cargo test --workspace\n'
-    cargo test --workspace --quiet
-    printf '==> scenarios\n'
-    cargo run --quiet --release -p scenario -- scenarios/
+    printf '==> full verification\n'
+    python3 scripts/verify.py full
 fi
 
 # --- Build and stage. ---------------------------------------------------------

@@ -22,6 +22,25 @@
     budget: (ticks: 83),
     expect: (
         attack_phase: Idle, swing_tick: 0, recovery_ticks: 1, swing_recovery_ticks: 0,
-        trace: "recovery_edits_apply_to_the_next_swing.trace",
+        events: (
+        kinds: [AttackRecoveryChanged, Swung, HitboxOpened, HitboxClosed, Hit],
+        sequence: [
+            (0, AttackRecoveryChanged(recovery: 2)),
+            (0, Swung),
+            (1, AttackRecoveryChanged(recovery: 30)),
+            (6, HitboxOpened),
+            (12, HitboxClosed),
+            (14, Swung),
+            (20, HitboxOpened),
+            (26, HitboxClosed),
+            (27, AttackRecoveryChanged(recovery: 1)),
+            (56, Swung),
+            (62, HitboxOpened),
+            (68, HitboxClosed),
+            (69, Swung),
+            (75, HitboxOpened),
+            (81, HitboxClosed),
+        ],
+    ),
     ),
 )

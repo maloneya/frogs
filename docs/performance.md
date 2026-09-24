@@ -76,8 +76,7 @@ longer than 25 ms. Neither field proves physical display frame delivery.
 surface availability or the GPU; a long renderer phase does not isolate which.
 `gpu_timing_available` is false. Crowd separation has its own timing boundary;
 other simulation passes are included only in total step time. Read-only observer
-callbacks mark boundaries in sim; the actual clock stays in app. The headless scenario step budget independently measures
-simulation without presentation.
+callbacks mark boundaries in sim; the actual clock stays in app. The unpaced headless benchmark independently measures simulation without presentation.
 
 The scene report exposes actual character draw counts as
 `player_character_draws` and `horde_character_draws`: one draw per material
@@ -100,36 +99,64 @@ explicitly once the workload is ready.
 
 ## Repeatable benchmark suite
 
-Run the maintained runner with Python 3; it builds the current checkout in release,
-launches its own app and private harness, keeps the display awake, requests window
+Run the maintained runner with Python 3. Live mode builds the current checkout in
+release, launches its own app and private harness, keeps the display awake, requests window
 focus, and cleans up only its own processes. It refuses to measure while another
 running `arpg` process competes with it; it does not stop someone else's game.
 Keep the game visible and leave its input and window alone during measurement.
 
 ```sh
-python3 scripts/perf.py run --output target/perf/baseline.json
-# After the change, on the same machine:
-python3 scripts/perf.py run --baseline target/perf/baseline.json --output target/perf/candidate.json
-# Re-evaluate existing evidence without launching anything:
-python3 scripts/perf.py compare target/perf/baseline.json target/perf/candidate.json --output target/perf/comparison.json
+# Fast simulation feedback, unpaced and without a GPU/window:
+python3 scripts/perf.py run --mode headless --output target/perf/candidate.json
+# Integrated presentation/frame pacing (keep the game visible):
+python3 scripts/perf.py run --mode live --output target/perf/live.json
+# Explicitly publish a measurement for reuse by later commits:
+python3 scripts/perf.py archive target/perf/candidate.json
+# Compare explicitly or rerun only uncertain workloads:
+python3 scripts/perf.py compare baseline.json candidate.json --output comparison.json
+python3 scripts/perf.py run --mode headless --rerun candidate.json --output retry.json
 ```
 
 Outputs are created exclusively: choose a new name for every run. There is no
-`--bless` or automatic baseline update. A run without a baseline evaluates only
-absolute budgets; it establishes no relative speedup. Store large raw results and
-adjacent build/app logs as task or CI artifacts, outside versioned source. Keep
-workload definitions, policy and the runner in version control.
-An unusable baseline or an occupied result/log path is refused before live work.
-An explicit baseline must be a result object; JSON `null` cannot turn a requested
-comparison into an absolute-only check.
+`--bless` or automatic baseline replacement. `archive` validates the raw result
+and creates an immutable compressed artifact plus a small provenance manifest in
+[`benchmarks/evidence`](../benchmarks/evidence/README.md). Commit both with the next
+change; the manifest identifies the measured revision and source digest, not the
+later commit carrying the evidence. This evidence directory is excluded from the
+source digest, avoiding the self-referential commit problem. Build/app logs remain
+adjacent to the original run output and are not required for timing revalidation.
+
+Every structurally valid run automatically saves an immutable compressed copy and
+manifest in ignored `target/perf/evidence`. This includes noisy measurements,
+without changing their verdicts. Later runs discover these copies automatically;
+there is no need to remember an archive command for reuse on this machine.
+`archive` publishes selected evidence into version control for reuse in other
+checkouts. Failed/incomplete runs remain at their requested output and are never
+registered as baseline candidates. Local storage is excluded by Git ignore rules
+and does not invalidate a verification run.
+
+Without `--baseline`, the runner searches both stores and selects the nearest ancestor with compatible
+machine/compiler/build, workload files and policy. Raw artifacts are hash checked
+and revalidated; manifests cannot override their contents. Corrupt evidence fails
+closed. To seed a baseline for future changes, measure a clean committed checkout, then
+archive and commit that evidence in a follow-up commit. A pre-commit measurement
+remains dirty evidence even after its source is committed.
+
+Dirty measurements remain usable explicitly; automatic reuse requires a
+clean measured tree or an identical source digest, because a dirty tree's HEAD
+does not prove its edits are ancestors. Missing compatible evidence is recorded as
+`relative_status: missing`; an absolute pass alone proves no relative improvement.
+Explicit incompatible comparison remains inconclusive while preserving absolute
+budget results. An occupied result/log path or invalid explicit baseline is refused
+before expensive work. Archived results preserve the original verdict and raw
+observations; publication does not certify that a measurement passed.
 
 [The suite](../benchmarks/suite.json) owns workload selection, warm-up/sample ticks,
 three repetitions, absolute budgets and comparison tolerances. It covers sparse
 idle enemies, a compressed seeking crowd, movement with attacks, and a moving
 animated crowd before compression. Scenes use the ordinary content loader; the
 runner neither implements physics nor generates a second scene format. Use
-`--workload sparse` (repeatable) for a focused run. Selection must match the
-baseline. `--vsync off` is available for throughput investigations; high frame
+`--workload sparse` (repeatable) for a focused run. A focused selection can reuse the matching workloads of a full baseline. `--vsync off` is available for throughput investigations; high frame
 rates can exhaust the bounded recorder, making that sample inconclusive. Shorter
 sample windows require an explicit suite edit, shared by both compared runs.
 
@@ -138,7 +165,7 @@ harness command `perf trial <warmup ticks> <sample ticks> idle|combat` restarts 
 selected scene, then replies only after the final measured frame interval closes.
 Warm-up accepts 1..3600 ticks and sampling 60..600 ticks. Combat walks a cardinal
 square, changing direction every 60 sample ticks and asking for an attack every
-30. The [trial owner](../crates/app/src/trial.rs) defines that schedule and its
+30. The [shared trial schedule](../benchmarks/driver.rs) defines that schedule and its
 version; this drives gameplay intent, not OS input or the keyboard binding table.
 Both modes stand still during warm-up. Each repetition starts from the selected
 scene again, so combat deaths do not reduce the next repetition's workload.
@@ -188,6 +215,16 @@ frame interval. Renderer CPU time is retained diagnostically but is not a relati
 gate: with vsync, faster simulation can legitimately increase time waiting inside
 the renderer. GPU execution is still unmeasured.
 
+Assessment is local to each workload and metric. A noisy combat presentation
+metric cannot invalidate stable step/frame metrics or another workload. Invalid
+raw evidence invalidates its workload, and still prevents overall certification.
+Results contain `absolute_status`, `relative_status`, metric rows and a
+`rerun_workloads` selection. Reruns create separate evidence, preserving healthy
+measurements and never silently replacing samples with a more flattering range.
+Gameplay/hash mismatch marks relative comparison incompatible; absolute budgets
+are still evaluated. Review changed behavior before explicitly publishing its
+measurements as new reference evidence.
+
 Repeated metric ranges wider than the suite's allowed spread are inconclusive.
 All repetitions must fall below an absolute budget to pass it; all must exceed it
 to establish a regression. Relative pass requires the candidate's slowest trial
@@ -204,9 +241,18 @@ allocation checks permanently. Add detailed timers or profiler captures for a
 specific investigation; retain a probe only when it answers an ongoing question.
 Do not grow instrumentation without checking its overhead.
 
+The headless runner (`scenario` package's `perf-headless` binary) loads the same
+scene and uses the same validated tick schedule as the app. It records every
+sample tick's Game::step duration in integer nanoseconds. Warm-up, hashing,
+serialization and population observations sit outside that timing boundary.
+It validates exact sample count/end tick, finite state, population outcomes and
+repeatable hashes. It measures only `mean_step_ms`, using the existing suite's
+step budget. Presentation metrics and frame budgets apply only to live mode;
+headless evidence cannot establish rendering capacity.
+
 Run ordinary workspace checks for changes. Changes to simulation, rendering,
 entity storage, scheduling or benchmark infrastructure additionally require the
-relevant release benchmark workloads against an explicit baseline. Run the full
+relevant release benchmark workloads against an explicit or automatically selected compatible baseline. Run the full
 suite before claiming an engine-wide capacity improvement. A performance change
 must report the workload, before/after evidence, status/uncertainty and gameplay
 verification. Intentional behavior or workload changes need reviewed new baseline

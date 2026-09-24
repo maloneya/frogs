@@ -1,43 +1,12 @@
 //! Bounded, tick-scheduled performance driving through the ordinary Game step.
 //! Only the harness can start a trial. No timings decide simulation inputs.
 
-use arpg_core::{AimDir, Intent, MoveDir, Report};
-use glam::Vec3;
+use arpg_core::{Intent, Report};
 use std::sync::mpsc::Sender;
 
-/// Validated at the shared harness entry point before any restart or mutation.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Spec {
-    warmup: u64,
-    samples: u64,
-    combat: bool,
-}
-
-impl Spec {
-    pub(crate) fn parse(mut words: std::str::SplitWhitespace<'_>) -> Result<Self, String> {
-        let usage = "expected: perf trial <1..3600 warmup ticks> <60..600 sample ticks> idle|combat";
-        let warmup = words.next().and_then(|s| s.parse().ok()).ok_or(usage)?;
-        let samples = words.next().and_then(|s| s.parse().ok()).ok_or(usage)?;
-        let combat = match words.next() {
-            Some("idle") => false,
-            Some("combat") => true,
-            _ => return Err(usage.into()),
-        };
-        if !(1..=3600).contains(&warmup) || !(60..=600).contains(&samples) || words.next().is_some() {
-            return Err(usage.into());
-        }
-        Ok(Self { warmup, samples, combat })
-    }
-
-    fn intent(self, tick: u64) -> Intent {
-        if !self.combat || tick < self.warmup {
-            return Intent::new(MoveDir::NONE, AimDir::FORWARD, false);
-        }
-        let tick = tick - self.warmup;
-        let direction = [Vec3::X, Vec3::Z, -Vec3::X, -Vec3::Z][(tick / 60 % 4) as usize];
-        Intent::new(MoveDir::new(direction), AimDir::new(direction).expect("cardinal aim"), tick.is_multiple_of(30))
-    }
-}
+#[path = "../../../benchmarks/driver.rs"]
+mod driver;
+pub(crate) use driver::Spec;
 
 pub(crate) struct Trial {
     spec: Spec,
@@ -97,6 +66,8 @@ impl Trial {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arpg_core::MoveDir;
+    use glam::Vec3;
     use arpg_game::{Game, GameScene};
     use arpg_sim::{Accumulator, Dt};
 

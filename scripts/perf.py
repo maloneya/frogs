@@ -2,12 +2,13 @@
 """Release performance trials. Standard library only; see docs/performance.md.
 
 Exit 0: pass, 1: regression, 2: inconclusive (including invalid evidence).
-A baseline is an explicit, immutable result file, never rewritten by this tool.
+Baselines are immutable results, selected explicitly or from compatible archived evidence.
 """
 import argparse
 import contextlib
 import datetime
 import hashlib
+import gzip
 import json
 import math
 import os
@@ -24,6 +25,8 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "benchmarks/suite.json"
 SCHEMA = 1
+EVIDENCE = ROOT / "benchmarks/evidence"
+LOCAL_EVIDENCE = ROOT / "target/perf/evidence"
 METRICS = ("mean_step_ms", "presentation_ms.mean", "frame_ms.p99")
 EXIT = {"pass": 0, "regression": 1, "inconclusive": 2}
 
@@ -101,6 +104,8 @@ def environment(perf):
 
 
 def outcome(trial):
+    if "step_ns" in trial:
+        return [trial["final_hash"], trial["initial_enemies"], trial["start_enemies"], trial["end_enemies"], trial["population_sum"]]
     info, perf = trial["trial"], trial["perf"]
     return [trial["final_hash"], info["initial_enemies"], info["start_enemies"],
             perf["current_enemies"], info["population_sum"]]
@@ -127,6 +132,31 @@ def validate_timings(perf, frames):
 
 
 def validate_trial(trial, workload):
+    if "step_ns" in trial:
+        if trial["debug_build"] is not False or trial["finite"] is not True or trial["schedule_version"] != 1:
+            raise ValueError("invalid headless execution")
+        for key in ("warmup_ticks", "sample_ticks", "input"):
+            if trial[key] != workload[key]:
+                raise ValueError("headless workload mismatch: " + key)
+        if trial["current_tick"] != workload["warmup_ticks"] + workload["sample_ticks"]:
+            raise ValueError("incomplete headless window")
+        samples = trial["step_ns"]
+        if not isinstance(samples, dict) or set(samples) != {str(i) for i in range(workload["sample_ticks"])}:
+            raise ValueError("missing headless samples")
+        for value in samples.values():
+            number(value, "step_ns", positive=True)
+        start = number(trial["start_enemies"], "population", positive=True)
+        end = number(trial["end_enemies"], "population", positive=True)
+        total = number(trial["population_sum"], "population sum", positive=True)
+        if start != trial["initial_enemies"]:
+            raise ValueError("population changed during warm-up")
+        if workload["input"] == "idle":
+            if end != start or total != start * workload["sample_ticks"]:
+                raise ValueError("fixed-population workload lost enemies")
+        elif not 0 < end < start or not end * workload["sample_ticks"] <= total <= start * workload["sample_ticks"]:
+            raise ValueError("combat did not exercise defeats or inconsistent population")
+        fingerprint(trial["final_hash"], 16)
+        return {"mode": "headless"}
     info, perf = trial["trial"], trial["perf"]
     if trial["finite"] is not True:
         raise ValueError("non-finite simulation outcome")
@@ -197,7 +227,7 @@ def validate_result(result):
     for key in ("machine", "cpu", "memory_bytes", "os", "rustc"):
         if not isinstance(conditions[key], str) or not conditions[key]:
             raise ValueError("missing machine/compiler conditions: " + key)
-    if conditions["build"] != "cargo build --release -p arpg" or not isinstance(conditions["build_environment"], dict):
+    if conditions["build"] not in ("cargo build --release -p arpg", "cargo build --release -p scenario --bin perf-headless") or not isinstance(conditions["build_environment"], dict):
         raise ValueError("missing release build conditions")
     policy = result["suite"]
     if policy["version"] != 1 or not 3 <= policy["repetitions"] <= 10:
@@ -216,60 +246,111 @@ def validate_result(result):
         if len(trials) != policy["repetitions"]:
             raise ValueError("missing repetitions: " + workload["name"])
         for trial in trials:
+            if ("step_ns" in trial) != ("perf-headless" in conditions["build"]):
+                raise ValueError("trial does not match recorded build mode")
             current = validate_trial(trial, workload)
             if settings is not None and settings != current:
                 raise ValueError("presentation settings changed between trials")
             settings = current
             if outcome(trial) != outcome(trials[0]):
                 raise ValueError("repeated inputs produced different outcomes: " + workload["name"])
-        for name in METRICS:
-            values = [metric(t["perf"], name) for t in trials]
-            if (max(values) - min(values)) / statistics.median(values) > policy["max_trial_spread"]:
-                raise ValueError("unstable repeated timings: " + workload["name"] + "/" + name)
     return settings
 
 
+def trial_metric(trial, name):
+    if "step_ns" in trial:
+        return statistics.mean(trial["step_ns"].values()) / 1e6
+    return metric(trial["perf"], name)
+
+
+def selected(result, workload):
+    """Validate each workload independently; failures cannot erase other evidence."""
+    part = dict(result)
+    part["suite"] = {**result["suite"], "workloads": [workload]}
+    part["workloads"] = {workload["name"]: result["workloads"][workload["name"]]}
+    return part
+
+
 def assess(current, baseline=None):
-    """Never trust a stored verdict: validate raw evidence again on comparison."""
-    result = {"status": "inconclusive", "scope": "relative_and_absolute" if baseline is not None else "absolute_only",
-              "reasons": [], "metrics": []}
+    """Revalidate raw evidence; absolute budgets survive missing relative evidence."""
+    result = {"status": "inconclusive", "scope": "relative_and_absolute" if baseline else "absolute_only",
+              "reasons": [], "metrics": [], "relative_status": "missing" if baseline is None else "pass",
+              "rerun_workloads": []}
+    states, relative_states = [], []
     try:
-        settings = validate_result(current)
-        if baseline is not None:
-            if settings != validate_result(baseline):
-                raise ValueError("baseline presentation settings differ")
-            for key in ("suite", "conditions", "workload_digest"):
-                if current[key] != baseline[key]:
-                    raise ValueError("baseline comparison mismatch: " + key)
-        states = []
-        for workload in current["suite"]["workloads"]:
-            trials = current["workloads"][workload["name"]]
-            previous = baseline["workloads"][workload["name"]] if baseline is not None else None
-            if previous is not None and outcome(trials[0]) != outcome(previous[0]):
-                raise ValueError("baseline gameplay/population differs: " + workload["name"])
-            for name in METRICS:
-                values = [metric(t["perf"], name) for t in trials]
-                row = {"workload": workload["name"], "metric": name, "current_ms": values,
-                       "median_ms": statistics.median(values)}
+        workloads = current["suite"]["workloads"]
+        names = [w["name"] for w in workloads]
+        if len(names) != len(set(names)) or set(names) != set(current["workloads"]):
+            raise ValueError("missing or duplicate workloads")
+        if not workloads:
+            raise ValueError("missing workloads")
+        invalid_workloads = False
+        for workload in workloads:
+            label = workload["name"]
+            try:
+                settings = validate_result(selected(current, workload))
+            except (KeyError, TypeError, ValueError, IndexError) as error:
+                result["reasons"].append(label + ": " + str(error))
+                states.append("inconclusive")
+                invalid_workloads = True
+                result["rerun_workloads"].append(label)
+                continue
+            trials = current["workloads"][label]
+            previous, mismatch = None, None
+            if baseline is not None:
+                try:
+                    old_work = next(w for w in baseline["suite"]["workloads"] if w["name"] == label)
+                    if settings != validate_result(selected(baseline, old_work)):
+                        raise ValueError("presentation settings differ")
+                    for key in ("conditions", "workload_digest"):
+                        if current[key] != baseline[key]:
+                            raise ValueError("baseline comparison mismatch: " + key)
+                    if selected(current, workload)["suite"] != selected(baseline, old_work)["suite"]:
+                        raise ValueError("baseline policy/workload differs")
+                    previous = baseline["workloads"][label]
+                    if outcome(trials[0]) != outcome(previous[0]):
+                        raise ValueError("baseline gameplay/population differs")
+                except (KeyError, TypeError, ValueError, IndexError, StopIteration) as error:
+                    mismatch = str(error) or "baseline workload missing"
+                    previous = None
+                    relative_states.append("inconclusive")
+                    result["reasons"].append(label + ": " + mismatch)
+            names = ("mean_step_ms",) if "step_ns" in trials[0] else METRICS
+            for name in names:
+                values = [trial_metric(t, name) for t in trials]
+                row = {"workload": label, "metric": name, "current_ms": values,
+                       "median_ms": statistics.median(values), "relative": "incompatible" if mismatch else "missing"}
                 checks = []
+                stable = (max(values) - min(values)) / statistics.median(values) <= current["suite"]["max_trial_spread"]
+                row["stability"] = "stable" if stable else "inconclusive"
+                if not stable:
+                    checks.append("inconclusive")
                 if name in workload["budgets_ms"]:
                     limit = number(workload["budgets_ms"][name], "budget", positive=True)
-                    state = "pass" if max(values) <= limit else "regression" if min(values) > limit else "inconclusive"
+                    state = "inconclusive" if not stable else "pass" if max(values) <= limit else "regression" if min(values) > limit else "inconclusive"
                     row.update(absolute=state, budget_ms=limit)
                     checks.append(state)
                 if previous is not None:
-                    old = [metric(t["perf"], name) for t in previous]
+                    old = [trial_metric(t, name) for t in previous]
+                    old_stable = (max(old) - min(old)) / statistics.median(old) <= current["suite"]["max_trial_spread"]
                     factor = 1 + current["suite"]["relative_tolerance"]
-                    state = "pass" if max(values) <= min(old) * factor else "regression" if min(values) > max(old) * factor else "inconclusive"
+                    state = "inconclusive" if not stable or not old_stable else "pass" if max(values) <= min(old) * factor else "regression" if min(values) > max(old) * factor else "inconclusive"
                     row.update(relative=state, baseline_ms=old,
                                change_percent=100 * (statistics.median(values) / statistics.median(old) - 1))
                     checks.append(state)
+                    relative_states.append(state)
+                elif mismatch:
+                    checks.append("inconclusive")
                 row["status"] = merge_status(checks) if checks else "observed"
                 states.extend(checks)
                 result["metrics"].append(row)
+                if row["status"] == "inconclusive" and not mismatch and label not in result["rerun_workloads"]:
+                    result["rerun_workloads"].append(label)
         result["status"] = merge_status(states)
-        if result["status"] == "inconclusive":
-            result["reasons"].append("trial ranges straddle a budget or comparison threshold; repeat under stable conditions")
+        if relative_states:
+            result["relative_status"] = merge_status(relative_states)
+        result["absolute_status"] = merge_status([row["absolute"] for row in result["metrics"] if "absolute" in row] +
+                                                  (["inconclusive"] if invalid_workloads or len(result["metrics"]) == 0 else []))
     except (KeyError, TypeError, ValueError, IndexError) as error:
         result["reasons"].append(str(error))
     return result
@@ -277,15 +358,16 @@ def assess(current, baseline=None):
 
 def source_identity(exclude=()):
     excluded = {Path(path).resolve() for path in exclude}
+    excluded.add(EVIDENCE.resolve())
     paths = ["."]
     for path in sorted(excluded):
         try:
-            paths.append(":(exclude,literal)" + str(path.relative_to(ROOT)))
+            paths.append(":(exclude)" + str(path.relative_to(ROOT)) + ("/**" if path.is_dir() else ""))
         except ValueError:
             pass  # Artifacts outside the checkout cannot affect its identity.
     files = command(["git", "ls-files", "-co", "--exclude-standard", "-z"]).split("\0")
     contents = {p: file_digest(ROOT / p) for p in sorted(set(files))
-                if p and (ROOT / p).is_file() and (ROOT / p).resolve() not in excluded}
+                if p and (ROOT / p).is_file() and not any((ROOT / p).resolve() == e or e in (ROOT / p).resolve().parents for e in excluded)}
     return {"revision": command(["git", "rev-parse", "HEAD"]),
             "dirty": bool(command(["git", "status", "--porcelain", "--untracked-files=all", "--", *paths])),
             "digest": digest(json.dumps(contents, sort_keys=True).encode())}
@@ -377,6 +459,7 @@ def run(args):
               "errors": [], "workloads": {}}
     try:
         suite = load(SUITE)
+        headless = args.mode == "headless"
         if args.workload:
             suite["workloads"] = [w for w in suite["workloads"] if w["name"] in args.workload]
             if {w["name"] for w in suite["workloads"]} != set(args.workload):
@@ -391,11 +474,15 @@ def run(args):
         before = source_identity(outputs)
         result["source"] = before
         result["conditions"] = host_conditions()
-        workload_files = [ROOT / w["scene"] for w in suite["workloads"]]
-        workload_files += sorted((ROOT / "assets").rglob("*.glb"))
+        build_args = ["cargo", "build", "--release", "-p", "scenario", "--bin", "perf-headless"] if headless else ["cargo", "build", "--release", "-p", "arpg"]
+        result["conditions"]["build"] = " ".join(build_args)
+        workload_files = [ROOT / w["scene"] for w in load(SUITE)["workloads"]]
+        workload_files += [ROOT / "benchmarks/driver.rs"]
+        if not headless:
+            workload_files += sorted((ROOT / "assets").rglob("*.glb"))
         result["workload_digest"] = digest(json.dumps({str(p.relative_to(ROOT)): file_digest(p) for p in workload_files}, sort_keys=True).encode())
         print("Building release app…", flush=True)
-        build = subprocess.run(["cargo", "build", "--release", "-p", "arpg", "--message-format=json"],
+        build = subprocess.run([*build_args, "--message-format=json"],
                                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         with Path(str(args.output) + ".build.log").open("x") as build_log:
             build_log.write(build.stderr)
@@ -403,8 +490,19 @@ def run(args):
             raise ValueError("release build failed; inspect build log")
         artifacts = [json.loads(line) for line in build.stdout.splitlines()]
         binary = next(Path(a["executable"]) for a in artifacts
-                      if a.get("reason") == "compiler-artifact" and a.get("target", {}).get("name") == "arpg" and a.get("executable"))
+                      if a.get("reason") == "compiler-artifact" and a.get("target", {}).get("name") == ("perf-headless" if headless else "arpg") and a.get("executable"))
         result["binary_sha256"] = file_digest(binary)
+        if headless:
+            for workload in suite["workloads"]:
+                trials = result["workloads"][workload["name"]] = []
+                for repetition in range(suite["repetitions"]):
+                    print(f"{workload['name']}: headless trial {repetition + 1}/{suite['repetitions']}", flush=True)
+                    trial = json.loads(command([str(binary), workload["scene"], str(workload["warmup_ticks"]),
+                                               str(workload["sample_ticks"]), workload["input"]]))
+                    trials.append(trial)
+            if source_identity(outputs) != before or file_digest(binary) != result["binary_sha256"]:
+                raise ValueError("source or executable changed during measurement")
+            return result
         with app(binary, args.output) as path:
             if request(path, "vsync " + args.vsync) != "vsync " + str(args.vsync == "on").lower():
                 raise ValueError("requested present mode unavailable")
@@ -420,7 +518,6 @@ def run(args):
                     text = f"perf trial {workload['warmup_ticks']} {workload['sample_ticks']} {workload['input']}"
                     trial = json.loads(request(path, text, timeout=180))
                     result["workloads"][name].append(trial)
-                    validate_trial(trial, workload)
         if other_games():
             raise ValueError("another game started during measurement")
         if source_identity(outputs) != before or file_digest(binary) != result["binary_sha256"]:
@@ -430,10 +527,73 @@ def run(args):
     return result
 
 
+def archive(path, directory=None):
+    """Explicit immutable publication, including inconclusive but valid measurements."""
+    result = load(path)
+    validate_result(result)
+    raw = json.dumps(result, sort_keys=True, allow_nan=False).encode()
+    identity = digest(raw)
+    directory = Path(directory) if directory is not None else EVIDENCE
+    directory.mkdir(parents=True, exist_ok=True)
+    artifact = directory / (identity + ".json.gz")
+    with artifact.open("xb") as stream:
+        stream.write(gzip.compress(raw, mtime=0))
+    manifest = {"artifact": artifact.name, "sha256": identity, "source": result["source"],
+                "conditions": result["conditions"], "workload_digest": result["workload_digest"],
+                "created_utc": result.get("created_utc", ""), "suite": result["suite"]}
+    save(directory / (identity + ".json"), manifest)
+    return artifact
+
+
+def discover(current, directory=None):
+    """Nearest ancestor's compatible measurements; never infer a passing verdict."""
+    best = None
+    stores = (Path(directory),) if directory is not None else (EVIDENCE, LOCAL_EVIDENCE)
+    manifests = sorted(path for store in stores for path in store.glob("*.json"))
+    for manifest_path in manifests:
+        manifest = load(manifest_path)
+        fingerprint(manifest["sha256"], 64)
+        if manifest["artifact"] != manifest["sha256"] + ".json.gz":
+            raise ValueError("invalid evidence artifact path")
+        raw = gzip.decompress((manifest_path.parent / manifest["artifact"]).read_bytes())
+        if digest(raw) != manifest["sha256"]:
+            raise ValueError("corrupt archived evidence: " + str(manifest_path))
+        result = json.loads(raw)
+        validate_result(result)
+        for key in ("source", "conditions", "workload_digest", "suite"):
+            if manifest[key] != result[key]:
+                raise ValueError("manifest contradicts raw evidence: " + key)
+        # A dirty checkout is not an ancestor merely because its HEAD is.
+        if result["source"]["dirty"] and result["source"]["digest"] != current["source"]["digest"]:
+            continue
+        if any(current[key] != result[key] for key in ("conditions", "workload_digest")):
+            continue
+        wanted = {w["name"]: w for w in current["suite"]["workloads"]}
+        offered = {w["name"]: w for w in result["suite"]["workloads"]}
+        if any(offered.get(k) != v for k, v in wanted.items()):
+            continue
+        if any(current["suite"][k] != result["suite"][k] for k in ("version", "repetitions", "relative_tolerance", "max_trial_spread")):
+            continue
+        revision = result["source"]["revision"]
+        ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", revision, current["source"]["revision"]], cwd=ROOT, capture_output=True)
+        if ancestor.returncode:
+            continue
+        distance = int(command(["git", "rev-list", "--count", revision + ".." + current["source"]["revision"]]))
+        # Keep only the winner's raw frame dictionaries, not the entire history.
+        rank = (-distance, manifest.get("created_utc", ""), str(manifest_path))
+        if best is None or rank > best[0]:
+            best = (rank, result)
+    if best is None:
+        return None, None
+    return best[1], best[0][2]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     live = sub.add_parser("run", help="build release and collect the versioned suite")
+    live.add_argument("--mode", choices=("live", "headless"), default="live")
+    live.add_argument("--rerun", type=Path, help="select uncertain workloads from a previous result; preserve that result")
     live.add_argument("--output", type=Path, required=True)
     live.add_argument("--baseline", type=Path)
     live.add_argument("--workload", action="append", help="select workload; may repeat (default: full suite)")
@@ -442,7 +602,23 @@ def main():
     compare.add_argument("baseline", type=Path)
     compare.add_argument("candidate", type=Path)
     compare.add_argument("--output", type=Path, required=True)
+    publish = sub.add_parser("archive", help="check in immutable raw evidence and its provenance manifest")
+    publish.add_argument("result", type=Path)
     args = parser.parse_args()
+    if args.command == "archive":
+        try:
+            print(archive(args.result))
+            return 0
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print("inconclusive: " + str(error), file=sys.stderr)
+            return 2
+    if args.command == "run" and args.rerun:
+        if args.workload:
+            parser.error("choose --rerun or --workload")
+        previous = load(args.rerun)
+        args.workload = assess(previous)["rerun_workloads"]
+        if not args.workload:
+            parser.error("no uncertain workloads to rerun")
     # Fail before expensive work if the immutable destination is already used.
     if args.output.exists():
         parser.error("output exists; choose a new result path")
@@ -460,9 +636,12 @@ def main():
             validate_result(baseline)
         if args.command == "run":
             result = run(args)
+            baseline_path = str(args.baseline.resolve()) if args.baseline else None
+            if baseline is None and not result["errors"]:
+                baseline, baseline_path = discover(result)
             verdict = assess(result, baseline)
             result["assessment"] = verdict
-            result["baseline"] = str(args.baseline.resolve()) if args.baseline else None
+            result["baseline"] = baseline_path
         else:
             result = verdict = assess(load(args.candidate), baseline)
             result["baseline"] = str(args.baseline.resolve())
@@ -471,6 +650,13 @@ def main():
             result["baseline_digest"] = digest(json.dumps(baseline, sort_keys=True).encode())
             result["baseline_source"] = baseline.get("source") if isinstance(baseline, dict) else None
         save(args.output, result)
+        if args.command == "run":
+            try:
+                validate_result(result)
+            except (KeyError, TypeError, ValueError, IndexError):
+                pass  # Partial/invalid runs remain at the requested output, never eligible baselines.
+            else:
+                archive(args.output, LOCAL_EVIDENCE)
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
         print("inconclusive: " + str(error), file=sys.stderr)
         try:

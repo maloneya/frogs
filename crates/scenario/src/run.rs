@@ -4,7 +4,7 @@ use std::path::Path;
 
 use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::Game;
-use arpg_sim::{Accumulator, Dt, EntityId, Event, SourceId, Template};
+use arpg_sim::{Accumulator, Dt, EntityId, SourceId, Template};
 use glam::Vec3;
 
 use crate::spec::{Action, Expect, Scenario};
@@ -13,6 +13,7 @@ use crate::spec::{Action, Expect, Scenario};
 /// determinism pass can compare two runs without re-deciding what "passed"
 /// means.
 pub(crate) struct Run {
+    pub(crate) timing: crate::timing::Timing,
     pub(crate) game: Game,
     /// Stable identities of setup.sources, retained even after removal.
     sources: Vec<SourceId>,
@@ -78,6 +79,11 @@ use arpg_sim::WALK_PER_TICK as TICK_OF_WALKING;
 /// just to remove one field from checkpoints.
 pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     let mut failures = Vec::new();
+    if let Some(events) = &scenario.expect.events
+        && (scenario.expect.trace.is_some() || events.kinds.is_empty() || events.sequence.len() >= arpg_sim::MAX_TRACE_EVENTS || events.sequence.iter().any(|(tick, event)|
+            *tick >= scenario.budget.ticks || !events.kinds.contains(&event.kind()))) {
+        failures.push(Failure::new("events", "events without a golden, a nonempty scope, and reachable predictions fitting MAX_TRACE_EVENTS".into(), format!("{events:?}")));
+    }
     for aim in &scenario.aims {
         if aim.at >= scenario.budget.ticks || AimDir::new(Vec3::new(aim.dir.0, 0.0, aim.dir.1)).is_err() {
             failures.push(Failure::new("aims", "a finite nonzero aim and a tick inside the budget".into(), format!("{aim:?}")));
@@ -203,11 +209,11 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
                 format!("tick {} will not run", checkpoint.at),
             ));
         }
-        if checkpoint.expect.trace.is_some() {
+        if checkpoint.expect.trace.is_some() || checkpoint.expect.events.is_some() {
             failures.push(Failure::new(
                 &label,
-                "state assertions; golden traces belong in the final expect.trace".into(),
-                "a checkpoint contains trace".into(),
+                "state assertions; transition evidence belongs in final expect.events or expect.trace".into(),
+                "a checkpoint contains transition evidence".into(),
             ));
         }
     }
@@ -221,6 +227,8 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
 /// scenario makes is about the code path the game runs, and a runner that
 /// stepped the game by some other route would be testing a different program.
 pub(crate) fn run(scenario: &Scenario) -> Run {
+    let run_started = std::time::Instant::now();
+    let mut timing = crate::timing::Timing::default();
     let mut game = Game::empty();
     let mut instances = Vec::new();
     let mut installed_sources = Vec::new();
@@ -273,19 +281,19 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     // `Game::default()` building a horde this scenario just replaced, tying
     // every golden file to a constant none of them are about.
     game.clear_trace();
+    if scenario.expect.trace.is_some() {
+        game.capture_trace(65_536).expect("fixed golden capacity is supported");
+    }
+    if let Some(events) = &scenario.expect.events {
+        // One extra event proves an unexpected duplicate. Any larger excess
+        // fails closed as overflow, without allocating according to crowd size.
+        game.capture_events(events.sequence.len().saturating_add(1), events.kinds.clone()).expect("validated event count");
+    }
 
+    timing.setup = run_started.elapsed();
     let budget = scenario.budget.ticks as usize;
     let schedule = input_schedule(scenario);
     let aims = aim_schedule(scenario, &schedule);
-
-    // Whether any body can appear mid-run at all. Hoisted because the check
-    // below costs a walk of the whole trace ring, and the overwhelming majority
-    // of scenarios place everything in setup and nothing after — for those,
-    // 16384 events would be filtered on every tick to find nothing.
-    let mut watching = !scenario.spawns.is_empty()
-        || !sources.is_empty()
-        || !scenario.scenes.is_empty()
-        || !scenario.setup.scenes.is_empty();
 
     let mut accumulator = Accumulator::default();
     let mut hashes = Vec::with_capacity(budget);
@@ -303,12 +311,10 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             let tick = hashes.len() as u64;
             // Loads complete before source evaluation; evictions therefore stop
             // a source from firing on this very tick. No implicit warm-up tick.
-            let mut installed = 0;
             while scene_commands.peek().is_some_and(|command| command.at == tick) {
                 let command = scene_commands.next().expect("peeked scene command");
                 match &command.action {
                     crate::spec::SceneAction::Load(scene) => {
-                        let before = placed.len();
                         load_scene(
                             &mut game,
                             scene.content(),
@@ -317,7 +323,6 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                             &mut placed,
                             &mut command_failures,
                         );
-                        installed += placed.len() - before;
                     }
                     crate::spec::SceneAction::Evict(nth) => {
                         if !instances
@@ -384,10 +389,9 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             // Asked for before the step, through the same queue anything
             // inside the simulation uses. The spawn pass grants them before
             // row readers, so each body exists for the whole of tick `at`.
-            let mut asked = 0;
+            let mut tickets = Vec::new();
             for spawn in scenario.spawns.iter().filter(|s| s.at == tick) {
-                let _ = game.request_spawn(glam::Vec2::new(spawn.pos.0, spawn.pos.1), spawn.what);
-                asked += 1;
+                tickets.push(game.request_spawn(glam::Vec2::new(spawn.pos.0, spawn.pos.1), spawn.what));
             }
 
             for command in scenario.impulses.iter().filter(|command| command.at == tick) {
@@ -409,25 +413,14 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             let started = std::time::Instant::now();
             game.step(dt, intent);
             step_time += started.elapsed();
+            let hashing = std::time::Instant::now();
             hashes.push(game.hash());
+            timing.hashing += hashing.elapsed();
 
-            if watching {
-                if game.trace().dropped() > 0 {
-                    // Scene batches can exceed the trace ring in one boundary
-                    // operation. Binding only its surviving tail would silently
-                    // change placement numbering, even without a golden trace.
-                    command_failures.push(Failure::new(
-                        "placement trace",
-                        "an untruncated trace for runtime body identities".into(),
-                        "trace wrapped; shorten or reduce the scenario".into(),
-                    ));
-                    watching = false;
-                } else {
-                    record_placed(&game, tick, asked, installed, &mut placed);
-                }
-            }
+            record_placed(&game, &tickets, &mut placed);
             // After recording this tick's spawns, so a checkpoint can inspect
             // a newly granted body by the same name used at the end of the run.
+            let assertions = std::time::Instant::now();
             while checkpoints.peek().is_some_and(|(_, checkpoint)| checkpoint.at == tick) {
                 let (index, checkpoint) = checkpoints.next().expect("peeked checkpoint");
                 for mut failure in check_state(&checkpoint.expect, &game, &placed, &sources, &instances, &installed_sources) {
@@ -436,10 +429,15 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                     checkpoint_failures.push(failure);
                 }
             }
+            timing.assertions += assertions.elapsed();
         }
     }
 
+    timing.simulation = step_time;
+    timing.driver = run_started.elapsed().saturating_sub(
+        timing.setup + timing.simulation + timing.hashing + timing.assertions);
     Run {
+        timing,
         game,
         sources,
         instances,
@@ -452,47 +450,21 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     }
 }
 
-/// Continues the placement numbering with every body the queue granted this
-/// tick, whoever asked for it.
-///
-/// **Read out of the trace rather than returned by an API**, and that is worth
-/// a sentence because it looks like the long way round. A queued spawn is
-/// granted inside `step`, by a pass, on behalf of an asker that may not be the
-/// runner at all — so there is nothing for a return value to hang off. The
-/// trace is the channel the simulation already reports what it did on, and
-/// binding names through it means this keeps working unchanged when the asker
-/// is a trigger inside the simulation rather than a line in the `.ron`.
-///
-/// A request that was refused leaves no `Placed` event, so the shortfall is
-/// padded with `None` — placement numbers must not shift under the assertions
-/// that refer to them. Refusal means the horde hit its budget, which cannot
-/// un-happen, so the shortfall is always the tail of what was asked for.
+/// Bind each explicit request by ticket, retaining refusals in their original
+/// positions. Source requests follow explicit requests at the spawn boundary.
+/// Scene installation binds its own immediate bodies at the load operation.
 fn record_placed(
     game: &Game,
-    tick: u64,
-    asked: usize,
-    installed: usize,
+    tickets: &[Option<arpg_sim::SpawnTicket>],
     placed: &mut Vec<Option<EntityId>>,
 ) {
-    let granted: Vec<EntityId> = game
-        .trace()
-        .since(tick)
-        .filter_map(|(_, event)| match event {
-            Event::Placed { id } => Some(id),
-            _ => None,
-        })
-        .skip(installed)
-        .collect();
-
-    // The runner's own requests were queued *before* the tick began and a
-    // source's are pushed during it, and the queue is FIFO — so within a tick
-    // the scenario's own spawns are granted first and everything after them
-    // came from a source.
-    let (mine, from_sources) = granted.split_at(granted.len().min(asked));
-
-    placed.extend(mine.iter().copied().map(Some));
-    placed.extend(std::iter::repeat_n(None, asked - mine.len()));
-    placed.extend(from_sources.iter().copied().map(Some));
+    let outcomes = game.spawn_outcomes();
+    placed.extend(tickets.iter().map(|ticket| {
+        ticket.map(|ticket| outcomes.iter().find(|result| result.ticket == ticket)
+            .expect("each accepted spawn ticket completes at the boundary"))
+            .and_then(|result| result.entity)
+    }));
+    placed.extend(outcomes.iter().filter(|result| result.source.is_some()).map(|result| result.entity));
 }
 
 /// Flattens the input spans into one direction per tick.
@@ -603,6 +575,7 @@ fn check_state(
         directional_lights,
         bodies,
         trace: _,
+        events: _,
     } = expect;
 
     check_eq("player_health", player_health, game.player_health(), &mut failures);
@@ -792,6 +765,13 @@ fn check_body(
                 want.to_string(), got.map_or("no interaction".into(), |state| state.to_string())));
         }
     }
+    if let Some(want) = body.gait {
+        let got = game.gait(id);
+        if got != Some(want) {
+            failures.push(Failure::new(&format!("bodies[{}].gait", body.nth),
+                want.label().into(), got.map_or("no gait", arpg_sim::Gait::label).into()));
+        }
+    }
     let alive = game.is_alive(id);
     check_eq(&format!("bodies[{}].damageable", body.nth), &body.damageable,
         game.health(id).is_some(), failures);
@@ -936,34 +916,32 @@ pub(crate) fn check_replay(scenario: &Scenario, first: &Run) -> Option<Failure> 
     )
 }
 
-/// Compares the run's trace against a checked-in golden file.
-///
-/// Returns the failure, or `None` if it matched. `bless` rewrites the file
-/// instead of comparing, which is the only way to create one.
+/// Check exact typed event predictions or a diagnostic serialization golden.
+/// `bless` can rewrite only a complete golden; typed predictions always assert.
 pub(crate) fn check_trace(
     scenario: &Scenario,
     run: &Run,
     beside: &Path,
     bless: bool,
 ) -> Option<Failure> {
+    if let Some(events) = &scenario.expect.events {
+        let Some(actual) = run.game.captured_events() else {
+            return Some(Failure::new("events", "complete selected evidence".into(), "event capture overflowed".into()));
+        };
+        if actual.len() != events.sequence.len() {
+            return Some(Failure::new("events", format!("{} selected events", events.sequence.len()), format!("{} selected events", actual.len())));
+        }
+        for (index, ((tick, expected), (actual_tick, event))) in events.sequence.iter().zip(actual).enumerate() {
+            if tick != actual_tick || !expected.matches(*event) {
+                return Some(Failure::new("events", format!("event {index}: {tick} {expected:?}"), format!("{actual_tick} {event:?}")));
+            }
+        }
+    }
     let name = scenario.expect.trace.as_ref()?;
     let path = beside.parent().unwrap_or(Path::new(".")).join(name);
-    let actual = run.game.render_trace_since(0);
-
-    // A wrapped ring buffer means the beginning of the run is simply gone, so
-    // the golden file would silently stop describing what it is named after.
-    // Refused rather than compared.
-    let dropped = run.game.trace_dropped();
-    if dropped > 0 {
-        return Some(
-            Failure::new("trace", "a complete trace".into(), format!("{dropped} event(s) dropped"))
-                .with_note(
-                    "the trace ring buffer wrapped, so the start of the run is gone. Shorten \
-                     the scenario or raise the buffer, but do not bless a truncated trace"
-                        .into(),
-                ),
-        );
-    }
+    let Some(actual) = run.game.render_captured_trace() else {
+        return Some(Failure::new("trace", "complete captured evidence".into(), "capture overflowed".into()));
+    };
 
     if bless {
         return match std::fs::write(&path, &actual) {
@@ -1079,5 +1057,38 @@ mod channel_input_tests {
         }
         let scenario: Scenario = ron::from_str("(description: \"valid channel\", channels: [(at: 0, ticks: 10)], budget: (ticks: 10))").unwrap();
         assert!(validate(&scenario).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod spawn_binding_tests {
+    use super::*;
+
+    #[test]
+    fn refusal_keeps_its_place_and_log_retention_cannot_change_bindings() {
+        for retention in [0, 1, 16_384] {
+            let mut game = Game::empty();
+            game.set_trace_retention(retention).unwrap();
+            let tickets = [
+                game.request_spawn(glam::Vec2::new(10.0, 0.0), Template::BODY),
+                game.request_spawn(glam::Vec2::splat(f32::NAN), Template::BODY),
+                // An immediately refused request must also retain its number.
+                None,
+                game.request_spawn(glam::Vec2::new(20.0, 0.0), Template::BODY),
+            ];
+            for dt in Accumulator::default().pending(Dt::SECS) {
+                game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+            }
+            game.clear_trace();
+
+            let mut placed = Vec::new();
+            record_placed(&game, &tickets, &mut placed);
+            assert_eq!(placed.len(), 4);
+            assert!(placed[0].is_some());
+            assert_eq!(placed[1], None);
+            assert_eq!(placed[2], None);
+            assert!(placed[3].is_some());
+            assert_ne!(placed[0], placed[3]);
+        }
     }
 }

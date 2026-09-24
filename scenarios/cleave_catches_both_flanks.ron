@@ -42,6 +42,19 @@
             (nth: 3, health: 3, pos: (x: 0.0, z: -1.5, tol: 0.0)),
             (nth: 4, health: 3, pos: (x: 4.0, z: 1.2, tol: 0.0)),
         ],
-        trace: "cleave_catches_both_flanks.trace",
+        events: (
+        kinds: [Swung, HitboxOpened, Hit, Impulsed, HitboxClosed],
+        sequence: [
+            (0, Swung),
+            (6, HitboxOpened),
+            (6, Hit(id: (1, 1), remaining: 2)),
+            (6, Impulsed(id: (1, 1), value: (0.0000,24.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (8, Hit(id: (2, 1), remaining: 2)),
+            (8, Impulsed(id: (2, 1), value: (0.0000,24.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (11, Hit(id: (3, 1), remaining: 2)),
+            (11, Impulsed(id: (3, 1), value: (0.0000,24.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (12, HitboxClosed),
+        ],
+    ),
     ),
 )

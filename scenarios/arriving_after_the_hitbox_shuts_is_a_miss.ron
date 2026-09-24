@@ -1,11 +1,11 @@
 // Slam closes at 14. Final reach is 1.6+2.6+.25-.001=4.449m.
-// At 2.5 m/s, a seeker at 5.05m is at 4.466667 after tick 13,
-// outside reach, then 4.425 after tick 14, inside reach only after shutdown.
+// With bounded motor acceleration, a seeker at 4.96m is at 4.478086 after
+// tick 13, then 4.436419 after tick 14: inside reach only after shutdown.
 (
     description: "A chaser that comes into range on the tick the hitbox shuts is not hit.",
     setup: (
         actions: [
-            Place((0.0, 5.05)),
+            Place((0.0, 4.96)),
             Seek(0),
         ],
     ),
@@ -14,9 +14,9 @@
     attacks: [0],
     checkpoints: [
         (at: 13, expect: (attack_phase: Active, struck: 0,
-            bodies: [(nth: 0, health: 3, pos: (x: 0.0, z: 4.466667, tol: 0.00001))])),
+            bodies: [(nth: 0, health: 3, pos: (x: 0.0, z: 4.478086, tol: 0.00001))])),
         (at: 14, expect: (attack_phase: Recovery, struck: 0,
-            bodies: [(nth: 0, health: 3, pos: (x: 0.0, z: 4.425, tol: 0.00001))])),
+            bodies: [(nth: 0, health: 3, pos: (x: 0.0, z: 4.436419, tol: 0.00001))])),
     ],
     budget: (ticks: 30),
     expect: (
@@ -26,6 +26,14 @@
         bodies: [
             (nth: 0, seeking: true, health: 3),
         ],
-        trace: "arriving_after_the_hitbox_shuts_is_a_miss.trace",
+        events: (
+        kinds: [AttackProfileChanged, Swung, HitboxOpened, HitboxClosed, Hit],
+        sequence: [
+            (0, AttackProfileChanged(profile: Slam)),
+            (0, Swung),
+            (9, HitboxOpened),
+            (14, HitboxClosed),
+        ],
+    ),
     ),
 )

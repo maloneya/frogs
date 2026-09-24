@@ -218,7 +218,7 @@ fn restart_resets_the_complete_playtest_boundary() {
         app.game.player_id(),
         arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()
     ));
-    assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
+    assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY).is_some());
     app.input.on_key(KeyCode::F2, true, false);
     assert!(app.input.menu().open());
     let mut camera = OrthoCamera::new(1280, 720);
@@ -342,7 +342,7 @@ fn perf_queries_and_reset_preserve_gameplay_and_pending_work() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut app = App { harness: Some(rx), ..Default::default() };
     app.start_playtest(pair()).unwrap();
-    assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY));
+    assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY).is_some());
     record_perf_frame(&mut app);
     let before = app.report_state();
     let trace = app.game.trace().render();

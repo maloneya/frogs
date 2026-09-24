@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""One verification entry point with immutable evidence and exact-input check reuse.
+
+Quick is explicitly partial. Full includes all correctness checks and headless
+performance; --live adds the display-dependent performance gate. Only successful
+correctness checks are cached. Performance samples are always freshly measured,
+with baseline reuse owned by perf.py. No source edits or commands are inferred.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+CHECKS = ("clippy", "tests", "docs", "scenarios-fast", "scenarios-extended", "performance-headless")
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def packed(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def input_digest(path, active=frozenset()):
+    """Fingerprint linked inputs recursively; reject cycles and special files."""
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return digest(b"deleted")
+    identity = (metadata.st_dev, metadata.st_ino)
+    if identity in active:
+        raise ValueError("cycle in verification inputs: " + str(path))
+    active = active | {identity}
+    mode = metadata.st_mode
+    if stat.S_ISLNK(mode):
+        target = os.readlink(path)
+        linked = Path(target) if os.path.isabs(target) else path.parent / target
+        return digest(packed({"link": target, "target": input_digest(linked, active)}))
+    if stat.S_ISREG(mode):
+        return digest(packed({"file": digest(path.read_bytes()), "mode": mode & 0o777}))
+    if stat.S_ISDIR(mode):
+        children = {child.name: input_digest(child, active)
+                    for child in sorted(path.iterdir(), key=lambda p: os.fsencode(p.name))}
+        return digest(packed({"directory": children, "mode": mode & 0o777}))
+    raise ValueError("unsupported verification input: " + str(path))
+
+
+def source_identity(root=ROOT):
+    """All tracked/unignored inputs, including dirty and untracked authored data.
+
+    Ignore build outputs through Git's existing ignore rules. Track deletions and
+    paths as well as bytes. A generated evidence index remains a real input: its
+    changes must invalidate verification rather than silently escaping the key.
+    """
+    names = subprocess.check_output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root)
+    state = hashlib.sha256()
+    for name in sorted(set(names.split(b"\0")) - {b""}):
+        path = root / os.fsdecode(name)
+        state.update(name + b"\0")
+        state.update(input_digest(path).encode())
+    return state.hexdigest()
+
+
+def context():
+    # Tests and build scripts may read arbitrary inherited variables. Hash the
+    # complete environment rather than guessing which prefixes are meaningful.
+    # Values stay private; only the digest appears in stored evidence.
+    env = dict(os.environ)
+    cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    configs = {name: digest((cargo_home / name).read_bytes()) for name in ("config", "config.toml")
+               if (cargo_home / name).is_file()}
+    hardware = {}
+    if platform.system() == "Darwin":
+        for field in ("hw.model", "hw.memsize", "machdep.cpu.brand_string"):
+            hardware[field] = subprocess.check_output(["sysctl", "-n", field], text=True).strip()
+    return {"hardware": hardware, "rustc": subprocess.check_output(["rustc", "-Vv"], text=True),
+            "cargo": subprocess.check_output(["cargo", "-V"], text=True),
+            "python": sys.version, "machine": platform.platform(),
+            "environment": digest(packed(env)), "cargo_config": configs}
+
+
+def scenario_files(suite, root=ROOT):
+    if suite not in ("fast", "extended"):
+        raise ValueError("unknown scenario suite: " + suite)
+    manifest = json.loads((root / "scenarios/suites.json").read_text())
+    if set(manifest) != {"extended"} or not isinstance(manifest["extended"], dict):
+        raise ValueError("suite manifest must contain only an extended scenario/reason map")
+    directory = root / "scenarios"
+    files = {p.relative_to(directory).as_posix(): p for p in directory.rglob("*.ron")}
+    extended = manifest["extended"]
+    for name, reason in extended.items():
+        if name not in files or not isinstance(reason, str) or not reason.strip():
+            raise ValueError("unknown extended scenario or missing reason: " + name)
+    selected = [str(path.relative_to(root)) for name, path in sorted(files.items())
+                if (name in extended) == (suite == "extended")]
+    if not selected:
+        raise ValueError("empty scenario suite: " + suite)
+    return selected
+
+
+def commands(name, artifact, root=ROOT):
+    if name == "clippy":
+        return ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+    if name == "tests":
+        return ["cargo", "test", "--workspace"]
+    if name == "docs":
+        return ["cargo", "doc", "--workspace", "--lib", "--bins", "--no-deps", "--document-private-items"]
+    if name.startswith("scenarios-"):
+        suite = name.removeprefix("scenarios-")
+        return ["cargo", "run", "--quiet", "-p", "scenario", "--", "--timings",
+                str(artifact / (name + ".timings.json"))] + scenario_files(suite, root)
+    if name.startswith("performance-"):
+        return [sys.executable, "scripts/perf.py", "run", "--mode", name.removeprefix("performance-"),
+                "--output", str(artifact / (name + ".json"))]
+    raise ValueError("unknown check: " + name)
+
+
+def cache_key(source, machine, command, artifact):
+    # Output destination varies per invocation but is not an input to the test.
+    canonical = [part.replace(str(artifact), "<evidence>") for part in command]
+    return digest(packed({"source": source, "context": machine, "command": canonical}))
+
+
+def cached_record(cache, key):
+    try:
+        record = json.loads((cache / (key + ".json")).read_text())
+        if record["key"] != key or record["exit_code"] != 0:
+            return None
+        for item in record["evidence"]:
+            if digest(Path(item["path"]).read_bytes()) != item["sha256"]:
+                return None
+        if not record["evidence"]:
+            return None
+        return record
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def run_check(name, command, source, machine, artifact, cache, fresh=False, root=ROOT):
+    key = cache_key(source, machine, command, artifact)
+    old = None if fresh or name.startswith("performance-") else cached_record(cache, key)
+    if old:
+        return {**old, "cached": True}
+    log = artifact / (name + ".log")
+    started = time.monotonic()
+    with log.open("x") as out:
+        code = subprocess.run(command, cwd=root, stdout=out, stderr=subprocess.STDOUT, check=False).returncode
+    record = {"name": name, "key": key, "command": command, "exit_code": code,
+              "seconds": round(time.monotonic() - started, 3), "cached": False,
+              "evidence": [{"path": str(log), "sha256": digest(log.read_bytes())}]}
+    extra = artifact / (name + (".timings.json" if name.startswith("scenarios-") else ".json"))
+    if code == 0 and name.startswith(("scenarios-", "performance-")) and not extra.is_file():
+        record["exit_code"] = 2
+        record["reason"] = "check did not produce its required structured evidence"
+    if extra.exists():
+        record["evidence"].append({"path": str(extra), "sha256": digest(extra.read_bytes())})
+    if source_identity(root) != source:
+        record["exit_code"] = 2
+        record["reason"] = "inputs changed during check; result cannot certify current source"
+    if record["exit_code"] == 0 and not name.startswith("performance-"):
+        cache.mkdir(parents=True, exist_ok=True)
+        destination = cache / (key + ".json")
+        # Replace a corrupt/missing entry atomically; immutable run evidence stays.
+        with tempfile.NamedTemporaryFile("w", dir=cache, delete=False) as out:
+            json.dump(record, out, indent=2)
+            temporary = out.name
+        os.replace(temporary, destination)
+    return record
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("scope", choices=("quick", "full"), nargs="?", default="full")
+    parser.add_argument("--live", action="store_true", help="also measure real-time presentation")
+    parser.add_argument("--only", choices=CHECKS, help="one explicitly partial check (for hooks)")
+    parser.add_argument("--fresh", action="store_true", help="do not reuse correctness results")
+    args = parser.parse_args(argv)
+    if args.only and args.live:
+        parser.error("--only and --live cannot be combined")
+    base = ROOT / "target/verify"
+    base.mkdir(parents=True, exist_ok=True)
+    artifact = Path(tempfile.mkdtemp(prefix="run-", dir=base))
+    required = list(CHECKS) + (["performance-live"] if args.live else [])
+    result = {"schema": 1, "scope": args.scope, "checks": [], "coverage": [], "omitted": required.copy()}
+    try:
+        source = source_identity()
+        machine = context()
+        result.update(source=source, context=machine)
+        selected = [args.only] if args.only else list(CHECKS if args.scope == "full" else
+                                                      ("clippy", "tests", "scenarios-fast"))
+        if args.live:
+            selected.append("performance-live")
+        for name in selected:
+            print("Checking " + name + "…", flush=True)
+            row = run_check(name, commands(name, artifact), source, machine, artifact, base / "cache", args.fresh)
+            result["checks"].append(row)
+            state = "cached pass" if row["cached"] else "pass" if row["exit_code"] == 0 else "inconclusive" if row["exit_code"] == 2 else "failed"
+            print(f"  {state}: {row['seconds']:.2f}s; {row['evidence'][0]['path']}", flush=True)
+            if row.get("reason"):
+                print("  " + row["reason"], flush=True)
+                break
+        result["coverage"] = [row["name"] for row in result["checks"] if row["exit_code"] == 0]
+        result["omitted"] = [name for name in required if name not in result["coverage"]]
+        codes = [row["exit_code"] for row in result["checks"]]
+        code = 1 if any(c not in (0, 2) for c in codes) else 2 if 2 in codes else 0
+        if source_identity() != source:
+            code = 2
+            result["reason"] = "inputs changed during verification"
+            result["coverage"] = []
+            result["omitted"] = required.copy()
+        result["complete"] = code == 0 and not result["omitted"]
+        result["status"] = "complete_pass" if result["complete"] else "partial_pass" if code == 0 else "failed" if code == 1 else "inconclusive"
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+        result.update(status="inconclusive", complete=False, reason=str(error))
+        code = 2
+    path = artifact / "verification.json"
+    path.write_text(json.dumps(result, indent=2) + "\n")
+    print(result["status"] + ": " + str(path))
+    if result["omitted"]:
+        print("Not certified: " + ", ".join(result["omitted"]))
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

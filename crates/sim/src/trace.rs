@@ -27,9 +27,12 @@ use crate::slots::EntityId;
 /// How many events are kept.
 ///
 /// A ring buffer rather than a growing log, because the game runs for hours and
-/// the interesting window is always the last few seconds. At the current one-
-/// event-per-pass-per-tick ceiling this is roughly a minute and a half of play.
-const CAPACITY: usize = 16_384;
+/// the interesting window is recent history. The default keeps four times the
+/// old 16K history; capture correctness never depends on this retention size.
+const CAPACITY: usize = 65_536;
+/// Maximum events per history or assertion capture. Shared by every stream so
+/// callers cannot request unbounded allocations; zero remains valid.
+pub const MAX_TRACE_EVENTS: usize = 262_144;
 const _: () = assert!(CAPACITY > 0, "a zero-length trace silently records nothing");
 
 /// Something worth knowing that happened during a tick.
@@ -41,6 +44,16 @@ const _: () = assert!(CAPACITY > 0, "a zero-length trace silently records nothin
 /// that occur rarely: a hitbox opening, a hit landing, hitstop starting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
+    /// Gait transitions aggregated per tick to keep dense crowds from flooding
+    /// the trace. Individual current choices remain available through World::gait.
+    GaitsChanged {
+        /// Chasers switching to walking.
+        walking: usize,
+        /// Chasers switching to running.
+        running: usize,
+        /// Chasers switching to sprinting.
+        sprinting: usize,
+    },
     /// A nearby object changed from Ready to Activated.
     Activated {
         /// The single object activated by this press.
@@ -195,12 +208,106 @@ pub enum Event {
     },
 }
 
+/// Event categories for diagnostic selection; payloads remain in [`Event`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+pub enum EventKind {
+    /// The `GaitsChanged` transition.
+    GaitsChanged,
+    /// The `Activated` transition.
+    Activated,
+    /// The `SceneLoaded` transition.
+    SceneLoaded,
+    /// The `SceneEvicted` transition.
+    SceneEvicted,
+    /// The `AttackRecoveryChanged` transition.
+    AttackRecoveryChanged,
+    /// The `AttackProfileChanged` transition.
+    AttackProfileChanged,
+    /// The `Impulsed` transition.
+    Impulsed,
+    /// The `Momentum` transition.
+    Momentum,
+    /// The `Rested` transition.
+    Rested,
+    /// The `Placed` transition.
+    Placed,
+    /// The `SourceAdded` transition.
+    SourceAdded,
+    /// The `SourceRemoved` transition.
+    SourceRemoved,
+    /// The `SourceEnablementChanged` transition.
+    SourceEnablementChanged,
+    /// The `Fired` transition.
+    Fired,
+    /// The `Refused` transition.
+    Refused,
+    /// The `Removed` transition.
+    Removed,
+    /// The `Swung` transition.
+    Swung,
+    /// The `ChannelStarted` transition.
+    ChannelStarted,
+    /// The `ChannelStopped` transition.
+    ChannelStopped,
+    /// The `HitboxOpened` transition.
+    HitboxOpened,
+    /// The `HitboxClosed` transition.
+    HitboxClosed,
+    /// The `Hit` transition.
+    Hit,
+    /// The `Contacts` transition.
+    Contacts,
+    /// The `Crowded` transition.
+    Crowded,
+    /// The `WallContacts` transition.
+    WallContacts,
+    /// The `Clamped` transition.
+    Clamped,
+}
+
+impl Event {
+    /// Category without discarding the original event payload.
+    #[must_use]
+    pub fn kind(self) -> EventKind {
+        match self {
+            Self::GaitsChanged { .. } => EventKind::GaitsChanged,
+            Self::Activated { .. } => EventKind::Activated,
+            Self::SceneLoaded { .. } => EventKind::SceneLoaded,
+            Self::SceneEvicted { .. } => EventKind::SceneEvicted,
+            Self::AttackRecoveryChanged { .. } => EventKind::AttackRecoveryChanged,
+            Self::AttackProfileChanged { .. } => EventKind::AttackProfileChanged,
+            Self::Impulsed { .. } => EventKind::Impulsed,
+            Self::Momentum { .. } => EventKind::Momentum,
+            Self::Rested { .. } => EventKind::Rested,
+            Self::Placed { .. } => EventKind::Placed,
+            Self::SourceAdded { .. } => EventKind::SourceAdded,
+            Self::SourceRemoved { .. } => EventKind::SourceRemoved,
+            Self::SourceEnablementChanged { .. } => EventKind::SourceEnablementChanged,
+            Self::Fired { .. } => EventKind::Fired,
+            Self::Refused { .. } => EventKind::Refused,
+            Self::Removed { .. } => EventKind::Removed,
+            Self::Swung => EventKind::Swung,
+            Self::ChannelStarted => EventKind::ChannelStarted,
+            Self::ChannelStopped => EventKind::ChannelStopped,
+            Self::HitboxOpened => EventKind::HitboxOpened,
+            Self::HitboxClosed => EventKind::HitboxClosed,
+            Self::Hit { .. } => EventKind::Hit,
+            Self::Contacts { .. } => EventKind::Contacts,
+            Self::Crowded { .. } => EventKind::Crowded,
+            Self::WallContacts { .. } => EventKind::WallContacts,
+            Self::Clamped { .. } => EventKind::Clamped,
+        }
+    }
+}
+
 impl fmt::Display for Event {
     /// The golden-trace line format. Stable on purpose: a checked-in trace is a
     /// review artifact, and reformatting it would turn every future diff into
     /// noise that hides the one line that mattered.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::GaitsChanged { walking, running, sprinting } =>
+                write!(f, "gaits walk={walking} run={running} sprint={sprinting}"),
             Self::Activated { id } => write!(f, "activated id={id}"),
             Self::SceneLoaded { id } => write!(f, "scene loaded id={id}"),
             Self::SceneEvicted { id } => write!(f, "scene evicted id={id}"),
@@ -245,14 +352,14 @@ impl fmt::Display for Event {
 /// A ring buffer of tick-stamped events.
 pub struct Trace<E = Event> {
     events: Vec<(u64, E)>,
+    capacity: usize,
+    capture: Option<Capture<E>>,
     /// Where the next event goes once `events` is full.
     next: usize,
     /// Events overwritten because the buffer wrapped.
     ///
-    /// Reported rather than ignored, and the scenario runner refuses to compare
-    /// a golden trace when it is nonzero. Silent truncation is the failure mode
-    /// that would make a golden file quietly stop covering the beginning of the
-    /// run it claims to describe.
+    /// Reports lost live debugging history. Assertion capture has a separate
+    /// fail-closed bound and never reads this ring.
     dropped: usize,
 }
 
@@ -260,11 +367,56 @@ impl<E> Default for Trace<E> {
     fn default() -> Self {
         // Allocated once, up front, for the same reason the instance buffer is:
         // a steady-state tick must not touch the allocator.
-        Self { events: Vec::with_capacity(CAPACITY), next: 0, dropped: 0 }
+        Self { events: Vec::with_capacity(CAPACITY), capacity: CAPACITY, capture: None, next: 0, dropped: 0 }
     }
 }
 
+struct Capture<E> {
+    events: Vec<(u64, E)>,
+    limit: usize,
+    overflowed: bool,
+    accepts: Box<dyn Fn(E) -> bool + Send + Sync>,
+}
+
 impl<E: Copy + fmt::Display> Trace<E> {
+    /// Change recent-history retention. Zero disables history. Does not clear
+    /// an independent observation capture or affect simulation state. Limits
+    /// above [`MAX_TRACE_EVENTS`] are refused without mutation.
+    pub fn set_retention(&mut self, capacity: usize) -> Result<(), &'static str> {
+        Self::validate_limit(capacity)?;
+        self.capacity = capacity;
+        self.events = Vec::with_capacity(capacity);
+        self.next = 0;
+        self.dropped = 0;
+        Ok(())
+    }
+
+    /// Reject unsupported allocations before changing observation state.
+    pub fn validate_limit(limit: usize) -> Result<(), &'static str> {
+        if limit > MAX_TRACE_EVENTS { Err("trace event capacity exceeds MAX_TRACE_EVENTS") } else { Ok(()) }
+    }
+
+    /// Start a bounded, filtered observation capture independent of the live
+    /// ring. Exhaustion is explicit and never overwrites required evidence.
+    /// Limits above [`MAX_TRACE_EVENTS`] preserve any current capture.
+    pub fn capture(&mut self, limit: usize, accepts: impl Fn(E) -> bool + Send + Sync + 'static) -> Result<(), &'static str> {
+        Self::validate_limit(limit)?;
+        self.capture = Some(Capture {
+            events: Vec::with_capacity(limit), limit, overflowed: false,
+            accepts: Box::new(accepts),
+        });
+        Ok(())
+    }
+
+    /// Stop independent observation collection and release its storage.
+    pub fn stop_capture(&mut self) { self.capture = None; }
+
+    /// Complete captured evidence, or `None` if not enabled or exhausted.
+    pub fn captured(&self) -> Option<&[(u64, E)]> {
+        self.capture.as_ref().filter(|capture| !capture.overflowed)
+            .map(|capture| capture.events.as_slice())
+    }
+
     /// Hands out the only thing a pass may write through.
     pub fn sink(&mut self, tick: u64) -> TraceSink<'_, E> {
         TraceSink { trace: self, tick }
@@ -324,14 +476,23 @@ impl<E: Copy + fmt::Display> Trace<E> {
     }
 
     fn push(&mut self, tick: u64, event: E) {
-        if self.events.len() < CAPACITY {
+        if let Some(capture) = &mut self.capture
+            && (capture.accepts)(event) {
+            if capture.events.len() < capture.limit {
+                capture.events.push((tick, event));
+            } else {
+                capture.overflowed = true;
+            }
+        }
+        if self.capacity == 0 { return; }
+        if self.events.len() < self.capacity {
             self.events.push((tick, event));
             // `next` only means anything once the buffer is full; until then the
             // events are already in order and `split_at` below handles it.
             self.next = 0;
         } else {
             self.events[self.next] = (tick, event);
-            self.next = (self.next + 1) % CAPACITY;
+            self.next = (self.next + 1) % self.capacity;
             self.dropped += 1;
         }
     }
@@ -363,6 +524,41 @@ impl<E: Copy + fmt::Display> TraceSink<'_, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_capacity_preserves_history_and_capture() {
+        let mut trace = Trace::default();
+        trace.set_retention(1).unwrap();
+        trace.capture(2, |_| true).unwrap();
+        trace.sink(0).emit(Event::Swung);
+        for invalid in [MAX_TRACE_EVENTS + 1, usize::MAX] {
+            assert!(trace.set_retention(invalid).is_err());
+            assert!(trace.capture(invalid, |_| false).is_err());
+            assert_eq!(trace.iter().collect::<Vec<_>>(), vec![(0, Event::Swung)]);
+            assert_eq!(trace.captured(), Some(&[(0, Event::Swung)][..]));
+        }
+        trace.sink(1).emit(Event::HitboxOpened);
+        assert_eq!(trace.iter().collect::<Vec<_>>(), vec![(1, Event::HitboxOpened)]);
+        assert_eq!(trace.captured(), Some(&[(0, Event::Swung), (1, Event::HitboxOpened)][..]));
+    }
+
+    #[test]
+    fn capture_is_filtered_and_survives_ring_clear_disable_and_overwrite() {
+        for retention in [0, 1, 4] {
+            let mut trace = Trace::default();
+            trace.set_retention(retention).unwrap();
+            trace.capture(2, |event| matches!(event, Event::Swung)).unwrap();
+            trace.sink(0).emit(Event::Swung);
+            for tick in 1..10 { trace.sink(tick).emit(Event::Contacts { count: 1 }); }
+            trace.clear();
+            trace.sink(10).emit(Event::Swung);
+            assert_eq!(trace.captured(), Some(&[(0, Event::Swung), (10, Event::Swung)][..]));
+            trace.sink(11).emit(Event::Swung);
+            assert!(trace.captured().is_none(), "required evidence cannot silently truncate");
+            trace.clear();
+            assert!(trace.captured().is_none(), "clearing history cannot bless lost evidence");
+        }
+    }
 
     #[test]
     fn events_come_back_in_the_order_they_happened() {

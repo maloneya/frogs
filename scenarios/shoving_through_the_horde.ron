@@ -19,6 +19,26 @@
     expect: (
         enemy_count: 64,
         contacts: 0,
-        trace: "shoving_through_the_horde.trace",
+        events: (
+        kinds: [Contacts],
+        sequence: [
+            (0, Contacts(count: 2)),
+            (1, Contacts(count: 2)),
+            (2, Contacts(count: 2)),
+            (4, Contacts(count: 2)),
+            (5, Contacts(count: 2)),
+            (6, Contacts(count: 2)),
+            (7, Contacts(count: 2)),
+            (8, Contacts(count: 2)),
+            (9, Contacts(count: 2)),
+            (10, Contacts(count: 2)),
+            (11, Contacts(count: 2)),
+            (12, Contacts(count: 2)),
+            (13, Contacts(count: 2)),
+            (14, Contacts(count: 2)),
+            (15, Contacts(count: 2)),
+            (16, Contacts(count: 2)),
+        ],
+    ),
     ),
 )

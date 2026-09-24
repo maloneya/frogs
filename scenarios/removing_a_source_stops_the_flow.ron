@@ -28,6 +28,15 @@
         sources: 0,
         contacts: 0,
         crowd_contacts: 0,
-        trace: "removing_a_source_stops_the_flow.trace",
+        events: (
+        kinds: [Fired, Placed, SourceRemoved, Refused],
+        sequence: [
+            (0, Fired(source: "s0")),
+            (0, Placed(id: (1, 1))),
+            (10, Fired(source: "s0")),
+            (10, Placed(id: (2, 1))),
+            (15, SourceRemoved(id: "s0")),
+        ],
+    ),
     ),
 )

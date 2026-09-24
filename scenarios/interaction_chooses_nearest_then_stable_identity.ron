@@ -15,5 +15,12 @@
     expect: (enemy_count: 0, bodies: [
         (nth: 0, interaction: Activated), (nth: 1, interaction: Activated),
         (nth: 2, interaction: Activated), (nth: 3, interaction: Ready),
-    ], trace: "interaction_chooses_nearest_then_stable_identity.trace"),
+    ], events: (
+        kinds: [Activated],
+        sequence: [
+            (0, Activated(id: (3, 1))),
+            (1, Activated(id: (1, 1))),
+            (2, Activated(id: (2, 1))),
+        ],
+    )),
 )
