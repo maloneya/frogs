@@ -5,6 +5,11 @@
 // with their 0.5 m spawn radius. Every 144 ticks per source preserves the old
 // aggregate rate (8/144 = 1/18), now arriving in eight-enemy waves.
 (
+    environment: (
+        ambient_colour: (1.0, 1.0, 1.0), ambient_intensity: 0.0,
+        directional_colour: (1.0, 1.0, 1.0), directional_intensity: 0.0,
+        direction: (0.4, 1.0, 0.3),
+    ),
     engine: (
         name: "Soul trial - circle in the dark",
         bodies: [

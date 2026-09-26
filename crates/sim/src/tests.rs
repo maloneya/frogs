@@ -66,6 +66,21 @@ fn tick_dt() -> Dt {
     Accumulator::default().pending(Dt::SECS).next().expect("one tick's worth buys one tick")
 }
 
+const ENEMY_SPACING: f32 = 0.7;
+const _: () = assert!(ENEMY_SPACING > 2.0 * ENEMY_RADIUS);
+
+/// Centred crowd fixture for physical interaction tests.
+fn grid_positions(n: usize) -> impl Iterator<Item = Vec2> {
+    let side = (n as f32).sqrt().ceil().max(1.0) as usize;
+    let offset = (side as f32 - 1.0) * ENEMY_SPACING * 0.5;
+    (0..n).map(move |i| {
+        Vec2::new(
+            (i % side) as f32 * ENEMY_SPACING - offset,
+            (i / side) as f32 * ENEMY_SPACING - offset,
+        )
+    })
+}
+
 /// Ordinary construction for tests needing a crowd of a particular size.
 fn world_with_enemies(count: usize) -> World {
     let mut world = World::empty();
@@ -541,7 +556,7 @@ fn every_field_of_the_world_reaches_the_hash() {
     ];
 
     for (field, poke) in fields {
-        let mut world = World::default();
+        let mut world = world_with_enemies(1024);
         let before = world.hash();
         poke(&mut world);
         assert_ne!(world.hash(), before, "{field} never reaches the hash");
@@ -551,11 +566,11 @@ fn every_field_of_the_world_reaches_the_hash() {
 #[test]
 fn every_configured_and_committed_attack_profile_reaches_the_hash() {
     for profile in AttackProfile::ALL.into_iter().skip(1) {
-        let mut configured = World::default();
+        let mut configured = world_with_enemies(1024);
         configured.set_attack_profile(profile);
         assert_ne!(
             configured.hash(),
-            World::default().hash(),
+            world_with_enemies(1024).hash(),
             "configured {profile} omitted from replay state"
         );
 
@@ -638,7 +653,7 @@ fn a_steady_state_frame_allocates_nothing() {
 /// stay finite, since a NaN position would silently vanish the character.
 #[test]
 fn the_player_cannot_walk_off_the_arena() {
-    let mut world = World::default();
+    let mut world = world_with_enemies(1024);
     for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
         // Twenty seconds at `PLAYER_SPEED` is 180 units — comfortably past
         // the far wall from anywhere in a 96-unit half-arena, so this
@@ -654,7 +669,7 @@ fn the_player_cannot_walk_off_the_arena() {
 
 #[test]
 fn turning_never_overshoots_its_target() {
-    let mut world = World::default();
+    let mut world = world_with_enemies(1024);
     let target = std::f32::consts::FRAC_PI_2;
 
     for _ in 0..200 {
@@ -668,7 +683,7 @@ fn turning_never_overshoots_its_target() {
 /// accumulating toward the range where f32 loses angular precision.
 #[test]
 fn facing_stays_wrapped_while_spinning() {
-    let mut world = World::default();
+    let mut world = world_with_enemies(1024);
     let circle = [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z];
 
     for lap in 0..50 {
@@ -699,11 +714,8 @@ fn the_physical_population_ceiling_is_preserved() {
 /// produce N bodies — not N draw calls over a formula.
 #[test]
 fn the_horde_holds_exactly_the_requested_count() {
-    let mut world = World::default();
-    assert_eq!(world.enemy_count(), DEFAULT_ENEMIES);
-
     for n in [1, 17, 512, 1024, 4096] {
-        world = world_with_enemies(n);
+        let world = world_with_enemies(n);
         assert_eq!(world.enemy_count(), n);
         assert_eq!(world.bodies.pos[1..].len(), n);
     }
@@ -774,7 +786,7 @@ fn a_ground_position_keeps_x_and_lifts_y_into_z() {
 /// world rather than on a pair: after a step, nothing is inside the player.
 #[test]
 fn no_enemy_is_left_overlapping_the_player() {
-    let mut world = World::default();
+    let mut world = world_with_enemies(1024);
 
     // Walk into the middle of the horde and keep going.
     for _ in 0..240 {
@@ -795,7 +807,7 @@ fn no_enemy_is_left_overlapping_the_player() {
 /// ever overlaps because nothing ever touches.
 #[test]
 fn walking_through_the_horde_displaces_it() {
-    let mut world = World::default();
+    let mut world = world_with_enemies(1024);
     let before = world.bodies.pos[1..].to_vec();
 
     let mut ever_touched = 0;
@@ -822,7 +834,7 @@ fn the_contact_count_tracks_whether_anything_is_touching() {
 
     // The horde is centred on the origin and so is the player, so the
     // spawn itself puts bodies in contact.
-    let mut crowded = World::default();
+    let mut crowded = world_with_enemies(1024);
     crowded.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert!(crowded.contacts() > 0, "spawned inside the horde and touched nothing");
 }

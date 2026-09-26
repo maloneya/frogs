@@ -71,6 +71,6 @@ Use the [playtest skill](../playtest/SKILL.md) when the task needs visual or
 interactive verification. Drive the app through its harness.
 
 Explain how to start the scene in the companion Scenes tab, what to try, and what was asserted.
-Click Refresh files to discover added files. Open selected reads the latest layout; Save & play saves and starts it; **Restart current** repeats the cached snapshot. After a restart,
+Click Refresh files to discover added files. Open selected reads the latest layout; Save & play saves and starts it; **Restart scene** repeats the cached snapshot. After a restart,
 discard old run-scoped identities. Report any remaining human feel question
 without presenting it as a passed automated check.

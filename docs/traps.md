@@ -25,6 +25,15 @@ an empty tuning catalog (2026-09-26).
 background. The small settings view uses a standard `HSplitView` and plain list,
 which also avoids unnecessary navigation containers and captures its rows.
 
+## Swift reports that FileManager has no member default
+
+**Cause:** switching between checkouts that share `target` can reuse Swift module
+caches containing paths from the other checkout (2026-09-26).
+**Check:** the same source builds in a fresh Swift scratch directory; adding an
+explicit Foundation import does not resolve the stale-cache failure.
+**Safeguard:** `scripts/companion.py` namespaces its scratch directory by the
+canonical checkout path, so worktrees sharing Rust artifacts keep separate Swift caches.
+
 ## Frame rate is absurd, zero, or faster for a heavier scene
 
 **Cause:** occlusion can skip draws; display sleep can stop presentation;

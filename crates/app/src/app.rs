@@ -1,6 +1,7 @@
 //! Native lifecycle, playtest replacement and the simulation-to-render frame loop.
 
 mod capture;
+mod scene_session;
 mod tuning_control;
 mod companion_control;
 mod control;
@@ -43,6 +44,8 @@ pub(crate) struct App {
     companion_server: Option<crate::companion::Server>,
     tuning_path: std::path::PathBuf,
     scene_catalog: Option<Result<Vec<std::path::PathBuf>, String>>,
+    /// Local launch preference; never part of Game or replay state.
+    scene_session_path: Option<std::path::PathBuf>,
     renderer: Option<Renderer>,
     /// Ground and prop resources exist together once GPU initialization succeeds.
     world_assets: Option<WorldAssets<MeshAsset>>,
@@ -169,23 +172,10 @@ impl App {
             .summary())
     }
 
-    fn handle_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
-        if key == KeyCode::F4 {
-            if pressed && !repeat {
-                if let Err(error) = self.open_companion() {
-                    log::error!("{error}");
-                    self.companion_message = error;
-                    self.companion_error = true;
-                }
-                self.input.release_all();
-            }
-            return true;
-        }
-        self.input.on_key(key, pressed, repeat)
-    }
-
     fn start_scene_file(&mut self, path: &std::path::Path) -> Result<(), String> {
-        self.start_playtest(read_scene(path)?)
+        self.start_playtest(read_scene(path)?)?;
+        self.remember_scene_file(path);
+        Ok(())
     }
 
     fn restart_playtest(&mut self) -> Result<(), String> {
@@ -399,6 +389,7 @@ impl App {
             RenderFrame {
                 camera,
                 lights: world_assets.torches.lights(),
+                environment: self.game.environment_light(),
                 meshes: &meshes,
                 character,
                 horde,
@@ -438,8 +429,8 @@ impl App {
         // looping. Vsync in the surface config is what actually paces us.
         event_loop.set_control_flow(ControlFlow::Poll);
         let mut app = App::default();
-        app.start_playtest(Scene::boot()).expect("valid built-in boot scene");
         app.load_saved_tuning();
+        app.restore_scene_session();
         event_loop.run_app(&mut app).expect("run app");
     }
 }
@@ -536,7 +527,7 @@ impl ApplicationHandler for App {
                 };
                 let pressed = key_event.state == ElementState::Pressed;
 
-                let consumed = self.handle_key(key, pressed, key_event.repeat);
+                let consumed = self.input.on_key(key, pressed, key_event.repeat);
                 if !consumed && pressed && !key_event.repeat && key == KeyCode::Escape {
                     event_loop.exit();
                 }

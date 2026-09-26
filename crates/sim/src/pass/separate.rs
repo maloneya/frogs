@@ -27,7 +27,7 @@ use crate::{ENEMY_RADIUS, EntityId, PLAYER_ENEMY_CONTACT_DISTANCE};
 
 /// Separates every body overlapping the player, and reports how many.
 ///
-/// Brute force, deliberately. It is O(N), so at the default horde it is a
+/// Brute force, deliberately. It is O(N), so for a crowd of 1,024 it is a
 /// thousand distance checks a tick and costs nothing worth measuring.
 ///
 /// **Runs after [`crowd`]**, and that order is a decision rather than an

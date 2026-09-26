@@ -48,6 +48,7 @@ struct SceneField: Decodable, Identifiable, Sendable {
     let value: Double
     let step: Double
     let options: [String]?
+    let colour: [Double]?
     var id: String { key }
 }
 
@@ -67,12 +68,6 @@ struct SceneObject: Decodable, Identifiable, Sendable {
     func value(_ field: String) -> Double { fields.first { $0.key == field }?.value ?? 0 }
 }
 
-struct SceneLandmark: Decodable, Sendable {
-    let x: Double
-    let z: Double
-    let label: String
-}
-
 struct SceneDocument: Decodable, Sendable {
     let scene: JSONValue
     let name: String
@@ -82,35 +77,97 @@ struct SceneDocument: Decodable, Sendable {
     let revision: String?
     let arena_half: Double
     let player_radius: Double
-    let trees: [SceneLandmark]
-    let torches: [SceneLandmark]
+    let projection: SceneProjection
+    let lighting: [SceneField]
     let relationships: Int
 }
 
-/// World X/Z metres and view pixels. The map uses a uniform scale even when
-/// resized; snap rounds authored coordinates, never the simulation geometry.
+/// The camera supplies this ground-plane matrix; Swift owns no camera angles.
+struct SceneProjection: Decodable, Sendable {
+    let right: [Double]
+    let up: [Double]
+    init(_ rows: [[Double]]) {
+        precondition(Self.valid(rows))
+        right = rows[0]; up = rows[1]
+    }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rows = try container.decode([[Double]].self)
+        guard Self.valid(rows) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid scene camera projection")
+        }
+        right = rows[0]; up = rows[1]
+    }
+    private static func valid(_ rows: [[Double]]) -> Bool {
+        rows.count == 2 && rows.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) }
+            && abs(rows[0][0] * rows[1][1] - rows[0][1] * rows[1][0]) > 0.000001
+    }
+    func project(x: Double, z: Double) -> (Double, Double) {
+        (right[0] * x + right[1] * z, up[0] * x + up[1] * z)
+    }
+    /// Conservative world-space pick margin for a screen-plane radius.
+    /// The inverse matrix norm keeps compressed ground footprints selectable.
+    func worldTolerance(_ radius: Double) -> Double {
+        let (a,b) = unproject(right: radius, up: 0)
+        let (c,d) = unproject(right: 0, up: radius)
+        return sqrt(a*a + b*b + c*c + d*d)
+    }
+    func unproject(right x: Double, up y: Double) -> (Double, Double) {
+        let determinant = right[0] * up[1] - right[1] * up[0]
+        return ((up[1] * x - right[1] * y) / determinant, (-up[0] * x + right[0] * y) / determinant)
+    }
+}
+
+/// Camera-plane metres and view pixels. Snapping always rounds world X/Z,
+/// after inverse projection, so camera alignment cannot alter authored geometry.
 struct SceneViewport {
     var centreX = 0.0
     var centreZ = 0.0
     var span = 48.0
     func scale(width: Double, height: Double) -> Double { min(width, height) / span }
-    func world(x: Double, y: Double, width: Double, height: Double, snap: Double) -> (Double, Double) {
+    /// At most roughly 80 world grid lines per axis, including extreme light
+    /// ranges and wide windows. Use readable 1/2/5 metre increments.
+    static func gridSpacing(extent: Double) -> Double {
+        let target = max(1, extent / 80)
+        let magnitude = pow(10, floor(log10(target)))
+        let fraction = target / magnitude
+        return magnitude * (fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10)
+    }
+    func world(x: Double, y: Double, width: Double, height: Double, snap: Double, projection: SceneProjection) -> (Double, Double) {
+        let (dx, dz) = delta(x: x - width / 2, y: y - height / 2, width: width, height: height, projection: projection)
+        return snapped(x: centreX + dx, z: centreZ + dz, spacing: snap)
+    }
+    func delta(x: Double, y: Double, width: Double, height: Double, projection: SceneProjection) -> (Double, Double) {
         let s = scale(width: width, height: height)
-        let a = centreX + (x - width / 2) / s, b = centreZ - (y - height / 2) / s
-        return snapped(x: a, z: b, spacing: snap)
+        return projection.unproject(right: x / s, up: -y / s)
     }
     func snapped(x: Double, z: Double, spacing: Double) -> (Double, Double) {
         if spacing > 0 { return ((x / spacing).rounded() * spacing, (z / spacing).rounded() * spacing) }
         return (x, z)
     }
-    func screen(x: Double, z: Double, width: Double, height: Double) -> (Double, Double) {
+    func screen(x: Double, z: Double, width: Double, height: Double, projection: SceneProjection) -> (Double, Double) {
         let s = scale(width: width, height: height)
-        return (width / 2 + (x - centreX) * s, height / 2 - (z - centreZ) * s)
+        let (right, up) = projection.project(x: x - centreX, z: z - centreZ)
+        return (width / 2 + right * s, height / 2 - up * s)
+    }
+    mutating func fit(_ document: SceneDocument) {
+        var points: [(Double, Double)] = [(0, 0)]
+        for o in document.objects {
+            // Conservative world bounds include rotated walls and source ranges.
+            let extent = max(o.width, o.depth) + o.radius
+            for dx in [-extent, extent] { for dz in [-extent, extent] {
+                points.append(document.projection.project(x: o.x + dx, z: o.z + dz))
+            } }
+        }
+        let xs = points.map { $0.0 }, ys = points.map { $0.1 }
+        let (x, z) = document.projection.unproject(right: (xs.min()! + xs.max()!) / 2, up: (ys.min()! + ys.max()!) / 2)
+        centreX = x; centreZ = z
+        span = max(16, max(xs.max()! - xs.min()!, ys.max()! - ys.min()!) * 1.15)
     }
     func hit(_ objects: [SceneObject], x: Double, z: Double, tolerance: Double) -> SceneObject? {
         objects.reversed().first { o in
             let dx = x - o.x, dz = z - o.z
-            if o.kind == "wall" {
+            if o.kind == "wall" || o.kind == "tree" {
                 let localX = dx * cos(o.yaw) - dz * sin(o.yaw)
                 let localZ = dx * sin(o.yaw) + dz * cos(o.yaw)
                 return abs(localX) <= o.width / 2 + tolerance && abs(localZ) <= o.depth / 2 + tolerance
@@ -119,7 +176,7 @@ struct SceneViewport {
                 return dx >= -tolerance && dx <= o.width + tolerance && dz >= -tolerance && dz <= o.depth + tolerance
             }
             let distance = hypot(dx, dz)
-            if o.kind == "source" { return distance <= tolerance || abs(distance - o.radius) <= tolerance }
+            if o.kind == "source" || o.kind == "campfire" { return distance <= tolerance || abs(distance - o.radius) <= tolerance }
             return distance <= max(o.radius, tolerance)
         }
     }

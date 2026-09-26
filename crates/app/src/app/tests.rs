@@ -159,8 +159,6 @@ fn companion_uses_the_fresh_start_boundary_and_survives_bad_files() {
     assert_eq!(companion(&mut app, json!({"op":"start_scene", "path":path}))["ok"], true);
     assert_ne!(app.game.hash(), initial);
     assert_eq!(app.run_id, 4);
-    assert_eq!(companion(&mut app, json!({"op":"default_scene"}))["ok"], true);
-    assert_eq!(app.game.hash(), Game::from_scene(&Scene::boot()).unwrap().hash());
     let expected = scene_catalog(std::path::Path::new("scenes"));
     assert_eq!(companion(&mut app, json!({"op":"refresh_scenes"}))["ok"], expected.is_ok());
     assert_eq!(app.scene_catalog.as_ref(), Some(&expected));
@@ -179,7 +177,7 @@ fn exhausted_run_ids_preserve_the_game_input_and_pending_capture() {
     let before = app.game.hash();
     let held = app.input.held().move_axis();
 
-    assert!(app.start_playtest(Scene::boot()).is_err());
+    assert!(app.start_playtest(Scene::default()).is_err());
     assert!(app.restart_playtest().is_err());
     assert_eq!(app.game.hash(), before);
     assert_eq!(app.game.selected_scene_name(), Some("pair"));
@@ -568,7 +566,7 @@ fn companion_controls_refuse_stale_sessions_and_performance_trials() {
     let before = app.game.hash();
     let height = app.camera.as_ref().unwrap().view_height();
     let commands = [
-        json!({"op":"restart"}), json!({"op":"default_scene"}),
+        json!({"op":"restart"}),
         json!({"op":"start_scene", "path":"missing.ron"}),
         json!({"op":"refresh_scenes"}), json!({"op":"collision", "enabled":true}),
         json!({"op":"vsync", "enabled":false}), json!({"op":"zoom", "direction":"in"}),

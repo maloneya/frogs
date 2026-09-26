@@ -24,10 +24,6 @@ impl App {
                 self.start_scene_file(&path)?;
                 Ok(format!("Started {}", path.display()))
             }
-            Control::DefaultScene => {
-                self.start_playtest(Scene::boot())?;
-                Ok("Started default horde.".into())
-            }
             Control::Collision(enabled) => {
                 self.collision_debug.set_enabled(enabled, &self.game);
                 Ok(format!("Collision outlines {}", if enabled { "on" } else { "off" }))
@@ -111,15 +107,6 @@ impl App {
             let _ = request.reply.send(response);
         }
     }
-
-    pub(super) fn open_companion(&self) -> Result<(), String> {
-        let server = self.companion_server.as_ref().ok_or("Companion socket is unavailable; check the game log")?;
-        let bundle = std::path::absolute("target/ARPG Companion.app").map_err(|e| e.to_string())?;
-        if !bundle.is_dir() { return Err("Build the native companion with: python3 scripts/companion.py build".into()); }
-        let status = std::process::Command::new("open").arg(&bundle).arg("--args").arg("--socket").arg(&server.path)
-            .status().map_err(|e| e.to_string())?;
-        if status.success() { Ok(()) } else { Err("macOS could not open ARPG Companion".into()) }
-    }
 }
 
 impl App {
@@ -127,7 +114,7 @@ impl App {
         use crate::scene_editor::{Request, document};
         let (message, draft) = match request {
             Request::New => {
-                let scene = Scene { engine: arpg_sim::Scene { name: "Untitled encounter".into(), ..Default::default() }, ..Default::default() };
+                let scene = Scene { engine: arpg_sim::Scene { name: "Untitled scene".into(), ..Default::default() }, ..Default::default() };
                 ("New scene draft. The current game is unchanged.".into(), document(&scene, None, None, None)?)
             }
             Request::Open { path } => {
@@ -150,7 +137,11 @@ impl App {
                     Some((run, game))
                 } else { None };
                 let revision = arpg_content::save_scene_document(&path, &scene, revision.as_deref())?;
-                if let Some((run, game)) = prepared { self.game = game; self.finish_playtest_start(run); }
+                if let Some((run, game)) = prepared {
+                    self.game = game;
+                    self.finish_playtest_start(run);
+                    self.remember_scene_file(&path);
+                }
                 self.scene_catalog = Some(scene_catalog(std::path::Path::new("scenes")));
                 draft["revision"] = json!(revision);
                 (if play { "Scene saved and started." } else { "Scene saved." }.into(), draft)

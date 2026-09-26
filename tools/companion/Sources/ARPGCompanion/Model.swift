@@ -90,7 +90,7 @@ final class Model: ObservableObject {
             state = snapshot
             connected = true
             if reply.ok, let document = reply.editor, let request = request.request {
-                acceptEditor(document, action: request.action)
+                acceptEditor(document, request: request)
             }
             // Polls must not erase a local validation error while its draft remains.
             if request.op != .state || reconnecting || drafts.isEmpty {
@@ -116,7 +116,8 @@ extension Model {
         return await send(Request(op: .sceneEditor, request: EditorRequest(action: "edit", scene: editor.scene, edit: edit)))
     }
 
-    func acceptEditor(_ document: SceneDocument, action: String) {
+    func acceptEditor(_ document: SceneDocument, request: EditorRequest) {
+        let action = request.action
         if action == "edit" {
             if let editor { undoScenes.append(editor); if undoScenes.count > 32 { undoScenes.removeFirst() } }
             redoScenes.removeAll()
@@ -124,7 +125,15 @@ extension Model {
             undoScenes.removeAll(); redoScenes.removeAll()
         }
         editor = document
-        if action != "save" { editorSelection = document.selected ?? document.objects.first?.id }
+        if action == "edit" {
+            // Deletion shifts array indices: a surviving ID can now name a
+            // different object. Clearing selection also discards its inspector drafts.
+            if case .object(let edit) = request.edit, edit["action"] == .string("delete") {
+                editorSelection = nil
+            } else {
+                editorSelection = document.selected ?? editorSelection.flatMap { id in document.objects.contains { $0.id == id } ? id : nil }
+            }
+        } else if action != "save" { editorSelection = document.selected ?? document.objects.first?.id }
         if action != "edit" {
             editorPath = document.path; editorRevision = document.revision
             savedScene = action == "new" ? nil : document.scene

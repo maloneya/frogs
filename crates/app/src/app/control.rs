@@ -102,15 +102,15 @@ impl App {
                     Err(error) => error.into(),
                 },
                 Command::Press(key) => {
-                    self.handle_key(key, true, false);
+                    self.input.on_key(key, true, false);
                     "ok".to_string()
                 }
                 Command::Release(key) => {
-                    self.handle_key(key, false, false);
+                    self.input.on_key(key, false, false);
                     "ok".to_string()
                 }
                 Command::Tap(key) => {
-                    self.handle_key(key, true, false);
+                    self.input.on_key(key, true, false);
                     self.scheduled.push(Deferred {
                         due: now,
                         release: Some(key),
@@ -372,7 +372,7 @@ impl App {
             return;
         };
         if let Some(key) = key {
-            self.handle_key(key, true, false);
+            self.input.on_key(key, true, false);
         }
         self.scheduled.push(Deferred {
             due,

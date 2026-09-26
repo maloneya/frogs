@@ -75,7 +75,6 @@ enum Operation: String, Encodable, Sendable {
     case sceneEditor = "scene_editor"
     case refreshScenes = "refresh_scenes"
     case startScene = "start_scene"
-    case defaultScene = "default_scene"
 }
 
 enum ZoomDirection: String, Encodable, Sendable { case `in`, out }

@@ -1,5 +1,6 @@
 //! Complete authored gameplay and its immutable restart snapshot.
 
+use crate::environment::{EnvironmentSpec, Environments};
 use crate::tree::{Trees, TreeSpec};
 
 use arpg_core::Report;
@@ -15,6 +16,9 @@ use crate::torch::{Torches, TorchSpec};
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GameScene {
+    /// Scene-wide illumination, independent of the number of torches.
+    #[serde(default)]
+    pub environment: EnvironmentSpec,
     /// Physical content, still defined and validated by sim.
     pub engine: arpg_sim::Scene,
     /// Stationary lights owned by this scene instance. Omitted means no lights.
@@ -39,21 +43,15 @@ pub struct GameScene {
 
 impl From<arpg_sim::Scene> for GameScene {
     fn from(engine: arpg_sim::Scene) -> Self {
-        Self { engine, torches: Vec::new(), trees: Vec::new(), doors: Vec::new(), chests: Vec::new(), encounters: Vec::new(), enemy_attack: None }
+        Self { engine, ..Self::default() }
     }
 }
 
 impl GameScene {
-    /// The built-in engine horde without gameplay connections.
-    #[must_use]
-    pub fn boot() -> Self {
-        arpg_sim::Scene::boot().into()
-    }
-
     /// The only installation path, shared by fresh runs and additive loads.
     /// Validate relationships before physical admission can mutate the world.
     pub(crate) fn install(&self, world: &mut World, live: LiveSceneState<'_>) -> Result<SceneId, SceneError> {
-        let LiveSceneState { trees, torches, doors, chests, encounters, attacks } = live;
+        let LiveSceneState { trees, torches, environments, doors, chests, encounters, attacks } = live;
         Doors::validate(&self.doors, &self.engine.bodies)?;
         chests.validate(&self.chests, &self.engine.bodies, &self.doors)?;
         encounters.validate_add(self)?;
@@ -72,6 +70,7 @@ impl GameScene {
         attacks.install(owner, self.enemy_attack, world.scene_bodies(owner).expect("admitted scene"));
         trees.install(owner, self.engine.walls.len(), &self.trees);
         torches.install(owner, &self.torches);
+        environments.install(owner, self.environment);
         Ok(owner)
     }
 }
@@ -79,6 +78,7 @@ impl GameScene {
 /// The complete set of gameplay stores that participate in scene admission.
 /// Keeping this private prevents ordinary passes from using it as mutable Game.
 pub(crate) struct LiveSceneState<'a> {
+    pub(crate) environments: &'a mut Environments,
     pub(crate) trees: &'a mut Trees,
     pub(crate) torches: &'a mut Torches,
     pub(crate) doors: &'a mut Doors,
@@ -127,6 +127,7 @@ pub(crate) struct RestartScene {
 
 /// Complete validated replacement, ready for atomic installation by Game.
 pub(crate) struct PreparedScene {
+    pub(crate) environments: Environments,
     pub(crate) world: World,
     pub(crate) trees: Trees,
     pub(crate) torches: Torches,
@@ -143,17 +144,18 @@ impl RestartScene {
         let mut world = World::empty();
         let mut trees = Trees::default();
         let mut torches = Torches::default();
+        let mut environments = Environments::default();
         let mut doors = Doors::default();
         let mut chests = Chests::default();
         let mut encounters = Encounters::default();
         let mut attacks = EnemyAttacks::default();
         scene.install(&mut world, LiveSceneState {
-            trees: &mut trees, torches: &mut torches, doors: &mut doors,
+            trees: &mut trees, torches: &mut torches, environments: &mut environments, doors: &mut doors,
             chests: &mut chests, encounters: &mut encounters, attacks: &mut attacks,
         })?;
-        let content_hash = fingerprint(&world, (&torches, &trees), &doors, &chests, &encounters, &attacks);
+        let content_hash = fingerprint(&world, (&torches, &trees, &environments), &doors, &chests, &encounters, &attacks);
         let snapshot = Self { scene: scene.clone(), content_hash };
-        Ok(PreparedScene { world, trees, torches, doors, chests, encounters, attacks, restart: snapshot })
+        Ok(PreparedScene { world, trees, torches, environments, doors, chests, encounters, attacks, restart: snapshot })
     }
 
     pub(crate) fn description(&self) -> &GameScene {
@@ -198,10 +200,11 @@ impl std::error::Error for RestartError {}
 
 /// Hash every gameplay store in a fixed order, including empty stores.
 /// Each store encodes its length or presence, so adjacent stores stay distinct.
-pub(crate) fn fingerprint(world: &World, decorations: (&Torches, &Trees), doors: &Doors, chests: &Chests, encounters: &Encounters, attacks: &EnemyAttacks) -> u64 {
+pub(crate) fn fingerprint(world: &World, decorations: (&Torches, &Trees, &Environments), doors: &Doors, chests: &Chests, encounters: &Encounters, attacks: &EnemyAttacks) -> u64 {
     let mut hash = Fnv::default();
     decorations.0.hash(&mut hash);
     decorations.1.hash(&mut hash);
+    decorations.2.hash(&mut hash);
     doors.hash(&mut hash);
     chests.hash(&mut hash);
     encounters.hash(&mut hash);

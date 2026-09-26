@@ -1,7 +1,7 @@
 # Static props and interaction
 
-Open the companion Scenes tab, select `soul_trial.ron`, and click **Start selected**. Press E beside the blue
-block: it turns green once and starts the timed encounter. Restart current
+Open the companion Scenes tab, select `soul_trial.ron`, click **Open selected**, then **Save & play**. Press E beside the blue
+block: it turns green once and starts the timed encounter. Restart scene
 restores Ready. See [encounters](encounters.md).
 The block uses the [plinth asset](../assets/world/README.md) and a circular
 collision footprint; visible geometry does not define its physical shape.

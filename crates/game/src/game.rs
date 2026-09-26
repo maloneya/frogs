@@ -1,3 +1,4 @@
+use crate::environment::Environments;
 use crate::tree::{Trees, TreeSpec};
 use crate::scene::{GameScene, LiveSceneState, RestartError, RestartScene, SceneError, fingerprint};
 use arpg_core::{Intent, Report};
@@ -28,6 +29,7 @@ pub struct Game {
     restart: Option<RestartScene>,
     trees: Trees,
     torches: Torches,
+    environments: Environments,
     doors: Doors,
     chests: Chests,
     encounters: Encounters,
@@ -37,12 +39,8 @@ pub struct Game {
 }
 
 impl Default for Game {
-    /// Constructs the built-in horde through ordinary scene loading.
-    fn default() -> Self {
-        let mut game = Self::empty();
-        game.load_scene(&GameScene::boot()).expect("valid boot scene");
-        game
-    }
+    /// A fresh player without a selected scene.
+    fn default() -> Self { Self::empty() }
 }
 
 impl Game {
@@ -54,6 +52,7 @@ impl Game {
             restart: None,
             trees: Trees::default(),
             torches: Torches::default(),
+            environments: Environments::default(),
             doors: Doors::default(),
             chests: Chests::default(),
             encounters: Encounters::default(),
@@ -65,12 +64,13 @@ impl Game {
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
-        let crate::scene::PreparedScene { world, trees, torches, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
+        let crate::scene::PreparedScene { world, trees, torches, environments, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
         Ok(Self {
             world,
             restart: Some(restart),
             trees,
             torches,
+            environments,
             doors,
             chests,
             encounters,
@@ -133,6 +133,7 @@ impl Game {
             restart: _,
             trees: _,
             torches: _,
+            environments: _,
             doors,
             chests,
             encounters,
@@ -161,6 +162,7 @@ impl Game {
             restart,
             trees,
             torches,
+            environments,
             doors,
             chests,
             encounters,
@@ -169,7 +171,7 @@ impl Game {
             corpses,
         } = self;
         let mut hash = Fnv::default();
-        hash.u64(fingerprint(world, (torches, trees), doors, chests, encounters, attacks));
+        hash.u64(fingerprint(world, (torches, trees, environments), doors, chests, encounters, attacks));
         corpses.hash(&mut hash);
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
@@ -197,6 +199,7 @@ impl Game {
             restart,
             trees,
             torches,
+            environments,
             doors,
             chests,
             encounters,
@@ -207,6 +210,7 @@ impl Game {
         world.report(out);
         trees.report(out);
         torches.report(out);
+        environments.report(out);
         doors.report(out);
         chests.report(out);
         encounters.report(out);
@@ -228,6 +232,7 @@ impl Game {
             restart: _,
             trees,
             torches,
+            environments,
             doors,
             chests,
             encounters,
@@ -235,7 +240,7 @@ impl Game {
             attacks,
             corpses: _, // Additive loads retain existing corpses.
         } = self;
-        scene.install(world, LiveSceneState { trees, torches, doors, chests, encounters, attacks })
+        scene.install(world, LiveSceneState { trees, torches, environments, doors, chests, encounters, attacks })
     }
 
     /// Evicts a live instance and its descendants; preserves the restart snapshot.
@@ -247,6 +252,7 @@ impl Game {
             restart: _,
             trees,
             torches,
+            environments,
             doors,
             chests,
             encounters,
@@ -259,6 +265,7 @@ impl Game {
         }
         trees.evict(id);
         torches.evict(id);
+        environments.evict(id);
         doors.evict(id);
         chests.evict(id);
         encounters.evict(id);
@@ -269,6 +276,9 @@ impl Game {
 
     /// Solid trees in scene-installation and authored order.
     pub fn trees(&self) -> impl Iterator<Item = TreeSpec> + '_ { self.trees.iter() }
+
+    /// Illumination from the most recently loaded live scene, or neutral daylight.
+    pub fn environment_light(&self) -> arpg_core::EnvironmentLight { self.environments.active() }
 
     /// Stationary torches in stable scene-installation and authored order.
     pub fn torches(&self) -> impl Iterator<Item = TorchSpec> + '_ { self.torches.iter() }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build/test/open the native macOS tooling companion, without an Xcode project."""
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import plistlib
@@ -8,7 +9,9 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRATCH = ROOT / "target/swift-companion"
+# Swift module caches embed source paths. Verification worktrees can share a
+# target directory, but must not reuse another checkout's native module cache.
+SCRATCH = ROOT / "target/swift-companion" / hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]
 BUNDLE = ROOT / "target/ARPG Companion.app"
 
 
@@ -33,6 +36,11 @@ def build():
     subprocess.run(["codesign", "--force", "--sign", "-", str(BUNDLE)], check=True)
 
 
+def open_app(socket_path):
+    # A new instance honors --socket even when another companion is running.
+    subprocess.run(["open", "-n", str(BUNDLE), "--args", "--socket", str(Path(socket_path).absolute())], check=True)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["build", "test", "open"])
@@ -54,4 +62,4 @@ if __name__ == "__main__":
     else:
         build()
         if args.command == "open":
-            subprocess.run(["open", str(BUNDLE), "--args", "--socket", str(Path(args.socket).absolute())], check=True)
+            open_app(args.socket)

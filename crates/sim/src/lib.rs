@@ -101,15 +101,8 @@ fn on_ground(p: Vec2, height: f32) -> Vec3 {
 pub const MAX_BODIES: usize = 183_494;
 const _: () = assert!(MAX_BODIES > 0);
 
-/// How large the horde starts. A readable crowd with headroom for gameplay.
-const DEFAULT_ENEMIES: usize = 1024;
-const _: () = assert!(DEFAULT_ENEMIES >= 1 && DEFAULT_ENEMIES <= MAX_BODIES);
-
 /// Legacy report height retained independently of the rendered asset dimensions.
 const ENEMY_HALF_HEIGHT: f32 = 0.25;
-
-/// Spawn grid spacing in metres; wider than a body's collision diameter.
-const ENEMY_SPACING: f32 = 0.7;
 
 /// Collision radii, in world units. **Bodies are discs, not boxes**, and that
 /// is a decision the camera pays for rather than a shortcut.
@@ -136,11 +129,6 @@ pub const PLAYER_RADIUS: f32 = 0.3;
 pub(crate) const PLAYER_ENEMY_CONTACT_DISTANCE: f32 = PLAYER_RADIUS + ENEMY_RADIUS;
 
 const _: () = assert!(ENEMY_RADIUS > 0.0 && PLAYER_RADIUS > 0.0);
-const _: () = assert!(
-    ENEMY_SPACING > 2.0 * ENEMY_RADIUS,
-    "bodies must spawn clear of each other"
-);
-
 /// Half the arena width, in metres. Presentation scales its ground to this extent.
 pub const ARENA_HALF: f32 = 96.0;
 const _: () = assert!(ARENA_HALF.is_finite() && ARENA_HALF > PLAYER_RADIUS);
@@ -204,18 +192,6 @@ impl Default for Bodies {
         bodies.spawn(Vec2::ZERO, Template::BODY).expect("the initial player fits");
         bodies
     }
-}
-
-/// Placement formula for the authored boot scene.
-fn grid_positions(n: usize) -> impl Iterator<Item = Vec2> {
-    let side = (n as f32).sqrt().ceil().max(1.0) as usize;
-    let offset = (side as f32 - 1.0) * ENEMY_SPACING * 0.5;
-    (0..n).map(move |i| {
-        Vec2::new(
-            (i % side) as f32 * ENEMY_SPACING - offset,
-            (i / side) as f32 * ENEMY_SPACING - offset,
-        )
-    })
 }
 
 impl Bodies {
@@ -402,7 +378,7 @@ pub struct World {
 
 impl Default for World {
     fn default() -> Self {
-        Self::from_scene(&Scene::boot()).expect("the built-in scene is valid")
+        Self::empty()
     }
 }
 

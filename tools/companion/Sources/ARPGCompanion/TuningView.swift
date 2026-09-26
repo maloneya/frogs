@@ -46,7 +46,7 @@ struct TuningView: View {
                     Button("Revert saved") { Task { await model.action(.revert) } }
                     Button("Reset defaults") { Task { await model.action(.defaults) } }
                     Spacer()
-                    Button("Restart encounter") { Task { await model.action(.restart) } }
+                    Button("Restart scene") { Task { await model.action(.restart) } }.disabled(model.state?.scenes.current == nil)
                 }.disabled(!model.editable)
                 Text(model.state?.path ?? model.socketPath).font(.caption2).foregroundStyle(.secondary)
                     .textSelection(.enabled).lineLimit(1).truncationMode(.middle)

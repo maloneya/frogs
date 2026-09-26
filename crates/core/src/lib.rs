@@ -47,7 +47,7 @@ mod intent;
 mod report;
 mod smoothing;
 
-pub use lighting::{PointLight, MAX_POINT_LIGHTS};
+pub use lighting::{EnvironmentLight, PointLight, MAX_POINT_LIGHTS};
 pub use input::{Action, ActionMask, Actions, InputState};
 pub use instance::{Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES};
 pub use intent::{AimDir, Intent, MoveDir};

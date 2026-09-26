@@ -23,6 +23,8 @@ use crate::{
 pub struct RenderFrame<'a> {
     /// The camera used for all world-space streams.
     pub camera: &'a OrthoCamera,
+    /// Scene-wide ambient and directional illumination.
+    pub environment: arpg_core::EnvironmentLight,
     /// World-space point lights illuminating meshes and characters.
     pub lights: &'a [PointLight],
     /// Uploaded static meshes and their instance placements.

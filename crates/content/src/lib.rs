@@ -99,6 +99,30 @@ mod tests {
     }
 
     #[test]
+    fn environment_files_validate_and_round_trip_at_the_owner() {
+        let scene = parse_scene(r#"(engine: (name: "dusk"), environment: (
+            ambient_colour: (0.1, 0.2, 0.3), ambient_intensity: 0.25,
+            directional_colour: (0.9, 0.8, 0.7), directional_intensity: 0.75,
+            direction: (-1.0, 2.0, 3.0),
+        ))"#).unwrap();
+        let encoded = ron::ser::to_string(&scene).unwrap();
+        let decoded = parse_scene(&encoded).unwrap();
+        assert_eq!(scene.environment, decoded.environment);
+        for (colour, intensity, direction) in [
+            ("(1.1, 0.0, 0.0)", "1.0", "(0.0, 1.0, 0.0)"),
+            ("(1.0, 1.0, 1.0)", "-0.1", "(0.0, 1.0, 0.0)"),
+            ("(1.0, 1.0, 1.0)", "1.0", "(0.0, 0.0, 0.0)"),
+        ] {
+            let invalid = format!(r#"(engine: (name: "bad"), environment: (
+                ambient_colour: {colour}, ambient_intensity: {intensity},
+                directional_colour: (1.0, 1.0, 1.0), directional_intensity: 0.0,
+                direction: {direction},
+            ))"#);
+            assert!(parse_scene(&invalid).is_err());
+        }
+    }
+
+    #[test]
     fn torch_files_use_shared_validation_before_game_mutation() {
         let valid = "(position: (1.0, 2.2, 3.0), colour: (1.0, 0.5, 0.2), intensity: 24.0, range: 14.0)";
         let scene = parse_scene(&format!("(engine: (name: \"lit\"), torches: [{valid}])")).unwrap();

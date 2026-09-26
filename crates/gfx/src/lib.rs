@@ -346,7 +346,7 @@ impl Renderer {
         capture_path: Option<&std::path::Path>,
     ) -> FrameOutcome {
         let RenderFrame {
-            camera, lights, meshes, character, horde, overlay, debug_discs, effects,
+            camera, lights, environment, meshes, character, horde, overlay, debug_discs, effects,
         } = input;
 
         // Acquiring a swapchain image can fail in several recoverable ways —
@@ -403,7 +403,7 @@ impl Renderer {
             });
 
         self.camera.upload(&self.queue, camera);
-        self.camera.upload_lights(&self.queue, lights);
+        self.camera.upload_lights(&self.queue, lights, environment);
         self.static_meshes.upload(&self.queue, meshes);
         let effect_count = self.effects.upload(&self.queue, effects);
         let debug_count = self.debug.upload(&self.queue, debug_discs);
@@ -425,7 +425,7 @@ impl Renderer {
                         // cost real bandwidth, so always clear what you'll
                         // fully overwrite.
                         //
-                        // No ambient sky: unlit world pixels stay black.
+                        // Geometry receives scene lighting; the space beyond it stays black.
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
@@ -542,7 +542,7 @@ mod tests {
         let binding = CameraBinding::new(device);
         binding.upload_lights(queue, &[PointLight::new(
             Vec3::new(40.0, 100.0, 30.0), Vec3::ONE, 12_000.0, 1_000.0,
-        )]);
+        )], arpg_core::EnvironmentLight::try_new(Vec3::ONE, 0.0, Vec3::ONE, 0.0, Vec3::Y).unwrap());
         binding
     }
 

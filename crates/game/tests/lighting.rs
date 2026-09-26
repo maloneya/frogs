@@ -131,3 +131,67 @@ fn authored_light_changes_affect_complete_hash_but_not_physics() {
     assert!(b.evict_scene(id_b));
     assert_ne!(a.hash(), b.hash());
 }
+
+#[test]
+fn environment_belongs_to_scenes_and_survives_torch_changes_and_restart() {
+    use arpg_core::EnvironmentLight;
+    use arpg_game::EnvironmentSpec;
+    let dark = EnvironmentLight::try_new(Vec3::ONE, 0.0, Vec3::ONE, 0.0, Vec3::Y).unwrap();
+    let blue = EnvironmentLight::try_new(Vec3::Z, 0.15, Vec3::ONE, 0.1, Vec3::new(-1.0, 2.0, 0.0)).unwrap();
+    let mut authored = scene(1, 0.0);
+    authored.environment = EnvironmentSpec::new(dark);
+    let mut game = Game::from_scene(&authored).unwrap();
+    let first = game.scene_instances().next().unwrap().0;
+    let fresh = observed(&game);
+    assert_eq!(game.environment_light(), dark);
+    step(&mut game);
+    assert_eq!(game.environment_light(), dark, "ticks never change scene illumination");
+    // A newly loaded scene selects its explicit environment even without lights.
+    let next = GameScene { environment: EnvironmentSpec::new(blue), ..GameScene::default() };
+    let second = game.load_scene(&next).unwrap();
+    assert_eq!(game.torch_count(), 1);
+    assert_eq!(game.environment_light(), blue);
+    assert!(observed(&game).1.contains(&format!("\"scene\":\"{second}\"")));
+    let before = observed(&game);
+    let mut invalid = scene(MAX_POINT_LIGHTS, 10.0);
+    invalid.environment = EnvironmentSpec::default();
+    assert!(game.load_scene(&invalid).is_err());
+    assert_eq!(observed(&game), before, "failed admission cannot select an environment");
+    assert!(game.evict_scene(second));
+    assert_eq!(game.environment_light(), dark, "eviction reveals the prior live environment");
+    assert!(!game.evict_scene(second));
+    assert_eq!(game.environment_light(), dark, "stale scene identities have no effect");
+    assert!(game.evict_scene(first));
+    assert_eq!(game.environment_light(), EnvironmentLight::default());
+    game.restart().unwrap();
+    assert_eq!(observed(&game), fresh, "restart restores complete authored lighting");
+    let newer = game.load_scene(&next).unwrap();
+    let older = game.scene_instances().next().unwrap().0;
+    assert!(game.evict_scene(older));
+    assert_eq!(game.torch_count(), 0);
+    assert_eq!(game.environment_light(), blue, "removing the final torch cannot change the newer environment");
+    assert!(game.evict_scene(newer));
+}
+
+#[test]
+fn every_environment_component_affects_game_hash_without_changing_physics() {
+    use arpg_core::EnvironmentLight;
+    use arpg_game::EnvironmentSpec;
+    let original = Game::from_scene(&GameScene::default()).unwrap();
+    for light in [
+        EnvironmentLight::try_new(Vec3::X, 0.22, Vec3::ONE, 0.35, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
+        EnvironmentLight::try_new(Vec3::ONE, 0.4, Vec3::ONE, 0.35, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
+        EnvironmentLight::try_new(Vec3::ONE, 0.22, Vec3::Z, 0.35, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
+        EnvironmentLight::try_new(Vec3::ONE, 0.22, Vec3::ONE, 0.5, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
+        EnvironmentLight::try_new(Vec3::ONE, 0.22, Vec3::ONE, 0.35, Vec3::Y).unwrap(),
+    ] {
+        let authored = GameScene { environment: EnvironmentSpec::new(light), ..GameScene::default() };
+        let mut changed = Game::from_scene(&authored).unwrap();
+        assert_eq!(changed.engine_hash(), original.engine_hash());
+        assert_ne!(changed.hash(), original.hash());
+        let id = changed.scene_instances().next().unwrap().0;
+        assert!(changed.evict_scene(id));
+        changed.restart().unwrap();
+        assert_eq!(changed.environment_light(), light);
+    }
+}

@@ -18,7 +18,6 @@ pub(crate) enum Control {
     Tuning(Edit),
     RefreshScenes,
     StartScene(PathBuf),
-    DefaultScene,
     Collision(bool),
     Vsync(bool),
     Zoom(ZoomDirection),
@@ -34,7 +33,6 @@ pub(crate) enum Command {
     Save { session: u32 }, Revert { session: u32 }, Defaults { session: u32 }, Restart { session: u32 },
     RefreshScenes { session: u32 },
     StartScene { session: u32, path: PathBuf },
-    DefaultScene { session: u32 },
     Collision { session: u32, enabled: bool },
     Vsync { session: u32, enabled: bool },
     Zoom { session: u32, direction: ZoomDirection },
@@ -53,7 +51,6 @@ impl Command {
             Self::Restart { session } => (session, Control::Tuning(Edit::Restart)),
             Self::RefreshScenes { session } => (session, Control::RefreshScenes),
             Self::StartScene { session, path } => (session, Control::StartScene(path)),
-            Self::DefaultScene { session } => (session, Control::DefaultScene),
             Self::Collision { session, enabled } => (session, Control::Collision(enabled)),
             Self::Vsync { session, enabled } => (session, Control::Vsync(enabled)),
             Self::Zoom { session, direction } => (session, Control::Zoom(direction)),
@@ -79,7 +76,7 @@ pub(crate) fn socket_path() -> PathBuf {
 /// Ownership of the socket path lasts exactly as long as this server.
 pub(crate) struct Server {
     pub(crate) requests: Receiver<Request>,
-    pub(crate) path: PathBuf,
+    path: PathBuf,
     inode: u64,
     stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,

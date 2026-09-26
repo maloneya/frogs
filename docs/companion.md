@@ -4,21 +4,38 @@ Development controls live in a separate native macOS SwiftUI app. Build and run
 from the repository root:
 
 ```sh
-python3 scripts/companion.py build
-cargo run --release
+python3 scripts/dev.py
 ```
 
-Press **F4** in the game to open or focus **ARPG Companion**, or use
-`python3 scripts/companion.py open`. Closing either window does not close the
-other. The companion reconnects when the game returns. The game keeps running
-while the companion has focus; focus loss releases gameplay input.
+The launcher builds both applications, starts the game, waits for its tooling
+socket to report the launched process identity, then opens a separate companion
+instance against that socket. It exits after startup; closing either app leaves
+the other running. A game restart lets the companion reconnect to the same socket.
+The game keeps running while the companion has focus; focus loss releases input.
+The game never launches the companion or knows its bundle path.
+
+Use `python3 scripts/dev.py --no-build` to reuse built binaries. `--socket` selects
+another endpoint; an active socket is refused without disturbing its owner.
+Game output is written to `target/dev-game.log`. Startup failure reports that log
+and stops only the game process started by that attempt.
+
+To run either application independently:
+
+```sh
+cargo run --release
+python3 scripts/companion.py open
+```
+
+The second command builds and opens only the companion. Packaged builds provide
+`play.command` for the game and `tools.command` for both apps (Python 3 required).
 
 - **Scenes:** select a file and click **Open selected**, or **New scene**, to edit
-  its starting layout on the top-down map. Place enemies, sources and formations;
-  drag walls into rectangles. Select and drag objects to move them, or use the
+  its starting layout on a map aligned with the game camera. Place enemies,
+  sources, formations, trees and campfires; drag walls into rectangles. Edit
+  ambient and sun/moon illumination in Scene lighting. Select and drag objects to move them, or use the
   inspector for exact values. **Save & play** saves and starts the layout;
-  **Restart current** repeats the last loaded layout with current tuning.
-  **Default horde** starts the built-in scene. Refresh rescans `scenes/`.
+  **Restart scene** repeats the last loaded layout with current tuning.
+  Refresh rescans `scenes/`. Startup reopens the last played file; on first launch, choose a scene in the companion.
   See [scene editing](scene-editor.md) and [scene lifecycle](scene-playtests.md).
 - **Tuning:** edit type-wide values at runtime, save them, revert saved values,
   or reset defaults. See [runtime tuning](tuning.md) for application timing and
@@ -31,7 +48,7 @@ while the companion has focus; focus loss releases gameplay input.
   use the [performance harness](performance.md) for measurements.
 
 The in-game debug menus and their F2/F3/V/P/zoom shortcuts are removed. The game
-retains movement, attacks, interaction, F4 to launch the companion, and Escape to
+retains movement, attacks, interaction, and Escape to
 quit. Health, ability status, encounter progress, and combat feedback remain in
 the gameplay HUD. Collision geometry is still drawn in the game when enabled.
 
@@ -39,10 +56,10 @@ the gameplay HUD. Collision geometry is still drawn in the game when enabled.
 
 The game starts a companion Unix socket at `target/companion.sock` relative to its
 working directory. `ARPG_COMPANION_SOCKET` overrides it; use a distinct path per game
-instance. F4 passes that exact path to the companion. To open manually against
+instance. The development launcher supplies that exact path to both apps. To open manually against
 another socket, use `python3 scripts/companion.py open --socket /tmp/experiment.sock`.
-Close an existing companion before switching sockets: opening an already running
-macOS app focuses its existing window.
+The launcher and companion command open a new native instance so the requested
+socket is honored even when a companion for another game is already running.
 
 The socket is user-readable/writable only. An active socket or a regular file is
 never removed to start another server. A refused connection to a stale socket
@@ -59,7 +76,6 @@ Each connection carries one newline-terminated JSON request and one JSON reply:
 {"op":"restart","session":12345}
 {"op":"refresh_scenes","session":12345}
 {"op":"start_scene","session":12345,"path":"scenes/soul_trial.ron"}
-{"op":"default_scene","session":12345}
 {"op":"collision","session":12345,"enabled":true}
 {"op":"vsync","session":12345,"enabled":false}
 {"op":"zoom","session":12345,"direction":"in"}

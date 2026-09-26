@@ -53,7 +53,7 @@ The command parser is in [harness](../../../crates/app/src/harness.rs). Spawn an
 RON descriptions, including templates, cadence and conditions; see
 [source enablement](../../../docs/source-enablement.md).
 
-See [ARPG Companion](../../../docs/companion.md) for native scene, tuning and debug controls, F4 launch and self-capture.
+See [ARPG Companion](../../../docs/companion.md) for native scene, tuning and debug controls, standalone launching and self-capture.
 
 Key names come from [BINDINGS](../../../crates/app/src/input.rs); an unknown key
 reply lists them. `cursor <x> <y>` supplies physical window pixels through
@@ -63,8 +63,8 @@ The live controls are WASD/arrows to move, cursor to aim, left click for Cleave,
 keys 1, 2 and 3 also use those slots. See
 [attack bindings](../../../docs/scene-playtests.md) for the fixed controls.
 A swing holds its starting direction through recovery while walking
-continues freely. `tap 1` swings and `tap e` interacts. F4 opens the native
-companion. Scene selection and debug controls live there; the game has no debug
+continues freely. `tap 1` swings and `tap e` interacts. Use `python3 scripts/dev.py`
+to launch the game and native companion together. Scene selection and debug controls live there; the game has no debug
 menus. Use explicit harness commands for automation.
 
 Choose population size and seeking in authored scene bodies or grids, then start

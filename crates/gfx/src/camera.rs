@@ -195,6 +195,20 @@ impl OrthoCamera {
         (right, Vec3::Y.cross(right))
     }
 
+    /// Maps ground X/Z offsets into screen right/up distances, before zoom.
+    ///
+    /// Unlike [`Self::ground_basis`], this retains the vertical compression
+    /// caused by camera elevation. Scene authoring can therefore show the same
+    /// ground layout without knowing or duplicating this camera's angles.
+    pub fn ground_projection(&self) -> [[f32; 2]; 2] {
+        let view = self.view_matrix();
+        [[view.x_axis.x, view.z_axis.x], [view.x_axis.y, view.z_axis.y]]
+    }
+
+    fn view_matrix(&self) -> Mat4 {
+        look_at_mat4(self.eye(), self.target, Vec3::Y)
+    }
+
     /// Projects a physical viewport pixel onto the ground using this camera's
     /// current view. Invalid or zero-sized viewports are rejected.
     pub fn ground_point(&self, pixel: glam::Vec2, width: u32, height: u32) -> Result<Vec3, &'static str> {
@@ -213,7 +227,7 @@ impl OrthoCamera {
 
     /// The combined view-projection matrix, as uploaded to the shader.
     pub fn view_proj(&self) -> Mat4 {
-        let view = look_at_mat4(self.eye(), self.target, Vec3::Y);
+        let view = self.view_matrix();
 
         let half_h = self.zoom;
         let half_w = self.zoom * self.aspect;
@@ -293,8 +307,8 @@ impl CameraBinding {
         Self { buffer, light, layout, bind_group }
     }
 
-    pub(crate) fn upload_lights(&self, queue: &wgpu::Queue, lights: &[crate::PointLight]) {
-        queue.write_buffer(&self.light, 0, bytemuck::bytes_of(&crate::lighting::LightUniform::new(lights)));
+    pub(crate) fn upload_lights(&self, queue: &wgpu::Queue, lights: &[crate::PointLight], environment: arpg_core::EnvironmentLight) {
+        queue.write_buffer(&self.light, 0, bytemuck::bytes_of(&crate::lighting::LightUniform::new(lights, environment)));
     }
 
     /// Uploads the camera matrix for this view.
@@ -362,6 +376,22 @@ mod tests {
         let dy = (to_ndc(&camera, up).y - origin.y).abs();
 
         assert!((dy / dx - ISO_PITCH.sin()).abs() < 1e-4, "expected sin(pitch) foreshortening");
+    }
+
+    #[test]
+    fn authoring_ground_projection_matches_rendering_after_pan_and_zoom() {
+        let mut camera = OrthoCamera::new(1280, 720);
+        camera.snap_to(Vec3::new(12.0, 0.0, -7.0));
+        camera.zoom_by(1.7);
+        let projection = camera.ground_projection();
+        let origin = to_ndc(&camera, camera.target());
+        for offset in [Vec3::X, Vec3::Z, Vec3::new(-3.0, 0.0, 9.0)] {
+            let rendered = to_ndc(&camera, camera.target() + offset) - origin;
+            let right = projection[0][0] * offset.x + projection[0][1] * offset.z;
+            let up = projection[1][0] * offset.x + projection[1][1] * offset.z;
+            assert!((rendered.x * camera.zoom * camera.aspect - right).abs() < 1e-4);
+            assert!((rendered.y * camera.zoom - up).abs() < 1e-4);
+        }
     }
 
     /// A minimised window reports zero height. Dividing by it yields NaN, which

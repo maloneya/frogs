@@ -32,22 +32,21 @@ pub(crate) const ATTACK_BINDINGS: [(Action, AttackProfile, &str); 3] = [
 ///
 /// Note the same action appearing twice. That is the case the naive
 /// implementation gets wrong — see `down` below.
-type Binding = (&'static str, KeyCode, Option<Action>);
+type Binding = (&'static str, KeyCode, Action);
 const BINDINGS: &[Binding] = &[
-    ("w", KeyCode::KeyW, Some(Action::MoveUp)),
-    ("s", KeyCode::KeyS, Some(Action::MoveDown)),
-    ("a", KeyCode::KeyA, Some(Action::MoveLeft)),
-    ("d", KeyCode::KeyD, Some(Action::MoveRight)),
-    ("up", KeyCode::ArrowUp, Some(Action::MoveUp)),
-    ("down", KeyCode::ArrowDown, Some(Action::MoveDown)),
-    ("left", KeyCode::ArrowLeft, Some(Action::MoveLeft)),
-    ("right", KeyCode::ArrowRight, Some(Action::MoveRight)),
-    ("1", KeyCode::Digit1, Some(Action::Attack)),
-    ("2", KeyCode::Digit2, Some(Action::AttackSecondary)),
-    ("3", KeyCode::Digit3, Some(Action::AttackTertiary)),
-    ("space", KeyCode::Space, Some(Action::AttackTertiary)),
-    ("e", KeyCode::KeyE, Some(Action::Interact)),
-    ("f4", KeyCode::F4, None),
+    ("w", KeyCode::KeyW, Action::MoveUp),
+    ("s", KeyCode::KeyS, Action::MoveDown),
+    ("a", KeyCode::KeyA, Action::MoveLeft),
+    ("d", KeyCode::KeyD, Action::MoveRight),
+    ("up", KeyCode::ArrowUp, Action::MoveUp),
+    ("down", KeyCode::ArrowDown, Action::MoveDown),
+    ("left", KeyCode::ArrowLeft, Action::MoveLeft),
+    ("right", KeyCode::ArrowRight, Action::MoveRight),
+    ("1", KeyCode::Digit1, Action::Attack),
+    ("2", KeyCode::Digit2, Action::AttackSecondary),
+    ("3", KeyCode::Digit3, Action::AttackTertiary),
+    ("space", KeyCode::Space, Action::AttackTertiary),
+    ("e", KeyCode::KeyE, Action::Interact),
 ];
 
 /// The one input route used by window events and injected harness keys.
@@ -164,9 +163,7 @@ impl Controls {
     fn sync(&mut self) {
         let mut held = ActionMask::EMPTY;
         for (i, (_, _, action)) in BINDINGS.iter().enumerate() {
-            if self.accepted & (1u32 << i) != 0
-                && let Some(action) = action
-            {
+            if self.accepted & (1u32 << i) != 0 {
                 held.insert(*action);
             }
         }
@@ -397,15 +394,16 @@ mod tests {
     #[test]
     fn an_unknown_name_is_not_a_key() {
         assert_eq!(key_named("q"), None);
-        for old_key in ["f1", "f2", "f3", "enter", "escape", "v", "p", "-", "="] {
+        for old_key in ["f1", "f2", "f3", "f4", "enter", "escape", "v", "p", "-", "="] {
             assert_eq!(key_named(old_key), None);
         }
         let mut controls = Controls::default();
         assert!(!controls.on_key(KeyCode::F1, true, false));
+        assert!(!controls.on_key(KeyCode::F4, true, false));
         assert_eq!(key_named(""), None);
     }
 
-    /// Unbound keys must fall through untouched, so the app can handle its launcher and exit keys.
+    /// Unbound keys must fall through untouched, so the app can handle exit.
     #[test]
     fn an_unbound_key_changes_nothing() {
         let mut input = Controls::default();

@@ -9,12 +9,28 @@ or dying in the game never change it. The game continues running during editing.
   `BodyGrid`; its rows, columns and spacing remain editable together.
 - **Wall:** drag opposite corners of a rectangle, or click for a default wall.
   Set width, thickness and rotation in the inspector. Rotation is shown in degrees.
+- **Tree:** click to place, then choose pine, broadleaf or bare, scale and rotation.
+  Its solid trunk footprint is shown on the map and follows the authored variant.
+- **Campfire:** click to place a visible fire and its light. Set light colour,
+  brightness, range and height in the inspector. The ring shows its light range.
 - **Pan:** drag the map. Zoom buttons and **Fit** change only the editor view.
 - **Snap:** off, 0.25, 0.5 or 1 metre; this affects mouse placement and movement.
-  Inspector positions remain exact. X increases right, Z up; P marks the fixed
-  player start at the origin. The arena border uses the simulation's dimensions.
+  Inspector positions remain exact. The map uses the game camera's ground-plane
+  projection, including rotation and vertical compression. The compass labels
+  world X/Z; P marks the fixed player start. Moving up the map moves up the game
+  view, while snapping still operates in world metres. The map shows ground
+  footprints, so tree height and canopy occlusion are visible in the game only.
 
-Inspector fields and source conditions come from Rust. Enter a value and press
+Choose a placement from the **Tool** palette; **Select** returns to moving existing
+objects. All placements support duplicate, delete and undo. Scene lighting sits
+in its own inspector section: ambient colour/brightness and sun/moon
+colour/brightness/direction/elevation. Colours are edited through native colour
+pickers and stored as linear RGB. Lighting is explicit scene data: adding or
+removing a campfire never switches daylight on or off. Save & play applies it.
+
+Inspector fields and source conditions come from Rust. Colour changes stay local
+until **Apply colour**, so a final picker adjustment cannot be lost while a
+previous request is in flight. Enter a numeric value and press
 Return to apply; Escape discards its text. Toggle and stepper changes apply
 immediately to the draft. Invalid edits preserve the previous draft and report
 an error. Pending inspector text must be applied or discarded before saving.
@@ -34,16 +50,16 @@ files require the revision obtained when opening them: an external edit causes
 refusal instead of an overwrite. Saving canonicalizes RON formatting and keeps
 leading line comments; inline comments are not retained. Files still use the
 same complete `GameScene` definition as hand-authored scenes and scenarios.
-Trees, torches, doors, chests, encounters and attack relationships round-trip
-intact. Trees and torches appear as reference markers; their authoring is outside
-this first editor. Large formations show their outline instead of drawing more
+Doors, chests, encounters and attack relationships round-trip intact; authoring
+those relationships remains outside this editor. Campfires use the game-owned
+`torches` collection. Large formations show their outline instead of drawing more
 than 2,000 individual markers. The editor admits at most 4,096 explicit placements;
 formations can represent the larger populations allowed by scene validation.
 
 **Save & play** prepares a validated replacement with current runtime tuning,
 saves the scene, then commits the replacement and performs the ordinary input,
 feedback, camera and capture cleanup. Validation, persistence or revision failure
-leaves the current run intact. **Restart current** repeats the last loaded scene;
+leaves the current run intact. **Restart scene** repeats the last loaded scene;
 saving alone does not select a different restart layout.
 
 ## Protocol
@@ -71,4 +87,5 @@ without starting or changing the running encounter. Capture uses the existing
 
 Verification exercises complete scene round-trips, relationship deletion/remapping,
 invalid geometry, persistence conflicts, failed saves, tuning retention and run
-identity, native undo/reconnect, coordinate conversion, and live save/play/reopen.
+identity, native undo/reconnect, camera projection and pointer conversion, prop
+editing, explicit lighting, and live save/play/reopen.

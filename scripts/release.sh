@@ -100,15 +100,25 @@ cp target/release/arpg "$payload/arpg"
 cp -R scenes "$payload/scenes"
 mkdir -p "$payload/target"
 cp -R "target/ARPG Companion.app" "$payload/target/ARPG Companion.app"
+mkdir -p "$payload/scripts"
+cp scripts/dev.py scripts/companion.py "$payload/scripts/"
 
 cat > "$payload/play.command" <<'LAUNCHER'
 #!/bin/sh
-# Double-click me. The game looks for scenes and the companion bundle in the
+# Double-click me. The game looks for scenes and assets in the
 # working directory, which Finder otherwise sets to your home.
 cd "$(dirname "$0")" || exit 1
 exec ./arpg
 LAUNCHER
 chmod +x "$payload/play.command"
+
+cat > "$payload/tools.command" <<'LAUNCHER'
+#!/bin/sh
+# Start both standalone apps using the same launcher as the development checkout.
+cd "$(dirname "$0")" || exit 1
+exec python3 scripts/dev.py --no-build --game ./arpg
+LAUNCHER
+chmod +x "$payload/tools.command"
 
 # Smaller download, and then re-signed: strip invalidates the ad-hoc signature
 # the linker applies, and an arm64 binary with a broken signature is killed
@@ -122,6 +132,7 @@ arpg $tag — macOS ($arch)
 Run it
     Double-click play.command.
     Or from a terminal, in this folder:  ./arpg
+    For the game plus editing tools: double-click tools.command (requires Python 3).
 
 If macOS refuses to open it
     This build is unsigned and un-notarized, so Gatekeeper quarantines it.
@@ -139,11 +150,11 @@ Controls
     2 / right click Slam
     3 / space       Disintegrate
     E               interact
-    F4              open ARPG Companion
     Esc             quit
 
 ARPG Companion
-    Scenes          edit scene layouts, save and play, or restart current
+    Launched separately by tools.command; closing either app leaves the other running.
+    Scenes          edit scene layouts, save and play, or restart scene
     Tuning          adjust runtime values and save tuning
     Debug           collision outlines, vsync, zoom, readouts and screenshots
 

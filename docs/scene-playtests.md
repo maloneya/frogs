@@ -62,20 +62,26 @@ creates independent instances. Eviction removes that instance's bodies,
 sources, descendants, and queued emissions. It preserves the player and other
 content. Restart removes additive instances as well as the previous player.
 
-Boot uses the established horde grid, constructed in code as `Scene::boot` and
-installed by the same loader. There is no scene environment variable or
-working-directory-dependent boot fallback.
+Interactive launches reopen the last successfully played scene file through the
+same loader. The local path preference lives in `target/last-scene.json`; it is
+not part of authored content or deterministic Game state. On first launch, or
+when that file is missing or invalid, the game starts with an empty player world.
+Choose a scene in the separately launched companion. There is no hidden horde fallback.
 
-See [runtime tuning](tuning.md) for the native F4 companion, live attributes and saved settings.
+Harness launches neither restore nor overwrite this preference. Set
+`ARPG_SESSION_FILE` to an isolated preference path to test restoration explicitly.
+Opening or saving a draft without playing does not change the startup scene;
+restarting still uses its cached snapshot, while a new launch rereads the file.
+
+See [runtime tuning](tuning.md) for the native companion, live attributes and saved settings.
 
 ## Companion scene controls
 
-Press **F4** to open [ARPG Companion](companion.md) and choose **Scenes**.
-**Restart current** uses the cached snapshot; **Default horde** starts the built-in
-scene. Select a `.ron` file and click **Open selected** to read its authored layout
+Run `python3 scripts/dev.py` to launch the game and [ARPG Companion](companion.md), then choose **Scenes**.
+**Restart scene** uses the cached snapshot. Select a `.ron` file and click **Open selected** to read its authored layout
 into the [scene editor](scene-editor.md), then **Save & play** to save and start fresh. The catalog lists sorted regular files directly inside `scenes/`, relative
 to the game's working directory. It is scanned at startup and on **Refresh files**,
-not on every state poll. A missing directory leaves the built-in buttons usable.
+not on every state poll. A missing directory still allows creating and saving a new scene.
 
 Scene starts use the same validated boundary as the harness. Read, parse or
 validation errors appear in the companion and preserve the current playtest.
@@ -90,7 +96,7 @@ The former in-game picker, menu input bindings and `state.ui` report are removed
 
 ### Playable catalog
 
-The companion offers **Default horde** (1,024 stationary enemies) and these files:
+The companion lists authored scene files, including:
 
 | File | Encounter |
 |---|---|
@@ -122,7 +128,7 @@ Mechanism fixtures live inline in `scenarios/`; they are not companion catalog e
 ### Scene format
 
 Scenes may also own [stationary torches](lighting.md). They participate in the
-same admission, eviction and cached-restart boundaries; omission selects neutral lighting when no live scene owns a torch.
+same admission, eviction and cached-restart boundaries. The scene environment selects ambient and directional illumination independently of torches; omission uses neutral daylight.
 
 ```ron
 (

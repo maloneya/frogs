@@ -4,6 +4,9 @@ struct PointLight {
 };
 struct Lights {
     count: vec4<u32>,
+    ambient: vec4<f32>,
+    directional: vec4<f32>,
+    direction: vec4<f32>,
     lights: array<PointLight, MAX_POINT_LIGHTS>,
 };
 @group(0) @binding(1) var<uniform> scene_lights: Lights;
@@ -23,13 +26,9 @@ fn contribution(light: PointLight, world_pos: vec3<f32>, normal: vec3<f32>) -> v
 
 fn illumination(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     let unit_normal = normalize(normal);
-    var total = vec3<f32>(0.0);
-    // Scenes without torches use soft neutral daylight for readable geometry.
-    // Authored torch scenes retain their intentional darkness and light pools.
-    if scene_lights.count.x == 0u {
-        let facing = max(dot(unit_normal, normalize(vec3<f32>(0.4, 1.0, 0.3))), 0.0);
-        total = vec3<f32>(0.22 + 0.35 * facing);
-    }
+    let facing = max(dot(unit_normal, scene_lights.direction.xyz), 0.0);
+    var total = scene_lights.ambient.rgb * scene_lights.ambient.w
+        + scene_lights.directional.rgb * scene_lights.directional.w * facing;
     for (var i = 0u; i < scene_lights.count.x; i += 1u) {
         total += contribution(scene_lights.lights[i], world_pos, unit_normal);
     }

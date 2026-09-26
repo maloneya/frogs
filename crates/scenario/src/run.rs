@@ -283,9 +283,8 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     let sources: Vec<SourceId> =
         scenario.setup.sources.iter().map(|source| game.add_source(*source)).collect();
 
-    // Setup is not the run. Without this the golden trace would also record
-    // `Game::default()` building a horde this scenario just replaced, tying
-    // every golden file to a constant none of them are about.
+    // Setup is not the run. Golden traces start after authored scene loading
+    // and initial placements so they describe the driven tick sequence.
     game.clear_trace();
     if scenario.expect.trace.is_some() {
         game.capture_trace(65_536).expect("fixed golden capacity is supported");

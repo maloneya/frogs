@@ -102,21 +102,6 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// The familiar startup horde, as content that uses the normal scene loader.
-    /// Constructed in code so launching the binary never depends on its cwd.
-    #[must_use]
-    pub fn boot() -> Self {
-        Self {
-            name: "Default horde".into(),
-            walls: Vec::new(),
-            bodies: crate::grid_positions(crate::DEFAULT_ENEMIES)
-                .map(|pos| Placed { pos: pos.into(), what: Template::BODY })
-                .collect(),
-            sources: Vec::new(),
-            grids: Vec::new(),
-        }
-    }
-
     fn validate(&self) -> Result<usize, SceneError> {
         let Self { name: _, bodies, grids, sources, walls: _ } = self;
         if bodies.iter().any(|body| !body.what.valid_at(Vec2::from(body.pos))) {
@@ -593,17 +578,19 @@ mod tests {
     }
 
     #[test]
-    fn boot_is_ready_without_queue_limits_or_interpolation_streaks() {
-        const {
-            assert!(crate::DEFAULT_ENEMIES > crate::pass::spawn::QUEUE_CAPACITY);
-        }
-        let world = World::from_scene(&Scene::boot()).unwrap();
-        assert_eq!(world.enemy_count(), crate::DEFAULT_ENEMIES);
+    fn a_large_grid_is_ready_without_queue_limits_or_interpolation_streaks() {
+        const { assert!(1024 > crate::pass::spawn::QUEUE_CAPACITY); }
+        let scene = Scene {
+            name: "crowd admission".into(),
+            grids: vec![BodyGrid { origin: (-10.85, -10.85), columns: 32, rows: 32,
+                spacing: 0.7, what: Template::BODY }],
+            ..Default::default()
+        };
+        let world = World::from_scene(&scene).unwrap();
+        assert_eq!(world.enemy_count(), 1024);
         assert_eq!(world.tick(), 0);
         assert_eq!(world.queue.len(), 0);
         assert_eq!(world.bodies.pos, world.bodies.prev_pos);
-        let legacy = World::default();
-        assert_eq!(world.bodies.pos, legacy.bodies.pos, "boot keeps the established layout");
     }
 
     /// The 128-rank stress scene is why this exists: written out one `Placed`

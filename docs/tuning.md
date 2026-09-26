@@ -4,12 +4,11 @@ Tuning is a tab in the native [ARPG Companion](companion.md). Build it once from
 the repository root:
 
 ```sh
-python3 scripts/companion.py build
-cargo run --release
+python3 scripts/dev.py
 ```
 
-Press **F4** in the game to open or focus **ARPG Companion**. Alternatively,
-`python3 scripts/companion.py open` builds and opens it. Open **Tuning**, select a type in the sidebar,
+The development launcher opens **ARPG Companion** alongside the game.
+`python3 scripts/companion.py open` builds and opens just the companion. Open **Tuning**, select a type in the sidebar,
 edit a numeric field and press Return to apply it. Escape discards that draft.
 Native steppers apply immediately; Reset beside a field restores its built-in
 value. Closing the companion leaves the game running.

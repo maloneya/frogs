@@ -28,7 +28,9 @@ fn assert_same(game: &Game, world: &World) {
 fn construction_matches_the_engine_scene_loading_path() {
     assert_same(&Game::default(), &World::default());
     assert_same(&Game::empty(), &World::empty());
-    let scene = Scene::boot();
+    let scene = Scene { name: "authored crowd".into(), grids: vec![arpg_sim::BodyGrid {
+        origin: (-10.85, -10.85), columns: 32, rows: 32, spacing: 0.7, what: Template::BODY,
+    }], ..Default::default() };
     let world = World::from_scene(&scene).unwrap();
     assert_same(&Game::from_scene(&scene.clone().into()).unwrap(), &world);
 }
