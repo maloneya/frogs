@@ -53,3 +53,18 @@ pub use instance::{Instance, InstanceBuffer, InstanceSink, MAX_INSTANCES};
 pub use intent::{AimDir, Intent, MoveDir};
 pub use report::Report;
 pub use smoothing::{damp, damp_vec3};
+
+/// Shared fixed camera orientation for rendering and headless authoring views.
+pub fn isometric_eye_direction() -> glam::Vec3 {
+    let yaw = std::f32::consts::FRAC_PI_4;
+    let pitch = 0.615_479_7_f32;
+    glam::Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin())
+}
+
+/// Projects world ground offsets to screen right/up, before pan and zoom.
+pub fn isometric_ground_projection() -> [[f32; 2]; 2] {
+    let forward = -isometric_eye_direction().normalize();
+    let right = forward.cross(glam::Vec3::Y).normalize();
+    let up = right.cross(forward);
+    [[right.x, right.z], [up.x, up.z]]
+}

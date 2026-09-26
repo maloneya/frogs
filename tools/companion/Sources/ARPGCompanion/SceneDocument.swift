@@ -34,22 +34,63 @@ indirect enum JSONValue: Codable, Equatable, Sendable {
 
 struct EditorRequest: Encodable, Sendable {
     let action: String
-    var scene: JSONValue? = nil
+    var document: JSONValue? = nil
     var edit: JSONValue? = nil
     var path: String? = nil
     var revision: String? = nil
-    var play: Bool? = nil
 }
 
 struct SceneField: Decodable, Identifiable, Sendable {
     let key: String
     let label: String
     let unit: String
-    let value: Double
+    private let rawValue: JSONValue
     let step: Double
     let options: [String]?
     let colour: [Double]?
+    let integer: Bool
     var id: String { key }
+    var integerValue: UInt64? {
+        guard integer, case .unsigned(let n) = rawValue else { return nil }
+        return n
+    }
+    var value: Double {
+        switch rawValue {
+        case .unsigned(let n): return Double(n)
+        case .signed(let n): return Double(n)
+        case .number(let n): return n
+        default: preconditionFailure("Scene fields must be numeric")
+        }
+    }
+    private enum CodingKeys: String, CodingKey { case key, label, unit, value, step, options, colour, integer }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = try c.decode(String.self, forKey: .key)
+        label = try c.decode(String.self, forKey: .label)
+        unit = try c.decode(String.self, forKey: .unit)
+        integer = try c.decodeIfPresent(Bool.self, forKey: .integer) ?? false
+        if integer {
+            rawValue = .unsigned(try c.decode(UInt64.self, forKey: .value))
+        } else {
+            rawValue = .number(try c.decode(Double.self, forKey: .value))
+        }
+        step = try c.decode(Double.self, forKey: .step)
+        options = try c.decodeIfPresent([String].self, forKey: .options)
+        colour = try c.decodeIfPresent([Double].self, forKey: .colour)
+    }
+    func parsed(_ text: String) -> JSONValue? {
+        if integer { return UInt64(text).map(JSONValue.unsigned) }
+        guard let n = Double(text), n.isFinite else { return nil }
+        return .number(n)
+    }
+    func stepped(up: Bool) -> JSONValue? {
+        if let n = integerValue {
+            let (next, overflow) = up ? n.addingReportingOverflow(1) : n.subtractingReportingOverflow(1)
+            return overflow ? nil : .unsigned(next)
+        }
+        let next = value + (up ? step : -step)
+        return next.isFinite ? .number(next) : nil
+    }
 }
 
 struct SceneObject: Decodable, Identifiable, Sendable {
@@ -57,6 +98,8 @@ struct SceneObject: Decodable, Identifiable, Sendable {
     let kind: String
     let index: Int
     let label: String
+    let name: String
+    let role: String
     let x: Double
     let z: Double
     let width: Double
@@ -69,7 +112,7 @@ struct SceneObject: Decodable, Identifiable, Sendable {
 }
 
 struct SceneDocument: Decodable, Sendable {
-    let scene: JSONValue
+    let document: JSONValue
     let name: String
     let objects: [SceneObject]
     let selected: String?
@@ -79,7 +122,8 @@ struct SceneDocument: Decodable, Sendable {
     let player_radius: Double
     let projection: SceneProjection
     let lighting: [SceneField]
-    let relationships: Int
+    let encounters: [SceneEncounter]
+    let rewards: [SceneReward]
 }
 
 /// The camera supplies this ground-plane matrix; Swift owns no camera angles.
@@ -150,9 +194,9 @@ struct SceneViewport {
         let (right, up) = projection.project(x: x - centreX, z: z - centreZ)
         return (width / 2 + right * s, height / 2 - up * s)
     }
-    mutating func fit(_ document: SceneDocument) {
+    mutating func fit(_ document: SceneDocument, objectIDs: Set<String>? = nil) {
         var points: [(Double, Double)] = [(0, 0)]
-        for o in document.objects {
+        for o in document.objects where objectIDs == nil || objectIDs!.contains(o.id) {
             // Conservative world bounds include rotated walls and source ranges.
             let extent = max(o.width, o.depth) + o.radius
             for dx in [-extent, extent] { for dz in [-extent, extent] {
@@ -179,5 +223,64 @@ struct SceneViewport {
             if o.kind == "source" || o.kind == "campfire" { return distance <= tolerance || abs(distance - o.radius) <= tolerance }
             return distance <= max(o.radius, tolerance)
         }
+    }
+}
+
+/// Derived relationship inspector data. Action payloads remain game-owned JSON.
+struct SceneReward: Decodable, Identifiable, Sendable {
+    let body: Int
+    let label: String
+    let action: JSONValue
+    var id: String { "body:\(body)" }
+}
+
+struct SceneEncounter: Decodable, Identifiable, Sendable {
+    let index: Int
+    let name: String
+    let trigger: Int
+    let sources: [Int]
+    let count: UInt32
+    let within_ticks: UInt32
+    let on_start: [JSONValue]
+    let on_success: [JSONValue]
+    let on_failure: [JSONValue]
+    var id: Int { index }
+    func objectIDs(rewards: [SceneReward]) -> Set<String> {
+        let actions = on_start + on_success + on_failure
+        return Set(["body:\(trigger)"] + sources.map { "source:\($0)" }
+            + rewards.filter { actions.contains($0.action) }.map(\.id))
+    }
+}
+
+/// An incomplete form is local UI state until its complete transaction is applied.
+struct EncounterForm: Identifiable {
+    let id = UUID()
+    let index: Int?
+    var name: String
+    var trigger: Int?
+    var sources: [Int]
+    var count: String
+    var ticks: String
+    var onStart: [JSONValue]
+    var onSuccess: [JSONValue]
+    var onFailure: [JSONValue]
+
+    init(document: SceneDocument, encounter: SceneEncounter?) {
+        index = encounter?.index
+        name = encounter?.name ?? "New encounter"
+        trigger = encounter?.trigger ?? document.objects.first { $0.kind == "body" && $0.value("interactable") != 0 }?.index
+        sources = encounter?.sources ?? []
+        count = String(encounter?.count ?? 30)
+        ticks = String(encounter?.within_ticks ?? 1800)
+        onStart = encounter?.on_start ?? []; onSuccess = encounter?.on_success ?? []; onFailure = encounter?.on_failure ?? []
+    }
+    var edit: JSONValue? {
+        guard let trigger, !sources.isEmpty, let count = UInt32(count), count > 0,
+              let ticks = UInt32(ticks), ticks > 0 else { return nil }
+        return .object(["action": .string("encounter"), "index": index.map { .number(Double($0)) } ?? .null,
+            "value": .object(["name": .string(name), "trigger": .number(Double(trigger)),
+                "sources": .array(sources.map { .number(Double($0)) }), "count": .unsigned(UInt64(count)),
+                "within_ticks": .unsigned(UInt64(ticks)), "on_start": .array(onStart),
+                "on_success": .array(onSuccess), "on_failure": .array(onFailure)])])
     }
 }

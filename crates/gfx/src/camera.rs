@@ -38,8 +38,6 @@ fn aspect_of(width: u32, height: u32) -> f32 {
     width.max(1) as f32 / height.max(1) as f32
 }
 
-const ISO_YAW: f32 = std::f32::consts::FRAC_PI_4; // 45°
-const ISO_PITCH: f32 = 0.615_479_7; // atan(1/sqrt(2))
 
 /// How far back the camera sits. Under orthographic projection this has *no*
 /// effect on apparent size — there's no perspective divide — so it only has to
@@ -162,11 +160,7 @@ impl OrthoCamera {
     /// Where the camera sits, derived from the iso angles rather than stored,
     /// so the two can never disagree.
     fn eye(&self) -> Vec3 {
-        let dir = Vec3::new(
-            ISO_PITCH.cos() * ISO_YAW.cos(),
-            ISO_PITCH.sin(),
-            ISO_PITCH.cos() * ISO_YAW.sin(),
-        );
+        let dir = arpg_core::isometric_eye_direction();
         self.target + dir * DISTANCE
     }
 
@@ -193,16 +187,6 @@ impl OrthoCamera {
         // what "up the screen" means on the floor.
         let right = forward.cross(Vec3::Y).normalize();
         (right, Vec3::Y.cross(right))
-    }
-
-    /// Maps ground X/Z offsets into screen right/up distances, before zoom.
-    ///
-    /// Unlike [`Self::ground_basis`], this retains the vertical compression
-    /// caused by camera elevation. Scene authoring can therefore show the same
-    /// ground layout without knowing or duplicating this camera's angles.
-    pub fn ground_projection(&self) -> [[f32; 2]; 2] {
-        let view = self.view_matrix();
-        [[view.x_axis.x, view.z_axis.x], [view.x_axis.y, view.z_axis.y]]
     }
 
     fn view_matrix(&self) -> Mat4 {
@@ -375,7 +359,7 @@ mod tests {
         let dx = (to_ndc(&camera, right).x - origin.x).abs();
         let dy = (to_ndc(&camera, up).y - origin.y).abs();
 
-        assert!((dy / dx - ISO_PITCH.sin()).abs() < 1e-4, "expected sin(pitch) foreshortening");
+        assert!((dy / dx - arpg_core::isometric_eye_direction().y).abs() < 1e-4, "expected sin(pitch) foreshortening");
     }
 
     #[test]
@@ -383,7 +367,7 @@ mod tests {
         let mut camera = OrthoCamera::new(1280, 720);
         camera.snap_to(Vec3::new(12.0, 0.0, -7.0));
         camera.zoom_by(1.7);
-        let projection = camera.ground_projection();
+        let projection = arpg_core::isometric_ground_projection();
         let origin = to_ndc(&camera, camera.target());
         for offset in [Vec3::X, Vec3::Z, Vec3::new(-3.0, 0.0, 9.0)] {
             let rendered = to_ndc(&camera, camera.target() + offset) - origin;

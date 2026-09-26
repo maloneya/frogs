@@ -1,10 +1,12 @@
 (
-    engine: (
-        name: "Three approaching seekers",
-        bodies: [
-            (pos: (-5.0, 5.0), what: (seeks: true)),
-            (pos: (0.0, 7.0), what: (seeks: true)),
-            (pos: (5.0, 5.0), what: (seeks: true)),
-        ],
-    )
+    scene: (
+        engine: (
+            name: "Three approaching seekers",
+            bodies: [
+                (pos: (-5.0, 5.0), what: (seeks: true)),
+                (pos: (0.0, 7.0), what: (seeks: true)),
+                (pos: (5.0, 5.0), what: (seeks: true)),
+            ],
+        )
+    ),
 )

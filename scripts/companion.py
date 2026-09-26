@@ -21,6 +21,8 @@ def swift(*args):
 
 
 def build():
+    cargo = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo")
+    subprocess.run([cargo, "build", "--release", "-p", "arpg-authoring", "--bin", "arpg-author"], cwd=ROOT, check=True)
     swift("build", "-c", "release")
     binary = subprocess.check_output(["swift", "build", "-c", "release", "--show-bin-path",
                                       "--package-path", str(ROOT / "tools/companion"),
@@ -28,6 +30,7 @@ def build():
     contents = BUNDLE / "Contents"
     (contents / "MacOS").mkdir(parents=True, exist_ok=True)
     shutil.copy2(Path(binary) / "ARPGCompanion", contents / "MacOS/ARPGCompanion")
+    shutil.copy2(ROOT / "target/release/arpg-author", contents / "MacOS/arpg-author")
     with (contents / "Info.plist").open("wb") as handle:
         plistlib.dump({"CFBundleExecutable": "ARPGCompanion", "CFBundleIdentifier": "dev.arpg.companion",
                       "CFBundleName": "ARPG Companion", "CFBundlePackageType": "APPL",
@@ -38,7 +41,7 @@ def build():
 
 def open_app(socket_path):
     # A new instance honors --socket even when another companion is running.
-    subprocess.run(["open", "-n", str(BUNDLE), "--args", "--socket", str(Path(socket_path).absolute())], check=True)
+    subprocess.run(["open", "-n", str(BUNDLE), "--args", "--socket", str(Path(socket_path).absolute()), "--scenes", str(ROOT / "scenes")], check=True)
 
 
 if __name__ == "__main__":
@@ -49,16 +52,16 @@ if __name__ == "__main__":
     if args.command == "test":
         # Apple's Command Line Tools ship SwiftUI but not XCTest/Swift Testing.
         # Compile the real model and transport with a small async assertion runner.
+        build()
         SCRATCH.mkdir(parents=True, exist_ok=True)
         sources = ROOT / "tools/companion/Sources/ARPGCompanion"
         checks = SCRATCH / "CompanionChecks"
         subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "6", "-warnings-as-errors",
                         str(sources / "Connection.swift"), str(sources / "Model.swift"),
-                        str(sources / "SceneDocument.swift"),
+                        str(sources / "SceneDocument.swift"), str(sources / "Authoring.swift"),
                         str(ROOT / "tools/companion/Tests/Checks.swift"),
                         "-o", str(checks)], check=True)
-        subprocess.run([str(checks)], check=True)
-        build()
+        subprocess.run([str(checks)], check=True, env=dict(os.environ, ARPG_AUTHORING_BIN=str(ROOT / "target/release/arpg-author")))
     else:
         build()
         if args.command == "open":

@@ -14,7 +14,6 @@ pub(crate) enum Edit {
 pub(crate) enum ZoomDirection { In, Out }
 
 pub(crate) enum Control {
-    SceneEditor(Box<crate::scene_editor::Request>),
     Tuning(Edit),
     RefreshScenes,
     StartScene(PathBuf),
@@ -27,7 +26,6 @@ pub(crate) enum Control {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Command {
-    SceneEditor { session: u32, request: Box<crate::scene_editor::Request> },
     State {},
     Set { session: u32, key: String, value: f32 },
     Save { session: u32 }, Revert { session: u32 }, Defaults { session: u32 }, Restart { session: u32 },
@@ -43,7 +41,6 @@ impl Command {
     pub(crate) fn control(self) -> Result<Option<Control>, String> {
         let (session, control) = match self {
             Self::State {} => return Ok(None),
-            Self::SceneEditor { session, request } => (session, Control::SceneEditor(request)),
             Self::Set { session, key, value } => (session, Control::Tuning(Edit::Set(TuningField::named(&key).ok_or("Unknown tuning field")?, value))),
             Self::Save { session } => (session, Control::Tuning(Edit::Save)),
             Self::Revert { session } => (session, Control::Tuning(Edit::Revert)),

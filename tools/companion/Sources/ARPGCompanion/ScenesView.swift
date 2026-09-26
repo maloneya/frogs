@@ -14,6 +14,8 @@ struct ScenesView: View {
     @State private var colourDrafts: [String: Color] = [:]
     @State private var fieldError: String?
     @State private var nameDraft = ""
+    @State private var objectNameDraft = ""
+    @State private var encounterForm: EncounterForm?
 
     private var selected: SceneObject? { model.editor?.objects.first { $0.id == model.editorSelection } }
     var body: some View {
@@ -30,24 +32,25 @@ struct ScenesView: View {
                     HStack {
                         Text("Scene files").font(.headline)
                         Spacer()
-                        Button { Task { await model.action(.refreshScenes) } } label: { Image(systemName: "arrow.clockwise") }
-                            .help("Refresh scene files").disabled(!model.editable)
+                        Button { model.refreshSceneFiles() } label: { Image(systemName: "arrow.clockwise") }
+                            .help("Refresh scene files").disabled(!model.canAuthor)
                     }
-                    List(model.state?.scenes.files ?? [], selection: $selection) { file in
+                    List(model.sceneFiles, selection: $selection) { file in
                         Text(file.label).lineLimit(1).help(file.path).tag(file.path)
                     }.listStyle(.plain).scrollContentBackground(.hidden)
                     Button("Open selected") {
                         if let selection { open(EditorRequest(action: "open", path: selection)) }
-                    }.disabled(!model.editable || selection == nil)
-                    Button("New scene") { open(EditorRequest(action: "new")) }.disabled(!model.editable)
-                    if let error = model.state?.scenes.error { Text(error).font(.caption).foregroundStyle(.red) }
+                    }.disabled(!model.canAuthor || selection == nil)
+                    Button("New scene") { open(EditorRequest(action: "new")) }.disabled(!model.canAuthor)
+                    if let error = model.sceneFileError { Text(error).font(.caption).foregroundStyle(.red) }
                 }.padding(12).frame(minWidth: 150, idealWidth: 180, maxWidth: 220)
                 if let document = model.editor {
                     VStack(spacing: 0) {
                         toolbar
                             .onAppear { nameDraft = document.name; fit(document) }
                         SceneCanvas(document: document, selection: $model.editorSelection, viewport: $viewport,
-                                    tool: tool, snap: snap, editable: model.editable, edit: { edit in Task { await model.editScene(edit) } })
+                                    encounter: document.encounters.first { $0.index == model.editorEncounter },
+                                    tool: tool, snap: snap, editable: model.canAuthor, edit: { edit in Task { await model.editScene(edit) } })
                         HStack {
                             Text("Game camera orientation · metres · P = player start").font(.caption).foregroundStyle(.secondary)
                             Spacer()
@@ -66,28 +69,34 @@ struct ScenesView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(model.editorPath ?? "New scene · choose a file when saving").lineLimit(1).truncationMode(.middle)
-                    Text(fieldError ?? (hasPendingInspectorEdits ? "Apply colour changes; press Return for numeric edits or Escape to discard text." : "Editing the starting layout. The running game stays unchanged until Save & play."))
+                    Text(fieldError ?? (model.editorFailed ? model.editorNotice : nil) ?? (hasPendingInspectorEdits ? "Apply colour changes; press Return for numeric edits or Escape to discard text." : model.editorNotice))
                         .foregroundStyle(fieldError == nil ? Color.secondary : .red).lineLimit(2)
                 }.font(.caption)
                 Spacer()
                 Button("Save as…") { save(asNew: true, play: false) }.disabled(!canSave)
                 Button("Save") { save(asNew: false, play: false) }.keyboardShortcut("s").disabled(!canSave)
-                Button("Save & play") { save(asNew: false, play: true) }.buttonStyle(.borderedProminent).disabled(!canSave)
+                Button("Save & play") { save(asNew: false, play: true) }.buttonStyle(.borderedProminent).disabled(!canSave || !model.editable)
             }.padding(12)
         }
         .confirmationDialog("Discard this scene draft?", isPresented: $confirmDiscard) {
             Button("Discard and open", role: .destructive) { if let pendingOpen { executeOpen(pendingOpen) } }
             Button("Cancel", role: .cancel) { pendingOpen = nil }
         } message: { Text("Save the current scene first if you want to keep it.") }
+        .sheet(item: $encounterForm) { form in
+            if let document = model.editor {
+                EncounterEditor(model: model, document: document, initial: form)
+            }
+        }
         .onChange(of: model.editorSelection) { _, _ in
+            objectNameDraft = selected?.name ?? ""
             let sceneKeys = Set(model.editor?.lighting.map(\.key) ?? [])
             fieldDrafts = fieldDrafts.filter { sceneKeys.contains($0.key) }
             colourDrafts = colourDrafts.filter { sceneKeys.contains($0.key) }
             fieldError = nil
         }
     }
-    private var hasPendingInspectorEdits: Bool { !fieldDrafts.isEmpty || !colourDrafts.isEmpty || (model.editor != nil && nameDraft != model.editor?.name) }
-    private var canSave: Bool { model.editable && model.editor != nil && !hasPendingInspectorEdits }
+    private var hasPendingInspectorEdits: Bool { !fieldDrafts.isEmpty || !colourDrafts.isEmpty || (model.editor != nil && nameDraft != model.editor?.name) || (selected != nil && objectNameDraft != selected?.name) }
+    private var canSave: Bool { model.canAuthor && model.editor != nil && !hasPendingInspectorEdits }
     private var toolbar: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -101,6 +110,11 @@ struct ScenesView: View {
                     Label("Formation", systemImage: "square.grid.3x3").tag("grid")
                     Label("Tree", systemImage: "tree").tag("tree")
                     Label("Campfire", systemImage: "flame").tag("campfire")
+                    Divider()
+                    Label("Static prop", systemImage: "cube").tag("prop")
+                    Label("Switch / shrine", systemImage: "hand.tap").tag("switch")
+                    Label("Door", systemImage: "door.left.hand.closed").tag("door")
+                    Label("Chest", systemImage: "shippingbox").tag("chest")
                 }.pickerStyle(.menu).frame(maxWidth: 200)
                 Spacer()
                 Button("Select") { tool = "select" }.help("Return to selecting and moving objects")
@@ -123,7 +137,7 @@ struct ScenesView: View {
                     .onChange(of: document.name) { _, value in nameDraft = value }
                     .onSubmit { Task { await model.editScene(.object(["action": .string("rename"), "name": .string(nameDraft)])) } }
                     .onExitCommand { nameDraft = document.name }
-                    .disabled(!model.editable)
+                    .disabled(!model.canAuthor)
                 Divider()
                 DisclosureGroup("Scene lighting") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -132,65 +146,93 @@ struct ScenesView: View {
                     }.padding(.top, 8)
                 }
                 Divider()
+                encounterControls(document)
+                Divider()
                 Picker("Object", selection: $model.editorSelection) {
                     Text("No selection").tag(String?.none)
                     ForEach(document.objects) { object in Text(object.label).tag(Optional(object.id)) }
                 }
                 if let object = selected {
-                    Text(object.label).font(.headline)
+                    Text(object.role).font(.headline)
+                    TextField("Object name", text: $objectNameDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .onAppear { objectNameDraft = object.name }
+                        .onChange(of: object.name) { _, value in objectNameDraft = value }
+                        .onExitCommand { objectNameDraft = object.name }
+                        .onSubmit { Task { await model.editScene(.object(["action": .string("name"), "target": object.target, "name": .string(objectNameDraft)])) } }
+                        .disabled(!model.canAuthor)
                     ForEach(object.fields) { field in inspectorField(object, field) }
                     HStack {
-                        Button("Duplicate") { action("duplicate", object) }.keyboardShortcut("d").disabled(!model.editable)
-                        Button("Delete", role: .destructive) { action("delete", object) }.disabled(!model.editable)
+                        Button("Duplicate") { action("duplicate", object) }.keyboardShortcut("d").disabled(!model.canAuthor)
+                        Button("Delete", role: .destructive) { action("delete", object) }.disabled(!model.canAuthor)
                     }
                     Text("Duplicate copies the placement; encounter links stay with the original.").font(.caption).foregroundStyle(.secondary)
                 }
                 Divider()
                 HStack {
-                    Button("Undo") { model.undoScene(); fieldDrafts.removeAll(); colourDrafts.removeAll() }.keyboardShortcut("z").disabled(model.busy || model.undoScenes.isEmpty)
-                    Button("Redo") { model.redoScene(); fieldDrafts.removeAll(); colourDrafts.removeAll() }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(model.busy || model.redoScenes.isEmpty)
+                    Button("Undo") { model.undoScene(); fieldDrafts.removeAll(); colourDrafts.removeAll(); objectNameDraft = selected?.name ?? "" }.keyboardShortcut("z").disabled(model.busy || model.undoScenes.isEmpty)
+                    Button("Redo") { model.redoScene(); fieldDrafts.removeAll(); colourDrafts.removeAll(); objectNameDraft = selected?.name ?? "" }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(model.busy || model.redoScenes.isEmpty)
                 }
-                if document.relationships > 0 {
-                    Text("Encounter links are preserved. Linked objects cannot be deleted while their relationships need them.").font(.caption).foregroundStyle(.secondary)
-                }
+                Text("Templates apply to a body, every formation member, or everything a source emits. Fixed props cannot seek. Doors and chests start locked.").font(.caption).foregroundStyle(.secondary)
             }.padding(14)
+        }
+    }
+    private func encounterControls(_ document: SceneDocument) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Encounters").font(.headline)
+            Picker("Show links", selection: $model.editorEncounter) {
+                Text("None").tag(Int?.none)
+                ForEach(document.encounters) { encounter in Text(encounter.name).tag(Optional(encounter.index)) }
+            }
+            Button("New encounter") { encounterForm = EncounterForm(document: document, encounter: nil) }.disabled(!model.canAuthor)
+            if let encounter = document.encounters.first(where: { $0.index == model.editorEncounter }) {
+                Text("Defeat \(encounter.count) within \(encounter.within_ticks) ticks").font(.caption)
+                HStack {
+                    Button("Edit") { encounterForm = EncounterForm(document: document, encounter: encounter) }.disabled(!model.canAuthor)
+                    Button("Frame") { viewport.fit(document, objectIDs: encounter.objectIDs(rewards: document.rewards)) }
+                    Button("Delete", role: .destructive) {
+                        Task { await model.editScene(.object(["action": .string("delete_encounter"), "index": .number(Double(encounter.index))])) }
+                    }.disabled(!model.canAuthor)
+                }
+            }
         }
     }
     @ViewBuilder private func inspectorField(_ object: SceneObject?, _ field: SceneField) -> some View {
         if let rgb = field.colour, rgb.count == 3 {
             VStack(alignment: .leading, spacing: 4) {
                 ColorPicker(field.label, selection: Binding(get: { colourDrafts[field.key] ?? Color(.sRGBLinear, red: rgb[0], green: rgb[1], blue: rgb[2]) },
-                    set: { colourDrafts[field.key] = $0 }), supportsOpacity: false).disabled(!model.editable)
+                    set: { colourDrafts[field.key] = $0 }), supportsOpacity: false).disabled(!model.canAuthor)
                 if let draft = colourDrafts[field.key] {
                     HStack {
-                        Button("Apply colour") { setColour(object, field, draft) }.disabled(!model.editable)
+                        Button("Apply colour") { setColour(object, field, draft) }.disabled(!model.canAuthor)
                         Button("Discard") { colourDrafts.removeValue(forKey: field.key) }
                     }.controlSize(.small)
                 }
             }
         } else if field.unit == "bool" {
-            Toggle(field.label, isOn: Binding(get: { field.value != 0 }, set: { set(object, field, $0 ? 1 : 0) })).disabled(!model.editable)
+            Toggle(field.label, isOn: Binding(get: { field.value != 0 }, set: { set(object, field, .unsigned($0 ? 1 : 0)) })).disabled(!model.canAuthor)
         } else if let options = field.options {
-            Picker(field.label, selection: Binding(get: { Int(field.value) }, set: { set(object, field, Double($0)) })) {
+            Picker(field.label, selection: Binding(get: { Int(field.value) }, set: { set(object, field, .unsigned(UInt64($0))) })) {
                 ForEach(Array(options.enumerated()), id: \.offset) { i, label in Text(label).tag(i) }
-            }.disabled(!model.editable)
+            }.disabled(!model.canAuthor)
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 Text(field.label + (field.unit.isEmpty ? "" : " · \(field.unit)")).font(.caption)
                 HStack {
-                    TextField(field.label, text: Binding(get: { fieldDrafts[field.key] ?? number(field.value) }, set: { fieldDrafts[field.key] = $0 }))
+                    TextField(field.label, text: Binding(get: { fieldDrafts[field.key] ?? field.integerValue.map { String($0) } ?? number(field.value) }, set: { fieldDrafts[field.key] = $0 }))
                         .textFieldStyle(.roundedBorder).onSubmit {
-                            guard let value = Double(fieldDrafts[field.key] ?? ""), value.isFinite else { fieldError = "Enter a finite number."; return }
+                            guard let value = field.parsed(fieldDrafts[field.key] ?? "") else { fieldError = field.integer ? "Enter a nonnegative whole number." : "Enter a finite number."; return }
                             set(object, field, value)
                         }.onExitCommand { fieldDrafts.removeValue(forKey: field.key); fieldError = nil }
-                    Stepper(field.label, onIncrement: { set(object, field, field.value + field.step) }, onDecrement: { set(object, field, field.value - field.step) }).labelsHidden().fixedSize()
-                }.disabled(!model.editable)
+                    Stepper(field.label, onIncrement: { set(object, field, field.stepped(up: true)) }, onDecrement: { set(object, field, field.stepped(up: false)) }).labelsHidden().fixedSize()
+                }.disabled(!model.canAuthor)
             }
         }
     }
-    private func set(_ object: SceneObject?, _ field: SceneField, _ value: Double) {
+    private func set(_ object: SceneObject?, _ field: SceneField, _ value: JSONValue?) {
+        guard let value else { fieldError = "Value is outside the numeric range."; return }
         let submittedDraft = fieldDrafts[field.key]
-        var edit: [String: JSONValue] = ["action": .string(object == nil ? "lighting" : "set"), "field": .string(field.key), "value": .number(value)]
+        var edit: [String: JSONValue] = ["action": .string(object == nil ? "lighting" : "set"), "field": .string(field.key), "value": value]
         if let object { edit["target"] = object.target }
         Task {
             if await model.editScene(.object(edit)),
@@ -224,8 +266,9 @@ struct ScenesView: View {
     }
     private func executeOpen(_ request: EditorRequest) {
         Task {
-            if await model.send(Request(op: .sceneEditor, request: request)), let document = model.editor {
-                fieldDrafts.removeAll(); colourDrafts.removeAll(); fieldError = nil; nameDraft = document.name; fit(document)
+            if await model.sendAuthoring(request), let document = model.editor {
+                fieldDrafts.removeAll(); colourDrafts.removeAll(); fieldError = nil
+                nameDraft = document.name; objectNameDraft = selected?.name ?? ""; fit(document)
             }
         }
     }
@@ -235,7 +278,7 @@ struct ScenesView: View {
         panel.title = play ? "Save scene and play" : "Save scene"
         panel.nameFieldStringValue = "encounter.ron"
         panel.allowedContentTypes = [UTType(filenameExtension: "ron") ?? .data]
-        if let directory = model.state?.scenes.directory { panel.directoryURL = URL(fileURLWithPath: directory) }
+        panel.directoryURL = model.sceneDirectory
         panel.begin { result in
             if result == .OK, let url = panel.url { Task { await model.saveScene(path: url.path, play: play) } }
         }

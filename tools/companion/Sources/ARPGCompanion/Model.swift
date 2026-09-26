@@ -9,13 +9,20 @@ final class Model: ObservableObject {
     @Published private(set) var notice = "Waiting for the game…"
     @Published private(set) var failed = false
     @Published private(set) var editor: SceneDocument?
+    @Published private(set) var editorNotice = "Open a scene or create one. Editing works without the game."
+    @Published private(set) var editorFailed = false
+    @Published private(set) var sceneFiles: [SceneFile] = []
+    @Published private(set) var sceneFileError: String?
+    let sceneDirectory: URL
+    var canAuthor: Bool { !busy }
     @Published var editorSelection: String?
+    @Published var editorEncounter: Int?
     @Published private(set) var editorPath: String?
     @Published private(set) var editorRevision: String?
     @Published private(set) var undoScenes: [SceneDocument] = []
     @Published private(set) var redoScenes: [SceneDocument] = []
     private var savedScene: JSONValue?
-    var editorDirty: Bool { editor.map { $0.scene != savedScene } ?? false }
+    var editorDirty: Bool { editor.map { $0.document != savedScene } ?? false }
     @Published var drafts: [String: String] = [:]
     var editable: Bool { connected && !busy && state?.busy == false }
     let socketPath: String
@@ -23,10 +30,18 @@ final class Model: ObservableObject {
     private var refreshFinished: CheckedContinuation<Void, Never>?
     private let exchange: @Sendable (Request) async throws -> Reply
 
-    init(path: String, exchange: (@Sendable (Request) async throws -> Reply)? = nil) {
+    private let author: @Sendable (EditorRequest) async throws -> AuthoringReply
+    init(path: String, exchange: (@Sendable (Request) async throws -> Reply)? = nil,
+         author: (@Sendable (EditorRequest) async throws -> AuthoringReply)? = nil) {
         socketPath = path
         let connection = Connection(path: path)
         self.exchange = exchange ?? { try await connection.exchange($0) }
+        let authoring = Authoring()
+        self.author = author ?? { try await authoring.exchange($0) }
+        let args = CommandLine.arguments
+        let path = args.firstIndex(of: "--scenes").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+        sceneDirectory = URL(fileURLWithPath: path ?? "scenes", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)).standardizedFileURL
+        refreshSceneFiles()
     }
 
     func poll() async {
@@ -89,9 +104,6 @@ final class Model: ObservableObject {
             if reconnecting { drafts.removeAll() }
             state = snapshot
             connected = true
-            if reply.ok, let document = reply.editor, let request = request.request {
-                acceptEditor(document, request: request)
-            }
             // Polls must not erase a local validation error while its draft remains.
             if request.op != .state || reconnecting || drafts.isEmpty {
                 notice = reply.error ?? snapshot.message
@@ -113,7 +125,7 @@ extension Model {
     @discardableResult
     func editScene(_ edit: JSONValue) async -> Bool {
         guard let editor else { return false }
-        return await send(Request(op: .sceneEditor, request: EditorRequest(action: "edit", scene: editor.scene, edit: edit)))
+        return await sendAuthoring(EditorRequest(action: "edit", document: editor.document, edit: edit))
     }
 
     func acceptEditor(_ document: SceneDocument, request: EditorRequest) {
@@ -125,6 +137,10 @@ extension Model {
             undoScenes.removeAll(); redoScenes.removeAll()
         }
         editor = document
+        if action == "new" || action == "open" { editorEncounter = document.encounters.first?.index }
+        if case .object(let edit) = request.edit {
+            if edit["action"] == .string("delete_encounter") { editorEncounter = nil }
+        }
         if action == "edit" {
             // Deletion shifts array indices: a surviving ID can now name a
             // different object. Clearing selection also discards its inspector drafts.
@@ -134,27 +150,66 @@ extension Model {
                 editorSelection = document.selected ?? editorSelection.flatMap { id in document.objects.contains { $0.id == id } ? id : nil }
             }
         } else if action != "save" { editorSelection = document.selected ?? document.objects.first?.id }
-        if action != "edit" {
+        if action == "new" || action == "open" || action == "save" {
             editorPath = document.path; editorRevision = document.revision
-            savedScene = action == "new" ? nil : document.scene
+            savedScene = action == "new" ? nil : document.document
         }
     }
 
     func undoScene() {
         guard !busy, let previous = undoScenes.popLast() else { return }
         if let editor { redoScenes.append(editor) }
-        editor = previous; editorSelection = previous.selected
+        editor = previous; editorSelection = previous.selected; editorEncounter = nil
     }
 
     func redoScene() {
         guard !busy, let next = redoScenes.popLast() else { return }
         if let editor { undoScenes.append(editor) }
-        editor = next; editorSelection = next.selected
+        editor = next; editorSelection = next.selected; editorEncounter = nil
     }
 
     func saveScene(path: String, play: Bool) async {
-        guard let editor else { return }
-        await send(Request(op: .sceneEditor, request: EditorRequest(action: "save", scene: editor.scene,
-            path: path, revision: path == editorPath ? editorRevision : nil, play: play)))
+        guard let editor, !play || editable else { return }
+        let saved = await sendAuthoring(EditorRequest(action: "save", document: editor.document,
+            path: path, revision: path == editorPath ? editorRevision : nil))
+        guard saved else { return }
+        refreshSceneFiles()
+        if play {
+            if await send(Request(op: .startScene, path: path)) {
+                editorNotice = "Scene saved and started."
+            } else {
+                editorFailed = true; editorNotice = "Scene saved, but play failed: \(notice)"
+            }
+        }
+    }
+
+    @discardableResult
+    func sendAuthoring(_ request: EditorRequest) async -> Bool {
+        guard canAuthor else { return false }
+        busy = true
+        defer { busy = false }
+        do {
+            let reply = try await author(request)
+            guard reply.ok, let document = reply.editor else {
+                throw ConnectionError(message: reply.error ?? "Authoring returned no document.")
+            }
+            acceptEditor(document, request: request)
+            editorFailed = false
+            editorNotice = request.action == "save" ? "Scene saved." : "Draft ready. Save & play to try it."
+            return true
+        } catch {
+            editorFailed = true; editorNotice = error.localizedDescription
+            return false
+        }
+    }
+
+    func refreshSceneFiles() {
+        do {
+            sceneFiles = try FileManager.default.contentsOfDirectory(at: sceneDirectory,
+                includingPropertiesForKeys: [.isRegularFileKey]).filter {
+                    $0.pathExtension == "ron" && (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+                }.sorted { $0.lastPathComponent < $1.lastPathComponent }.map { SceneFile(path: $0.path, label: $0.lastPathComponent) }
+            sceneFileError = nil
+        } catch { sceneFiles = []; sceneFileError = error.localizedDescription }
     }
 }

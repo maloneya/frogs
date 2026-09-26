@@ -32,7 +32,8 @@ getting them running. [README](README.md) is the human entry point.
    file and harness input; explain weaker safeguards. See [enforcement](docs/invariants.md).
 2. **Keep one definition.** Owners define types, validation and tuning; content,
    UI, reports and harness consume them. Derive facts from authoritative state.
-   The companion carries complete scene drafts; it must not own a second schema.
+   The companion and agents use the same headless authoring API and complete documents;
+   neither owns a second gameplay schema. Every authorable concept must work in both.
 3. **Keep execution deterministic.** Simulation/gameplay use state and ordered
    inputs, never wall clock, unseeded randomness or hash-order iteration.
    Presentation cannot write back. Replay is scoped to one binary on one machine.
@@ -69,12 +70,13 @@ owner before moving it. New gameplay relationships belong in game.
 | core | Shared vocabulary, independent of graphics/gameplay relationships |
 | sim | Physical world, identity, capabilities, validated operations, pass schedule |
 | game | Playable state, mechanic relationships and complete scene lifetime |
-| content | Decode/save definitions supplied by sim/game |
+| content | Decode/save authoring documents; pass game-owned playable data to runtime |
+| authoring | Headless edits, validation, inspection and CLI shared by agents/editor |
 | assets | Validate bounded GLB into CPU assets, independent of gameplay/GPU resources |
 | gfx | Rendering, camera and GPU resources; receives anonymous geometry |
 | app | Devices, presentation, tooling/harness boundary; maps input to world intent |
 | scenario | Headless driving and assertions through the same Game used by app |
-| tools/companion | Native scene drafts, undo, tuning and diagnostics via the app boundary |
+| tools/companion | Native drafts/undo via authoring; play, tuning and diagnostics via app |
 
 Game privately owns World; app/scenario use Game for construction, stepping and
 lifecycle. Engine tests may drive World directly. Crate build scripts enforce

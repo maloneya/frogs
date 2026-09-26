@@ -1,22 +1,29 @@
-//! Scene file decoding shared by the game and the headless gate.
+//! Authoring documents and file I/O shared by authoring, game and headless tests.
 //! Owns file I/O and RON decoding, not a second content schema. Scene and
 //! template definitions stay in sim; gameplay descriptions stay in game.
 //! Assertion scripts stay in the scenario binary. Both the app and runner use
 //! this crate without depending on each other.
 
 use std::path::Path;
+mod document;
+pub use document::{SceneDocument, SceneObjectKind, SceneObjectLabel, SceneObjectRef};
 
-/// Reads complete gameplay scenes using the game-owned schema.
+/// Read the playable scene from an authoring document, discarding its metadata.
 /// Parsing and I/O complete before the caller attempts world mutation.
 pub fn load_scene(path: &Path) -> Result<arpg_game::GameScene, LoadError> {
     let source = std::fs::read_to_string(path).map_err(LoadError::Read)?;
-    parse_scene(&source).map_err(LoadError::Parse)
+    parse_document(&source).map(|document| document.scene).map_err(LoadError::Parse)
 }
 
+#[cfg(test)]
 fn parse_scene(source: &str) -> Result<arpg_game::GameScene, ron::error::SpannedError> {
     ron::Options::default()
         .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
         .from_str(source)
+}
+
+fn parse_document(source: &str) -> Result<SceneDocument, ron::error::SpannedError> {
+    ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME).from_str(source)
 }
 
 /// File errors remain distinguishable from syntax/schema errors.
@@ -206,10 +213,10 @@ mod tuning_tests {
 
 /// Read an authoring document with a revision for detecting external edits.
 /// The revision includes comments and formatting as well as semantic content.
-pub fn read_scene_document(path: &Path) -> Result<(arpg_game::GameScene, String), String> {
+pub fn read_scene_document(path: &Path) -> Result<(SceneDocument, String), String> {
     let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let scene = parse_scene(&text).map_err(|error| error.to_string())?;
-    arpg_game::Game::from_scene(&scene).map_err(|error| error.to_string())?;
+    let scene = parse_document(&text).map_err(|error| error.to_string())?;
+    scene.validate()?;
     Ok((scene, text_revision(&text)))
 }
 
@@ -223,9 +230,9 @@ fn text_revision(text: &str) -> String {
 /// Validate and atomically save a complete scene. A missing revision means a
 /// new file; existing files require the revision obtained when opening them.
 /// Leading line comments survive canonical serialization of the scene data.
-pub fn save_scene_document(path: &Path, scene: &arpg_game::GameScene, revision: Option<&str>) -> Result<String, String> {
+pub fn save_scene_document(path: &Path, scene: &SceneDocument, revision: Option<&str>) -> Result<String, String> {
     use std::io::Write;
-    arpg_game::Game::from_scene(scene).map_err(|error| error.to_string())?;
+    scene.validate()?;
     let previous = match std::fs::read_to_string(path) {
         Ok(text) => {
             if revision != Some(text_revision(&text).as_str()) {
@@ -289,8 +296,8 @@ mod scene_document_tests {
     fn scene_saves_refuse_conflicts_and_invalid_data_without_losing_file_or_header() {
         let path = std::env::temp_dir().join(format!("arpg-scene-save-{}.ron", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let mut scene = arpg_game::GameScene::default();
-        scene.engine.name = "Before".into();
+        let mut scene = SceneDocument::default();
+        scene.scene.engine.name = "Before".into();
         let revision = save_scene_document(&path, &scene, None).unwrap();
         assert!(save_scene_document(&path, &scene, None).is_err());
         let original = std::fs::read_to_string(&path).unwrap();
@@ -298,11 +305,11 @@ mod scene_document_tests {
         assert!(save_scene_document(&path, &scene, Some(&revision)).is_err());
         let (_, revision) = read_scene_document(&path).unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
-        scene.engine.grids.push(arpg_sim::BodyGrid { origin: (0.0, 0.0), columns: 0, rows: 2, spacing: 1.0, what: arpg_sim::Template::BODY });
+        scene.scene.engine.grids.push(arpg_sim::BodyGrid { origin: (0.0, 0.0), columns: 0, rows: 2, spacing: 1.0, what: arpg_sim::Template::BODY });
         assert!(save_scene_document(&path, &scene, Some(&revision)).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
-        scene.engine.grids.clear();
-        scene.engine.name = "After".into();
+        scene.scene.engine.grids.clear();
+        scene.scene.engine.name = "After".into();
         let next = save_scene_document(&path, &scene, Some(&revision)).unwrap();
         assert_ne!(next, revision);
         assert!(std::fs::read_to_string(&path).unwrap().starts_with("// Keep this playtest question.\n"));

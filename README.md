@@ -19,7 +19,8 @@ loaded layout. The game reopens the last played file on the next launch; without
 one it starts empty. See [launch options](docs/companion.md).
 
 The [scene editor guide](docs/scene-editor.md) covers placement, duplication,
-camera-aligned coordinates, lighting, saving, and what still requires RON editing.
+camera-aligned coordinates, lighting, saving and complete encounter authoring.
+Agents use the [same headless API](docs/scene-authoring.md); editing works with the game closed.
 
 ## Controls
 

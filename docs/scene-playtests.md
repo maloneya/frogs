@@ -2,7 +2,8 @@
 
 Use the [scene editor](scene-editor.md) to build playable content. This page owns
 its loading, restart and identity contracts. Both the app and headless scenario
-runner drive `Game`; content decodes the same `GameScene` for either caller.
+runner drive `Game`; content extracts the same `GameScene` from the
+[authoring document](scene-authoring.md#document-and-runtime-boundary) for either caller.
 
 ## Start, restart and startup
 
@@ -62,13 +63,15 @@ attack relationships. The content crate decodes these owning types directly.
 
 ```ron
 (
-    engine: (
-        name: "Small encounter",
-        bodies: [(pos: (0.0, 4.0), what: (seeks: true))],
-        grids: [(origin: (-6.0, 8.0), columns: 8, rows: 4, spacing: 0.7,
-                 what: (seeks: true))],
-        sources: [(pos: (12.0, 0.0), radius: 3.0, every: 60,
-                   when: FewerThan(12), what: (seeks: true))],
+    scene: (
+        engine: (
+            name: "Small encounter",
+            bodies: [(pos: (0.0, 4.0), what: (seeks: true))],
+            grids: [(origin: (-6.0, 8.0), columns: 8, rows: 4, spacing: 0.7,
+                     what: (seeks: true))],
+            sources: [(pos: (12.0, 0.0), radius: 3.0, every: 60,
+                       when: FewerThan(12), what: (seeks: true))],
+        ),
     ),
 )
 ```

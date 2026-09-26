@@ -210,7 +210,10 @@ struct Checks {
         try await sceneDraftsSurviveDisconnectAndUndoAcrossSave()
         try sceneWideEditsPreserveSelection()
         try sceneJSONPreservesExactIntegers()
+        try encounterFormsPreserveCompleteRelationships()
+        try integerInspectorPreservesPrecision()
         sceneCoordinatesRoundTrip()
+        try await liveSceneEditorChecks(Model(path: "/tmp/no-authoring-game-\(UUID().uuidString).sock"))
         await localTransportFailsClearlyWithoutAGame()
         await editAdmissionWaitsForRefreshWithoutQueuingMoreEdits()
         print("Native companion: draft, validation, reconnect and transport checks passed")
@@ -254,14 +257,14 @@ struct Checks {
 
 private func sceneDocument(_ name: String, path: String? = nil, revision: String? = nil, objectCount: Int = 0) throws -> SceneDocument {
     let objects: [[String: Any]] = (0..<objectCount).map { index in
-        ["id": "body:\(index)", "kind": "body", "index": index, "label": "Enemy \(index+1)",
+        ["id": "body:\(index)", "kind": "body", "index": index, "label": "Enemy \(index+1)", "name": "", "role": "Enemy",
          "x": index, "z": 0, "width": 0, "depth": 0, "yaw": 0, "radius": 0.3, "fields": []]
     }
     let data = try JSONSerialization.data(withJSONObject: [
-        "scene": ["engine": ["name": name], "future_relationship": ["body": 3]],
+        "document": ["engine": ["name": name], "future_relationship": ["body": 3]],
         "name": name, "objects": objects, "selected": NSNull(), "path": path as Any? ?? NSNull(),
         "revision": revision as Any? ?? NSNull(), "arena_half": 96, "player_radius": 0.3,
-        "projection": [[0.8,-0.6],[-0.3,-0.4]], "lighting": [], "relationships": 1
+        "projection": [[0.8,-0.6],[-0.3,-0.4]], "lighting": [], "encounters": [], "rewards": []
     ])
     return try JSONDecoder().decode(SceneDocument.self, from: data)
 }
@@ -285,7 +288,8 @@ func sceneWideEditsPreserveSelection() throws {
 @MainActor
 func sceneDraftsSurviveDisconnectAndUndoAcrossSave() async throws {
     let peer = Peer()
-    let model = Model(path: "unused", exchange: { try await peer.exchange($0) })
+    let model = Model(path: "unused", exchange: { try await peer.exchange($0) },
+        author: { _ in AuthoringReply(ok: true, error: nil, editor: try sceneDocument("Offline edit")) })
     await model.send(Request(op: .state))
     let first = try sceneDocument("Original", path: "/scenes/a.ron", revision: "one")
     model.acceptEditor(first, request: EditorRequest(action: "open"))
@@ -295,22 +299,23 @@ func sceneDraftsSurviveDisconnectAndUndoAcrossSave() async throws {
     precondition(model.editorDirty && model.editorPath == "/scenes/a.ron")
     await peer.disconnect()
     await model.send(Request(op: .state))
-    precondition(!model.connected && model.editor?.scene == changed.scene)
+    precondition(!model.connected && model.editor?.document == changed.document)
     let accepted = await model.editScene(.object(["action": .string("rename"), "name": .string("Offline edit")]))
-    precondition(!accepted && model.editor?.scene == changed.scene)
+    precondition(accepted && model.editor?.name == "Offline edit")
+    model.undoScene(); precondition(model.editor?.document == changed.document)
     await peer.restart()
     await model.send(Request(op: .state))
-    precondition(model.connected && model.editor?.scene == changed.scene)
+    precondition(model.connected && model.editor?.document == changed.document)
     model.acceptEditor(try sceneDocument("Changed", path: "/scenes/a.ron", revision: "two"), request: EditorRequest(action: "save"))
     precondition(!model.editorDirty)
     model.undoScene()
-    precondition(model.editor?.scene == first.scene && model.editorDirty)
+    precondition(model.editor?.document == first.document && model.editorDirty)
     precondition(model.editorRevision == "two", "Undo must not revert the disk revision")
     model.redoScene()
-    precondition(model.editor?.scene == changed.scene && !model.editorDirty)
-    let encoded = try JSONEncoder().encode(changed.scene)
+    precondition(model.editor?.document == changed.document && !model.editorDirty)
+    let encoded = try JSONEncoder().encode(changed.document)
     let decoded = try JSONDecoder().decode(JSONValue.self, from: encoded)
-    precondition(decoded == changed.scene)
+    precondition(decoded == changed.document)
 }
 
 func sceneJSONPreservesExactIntegers() throws {
@@ -348,47 +353,105 @@ func sceneCoordinatesRoundTrip() {
 
 @MainActor
 func liveSceneEditorChecks(_ model: Model) async throws {
-    let run = model.state!.scenes.run
-    let created = await model.send(Request(op: .sceneEditor, request: EditorRequest(action: "new")))
+    let run = model.state?.scenes.run
+    let created = await model.sendAuthoring(EditorRequest(action: "new"))
     precondition(created)
     await model.editScene(.object(["action": .string("add"), "kind": .string("source"), "pos": .point(8, 8)]))
-    precondition(!model.failed && model.editor!.objects.count == 1)
+    precondition(!model.editorFailed && model.editor!.objects.count == 1)
     let source = model.editor!.objects[0]
     await model.editScene(.object(["action": .string("duplicate"), "target": source.target, "offset": .point(3, 0)]))
-    precondition(!model.failed && model.editor!.objects.count == 2)
+    precondition(!model.editorFailed && model.editor!.objects.count == 2)
     model.undoScene(); precondition(model.editor!.objects.count == 1)
     model.redoScene(); precondition(model.editor!.objects.count == 2)
     await model.editScene(.object(["action": .string("set"), "target": source.target, "field": .string("radius"), "value": .number(-2)]))
-    precondition(model.failed && model.editor!.objects[0].radius == 2)
-    precondition(model.state!.scenes.run == run)
+    precondition(model.editorFailed && model.editor!.objects[0].radius == 2)
+    precondition(model.state?.scenes.run == run)
     await model.editScene(.object(["action": .string("add"), "kind": .string("tree"), "pos": .point(-8, 8)]))
-    precondition(!model.failed)
+    precondition(!model.editorFailed)
     let tree = model.editor!.objects.first { $0.kind == "tree" }!
     for (field, value) in [("kind", 2.0), ("yaw", 30.0), ("scale", 1.5)] {
         await model.editScene(.object(["action": .string("set"), "target": tree.target, "field": .string(field), "value": .number(value)]))
-        precondition(!model.failed)
+        precondition(!model.editorFailed)
     }
     await model.editScene(.object(["action": .string("duplicate"), "target": tree.target, "offset": .point(3, 0)]))
     await model.editScene(.object(["action": .string("move"), "target": tree.target, "pos": .point(-10, 7)]))
-    precondition(!model.failed && model.editor!.objects.filter { $0.kind == "tree" }.count == 2)
+    precondition(!model.editorFailed && model.editor!.objects.filter { $0.kind == "tree" }.count == 2)
     await model.editScene(.object(["action": .string("add"), "kind": .string("campfire"), "pos": .point(4, 6)]))
-    precondition(!model.failed)
+    precondition(!model.editorFailed)
     let campfire = model.editor!.objects.first { $0.kind == "campfire" }!
     await model.editScene(.object(["action": .string("set"), "target": campfire.target, "field": .string("range"), "value": .number(9)]))
     await model.editScene(.object(["action": .string("colour"), "target": campfire.target, "colour": .array([.number(0.5),.number(0.25),.number(0.125)])]))
-    precondition(!model.failed)
+    precondition(!model.editorFailed)
     await model.editScene(.object(["action": .string("lighting"), "field": .string("ambient_intensity"), "value": .number(0.25)]))
     await model.editScene(.object(["action": .string("lighting_colour"), "field": .string("ambient_colour"), "colour": .array([.number(0.25),.number(0.5),.number(1)])]))
-    precondition(!model.failed)
-    let authored = model.editor!.scene
+    precondition(!model.editorFailed)
+    for (kind, x) in [("switch", -3.0), ("door", 3.0), ("chest", 6.0), ("door", 9.0)] {
+        await model.editScene(.object(["action": .string("place"), "kind": .string(kind), "pos": .point(x, -4)]))
+        precondition(!model.editorFailed)
+    }
+    let trigger = model.editor!.objects.first { $0.role == "Switch" }!
+    await model.editScene(.object(["action": .string("name"), "target": trigger.target, "name": .string("Trial shrine")]))
+    precondition(!model.editorFailed)
+    var form = EncounterForm(document: model.editor!, encounter: nil)
+    form.name = "Editor trial"; form.sources = [0, 1]; form.count = "4"; form.ticks = "1200"
+    let rewards = model.editor!.rewards
+    precondition(rewards.count == 3)
+    form.onStart = [rewards[0].action]; form.onSuccess = [rewards[2].action]; form.onFailure = [rewards[1].action]
+    await model.editScene(form.edit!)
+    precondition(!model.editorFailed && model.editor!.encounters.count == 1)
+    precondition(model.editor!.objects.filter { $0.kind == "source" }.allSatisfy { $0.value("enabled") == 0 })
+    let accepted = model.editor!.document
+    await model.editScene(.object(["action": .string("delete"), "target": trigger.target]))
+    precondition(model.editorFailed && model.editor!.document == accepted)
+    model.undoScene(); precondition(model.editor!.encounters.isEmpty)
+    model.redoScene(); precondition(model.editor!.encounters.count == 1)
+    let authored = model.editor!.document
     let path = FileManager.default.temporaryDirectory.appendingPathComponent("arpg-edited-\(UUID().uuidString).ron").path
     defer { try? FileManager.default.removeItem(atPath: path) }
-    await model.saveScene(path: path, play: true)
-    precondition(!model.failed && !model.editorDirty && model.state!.scenes.run == run + 1)
-    let reopened = await model.send(Request(op: .sceneEditor, request: EditorRequest(action: "open", path: path)))
+    await model.saveScene(path: path, play: model.connected)
+    precondition(!model.editorFailed && !model.editorDirty)
+    if let run { precondition(model.state?.scenes.run == run + 1) }
+    let reopened = await model.sendAuthoring(EditorRequest(action: "open", path: path))
     precondition(reopened)
-    precondition(model.editor!.objects.count == 5 && model.editor!.scene == authored)
+    precondition(model.editor!.objects.count == 9 && model.editor!.document == authored)
     precondition(model.editor!.lighting.first { $0.key == "ambient_intensity" }!.value == 0.25)
     precondition(model.editor!.objects.first { $0.kind == "campfire" }!.radius == 9)
-    print("Native companion: live scene props, lighting, duplicate, undo/redo, refusal, save/play and reopen passed")
+    let agent = Authoring()
+    let agentRead = try await agent.exchange(EditorRequest(action: "open", path: path))
+    precondition(agentRead.ok && agentRead.editor?.document == authored)
+    print("Native companion: shared headless scene props, lighting, named encounter, reward actions, undo/redo, refusal, save/play and reopen passed")
+}
+
+func encounterFormsPreserveCompleteRelationships() throws {
+    let action = JSONValue.object(["unlock_door": .unsigned(1)])
+    let encounter = SceneEncounter(index: 2, name: "Trial", trigger: 3, sources: [2, 0], count: 30,
+        within_ticks: 1800, on_start: [action], on_success: [], on_failure: [action])
+    let rewards = [SceneReward(body: 7, label: "Exit", action: action)]
+    precondition(encounter.objectIDs(rewards: rewards) == ["body:3", "source:2", "source:0", "body:7"])
+    var form = EncounterForm(document: try sceneDocument("Trial"), encounter: encounter)
+    precondition(form.sources == [2, 0] && form.onStart == [action] && form.onFailure == [action])
+    form.count = String(UInt32.max); form.ticks = String(UInt32.max)
+    guard case .object(let command) = form.edit, case .object(let value) = command["value"] else {
+        fatalError("Complete form must generate one transaction")
+    }
+    precondition(command["index"] == .number(2))
+    precondition(value["count"] == .unsigned(UInt64(UInt32.max)) && value["within_ticks"] == .unsigned(UInt64(UInt32.max)))
+    precondition(value["on_start"] == .array([action]) && value["on_failure"] == .array([action]))
+    for invalid in ["0", "-1", "1.5", "4294967296", ""] {
+        form.count = invalid; precondition(form.edit == nil)
+    }
+    form.count = "1"; form.sources = []; precondition(form.edit == nil)
+    form.sources = [0]; form.trigger = nil; precondition(form.edit == nil)
+}
+
+func integerInspectorPreservesPrecision() throws {
+    for n in [UInt64(16_777_217), UInt64(UInt32.max), UInt64.max] {
+        let data = Data("{\"key\":\"threshold\",\"label\":\"Population\",\"unit\":\"enemies\",\"value\":\(n),\"step\":1,\"integer\":true}".utf8)
+        let field = try JSONDecoder().decode(SceneField.self, from: data)
+        precondition(field.integerValue == n)
+        precondition(field.parsed(String(n)) == .unsigned(n))
+        precondition(field.stepped(up: false) == .unsigned(n - 1))
+        precondition(field.stepped(up: true) == (n == UInt64.max ? nil : .unsigned(n + 1)))
+        for invalid in ["-1", "1.5", "18446744073709551616", ""] { precondition(field.parsed(invalid) == nil) }
+    }
 }

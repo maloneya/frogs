@@ -4,6 +4,7 @@ struct SceneCanvas: View {
     let document: SceneDocument
     @Binding var selection: String?
     @Binding var viewport: SceneViewport
+    let encounter: SceneEncounter?
     let tool: String
     let snap: Double
     let editable: Bool
@@ -50,6 +51,7 @@ struct SceneCanvas: View {
                             let (a, b) = point(value.startLocation, geometry.size, snap: snap)
                             edit(.object(["action": .string("draw_wall"), "start": .point(a, b), "end": .point(x, z)]))
                         } else { edit(.object(["action": .string("add"), "kind": .string(tool), "pos": .point(x, z)])) }
+                    case "prop", "switch", "door", "chest": edit(.object(["action": .string("place"), "kind": .string(tool), "pos": .point(x, z)]))
                     case "body", "source", "grid", "tree", "campfire": edit(.object(["action": .string("add"), "kind": .string(tool), "pos": .point(x, z)]))
                     default: break
                     }
@@ -113,13 +115,21 @@ struct SceneCanvas: View {
         context.stroke(rectangle(-arena,-arena,arena,arena), with: .color(.secondary), lineWidth: 2)
         var axes = Path(); axes.move(to: screen(left, 0)); axes.addLine(to: screen(right, 0)); axes.move(to: screen(0, top)); axes.addLine(to: screen(0, bottom))
         context.stroke(axes, with: .color(.secondary.opacity(0.45)), lineWidth: 1)
+        let linked = encounter?.objectIDs(rewards: document.rewards) ?? []
+        if let encounter, let trigger = document.objects.first(where: { $0.id == "body:\(encounter.trigger)" }) {
+            var links = Path()
+            for object in document.objects where linked.contains(object.id) && object.id != trigger.id {
+                links.move(to: screen(trigger.x, trigger.z)); links.addLine(to: screen(object.x, object.z))
+            }
+            context.stroke(links, with: .color(.accentColor.opacity(0.45)), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+        }
         var formationMarkersRemaining = 2000
         for object in document.objects {
             var x = object.x, z = object.z
             if editable, object.id == dragObject?.id, let start = dragStart, let end = dragEnd {
                 (x, z) = moved(object, size: size, translation: CGSize(width: end.x-start.x, height: end.y-start.y))
             }
-            let selected = object.id == selection
+            let selected = object.id == selection || linked.contains(object.id)
             let colour: Color = selected ? .accentColor : object.kind == "tree" ? .green : ["source", "campfire"].contains(object.kind) ? .orange : .primary
             var path = Path()
             switch object.kind {
@@ -149,6 +159,9 @@ struct SceneCanvas: View {
                     context.draw(Text(Image(systemName: "flame.fill")).font(.caption).foregroundStyle(colour), at: screen(x,z))
                 } else if object.kind == "source" {
                     context.fill(marker(x,z), with: .color(colour))
+                } else if ["Switch", "Door", "Chest", "Prop"].contains(object.role) {
+                    let symbol = object.role == "Switch" ? "hand.tap.fill" : object.role == "Door" ? "door.left.hand.closed" : object.role == "Chest" ? "shippingbox.fill" : "cube.fill"
+                    context.draw(Text(Image(systemName: symbol)).font(.caption).foregroundStyle(colour), at: screen(x,z))
                 } else {
                     context.fill(path, with: .color(colour.opacity(0.35)))
                     context.fill(marker(x,z), with: .color(colour.opacity(0.5)))

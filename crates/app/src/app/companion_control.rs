@@ -1,5 +1,5 @@
 //! Native tooling commands and compact observations at the between-tick boundary.
-use super::{App, Scene, scene_catalog};
+use super::{App, scene_catalog};
 use crate::companion::{Command, Control, ZoomDirection};
 use arpg_sim::TuningField;
 use serde_json::json;
@@ -10,10 +10,9 @@ impl App {
         self.companion_message = match result { Ok(message) | Err(message) => message.clone() };
     }
 
-    fn apply_control(&mut self, control: Control) -> Result<(String, Option<serde_json::Value>), String> {
+    fn apply_control(&mut self, control: Control) -> Result<String, String> {
         if self.trial.is_some() { return Err("Companion controls are unavailable during a performance trial.".into()); }
         let message = match control {
-            Control::SceneEditor(request) => return self.scene_editor_request(*request),
             Control::Tuning(edit) => self.edit_tuning(edit),
             Control::RefreshScenes => {
                 self.scene_catalog = Some(scene_catalog(std::path::Path::new("scenes")));
@@ -42,7 +41,7 @@ impl App {
                 Ok("Screenshot requested. See Debug for the write result.".into())
             }
         }?;
-        Ok((message, None))
+        Ok(message)
     }
 
     pub(super) fn set_vsync(&mut self, enabled: bool) -> Result<String, String> {
@@ -60,14 +59,11 @@ impl App {
         }
         let result = command.control().and_then(|control| control.map(|control| self.apply_control(control)).transpose());
         match &result {
-            Ok(Some((message, _))) => self.companion_result(&Ok(message.clone())),
+            Ok(Some(message)) => self.companion_result(&Ok(message.clone())),
             Err(error) => self.companion_result(&Err(error.clone())),
             Ok(None) => {}
         }
-        let (editor, error) = match result {
-            Ok(control) => (control.and_then(|(_, editor)| editor), None),
-            Err(error) => (None, Some(error)),
-        };
+        let error = result.err();
         let catalog = self.scene_catalog.as_ref().expect("initialized catalog");
         let files: Vec<_> = catalog.as_ref().map(|paths| paths.iter().map(|path| {
             json!({"path":path, "label":path.file_name().unwrap_or_default().to_string_lossy()})
@@ -82,7 +78,7 @@ impl App {
                     "Motor speed ceiling: {:.2} m/s. Increase acceleration to reach higher target speeds.",
                     tuning.monster_speed_limit()))})
         }).collect();
-        json!({"ok":error.is_none(), "error":error, "editor":editor, "state":{
+        json!({"ok":error.is_none(), "error":error, "state":{
             "session":std::process::id(), "fields":fields, "unsaved":tuning != self.tuning_saved,
             "path":self.tuning_path, "message":self.companion_message, "error":self.companion_error,
             "busy":self.trial.is_some(),
@@ -106,47 +102,5 @@ impl App {
             } else { self.companion_reply(request.command) };
             let _ = request.reply.send(response);
         }
-    }
-}
-
-impl App {
-    fn scene_editor_request(&mut self, request: crate::scene_editor::Request) -> Result<(String, Option<serde_json::Value>), String> {
-        use crate::scene_editor::{Request, document};
-        let (message, draft) = match request {
-            Request::New => {
-                let scene = Scene { engine: arpg_sim::Scene { name: "Untitled scene".into(), ..Default::default() }, ..Default::default() };
-                ("New scene draft. The current game is unchanged.".into(), document(&scene, None, None, None)?)
-            }
-            Request::Open { path } => {
-                let path = std::path::absolute(path).map_err(|e| e.to_string())?;
-                let (scene, revision) = arpg_content::read_scene_document(&path)?;
-                ("Scene opened for editing.".into(), document(&scene, None, Some(path), Some(revision))?)
-            }
-            Request::Edit { scene, edit } => {
-                let (scene, selected) = crate::scene_editor::edit(scene, edit)?;
-                ("Draft updated. Save & play to try it.".into(), document(&scene, selected, None, None)?)
-            }
-            Request::Save { scene, path, revision, play } => {
-                let path = std::path::absolute(path).map_err(|e| e.to_string())?;
-                let mut draft = document(&scene, None, Some(path.clone()), None)?;
-                // Prepare the exact playable replacement before touching the file.
-                // Commit and adapter cleanup after persistence are infallible.
-                let prepared = if play {
-                    let run = self.run_id.checked_add(1).ok_or("playtest identities exhausted")?;
-                    let game = self.game.prepare_scene(&scene).map_err(|e| e.to_string())?;
-                    Some((run, game))
-                } else { None };
-                let revision = arpg_content::save_scene_document(&path, &scene, revision.as_deref())?;
-                if let Some((run, game)) = prepared {
-                    self.game = game;
-                    self.finish_playtest_start(run);
-                    self.remember_scene_file(&path);
-                }
-                self.scene_catalog = Some(scene_catalog(std::path::Path::new("scenes")));
-                draft["revision"] = json!(revision);
-                (if play { "Scene saved and started." } else { "Scene saved." }.into(), draft)
-            }
-        };
-        Ok((message, Some(draft)))
     }
 }

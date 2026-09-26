@@ -2,17 +2,19 @@
 // Walk toward the long wall, try left click/right click/Space, then walk around its right end.
 // The nearest enemy is shielded; the enemy beside the opening can be attacked.
 (
-    engine: (
-        name: "Walls — movement and attack cover",
-        walls: [
-            (centre: (0.0, 2.0), size: (6.0, 0.4)),
-            (centre: (-3.0, 5.0), size: (0.4, 6.0)),
-            (centre: (5.5, 5.0), size: (4.0, 0.3), yaw: 0.7853982),
-        ],
-        bodies: [
-            (pos: (0.0, 2.6)),
-            (pos: (4.0, 2.6)),
-            (pos: (-1.5, 4.0), what: (seeks: true)),
-        ],
+    scene: (
+        engine: (
+            name: "Walls — movement and attack cover",
+            walls: [
+                (centre: (0.0, 2.0), size: (6.0, 0.4)),
+                (centre: (-3.0, 5.0), size: (0.4, 6.0)),
+                (centre: (5.5, 5.0), size: (4.0, 0.3), yaw: 0.7853982),
+            ],
+            bodies: [
+                (pos: (0.0, 2.6)),
+                (pos: (4.0, 2.6)),
+                (pos: (-1.5, 4.0), what: (seeks: true)),
+            ],
+        ),
     ),
 )

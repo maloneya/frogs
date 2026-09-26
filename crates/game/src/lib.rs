@@ -6,6 +6,7 @@
 //! mechanisms and resources remain in sim; file decoding remains in content.
 //! No ordinary gameplay pass receives mutable access to Game or World.
 
+mod scene_edit;
 mod environment;
 pub use environment::EnvironmentSpec;
 mod game;

@@ -4,30 +4,32 @@
 // Watch for: whether one direction dominates and whether one new enemy per
 // spawner per second makes the escalation readable.
 (
-    engine: (
-        name: "Three enemy spawners",
-        sources: [
-            (
-                pos: (0.0, 24.0),
-                radius: 3.0,
-                every: 60,
-                when: FewerThan(12),
-                what: (seeks: true),
-            ),
-            (
-                pos: (-21.0, -12.0),
-                radius: 3.0,
-                every: 60,
-                when: FewerThan(12),
-                what: (seeks: true),
-            ),
-            (
-                pos: (21.0, -12.0),
-                radius: 3.0,
-                every: 60,
-                when: FewerThan(12),
-                what: (seeks: true),
-            ),
-        ],
+    scene: (
+        engine: (
+            name: "Three enemy spawners",
+            sources: [
+                (
+                    pos: (0.0, 24.0),
+                    radius: 3.0,
+                    every: 60,
+                    when: FewerThan(12),
+                    what: (seeks: true),
+                ),
+                (
+                    pos: (-21.0, -12.0),
+                    radius: 3.0,
+                    every: 60,
+                    when: FewerThan(12),
+                    what: (seeks: true),
+                ),
+                (
+                    pos: (21.0, -12.0),
+                    radius: 3.0,
+                    every: 60,
+                    when: FewerThan(12),
+                    what: (seeks: true),
+                ),
+            ],
+        ),
     ),
 )

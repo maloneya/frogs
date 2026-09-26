@@ -1,0 +1,24 @@
+[package]
+name = "arpg-authoring"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "arpg-author"
+path = "src/main.rs"
+
+[dependencies]
+arpg-core.workspace = true
+arpg-sim.workspace = true
+arpg-game.workspace = true
+arpg-content.workspace = true
+glam.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+toml_edit.workspace = true
+
+[lints]
+workspace = true

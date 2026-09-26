@@ -3,6 +3,8 @@
 The native macOS app hosts [scene authoring](scene-editor.md),
 [runtime tuning](tuning.md) and diagnostics. The game owns simulation and exposes
 a tooling socket; it never launches the companion or knows its bundle path.
+Scene authoring uses the bundled [headless backend](scene-authoring.md) and works
+without the game. Only playing scenes, tuning and diagnostics use its socket.
 
 ## Launch
 
@@ -58,8 +60,8 @@ Each connection carries one newline-terminated JSON request/reply. Start with
 {"op":"capture","session":12345,"path":"/tmp/arpg.png"}
 ```
 
-The complete vocabulary is [Control](../crates/app/src/companion.rs);
-[editor requests](scene-editor.md#protocol) carry whole drafts. Replies contain
+The game vocabulary is [Control](../crates/app/src/companion.rs). Authoring
+documents never travel through this socket. Replies contain
 `ok`, `error` and a small `state` snapshot with accepted/saved tuning, catalog,
 status and presentation readouts. They never serialize runtime bodies. Messages
 are bounded to 8 MiB; stale sessions and malformed input are refused.
@@ -72,7 +74,8 @@ refresh state, never automatically resend an edit.
 The companion polls every half second. Edits reserve controls before waiting
 for an outstanding poll, preventing reordered clicks. Disconnect/process changes
 clear unsubmitted tuning text; accepted scene drafts and undo history survive.
-Reconnect before submitting edits. Neither polling nor UI drawing steps Game.
+Reconnect before submitting runtime controls. Authoring continues offline.
+Neither polling nor UI drawing steps Game.
 Performance trials permit only state queries; close the companion for measurements
 to avoid its polling/rendering overhead.
 

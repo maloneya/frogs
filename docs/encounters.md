@@ -7,10 +7,10 @@ trial uses eight sources around a central light and rewards a chest opening. Mul
 entries run independently in the same scene, and loading the scene twice makes
 independent copies of every relationship.
 
-Build the layout in the [scene editor](scene-editor.md), then author relationship
-bindings in RON; the UI preserves them but cannot create them yet. Reopen after
-external edits before saving from the companion. Ordinary encounters compose
-existing rules without runtime changes. [EncounterSpec](../crates/game/src/encounter.rs),
+Build the layout and complete relationships in the
+[scene editor's encounter form](scene-editor.md#compose-an-encounter), or author
+the same RON directly. Ordinary encounters compose existing rules without runtime
+changes. [EncounterSpec](../crates/game/src/encounter.rs),
 [DoorSpec](../crates/game/src/door.rs) and [ChestSpec](../crates/game/src/chest.rs)
 own the schema; unknown fields are rejected. Preserve intended outcomes with
 a scenario loading that file.
@@ -31,7 +31,8 @@ References are resolved once to generational body IDs and monotonic source IDs.
 Manual reordering can change valid bindings; review every referenced index.
 Keep binding explanations in leading comments, since editor saves drop inline
 comments. Editor deletion remaps surviving links or refuses required endpoints;
-duplication does not copy relationships. Encounter names are unique display labels.
+duplication copies door/chest components but leaves encounter links on the original.
+Object names label editor choices; encounter names are unique display labels.
 
 ## What composes
 

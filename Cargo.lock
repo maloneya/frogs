@@ -191,12 +191,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "arpg-authoring"
+version = "0.2.0"
+dependencies = [
+ "arpg-content",
+ "arpg-core",
+ "arpg-game",
+ "arpg-sim",
+ "glam",
+ "serde",
+ "serde_json",
+ "toml_edit",
+]
+
+[[package]]
 name = "arpg-content"
 version = "0.2.0"
 dependencies = [
  "arpg-game",
  "arpg-sim",
  "ron",
+ "serde",
  "toml_edit",
 ]
 

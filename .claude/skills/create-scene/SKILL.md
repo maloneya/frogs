@@ -22,11 +22,13 @@ missing authoring controls separately from genuinely missing gameplay rules.
 
 ## Author with one vocabulary
 
-People can place enemies, formations, sources, walls, trees and campfires and
-edit lighting in the companion. Agents may author the same RON directly or use
-the [editor protocol](../../../docs/scene-editor.md#protocol); no UI automation or
+The companion authors all current scene concepts: placements, body templates,
+lighting, named objects, the single attacker, doors/chests and complete encounters.
+Agents may author the same RON directly or use
+the [headless authoring API](../../../docs/scene-authoring.md); no UI automation or
 parallel scene schema is required. Both routes validate through Game.
 
+Files wrap playable data under `scene` with optional authoring `labels`.
 Read [GameScene](../../../crates/game/src/scene.rs) and the relevant owners:
 [physical Scene/BodyGrid](../../../crates/sim/src/scene.rs),
 [Template](../../../crates/sim/src/pass/spawn.rs),
@@ -36,10 +38,10 @@ owner when predicting an outcome. Existing files are examples, not a schema auth
 
 Use `grids` for regular crowds, individual `bodies` for deliberate placements.
 Name the scene and save a `.ron` regular file directly inside `scenes/` for catalog
-discovery. Doors, chests and encounter bindings still need RON authoring; the
-editor preserves them. Inline comments are lost on editor save, so do not rely
-on them as the only explanation of index bindings. Runtime tuning is saved
-separately from the scene.
+discovery. Name important objects; the encounter form binds triggers, sources and
+unlock actions by those labels, with complete validation before accepting an edit.
+Inline comments are lost on editor save, so do not rely on them to explain manual
+index bindings. Runtime tuning is saved separately from the scene.
 
 ## Verify and hand off
 

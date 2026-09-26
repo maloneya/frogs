@@ -24,8 +24,7 @@ struct CompanionApp: App {
                 .task {
                     let args = CommandLine.arguments
                     if let flag = args.firstIndex(of: "--scene"), args.indices.contains(flag + 1) {
-                        await model.send(Request(op: .state))
-                        await model.send(Request(op: .sceneEditor, request: EditorRequest(action: "open", path: args[flag + 1])))
+                        await model.sendAuthoring(EditorRequest(action: "open", path: args[flag + 1]))
                     }
                     await model.poll()
                 }
@@ -100,15 +99,15 @@ struct CompanionView: View {
             HStack(alignment: .top, spacing: 12) {
                 Label(model.connected ? "Connected" : "Disconnected", systemImage: model.connected ? "circle.fill" : "circle")
                     .foregroundStyle(model.connected ? Color.green : Color.secondary)
-                Text(model.notice).foregroundStyle(model.failed ? Color.red : Color.secondary)
+                Text(page == .scenes && !model.connected ? "Game offline · scene editing is available" : model.notice)
+                    .foregroundStyle(page != .scenes && model.failed ? Color.red : Color.secondary)
                     .lineLimit(3).textSelection(.enabled)
                 Spacer(minLength: 0)
                 if model.state?.busy == true { Text("Performance trial").foregroundStyle(.secondary) }
             }.font(.caption).padding(16)
         }.frame(minWidth: 960, minHeight: 640)
-        .onChange(of: model.state?.session) { _, _ in sceneSelection = nil }
-        .onChange(of: model.state?.scenes.files.map(\.path)) { _, paths in
-            if !(paths?.contains { $0 == sceneSelection } ?? false) { sceneSelection = nil }
+        .onChange(of: model.sceneFiles.map(\.path)) { _, paths in
+            if !(paths.contains { $0 == sceneSelection }) { sceneSelection = nil }
         }
         .onChange(of: model.state?.groups, initial: true) { _, groups in
             if !(groups?.contains { $0 == tuningGroup } ?? false) { tuningGroup = groups?.first }

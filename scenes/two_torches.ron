@@ -1,10 +1,12 @@
 (
-    engine: (
-        name: "Three stationary enemies",
-        bodies: [
-            (pos: (-7.0, 0.0)),
-            (pos: (0.0, -3.0)),
-            (pos: (7.0, 0.0)),
-        ],
+    scene: (
+        engine: (
+            name: "Three stationary enemies",
+            bodies: [
+                (pos: (-7.0, 0.0)),
+                (pos: (0.0, -3.0)),
+                (pos: (7.0, 0.0)),
+            ],
+        ),
     ),
 )

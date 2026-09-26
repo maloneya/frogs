@@ -91,7 +91,7 @@ mod tests {
         assert_eq!(app.game.enemy_count(), 0);
         assert_eq!(app.game.selected_scene_name(), None);
         assert!(!session.exists());
-        std::fs::write(&scene, r#"(engine: (name: "chosen", bodies: [(pos: (4.0, 0.0))]))"#).unwrap();
+        std::fs::write(&scene, r#"(scene: (engine: (name: "chosen", bodies: [(pos: (4.0, 0.0))])))"#).unwrap();
         app.start_scene_file(&scene).unwrap();
         let saved = std::fs::read(&session).unwrap();
         assert_eq!(serde_json::from_slice::<PathBuf>(&saved).unwrap(), scene);

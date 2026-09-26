@@ -11,7 +11,7 @@ const REASON: &str = "content decodes game- and sim-owned definitions for both a
                       it must not depend on the renderer, window system, or test runner.";
 
 /// Game and sim supply definitions and validation; RON supplies file-format plumbing.
-const ALLOWED: &[&str] = &["arpg-sim", "arpg-game", "ron"];
+const ALLOWED: &[&str] = &["arpg-sim", "arpg-game", "ron", "serde"];
 
 #[path = "../../build_support/dependencies.rs"]
 mod dependencies;

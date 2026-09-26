@@ -67,12 +67,10 @@ struct Reply: Decodable, Sendable {
     let ok: Bool
     let error: String?
     let state: Snapshot?
-    let editor: SceneDocument?
 }
 
 enum Operation: String, Encodable, Sendable {
     case state, set, save, revert, defaults, restart, collision, vsync, zoom, capture
-    case sceneEditor = "scene_editor"
     case refreshScenes = "refresh_scenes"
     case startScene = "start_scene"
 }
@@ -87,7 +85,6 @@ struct Request: Encodable, Sendable {
     var path: String? = nil
     var enabled: Bool? = nil
     var direction: ZoomDirection? = nil
-    var request: EditorRequest? = nil
 }
 
 struct ConnectionError: LocalizedError {
