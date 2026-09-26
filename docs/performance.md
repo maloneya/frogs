@@ -99,6 +99,11 @@ explicitly once the workload is ready.
 
 ## Repeatable benchmark suite
 
+Ordinary verification runs due headless benchmarks and reports outstanding live
+coverage. Reserve an uninterrupted foreground session before explicitly requesting
+live measurement through `python3 scripts/verify.py --only performance-live` (which
+also records the verification checkpoint), or the direct runner below.
+
 Run the maintained runner with Python 3. Live mode builds the current checkout in
 release, launches its own app and private harness, keeps the display awake, requests window
 focus, and cleans up only its own processes. It refuses to measure while another

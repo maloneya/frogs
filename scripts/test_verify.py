@@ -265,6 +265,77 @@ class Workspace(unittest.TestCase):
             self.assertEqual(verify.main(["full", "--performance"]), 0)
             self.assertEqual([call.args[0] for call in run.call_args_list], list(verify.CHECKS))
 
+    def test_automatic_runs_never_launch_live_and_keep_due_evidence_omitted(self):
+        def fake(name, *args, **kwargs):
+            return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
+                    "evidence": [{"path": "test.log"}]}
+        selections = {
+            "quick": ["clippy", "tests", "scenarios-fast"],
+            "correctness": list(verify.CORRECTNESS),
+            "full": list(verify.CORRECTNESS) + ["performance-headless"],
+        }
+        checkpoint = {"revision": "test", "commits_since_pass": {}, "due": list(verify.PERFORMANCE)}
+        with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
+             patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run:
+            for scope, expected in selections.items():
+                # Repetition and --fresh must not turn outstanding live work into permission.
+                for flags in ([], [], ["--fresh"]):
+                    with self.subTest(scope=scope, flags=flags), contextlib.redirect_stdout(io.StringIO()) as output:
+                        before = set((self.root / "target/verify").glob("run-*/verification.json"))
+                        run.reset_mock()
+                        self.assertEqual(verify.main([scope] + flags), 0)
+                        self.assertEqual([call.args[0] for call in run.call_args_list], expected)
+                        after = set((self.root / "target/verify").glob("run-*/verification.json"))
+                        result = json.loads((after - before).pop().read_text())
+                        self.assertEqual(result["status"], "partial_pass")
+                        self.assertFalse(result["complete"])
+                        self.assertEqual(result["required"], list(verify.CHECKS))
+                        self.assertIn("performance-live", result["omitted"])
+                        self.assertEqual(result["performance_checkpoint"], checkpoint)
+                        self.assertIn("Live performance due; not launched", output.getvalue())
+                        self.assertIn("--only performance-live", output.getvalue())
+
+    def test_live_only_due_is_reported_without_automatic_checks(self):
+        checkpoint = {"revision": "test", "commits_since_pass": {}, "due": ["performance-live"]}
+        def fake(name, *args, **kwargs):
+            return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
+                    "evidence": [{"path": "test.log"}]}
+        with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
+             patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(verify.main(["full"]), 0)
+        self.assertEqual([call.args[0] for call in run.call_args_list], list(verify.CORRECTNESS))
+        result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
+        self.assertEqual(result["omitted"], ["performance-live"])
+        self.assertEqual(result["status"], "partial_pass")
+
+    def test_explicit_live_requests_run_even_when_not_due_and_retry_failures(self):
+        checkpoint = {"revision": "test", "commits_since_pass": {}, "due": []}
+        def fake(name, *args, **kwargs):
+            return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
+                    "evidence": [{"path": "test.log"}]}
+        with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
+             patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
+             contextlib.redirect_stdout(io.StringIO()):
+            for flags, expected in [
+                (["--live"], list(verify.CORRECTNESS) + ["performance-live"]),
+                (["--performance"], list(verify.CHECKS)),
+                (["--only", "performance-live"], ["performance-live"]),
+            ]:
+                with self.subTest(flags=flags):
+                    run.reset_mock()
+                    self.assertEqual(verify.main(flags), 0)
+                    self.assertEqual([call.args[0] for call in run.call_args_list], expected)
+                    for call in run.call_args_list:
+                        if call.args[0] in verify.PERFORMANCE:
+                            self.assertTrue(call.kwargs["retry"])
+
     def test_checkpoint_counts_relevant_commits_and_rejects_damaged_evidence(self):
         base = self.root / "target/verify"
         run = base / "run-checkpoint"

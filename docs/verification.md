@@ -7,7 +7,8 @@ python3 scripts/verify.py full
 ```
 
 It runs Clippy, workspace tests (including GPU tests), private Rustdoc, native
-companion tests/build, and every scenario with replay. Headless/live release
+companion tests/build, every scenario with replay, and due headless benchmarks.
+It never launches a live benchmark without an explicit flag. Headless/live release
 benchmarks are independently due every **10 relevant commits**, or immediately
 when checkpoint evidence is unavailable. Relevant paths and check commands are
 owned by [verify.py](../scripts/verify.py); Markdown is excluded from benchmark
@@ -21,14 +22,22 @@ source stayed unchanged. Headless evidence cannot certify rendering performance.
 |---|---|
 | `quick` | Partial: Clippy, workspace tests, fast scenarios |
 | `correctness` | All correctness; reports due benchmarks as omitted |
-| `full` | All correctness and due benchmarks |
-| `full --performance` | Also force both benchmark modes |
-| `full --live` | Also force live benchmarks |
+| `full` | All correctness and due headless benchmarks; reports due live coverage as omitted |
+| `full --performance` | Also force both benchmark modes; requires a foreground session |
+| `full --live` | Also force live benchmarks; requires a foreground session |
 | `--only <check>` | Explicitly partial selection |
 
 Run focused checks while editing, then `full` for completion. Hooks use this
 same runner; their presence does not prove execution. GPU tests require a real
 adapter; scenarios need no GPU/window. Rustdoc is separate from Clippy/tests.
+
+Live measurements are a deliberate foreground session: close other game instances,
+keep the benchmark window visible and leave input alone. When ready, run
+`python3 scripts/verify.py --only performance-live`, or include it with `full --live`.
+Until then, due live coverage remains in `required`/`omitted`, with no checkpoint
+advance. Otherwise successful automatic runs exit 0 as `partial_pass`; hooks do
+not repeatedly seize the desktop. Rendering/frame-pacing performance claims still
+require live evidence, even if cadence has not made it due.
 
 Results live in `target/verify/run-*/verification.json`. Read `coverage`,
 `omitted`, `complete` and source identity. Exit 0 means requested checks passed,

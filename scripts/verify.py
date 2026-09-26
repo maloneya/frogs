@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """One verification entry point with immutable evidence and exact-input check reuse.
 
-Quick is explicitly partial. Full includes all correctness checks and performance
-when the ten-commit checkpoint is due; --performance forces both benchmark modes. Only successful
+Quick is explicitly partial. Full includes all correctness checks and due headless
+benchmarks. Live benchmarks require --live, --performance or --only performance-live;
+due live coverage stays uncertified until explicitly measured. Only successful
 correctness checks are cached. Performance samples are always freshly measured,
 with baseline reuse owned by perf.py. No source edits or commands are inferred.
 """
@@ -246,8 +247,8 @@ def performance_checkpoint(root, base):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scope", choices=("quick", "correctness", "full"), nargs="?", default="full")
-    parser.add_argument("--performance", action="store_true", help="run both benchmark modes now")
-    parser.add_argument("--live", action="store_true", help="run live benchmarks now")
+    parser.add_argument("--performance", action="store_true", help="run both benchmark modes now; needs an uninterrupted foreground session")
+    parser.add_argument("--live", action="store_true", help="run live benchmarks now; needs an uninterrupted foreground session")
     parser.add_argument("--only", choices=CHECKS, help="one explicitly partial check (for hooks)")
     parser.add_argument("--fresh", action="store_true", help="do not reuse correctness results")
     args = parser.parse_args(argv)
@@ -271,9 +272,15 @@ def main(argv=None):
         selected = [args.only] if args.only else list(required if args.scope == "full" else
                                                       CORRECTNESS if args.scope == "correctness" else
                                                       ("clippy", "tests", "scenarios-fast"))
+        # Cadence requires evidence; it never authorizes taking over the desktop.
+        if not args.only and "performance-live" not in requested:
+            selected = [name for name in selected if name != "performance-live"]
         for name in requested:
             if name not in selected:
                 selected.append(name)
+        if "performance-live" in required and "performance-live" not in selected:
+            print("Live performance due; not launched. Reserve an uninterrupted foreground session, "
+                  "then run: python3 scripts/verify.py --only performance-live", flush=True)
         for name in selected:
             print("Checking " + name + "…", flush=True)
             row = run_check(name, commands(name, artifact), source, machine, artifact, base / "cache", args.fresh,
