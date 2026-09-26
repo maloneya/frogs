@@ -136,9 +136,12 @@ registered as baseline candidates. Local storage is excluded by Git ignore rules
 and does not invalidate a verification run.
 
 Without `--baseline`, the runner searches both stores and selects the nearest ancestor with compatible
-machine/compiler/build, workload files and policy. Raw artifacts are hash checked
-and revalidated; manifests cannot override their contents. Corrupt evidence fails
-closed. To seed a baseline for future changes, measure a clean committed checkout, then
+machine/compiler/build, workload files and policy **before building or measuring**.
+It filters manifests by evidence schema, mode, source eligibility and workload
+before reading raw artifacts. Eligible artifacts are hash checked and revalidated;
+manifests cannot override their contents. Corrupt eligible evidence fails closed
+during this preflight. Unrelated evidence cannot break another benchmark mode.
+To seed a baseline for future changes, measure a clean committed checkout, then
 archive and commit that evidence in a follow-up commit. A pre-commit measurement
 remains dirty evidence even after its source is committed.
 
@@ -148,8 +151,22 @@ does not prove its edits are ancestors. Missing compatible evidence is recorded 
 `relative_status: missing`; an absolute pass alone proves no relative improvement.
 Explicit incompatible comparison remains inconclusive while preserving absolute
 budget results. An occupied result/log path or invalid explicit baseline is refused
-before expensive work. Archived results preserve the original verdict and raw
+before expensive work. A run also refuses known explicit mode, conditions or workload
+mismatches during preflight; actual presentation settings and gameplay outcomes
+are checked after collection. Failures during assessment or archiving preserve
+collected trials and any completed absolute assessment at the requested output,
+with an infrastructure failure and an inconclusive overall verdict. Saved raw
+trials can be compared again without measuring again.
+Archived results preserve the original verdict and raw
 observations; publication does not certify that a measurement passed.
+
+Evidence schema 2 requires living/corpse population telemetry. Schema 1 artifacts
+are retired, with no migration or invented measurements. The old repository
+artifacts were removed; Git retains their history. Automatic discovery records
+unsupported or unversioned manifests in `baseline_exclusions` and does not open
+their artifacts. Explicit use of an old result is rejected. New archives stamp
+the schema in both manifest and result; validation contract changes must update
+this version. Retirement leaves relative evidence missing, never a relative pass.
 
 [The suite](../benchmarks/suite.json) owns workload selection, warm-up/sample ticks,
 three repetitions, absolute budgets and comparison tolerances. It covers sparse

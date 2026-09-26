@@ -39,7 +39,7 @@ def fixture():
                        "schedule_version": 1, "invalid": "", "initial_enemies": 100,
                        "start_enemies": 100, "population_sum": 6000},
              "final_hash": "0123456789abcdef", "finite": True, "perf": observation}
-    return {"schema_version": 1, "errors": [],
+    return {"schema_version": perf.SCHEMA, "errors": [],
             "source": {"revision": "a" * 40, "digest": "b" * 64, "dirty": False},
             "binary_sha256": "c" * 64, "workload_digest": "d" * 64,
             "conditions": {"machine": "test", "cpu": "test", "memory_bytes": "1024", "os": "test",
@@ -172,6 +172,81 @@ class EvidenceTests(unittest.TestCase):
                     self.assertEqual(perf.main(), 2)
                 live.assert_not_called()
                 self.assertEqual(log.read_text(), "preserve this log")
+
+    def test_retired_and_unrelated_evidence_is_filtered_before_reading_raw(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            current = fixture()
+            manifest = {key: current[key] for key in
+                        ("schema_version", "source", "conditions", "suite", "workload_digest")}
+            manifest.update(artifact="missing.json.gz", sha256="a" * 64)
+            retired = {**manifest, "schema_version": 1}
+            perf.save(store / "retired.json", retired)
+            unversioned = {k: v for k, v in retired.items() if k != "schema_version"}
+            perf.save(store / "unversioned.json", unversioned)
+            for key, value in (("build", "cargo build --release -p scenario --bin perf-headless"),
+                               ("cpu", "different machine")):
+                unrelated = copy.deepcopy(manifest)
+                unrelated["conditions"][key] = value
+                perf.save(store / (key + ".json"), unrelated)
+            exclusions = []
+            self.assertEqual(perf.discover(current, store, exclusions), (None, None))
+            self.assertEqual(len(exclusions), 2)
+
+    def test_bad_eligible_baseline_aborts_before_build_or_trials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            current = fixture()
+            current["source"]["revision"] = perf.command(["git", "rev-parse", "HEAD"])
+            baseline = directory / "baseline.json"
+            perf.save(baseline, current)
+            store = directory / "store"
+            artifact = perf.archive(baseline, store)
+            artifact.write_bytes(b"corrupt archive")
+            output = directory / "result.json"
+            with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]), \
+                 patch.object(perf, "prepare", side_effect=lambda args, result: result.update(copy.deepcopy(current))), \
+                 patch.object(perf, "EVIDENCE", store), patch.object(perf, "LOCAL_EVIDENCE", directory / "empty"), \
+                 patch.object(perf, "run") as measure, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(perf.main(), 2)
+            measure.assert_not_called()
+            saved = perf.load(output)
+            self.assertEqual(saved["failure"]["kind"], "infrastructure")
+            self.assertEqual(saved["failure"]["stage"], "baseline_preflight")
+
+    def test_late_failures_keep_raw_trials_and_absolute_assessment(self):
+        for stage in ("assessment", "archive"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "result.json"
+                current = fixture()
+                original_assess = perf.assess
+                calls = []
+                def assess(result, baseline=None):
+                    if stage == "assessment" and not calls:
+                        calls.append("failed")
+                        raise ValueError("comparison infrastructure failed")
+                    return original_assess(result, baseline)
+                def prepare(args, result):
+                    result.update(copy.deepcopy(current))
+                    result["workloads"] = {}
+                def measure(args, result):
+                    result["workloads"] = copy.deepcopy(current["workloads"])
+                with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]), \
+                     patch.object(perf, "prepare", side_effect=prepare), \
+                     patch.object(perf, "discover", return_value=(None, None)), \
+                     patch.object(perf, "run", side_effect=measure), \
+                     patch.object(perf, "assess", side_effect=assess), \
+                     patch.object(perf, "archive_result", side_effect=OSError("store unavailable")), \
+                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(perf.main(), 2)
+                saved = perf.load(output)
+                self.assertEqual(saved["workloads"], current["workloads"])
+                self.assertEqual(saved["assessment"]["absolute_status"], "pass")
+                self.assertEqual(saved["assessment"]["status"], "inconclusive")
+                self.assertEqual(saved["failure"]["stage"], stage)
+                # The saved raw samples can still be compared without measuring again.
+                self.assertEqual(original_assess(saved, current)["status"], "pass")
 
     def test_repeated_and_baseline_population_and_hash_must_match(self):
         result = fixture()
@@ -376,7 +451,8 @@ class EvidenceTests(unittest.TestCase):
             source["source"]["revision"] = perf.command(["git", "rev-parse", "HEAD"])
             with patch.object(perf, "EVIDENCE", directory / "published"), \
                  patch.object(perf, "LOCAL_EVIDENCE", directory / "local"), \
-                 patch.object(perf, "run", side_effect=lambda args: copy.deepcopy(source)), \
+                 patch.object(perf, "prepare", side_effect=lambda args, result: result.update(copy.deepcopy(source))), \
+                 patch.object(perf, "run"), \
                  contextlib.redirect_stdout(io.StringIO()):
                 outputs = []
                 for index in range(2):

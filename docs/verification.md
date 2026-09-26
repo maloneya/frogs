@@ -14,7 +14,8 @@ its eventual commit still counts toward the next checkpoint.
 
 Headless and live modes have independent counters. Missing, damaged or unavailable
 checkpoint evidence makes that mode due immediately. Failed or inconclusive runs
-do not advance the checkpoint. Checkpoints are local evidence under `target/verify`;
+do not advance the checkpoint. A successful mode advances independently even if
+another check fails, provided the source stayed unchanged. Checkpoints are local evidence under `target/verify`;
 a new checkout or removal of that evidence requires an initial benchmark run.
 The runner records the counters and required checks in its result. Benchmark
 samples are fresh whenever a mode is selected; this cadence is not a claim that
@@ -22,13 +23,16 @@ intervening changes have measured performance coverage.
 
 ```sh
 python3 scripts/verify.py quick              # partial correctness feedback
+python3 scripts/verify.py correctness        # all correctness, no benchmarks
 python3 scripts/verify.py full               # correctness + any due benchmarks
 python3 scripts/verify.py full --performance # agent discretion: both modes now
 python3 scripts/verify.py full --live        # agent discretion: live mode now
 ```
 
 `quick` runs Clippy, workspace tests and the small scenario suite; it cannot
-certify completion. `--only` likewise selects an explicitly partial check.
+certify completion. `correctness` runs every correctness check and reports any due
+benchmarks as omitted; it does not certify those benchmarks. `--only` likewise
+selects an explicitly partial check.
 Headless benchmarks measure Game step cost; live benchmarks measure real-time
 presentation. Headless evidence never certifies frame pacing or GPU behaviour.
 Existing scenario timing assertions remain correctness smoke gates.
@@ -65,6 +69,17 @@ calls by hooks, agents or a final report reuse the same verified result. Perform
 measurements are not cached by this layer. Their independent baseline selection,
 compatibility and local metric assessment belong to the
 [performance runner](performance.md#repeatable-benchmark-suite).
+
+An explicitly classified benchmark infrastructure failure (for example, a corrupt
+eligible baseline or a failed release build) defers automatic retries for identical
+source, command, environment and baseline-store contents. The runner retains the
+original failure evidence, still runs correctness checks, and returns inconclusive
+with that benchmark uncertified. This never advances a checkpoint or reuses a
+timing pass. Changed inputs or damaged failure evidence cause a fresh attempt.
+Use `--performance`, `--live`, or `--only performance-headless|performance-live`
+to retry explicitly after repairing an external condition. `--fresh` only affects
+correctness reuse. Noisy timings, regressions and measurement failures are not
+suppressed by this mechanism.
 
 `--only clippy` is an explicitly partial entry point for edit hooks. The stop hook
 runs `full` and benefits from already completed checks. These hooks are one client

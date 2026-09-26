@@ -21,10 +21,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "benchmarks/suite.json"
-SCHEMA = 1
+# Schema 2 requires corpse telemetry; old observations cannot be reconstructed.
+SCHEMA = 2
 EVIDENCE = ROOT / "benchmarks/evidence"
 LOCAL_EVIDENCE = ROOT / "target/perf/evidence"
 METRICS = ("mean_step_ms", "presentation_ms.mean", "frame_ms.p99")
@@ -457,33 +459,40 @@ def app(binary, output):
                     stop(awake)
 
 
-def run(args):
-    result = {"schema_version": SCHEMA, "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-              "errors": [], "workloads": {}}
+def prepare(args, result):
+    """Collect baseline eligibility metadata before building or measuring."""
+    suite = load(SUITE)
+    headless = args.mode == "headless"
+    if args.workload:
+        suite["workloads"] = [w for w in suite["workloads"] if w["name"] in args.workload]
+        if {w["name"] for w in suite["workloads"]} != set(args.workload):
+            raise ValueError("unknown workload")
+    result["suite"] = suite
+    if platform.system() != "Darwin":
+        raise ValueError("live benchmarks require the target macOS machine")
+    games = other_games()
+    if games:
+        raise ValueError("other game processes are running (leave them untouched): " + str(games))
+    result["source"] = source_identity(output_paths(args.output))
+    result["conditions"] = host_conditions()
+    build_args = ["cargo", "build", "--release", "-p", "scenario", "--bin", "perf-headless"] if headless else ["cargo", "build", "--release", "-p", "arpg"]
+    result["conditions"]["build"] = " ".join(build_args)
+    workload_files = [ROOT / w["scene"] for w in load(SUITE)["workloads"]]
+    workload_files += [ROOT / "benchmarks/driver.rs"]
+    if not headless:
+        workload_files += sorted((ROOT / "assets").rglob("*.glb"))
+    result["workload_digest"] = digest(json.dumps({str(p.relative_to(ROOT)): file_digest(p) for p in workload_files}, sort_keys=True).encode())
+
+
+def run(args, result):
+    """Collect into the caller-owned result so later failures cannot erase it."""
+    suite = result["suite"]
+    headless = args.mode == "headless"
+    outputs = output_paths(args.output)
+    before = result["source"]
+    build_args = result["conditions"]["build"].split()
+    stage = "build"
     try:
-        suite = load(SUITE)
-        headless = args.mode == "headless"
-        if args.workload:
-            suite["workloads"] = [w for w in suite["workloads"] if w["name"] in args.workload]
-            if {w["name"] for w in suite["workloads"]} != set(args.workload):
-                raise ValueError("unknown workload")
-        result["suite"] = suite
-        if platform.system() != "Darwin":
-            raise ValueError("live benchmarks require the target macOS machine")
-        games = other_games()
-        if games:
-            raise ValueError("other game processes are running (leave them untouched): " + str(games))
-        outputs = output_paths(args.output)
-        before = source_identity(outputs)
-        result["source"] = before
-        result["conditions"] = host_conditions()
-        build_args = ["cargo", "build", "--release", "-p", "scenario", "--bin", "perf-headless"] if headless else ["cargo", "build", "--release", "-p", "arpg"]
-        result["conditions"]["build"] = " ".join(build_args)
-        workload_files = [ROOT / w["scene"] for w in load(SUITE)["workloads"]]
-        workload_files += [ROOT / "benchmarks/driver.rs"]
-        if not headless:
-            workload_files += sorted((ROOT / "assets").rglob("*.glb"))
-        result["workload_digest"] = digest(json.dumps({str(p.relative_to(ROOT)): file_digest(p) for p in workload_files}, sort_keys=True).encode())
         print("Building release app…", flush=True)
         build = subprocess.run([*build_args, "--message-format=json"],
                                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -495,6 +504,7 @@ def run(args):
         binary = next(Path(a["executable"]) for a in artifacts
                       if a.get("reason") == "compiler-artifact" and a.get("target", {}).get("name") == ("perf-headless" if headless else "arpg") and a.get("executable"))
         result["binary_sha256"] = file_digest(binary)
+        stage = "measurement"
         if headless:
             for workload in suite["workloads"]:
                 trials = result["workloads"][workload["name"]] = []
@@ -527,12 +537,17 @@ def run(args):
             raise ValueError("source or executable changed during measurement")
     except (OSError, ValueError, KeyError, TypeError, IndexError, StopIteration, subprocess.SubprocessError) as error:
         result["errors"].append(str(error))
+        result["failure"] = {"kind": "infrastructure" if stage == "build" else "measurement",
+                             "stage": stage, "reason": str(error)}
     return result
 
 
 def archive(path, directory=None):
     """Explicit immutable publication, including inconclusive but valid measurements."""
-    result = load(path)
+    return archive_result(load(path), directory)
+
+
+def archive_result(result, directory=None):
     validate_result(result)
     raw = json.dumps(result, sort_keys=True, allow_nan=False).encode()
     identity = digest(raw)
@@ -541,20 +556,50 @@ def archive(path, directory=None):
     artifact = directory / (identity + ".json.gz")
     with artifact.open("xb") as stream:
         stream.write(gzip.compress(raw, mtime=0))
-    manifest = {"artifact": artifact.name, "sha256": identity, "source": result["source"],
+    manifest = {"schema_version": SCHEMA, "artifact": artifact.name, "sha256": identity, "source": result["source"],
                 "conditions": result["conditions"], "workload_digest": result["workload_digest"],
                 "created_utc": result.get("created_utc", ""), "suite": result["suite"]}
     save(directory / (identity + ".json"), manifest)
     return artifact
 
 
-def discover(current, directory=None):
-    """Nearest ancestor's compatible measurements; never infer a passing verdict."""
+def eligible(current, offered, automatic=True):
+    """Metadata-only filter; never parse trials from an unrelated benchmark."""
+    if automatic and offered["source"]["dirty"] and offered["source"]["digest"] != current["source"]["digest"]:
+        return False
+    if any(current[key] != offered[key] for key in ("conditions", "workload_digest")):
+        return False
+    wanted = {w["name"]: w for w in current["suite"]["workloads"]}
+    available = {w["name"]: w for w in offered["suite"]["workloads"]}
+    return (all(available.get(k) == v for k, v in wanted.items()) and
+            all(current["suite"][k] == offered["suite"][k]
+                for k in ("version", "repetitions", "relative_tolerance", "max_trial_spread")))
+
+
+def evidence_identity():
+    """Changes to local baseline inputs must release a deferred infrastructure failure."""
+    return digest(json.dumps({str(p): file_digest(p)
+                              for store in (EVIDENCE, LOCAL_EVIDENCE)
+                              for p in sorted(store.glob("*.json*"))}, sort_keys=True).encode())
+
+
+def discover(current, directory=None, exclusions=None):
+    """Preflight nearest eligible ancestor; validate raw evidence only after filtering."""
     best = None
     stores = (Path(directory),) if directory is not None else (EVIDENCE, LOCAL_EVIDENCE)
     manifests = sorted(path for store in stores for path in store.glob("*.json"))
     for manifest_path in manifests:
         manifest = load(manifest_path)
+        if manifest.get("schema_version") != SCHEMA:
+            if exclusions is not None:
+                exclusions.append({"path": str(manifest_path), "reason": "unsupported evidence schema"})
+            continue
+        if not eligible(current, manifest):
+            continue
+        revision = manifest["source"]["revision"]
+        ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", revision, current["source"]["revision"]], cwd=ROOT, capture_output=True)
+        if ancestor.returncode:
+            continue
         fingerprint(manifest["sha256"], 64)
         if manifest["artifact"] != manifest["sha256"] + ".json.gz":
             raise ValueError("invalid evidence artifact path")
@@ -562,25 +607,10 @@ def discover(current, directory=None):
         if digest(raw) != manifest["sha256"]:
             raise ValueError("corrupt archived evidence: " + str(manifest_path))
         result = json.loads(raw)
-        validate_result(result)
-        for key in ("source", "conditions", "workload_digest", "suite"):
+        for key in ("schema_version", "source", "conditions", "workload_digest", "suite"):
             if manifest[key] != result[key]:
                 raise ValueError("manifest contradicts raw evidence: " + key)
-        # A dirty checkout is not an ancestor merely because its HEAD is.
-        if result["source"]["dirty"] and result["source"]["digest"] != current["source"]["digest"]:
-            continue
-        if any(current[key] != result[key] for key in ("conditions", "workload_digest")):
-            continue
-        wanted = {w["name"]: w for w in current["suite"]["workloads"]}
-        offered = {w["name"]: w for w in result["suite"]["workloads"]}
-        if any(offered.get(k) != v for k, v in wanted.items()):
-            continue
-        if any(current["suite"][k] != result["suite"][k] for k in ("version", "repetitions", "relative_tolerance", "max_trial_spread")):
-            continue
-        revision = result["source"]["revision"]
-        ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", revision, current["source"]["revision"]], cwd=ROOT, capture_output=True)
-        if ancestor.returncode:
-            continue
+        validate_result(result)
         distance = int(command(["git", "rev-list", "--count", revision + ".." + current["source"]["revision"]]))
         # Keep only the winner's raw frame dictionaries, not the entire history.
         rank = (-distance, manifest.get("created_utc", ""), str(manifest_path))
@@ -628,6 +658,9 @@ def main():
     cargo_bin = str(Path.home() / ".cargo/bin")
     if not shutil.which("cargo"):
         os.environ["PATH"] = cargo_bin + os.pathsep + os.environ.get("PATH", "")
+    result = {"schema_version": SCHEMA, "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "errors": [], "workloads": {}}
+    stage = "baseline_preflight"
     try:
         if args.command == "run":
             for path in output_paths(args.output):
@@ -638,10 +671,20 @@ def main():
         if baseline is not None:
             validate_result(baseline)
         if args.command == "run":
-            result = run(args)
+            prepare(args, result)
             baseline_path = str(args.baseline.resolve()) if args.baseline else None
-            if baseline is None and not result["errors"]:
-                baseline, baseline_path = discover(result)
+            result["baseline_exclusions"] = []
+            if baseline is None:
+                baseline, baseline_path = discover(result, exclusions=result["baseline_exclusions"])
+            elif not eligible(result, baseline, automatic=False):
+                # Explicit dirty baselines are allowed, but known workload/mode mismatches are not.
+                raise ValueError("explicit baseline conditions or workload differ")
+            if result["baseline_exclusions"]:
+                print(f"Retired {len(result['baseline_exclusions'])} incompatible evidence manifests (schema {SCHEMA} required).", flush=True)
+            result["baseline"] = baseline_path
+            stage = "measurement"
+            run(args, result)
+            stage = "assessment"
             verdict = assess(result, baseline)
             result["assessment"] = verdict
             result["baseline"] = baseline_path
@@ -652,19 +695,26 @@ def main():
         if baseline is not None:
             result["baseline_digest"] = digest(json.dumps(baseline, sort_keys=True).encode())
             result["baseline_source"] = baseline.get("source") if isinstance(baseline, dict) else None
-        save(args.output, result)
+        stage = "archive"
         if args.command == "run":
             try:
                 validate_result(result)
             except (KeyError, TypeError, ValueError, IndexError):
                 pass  # Partial/invalid runs remain at the requested output, never eligible baselines.
             else:
-                archive(args.output, LOCAL_EVIDENCE)
-    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+                archive_result(result, LOCAL_EVIDENCE)
+        save(args.output, result)
+    except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError) as error:
         print("inconclusive: " + str(error), file=sys.stderr)
         try:
-            save(args.output, {"schema_version": SCHEMA, "errors": [str(error)],
-                               "assessment": {"status": "inconclusive", "reasons": [str(error)]}})
+            # Keep raw trials and any absolute assessment already obtained.
+            result["failure"] = {"kind": "infrastructure", "stage": stage, "reason": str(error)}
+            if "assessment" not in result:
+                result["assessment"] = assess(result)
+            verdict = result["assessment"]
+            verdict["status"] = "inconclusive"
+            verdict.setdefault("reasons", []).append(str(error))
+            save(args.output, result)
         except OSError:
             pass  # Never overwrite an existing result, including after a race.
         return 2

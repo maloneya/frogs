@@ -82,6 +82,79 @@ class Workspace(unittest.TestCase):
         self.next_run()
         self.assertFalse(self.run_check("print('tested')", fresh=True)["cached"])
 
+    def test_infrastructure_failure_defers_only_identical_automatic_retries(self):
+        name = "performance-headless"
+        def attempt(retry=False, kind="infrastructure", code=2):
+            output = self.artifact / (name + ".json")
+            script = ("import json; from pathlib import Path; "
+                      f"Path({str(output)!r}).write_text(json.dumps({{'failure': "
+                      f"{{'kind': {kind!r}, 'stage': 'baseline_preflight', 'reason': 'bad archive'}}}})); "
+                      f"raise SystemExit({code})")
+            return verify.run_check(name, [sys.executable, "-c", script],
+                                    verify.source_identity(self.root), self.machine,
+                                    self.artifact, self.cache, root=self.root, retry=retry)
+        with patch.object(verify.perf, "evidence_identity", return_value="same"):
+            first = attempt()
+            self.next_run()
+            second = attempt()
+            self.assertTrue(second["deferred"])
+            self.assertEqual(second["exit_code"], 2)
+            self.assertEqual(second["evidence"], first["evidence"])
+            self.assertFalse(second["cached"])
+            self.next_run()
+            self.assertNotIn("deferred", attempt(retry=True))
+            self.next_run()
+            with patch.object(verify.perf, "evidence_identity", return_value="repaired"):
+                self.assertNotIn("deferred", attempt())
+            (self.root / "source.rs").write_text("fixed tooling")
+            self.next_run()
+            changed = attempt()
+            self.assertNotIn("deferred", changed)
+            Path(changed["evidence"][0]["path"]).write_text("damaged log")
+            self.next_run()
+            self.assertNotIn("deferred", attempt())
+            self.next_run()
+            self.machine["toolchain"] = "updated"
+            self.assertNotIn("deferred", attempt())
+            self.next_run()
+            # A successful explicit retry removes the failure, without caching timings.
+            self.assertEqual(attempt(retry=True, code=0)["exit_code"], 0)
+
+    def test_noisy_measurement_is_never_deferred(self):
+        name = "performance-live"
+        for _ in range(2):
+            output = self.artifact / (name + ".json")
+            script = ("from pathlib import Path; "
+                      f"Path({str(output)!r}).write_text('{{\"assessment\": {{\"status\": \"inconclusive\"}}}}'); "
+                      "raise SystemExit(2)")
+            row = verify.run_check(name, [sys.executable, "-c", script],
+                                   verify.source_identity(self.root), self.machine,
+                                   self.artifact, self.cache, root=self.root)
+            self.assertNotIn("deferred", row)
+            self.assertEqual(row["exit_code"], 2)
+            self.next_run()
+
+    def test_full_reports_deferred_failure_but_runs_all_correctness(self):
+        def fake(name, *args, **kwargs):
+            row = {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
+                   "evidence": [{"path": "test.log"}]}
+            if name in verify.PERFORMANCE:
+                row.update(exit_code=2, deferred=True,
+                           infrastructure_failure={"reason": "bad archive"})
+            return row
+        with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(verify.main(["full"]), 2)
+            result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
+            self.assertFalse(result["complete"])
+            self.assertEqual(result["coverage"], list(verify.CORRECTNESS))
+            self.assertEqual(result["omitted"], list(verify.PERFORMANCE))
+            run.reset_mock()
+            self.assertEqual(verify.main(["correctness"]), 0)
+            self.assertEqual([call.args[0] for call in run.call_args_list], list(verify.CORRECTNESS))
+
     def test_symlink_retargeting_and_external_content_invalidate_identity(self):
         outside = self.root / "target/outside"
         outside.write_text("same contents")
@@ -160,7 +233,7 @@ class Workspace(unittest.TestCase):
         self.assertFalse(result["complete"])
 
     def test_changed_source_at_end_cannot_retain_certified_coverage(self):
-        def fake(name, *args):
+        def fake(name, *args, **kwargs):
             return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
                     "evidence": [{"path": "test.log"}]}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
@@ -174,7 +247,7 @@ class Workspace(unittest.TestCase):
         self.assertEqual(result["omitted"], list(verify.CHECKS))
 
     def test_not_due_completion_and_discretionary_benchmarks(self):
-        def fake(name, *args):
+        def fake(name, *args, **kwargs):
             return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
                     "evidence": [{"path": "test.log"}]}
         checkpoint = {"revision": "test", "commits_since_pass": {}, "due": []}
@@ -227,7 +300,12 @@ class Workspace(unittest.TestCase):
         self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], ["performance-live"])
         record["status"] = "inconclusive"
         evidence.write_text(json.dumps(record))
+        # A failing sibling check cannot discard this mode's successful checkpoint.
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], ["performance-live"])
+        record["reason"] = "inputs changed during verification"
+        evidence.write_text(json.dumps(record))
         self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], list(verify.PERFORMANCE))
+        del record["reason"]
         record["status"] = "complete_pass"
         evidence.write_text(json.dumps(record))
         log.write_text("damaged")
@@ -254,7 +332,7 @@ class Workspace(unittest.TestCase):
             verify.scenario_files("fast", self.root)
 
     def test_partial_run_cannot_report_complete_and_uncertainty_stays_nonzero(self):
-        def fake(name, *args):
+        def fake(name, *args, **kwargs):
             return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
                     "evidence": [{"path": "test.log"}]}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
@@ -267,7 +345,7 @@ class Workspace(unittest.TestCase):
             self.assertFalse(result["complete"])
             self.assertEqual(result["status"], "partial_pass")
             self.assertIn("performance-headless", result["omitted"])
-        def uncertain(name, *args):
+        def uncertain(name, *args, **kwargs):
             return {**fake(name), "exit_code": 2}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
              patch.object(verify, "source_identity", return_value="same"), \

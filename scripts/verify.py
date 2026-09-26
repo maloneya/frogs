@@ -18,6 +18,8 @@ import sys
 import tempfile
 import time
 
+import perf
+
 ROOT = Path(__file__).resolve().parents[1]
 CORRECTNESS = ("clippy", "tests", "docs", "companion", "scenarios-fast", "scenarios-extended")
 PERFORMANCE = ("performance-headless", "performance-live")
@@ -138,10 +140,10 @@ def cache_key(source, machine, command, artifact):
     return digest(packed({"source": source, "context": machine, "command": canonical}))
 
 
-def cached_record(cache, key):
+def cached_record(cache, key, exit_code=0):
     try:
         record = json.loads((cache / (key + ".json")).read_text())
-        if record["key"] != key or record["exit_code"] != 0:
+        if record["key"] != key or record["exit_code"] != exit_code:
             return None
         for item in record["evidence"]:
             if digest(Path(item["path"]).read_bytes()) != item["sha256"]:
@@ -153,8 +155,15 @@ def cached_record(cache, key):
         return None
 
 
-def run_check(name, command, source, machine, artifact, cache, fresh=False, root=ROOT):
-    key = cache_key(source, machine, command, artifact)
+def run_check(name, command, source, machine, artifact, cache, fresh=False, root=ROOT, retry=False):
+    performance = name in PERFORMANCE
+    inputs = {**machine, "baseline_inputs": perf.evidence_identity()} if performance else machine
+    key = cache_key(source, inputs, command, artifact)
+    failures = cache.parent / "infrastructure-failures"
+    if performance and not retry:
+        blocked = cached_record(failures, key, exit_code=2)
+        if blocked:
+            return {**blocked, "cached": False, "deferred": True, "seconds": 0}
     old = None if fresh or name.startswith("performance-") else cached_record(cache, key)
     if old:
         return {**old, "cached": True}
@@ -169,6 +178,13 @@ def run_check(name, command, source, machine, artifact, cache, fresh=False, root
     if code == 0 and name.startswith(("scenarios-", "performance-")) and not extra.is_file():
         record["exit_code"] = 2
         record["reason"] = "check did not produce its required structured evidence"
+    if extra.exists() and performance and code == 2:
+        try:
+            failure = json.loads(extra.read_text()).get("failure", {})
+            if failure.get("kind") == "infrastructure":
+                record["infrastructure_failure"] = failure
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass  # Unclassified failures must not suppress future measurements.
     if extra.exists():
         record["evidence"].append({"path": str(extra), "sha256": digest(extra.read_bytes())})
     if source_identity(root) != source:
@@ -182,6 +198,14 @@ def run_check(name, command, source, machine, artifact, cache, fresh=False, root
             json.dump(record, out, indent=2)
             temporary = out.name
         os.replace(temporary, destination)
+    if performance and record["exit_code"] == 2 and "infrastructure_failure" in record and not record.get("reason"):
+        failures.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=failures, delete=False) as out:
+            json.dump(record, out, indent=2)
+            temporary = out.name
+        os.replace(temporary, failures / (key + ".json"))
+    elif performance:
+        (failures / (key + ".json")).unlink(missing_ok=True)
     return record
 
 
@@ -197,7 +221,7 @@ def performance_checkpoint(root, base):
         try:
             result = json.loads(path.read_text())
             revision = result["revision"]
-            if result["status"] != "complete_pass":
+            if result.get("reason"):
                 continue
             if subprocess.run(["git", "merge-base", "--is-ancestor", revision, head],
                               cwd=root, capture_output=True).returncode:
@@ -221,7 +245,7 @@ def performance_checkpoint(root, base):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scope", choices=("quick", "full"), nargs="?", default="full")
+    parser.add_argument("scope", choices=("quick", "correctness", "full"), nargs="?", default="full")
     parser.add_argument("--performance", action="store_true", help="run both benchmark modes now")
     parser.add_argument("--live", action="store_true", help="run live benchmarks now")
     parser.add_argument("--only", choices=CHECKS, help="one explicitly partial check (for hooks)")
@@ -245,16 +269,21 @@ def main(argv=None):
                       performance_checkpoint=checkpoint, required=required)
         print("Performance checkpoint: " + (", ".join(benchmarks) if benchmarks else "not due"), flush=True)
         selected = [args.only] if args.only else list(required if args.scope == "full" else
+                                                      CORRECTNESS if args.scope == "correctness" else
                                                       ("clippy", "tests", "scenarios-fast"))
         for name in requested:
             if name not in selected:
                 selected.append(name)
         for name in selected:
             print("Checking " + name + "…", flush=True)
-            row = run_check(name, commands(name, artifact), source, machine, artifact, base / "cache", args.fresh)
+            row = run_check(name, commands(name, artifact), source, machine, artifact, base / "cache", args.fresh,
+                            retry=name in requested or args.only in PERFORMANCE)
             result["checks"].append(row)
-            state = "cached pass" if row["cached"] else "pass" if row["exit_code"] == 0 else "inconclusive" if row["exit_code"] == 2 else "failed"
+            state = "deferred infrastructure failure" if row.get("deferred") else "cached pass" if row["cached"] else "pass" if row["exit_code"] == 0 else "inconclusive" if row["exit_code"] == 2 else "failed"
             print(f"  {state}: {row['seconds']:.2f}s; {row['evidence'][0]['path']}", flush=True)
+            if row.get("deferred"):
+                print("  Unchanged failure: " + row["infrastructure_failure"]["reason"] +
+                      "; retry explicitly with --only " + name, flush=True)
             if row.get("reason"):
                 print("  " + row["reason"], flush=True)
                 break
