@@ -1,14 +1,14 @@
 #[test]
-fn f3_toggles_collision_drawing_without_simulation_input() {
+fn companion_toggles_collision_drawing_without_simulation_input() {
     let mut app = App {
         game: Game::empty(),
         ..Default::default()
     };
     let before = app.game.hash();
-    app.on_debug_key(KeyCode::F3);
+    assert_eq!(companion(&mut app, serde_json::json!({"op":"collision", "enabled":true}))["ok"], true);
     assert!(app.collision_debug.enabled());
     assert_eq!(app.collision_debug.drawings().len(), 1);
-    app.on_debug_key(KeyCode::F3);
+    assert_eq!(companion(&mut app, serde_json::json!({"op":"collision", "enabled":false}))["ok"], true);
     assert!(!app.collision_debug.enabled());
     assert!(app.collision_debug.drawings().is_empty());
     assert_eq!(app.game.hash(), before);
@@ -112,14 +112,15 @@ fn pair() -> Scene {
     .into()
 }
 
-fn tap(app: &mut App, key: KeyCode) {
-    app.handle_key(key, true, false);
-    app.handle_key(key, false, false);
+fn companion(app: &mut App, mut command: serde_json::Value) -> serde_json::Value {
+    command["session"] = serde_json::json!(std::process::id());
+    serde_json::from_str(&app.companion_reply(serde_json::from_value(command).unwrap())).unwrap()
 }
 
 #[test]
-fn picker_uses_the_fresh_start_boundary_and_survives_bad_files() {
-    let directory = std::env::temp_dir().join(format!("arpg-picker-{}", std::process::id()));
+fn companion_uses_the_fresh_start_boundary_and_survives_bad_files() {
+    use serde_json::json;
+    let directory = std::env::temp_dir().join(format!("arpg-companion-scenes-{}", std::process::id()));
     std::fs::create_dir_all(directory.join("directory.ron")).unwrap();
     let path = directory.join("a scene.ron");
     std::fs::write(&path, "(engine: (name: \"first\", bodies: [(pos: (20.0, 0.0))]))").unwrap();
@@ -129,57 +130,40 @@ fn picker_uses_the_fresh_start_boundary_and_survives_bad_files() {
     assert_eq!(paths, vec![path.clone(), directory.join("b.ron")]);
     assert!(scene_catalog(&directory.join("missing")).is_err());
 
-    let mut app = App::default();
+    let mut app = App { scene_catalog: Some(Ok(paths)), ..Default::default() };
     app.start_playtest(pair()).unwrap();
-    tap(&mut app, KeyCode::F2);
-    app.input.menu_mut().set_catalog(Ok(paths.clone()));
-    tap(&mut app, KeyCode::KeyS);
-    tap(&mut app, KeyCode::KeyS);
-    tap(&mut app, KeyCode::Enter);
+    app.input.on_key(KeyCode::KeyW, true, false);
+    let response = companion(&mut app, json!({"op":"start_scene", "path":path}));
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["state"]["scenes"]["files"][0]["label"], "a scene.ron");
+    assert_eq!(response["state"]["scenes"]["current"], "first");
     let initial = app.game.hash();
-    let direct = Game::from_scene(&arpg_content::load_scene(&path).unwrap()).unwrap();
-    assert_eq!(
-        initial,
-        direct.hash(),
-        "picker and file loader produce identical tick-zero worlds"
-    );
+    assert_eq!(initial, Game::from_scene(&arpg_content::load_scene(&path).unwrap()).unwrap().hash());
     assert_eq!(app.run_id, 2);
-    assert!(!app.input.menu().open());
     assert_eq!(app.input.sample().move_axis(), Vec2::ZERO);
     std::fs::write(&path, "(engine: (name: \"changed\"))").unwrap();
-    tap(&mut app, KeyCode::F2);
-    tap(&mut app, KeyCode::Enter); // Cached restart remains independent of disk.
-    assert_eq!(app.game.hash(), initial);
+    assert_eq!(companion(&mut app, json!({"op":"restart"}))["ok"], true);
+    assert_eq!(app.game.hash(), initial, "cached restart is independent of disk");
     assert_eq!(app.run_id, 3);
 
-    tap(&mut app, KeyCode::F2);
-    app.input.menu_mut().set_catalog(Ok(paths.clone()));
-    for _ in 0..3 {
-        tap(&mut app, KeyCode::KeyS);
-    }
-    tap(&mut app, KeyCode::Enter);
-    assert!(app.input.menu().picker().error().unwrap().contains("b.ron"));
-    assert!(app.input.menu().open());
+    let failed = companion(&mut app, json!({"op":"start_scene", "path":directory.join("b.ron")}));
+    assert_eq!(failed["ok"], false);
+    assert!(failed["error"].as_str().unwrap().contains("b.ron"));
     assert_eq!(app.game.hash(), initial);
     assert_eq!(app.run_id, 3);
     std::fs::remove_file(&path).unwrap();
-    tap(&mut app, KeyCode::KeyW);
-    tap(&mut app, KeyCode::Enter); // A file disappearing after discovery is safe too.
-    assert!(app.input.menu().picker().error().is_some());
+    assert_eq!(companion(&mut app, json!({"op":"start_scene", "path":path}))["ok"], false);
     assert_eq!(app.game.hash(), initial);
 
     std::fs::write(&path, "(engine: (name: \"changed\"))").unwrap();
-    tap(&mut app, KeyCode::Enter); // Retry reads the repaired file.
+    assert_eq!(companion(&mut app, json!({"op":"start_scene", "path":path}))["ok"], true);
     assert_ne!(app.game.hash(), initial);
     assert_eq!(app.run_id, 4);
-    assert!(!app.input.menu().open());
-    tap(&mut app, KeyCode::F2);
-    tap(&mut app, KeyCode::KeyS);
-    tap(&mut app, KeyCode::Enter);
-    assert_eq!(
-        app.game.hash(),
-        Game::from_scene(&Scene::boot()).unwrap().hash()
-    );
+    assert_eq!(companion(&mut app, json!({"op":"default_scene"}))["ok"], true);
+    assert_eq!(app.game.hash(), Game::from_scene(&Scene::boot()).unwrap().hash());
+    let expected = scene_catalog(std::path::Path::new("scenes"));
+    assert_eq!(companion(&mut app, json!({"op":"refresh_scenes"}))["ok"], expected.is_ok());
+    assert_eq!(app.scene_catalog.as_ref(), Some(&expected));
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -191,7 +175,7 @@ fn exhausted_run_ids_preserve_the_game_input_and_pending_capture() {
     app.input.on_key(KeyCode::KeyW, true, false);
     let (reply, response) = std::sync::mpsc::channel();
     app.capture
-        .request("pending.png".into(), Some(reply), std::time::Instant::now());
+        .request("pending.png".into(), Some(reply), std::time::Instant::now()).unwrap();
     let before = app.game.hash();
     let held = app.input.held().move_axis();
 
@@ -246,8 +230,6 @@ fn restart_resets_the_complete_playtest_boundary() {
         arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()
     ));
     assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY).is_some());
-    app.input.on_key(KeyCode::F2, true, false);
-    assert!(app.input.menu().open());
     let mut camera = OrthoCamera::new(1280, 720);
     camera.snap_to(glam::Vec3::new(40.0, 0.0, 40.0));
     app.camera = Some(camera);
@@ -265,7 +247,6 @@ fn restart_resets_the_complete_playtest_boundary() {
     assert_eq!(app.game.tick(), 0);
     assert_eq!(app.accumulator.alpha().get(), 0.0);
     assert_eq!(app.camera.as_ref().unwrap().target(), glam::Vec3::ZERO);
-    assert!(!app.input.menu().open());
     assert_eq!(app.input.sample().move_axis(), Vec2::ZERO);
     app.input.on_key(KeyCode::KeyW, true, false);
     assert_eq!(
@@ -294,7 +275,7 @@ fn restart_cancels_old_delayed_actions_and_capture_replies() {
         "pending.png".into(),
         Some(shot_reply),
         std::time::Instant::now(),
-    );
+    ).unwrap();
     app.start_playtest(pair()).unwrap();
     assert!(response.try_recv().unwrap().contains("cancelled"));
     assert!(shot_response.try_recv().unwrap().contains("cancelled"));
@@ -480,7 +461,7 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
 
 #[test]
 fn tuning_edits_save_restore_and_restart_through_the_shared_app_boundary() {
-    use crate::tuning::Edit;
+    use crate::companion::Edit;
     use arpg_sim::{Tuning, TuningField};
     let directory = std::env::temp_dir().join(format!("arpg-tuning-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -514,11 +495,12 @@ fn tuning_edits_save_restore_and_restart_through_the_shared_app_boundary() {
 
 #[test]
 fn companion_catalog_edits_errors_and_harness_changes_share_authority() {
-    use crate::tuning::{Command, Edit};
+    use crate::companion::{Command, Edit};
     use arpg_sim::TuningField;
-    let mut app = App::default();
+    let (requests, receiver) = std::sync::mpsc::channel();
+    let mut app = App { harness: Some(receiver), ..Default::default() };
     let read = |app: &mut App, command| -> serde_json::Value {
-        serde_json::from_str(&app.tuning_reply(command)).unwrap()
+        serde_json::from_str(&app.companion_reply(command)).unwrap()
     };
     let initial = read(&mut app, Command::State {});
     let fields = initial["state"]["fields"].as_array().unwrap();
@@ -534,21 +516,34 @@ fn companion_catalog_edits_errors_and_harness_changes_share_authority() {
     for (key, value) in [("player_speed", -1.0), ("missing", 3.0), ("slam_impulse", f32::INFINITY)] {
         let reply = read(&mut app, Command::Set { session: std::process::id(), key: key.into(), value });
         assert_eq!(reply["ok"], false);
+        assert_eq!(reply["state"]["error"], true);
+        assert_eq!(reply["state"]["message"], reply["error"]);
         assert_eq!(app.game.hash(), before);
     }
     let reply = read(&mut app, Command::Set { session: std::process::id(), key: "player_speed".into(), value: 4.0 });
     assert_eq!(reply["ok"], true);
+    assert_eq!(reply["state"]["error"], false);
     assert_eq!(reply["state"]["fields"][0]["value"], 4.0);
     assert_eq!(reply["state"]["unsaved"], true);
-    app.edit_tuning(Edit::Set(TuningField::PlayerSpeed, 7.0)).unwrap();
-    assert_eq!(read(&mut app, Command::State {})["state"]["fields"][0]["value"], 7.0);
+    for value in [7.0, -1.0] {
+        let (reply, response) = std::sync::mpsc::channel();
+        requests.send(crate::harness::Request {
+            command: crate::harness::Command::TuningEdit(Edit::Set(TuningField::PlayerSpeed, value)), reply,
+        }).unwrap();
+        assert!(!app.drain_harness());
+        let response = response.try_recv().unwrap();
+        let snapshot = read(&mut app, Command::State {});
+        assert_eq!(snapshot["state"]["fields"][0]["value"], 7.0);
+        assert_eq!(snapshot["state"]["error"], value < 0.0);
+        assert_eq!(snapshot["state"]["message"], response.strip_prefix("error: ").unwrap_or(&response));
+    }
 }
 
 #[test]
 fn expired_companion_edit_cannot_mutate_later() {
     use std::io::{Read, Write};
     let path = std::env::temp_dir().join(format!("arpg-expired-{}.sock", std::process::id()));
-    let server = crate::tuning::Server::start(path.clone()).unwrap();
+    let server = crate::companion::Server::start(path.clone()).unwrap();
     let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
     writeln!(stream, "{}", serde_json::json!({"op":"set","session":std::process::id(),"key":"player_speed","value":4})).unwrap();
     let mut response = String::new();
@@ -560,8 +555,62 @@ fn expired_companion_edit_cannot_mutate_later() {
     response.clear();
     second.read_to_string(&mut response).unwrap();
     assert!(response.contains("Game is busy"), "{response}");
-    let mut app = App { tuning_server: Some(server), ..Default::default() };
+    let mut app = App { companion_server: Some(server), ..Default::default() };
     let before = app.game.hash();
-    app.drain_tuning();
+    app.drain_companion();
     assert_eq!(app.game.hash(), before);
+}
+
+#[test]
+fn companion_controls_refuse_stale_sessions_and_performance_trials() {
+    use serde_json::json;
+    let mut app = App { camera: Some(OrthoCamera::new(800, 600)), ..Default::default() };
+    let before = app.game.hash();
+    let height = app.camera.as_ref().unwrap().view_height();
+    let commands = [
+        json!({"op":"restart"}), json!({"op":"default_scene"}),
+        json!({"op":"start_scene", "path":"missing.ron"}),
+        json!({"op":"refresh_scenes"}), json!({"op":"collision", "enabled":true}),
+        json!({"op":"vsync", "enabled":false}), json!({"op":"zoom", "direction":"in"}),
+        json!({"op":"capture", "path":"unused.png"}),
+    ];
+    for mut command in commands.clone() {
+        command["session"] = json!(0);
+        let reply: serde_json::Value = serde_json::from_str(&app.companion_reply(serde_json::from_value(command).unwrap())).unwrap();
+        assert_eq!(reply["ok"], false);
+        assert!(reply["error"].as_str().unwrap().contains("Game restarted"));
+    }
+    let spec = crate::trial::Spec::parse("1 60 idle".split_whitespace()).unwrap();
+    let (reply, pending) = std::sync::mpsc::channel();
+    app.trial = Some(crate::trial::Trial::new(spec, reply, app.game.enemy_count()));
+    for command in commands {
+        let reply = companion(&mut app, command);
+        assert_eq!(reply["ok"], false);
+        assert!(reply["error"].as_str().unwrap().contains("performance trial"));
+    }
+    assert_eq!(app.game.hash(), before);
+    assert_eq!(app.run_id, 0);
+    assert_eq!(app.camera.as_ref().unwrap().view_height(), height);
+    assert!(!app.collision_debug.enabled());
+    assert!(app.capture.path().is_none());
+    assert!(app.trial.is_some());
+    assert!(pending.try_recv().is_err());
+}
+
+#[test]
+fn companion_zoom_uses_the_camera_and_preserves_gameplay() {
+    use serde_json::json;
+    let mut app = App { camera: Some(OrthoCamera::new(800, 600)), ..Default::default() };
+    let before = app.game.hash();
+    let height = app.camera.as_ref().unwrap().view_height();
+    let closer = companion(&mut app, json!({"op":"zoom", "direction":"in"}));
+    assert_eq!(closer["ok"], true);
+    let reported = closer["state"]["debug"]["view_height"].as_f64().unwrap() as f32;
+    assert!(reported < height);
+    assert_eq!(reported, app.camera.as_ref().unwrap().view_height());
+    companion(&mut app, json!({"op":"zoom", "direction":"out"}));
+    assert!((app.camera.as_ref().unwrap().view_height() - height).abs() < 0.0001);
+    assert_eq!(app.game.hash(), before);
+    assert_eq!(companion(&mut app, json!({"op":"capture", "path":"unused.png"}))["ok"], false);
+    assert!(app.capture.path().is_none());
 }

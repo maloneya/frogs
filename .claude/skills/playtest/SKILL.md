@@ -53,7 +53,7 @@ The command parser is in [harness](../../../crates/app/src/harness.rs). Spawn an
 RON descriptions, including templates, cadence and conditions; see
 [source enablement](../../../docs/source-enablement.md).
 
-See [runtime tuning](../../../docs/tuning.md) for the native companion, F4 launch and self-capture.
+See [ARPG Companion](../../../docs/companion.md) for native scene, tuning and debug controls, F4 launch and self-capture.
 
 Key names come from [BINDINGS](../../../crates/app/src/input.rs); an unknown key
 reply lists them. `cursor <x> <y>` supplies physical window pixels through
@@ -63,10 +63,9 @@ The live controls are WASD/arrows to move, cursor to aim, left click for Cleave,
 keys 1, 2 and 3 also use those slots. See
 [attack bindings](../../../docs/scene-playtests.md) for the fixed controls.
 A swing holds its starting direction through recovery while walking
-continues freely. `tap 1` swings and `tap e` interacts. F2 opens the scene picker. W/S or arrows navigate, Enter confirms,
-Escape cancels. While a menu is open it captures gameplay input; the world keeps
-running. Use explicit harness commands for debug operations instead of trying
-to inject native debug keys.
+continues freely. `tap 1` swings and `tap e` interacts. F4 opens the native
+companion. Scene selection and debug controls live there; the game has no debug
+menus. Use explicit harness commands for automation.
 
 Choose population size and seeking in authored scene bodies or grids, then start
 that scene for a fresh trial. Scene restart restores the cached snapshot;
@@ -100,7 +99,7 @@ expected effect and observed result separately from whether it feels good.
 
 `shot` writes the app's own image; inspect that file directly. A covered window
 can time out. Capture also reports write failure and rejects a second request
-while one is pending. F3 or `debug collision on` displays authoritative collision
+while one is pending. The companion Debug tab or `debug collision on` displays authoritative collision
 geometry; see [collision debug](../../../docs/collision-debug.md).
 
 Measure release builds with the window visible and frontmost and display awake.

@@ -1,6 +1,6 @@
 # Collision and attack debug drawing
 
-F3 toggles collision outlines while playing (close the F2 scene picker first). The
+Enable **Collision outlines** in the [companion](companion.md) Debug tab. The
 harness equivalent is `debug collision on` or `debug collision off`. It starts
 off and remains an app setting across scene starts and restarts.
 

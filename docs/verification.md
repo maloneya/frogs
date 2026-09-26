@@ -1,7 +1,7 @@
 # Verification evidence
 
 The completion command is `python3 scripts/verify.py full`. It runs Clippy,
-workspace tests, private Rustdoc, native tuning companion tests/build and all scenarios with replay. Release benchmarks
+workspace tests, private Rustdoc, native companion tests/build and all scenarios with replay. Release benchmarks
 are required every **10 relevant commits**, and agents may run them sooner when
 useful (for example, investigating a slowdown or validating an optimization).
 

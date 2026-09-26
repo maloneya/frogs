@@ -6,7 +6,10 @@ private func reply(value: Double = 9, session: UInt32 = 1, ok: Bool = true) thro
     let data = """
     {"ok":\(ok),"error":\(ok ? "null" : "\"Out of range\""),"state":{
     "session":\(session),"fields":[{"key":"future_field","group":"Future type","label":"Speed","unit":"m/s","default":9,"min":0,"max":60,"step":0.1,"value":\(value),"saved":9}],
-    "unsaved":\(value != 9),"path":"tuning.ron","message":"Ready","error":false,"busy":false}}
+    "unsaved":\(value != 9),"path":"tuning.ron","message":"Ready","error":false,"busy":false,
+    "scenes":{"files":[{"path":"scenes/a.ron","label":"a.ron"}],"error":null,"current":"Test","run":1,"tick":42},
+    "debug":{"collision":false,"vsync":true,"view_height":30,"fps":60,"frame_ms":16.67,"enemies":3,"instances":4,
+    "capture":{"pending":false,"path":null,"error":null}}}}
     """.data(using: .utf8)!
     return try JSONDecoder().decode(Reply.self, from: data)
 }
@@ -139,6 +142,65 @@ func localTransportFailsClearlyWithoutAGame() async {
 }
 
 
+@MainActor
+func liveToolingChecks(_ model: Model) async throws {
+    let original = model.state!
+    guard let file = original.scenes.files.first(where: { $0.label == "single_enemy.ron" }) else {
+        fatalError("Live check requires the repository scene catalog")
+    }
+    await model.send(Request(op: .startScene, path: file.path))
+    precondition(!model.failed && model.state!.scenes.run == original.scenes.run + 1)
+    let started = model.state!.scenes
+    await model.send(Request(op: .startScene, path: "/no-such-arpg-scene.ron"))
+    precondition(model.failed && model.state!.scenes.run == started.run)
+    precondition(model.state!.scenes.current == started.current)
+    await model.action(.restart)
+    precondition(!model.failed && model.state!.scenes.run == started.run + 1)
+    await model.action(.refreshScenes)
+    precondition(!model.failed && model.state!.scenes.files.contains { $0.path == file.path })
+
+    let debug = model.state!.debug
+    await model.send(Request(op: .collision, enabled: !debug.collision))
+    precondition(!model.failed && model.state!.debug.collision != debug.collision)
+    await model.send(Request(op: .collision, enabled: debug.collision))
+    await model.send(Request(op: .vsync, enabled: !debug.vsync!))
+    precondition(!model.failed && model.state!.debug.vsync != debug.vsync)
+    await model.send(Request(op: .vsync, enabled: debug.vsync))
+    await model.send(Request(op: .zoom, direction: .in))
+    precondition(!model.failed && model.state!.debug.view_height! < debug.view_height!)
+    await model.send(Request(op: .zoom, direction: .out))
+    precondition(abs(model.state!.debug.view_height! - debug.view_height!) < 0.0001)
+
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("arpg-capture-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try Data([0]).write(to: directory.appendingPathComponent("blocked"))
+    for valid in [false, true] {
+        let path = directory.appendingPathComponent(valid ? "frame.png" : "blocked/frame.png").path
+        await model.send(Request(op: .capture, path: path))
+        precondition(!model.failed && model.state!.debug.capture.pending)
+        for _ in 0..<60 {
+            try await Task.sleep(for: .milliseconds(100))
+            await model.send(Request(op: .state))
+            if model.state?.debug.capture.pending == false { break }
+        }
+        precondition(model.connected && !model.state!.debug.capture.pending)
+        if valid {
+            precondition(model.state!.debug.capture.error == nil)
+            precondition(model.state!.debug.capture.path == path)
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            precondition(data.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]))
+        } else {
+            precondition(model.state!.debug.capture.error != nil)
+            precondition(!FileManager.default.fileExists(atPath: path))
+        }
+    }
+    await model.action(.defaultScene)
+    precondition(!model.failed && model.state!.scenes.run == started.run + 2)
+    print("Native companion: live scene start/refusal/restart, catalog, collision, vsync, zoom and screenshot success/failure passed")
+}
+
+
 @main
 struct Checks {
     @MainActor static func main() async throws {
@@ -147,7 +209,7 @@ struct Checks {
         await localTransportFailsClearlyWithoutAGame()
         await editAdmissionWaitsForRefreshWithoutQueuingMoreEdits()
         print("Native companion: draft, validation, reconnect and transport checks passed")
-        if let path = ProcessInfo.processInfo.environment["ARPG_TUNING_TEST_SOCKET"] {
+        if let path = ProcessInfo.processInfo.environment["ARPG_COMPANION_TEST_SOCKET"] {
             let model = Model(path: path)
             await model.send(Request(op: .state))
             precondition(model.connected)
@@ -170,6 +232,7 @@ struct Checks {
             await model.set(field, value: original)
             await model.action(.save)
             print("Native companion: live game edit, refusal, save, revert, defaults and restart passed")
+            try await liveToolingChecks(model)
         }
     }
 }

@@ -10,7 +10,6 @@ pub(crate) struct Clock {
     last: Instant,
     /// Exponential moving average of frame time, in seconds.
     smoothed: f32,
-    since_hud: f32,
 }
 
 /// How much each new sample moves the average. Low enough to be readable,
@@ -20,14 +19,9 @@ pub(crate) struct Clock {
 const SMOOTHING: f32 = 0.1;
 const _: () = assert!(SMOOTHING > 0.0 && SMOOTHING <= 1.0, "outside (0, 1] the average diverges or freezes");
 
-/// Refreshing the title every frame is unreadable, and pushes more work at the
-/// window server than the renderer is doing.
-const HUD_INTERVAL: f32 = 0.1;
-const _: () = assert!(HUD_INTERVAL > 0.0);
-
 impl Default for Clock {
     fn default() -> Self {
-        Self { last: Instant::now(), smoothed: 1.0 / 60.0, since_hud: 0.0 }
+        Self { last: Instant::now(), smoothed: 1.0 / 60.0 }
     }
 }
 
@@ -39,7 +33,7 @@ impl Clock {
     /// may run — the same rule expressed in the unit that decides it, and
     /// enforced by the only code that can mint a step.
     ///
-    /// So what leaves here is the honest measurement, which is what the HUD and
+    /// So what leaves here is the honest measurement, which is what the companion and
     /// the harness want anyway: a clamp reaching into the frame-time readout
     /// would hide the very hitches it exists to report.
     pub(crate) fn tick(&mut self) -> f32 {
@@ -48,7 +42,6 @@ impl Clock {
         self.last = now;
 
         self.smoothed += (dt - self.smoothed) * SMOOTHING;
-        self.since_hud += dt;
         dt
     }
 
@@ -60,12 +53,4 @@ impl Clock {
         if self.smoothed > 0.0 { 1.0 / self.smoothed } else { 0.0 }
     }
 
-    /// True roughly ten times a second.
-    pub(crate) fn hud_due(&mut self) -> bool {
-        if self.since_hud >= HUD_INTERVAL {
-            self.since_hud = 0.0;
-            return true;
-        }
-        false
-    }
 }

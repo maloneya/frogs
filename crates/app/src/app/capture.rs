@@ -10,6 +10,7 @@ const TIMEOUT: Duration = Duration::from_secs(4);
 #[derive(Default)]
 pub(super) struct Capture {
     pending: Option<Pending>,
+    completed: Option<Result<PathBuf, String>>,
 }
 
 struct Pending {
@@ -20,16 +21,19 @@ struct Pending {
 
 impl Capture {
     /// Reject overlap rather than silently replacing another caller's path.
-    pub(super) fn request(&mut self, path: PathBuf, reply: Option<Sender<String>>, now: Instant) {
+    pub(super) fn request(&mut self, path: PathBuf, reply: Option<Sender<String>>, now: Instant) -> Result<(), String> {
         if self.pending.is_some() {
-            Self::answer(reply, Err("a screenshot is already pending".into()));
-            return;
+            let error = "a screenshot is already pending".to_string();
+            Self::answer(reply, Err(error.clone()));
+            return Err(error);
         }
+        self.completed = None;
         self.pending = Some(Pending {
             path,
             requested: now,
             reply,
         });
+        Ok(())
     }
 
     pub(super) fn path(&self) -> Option<&Path> {
@@ -42,6 +46,7 @@ impl Capture {
             if result.is_ok() {
                 log::info!("captured frame to {}", pending.path.display());
             }
+            self.completed = Some(result.clone().map(|()| pending.path));
             Self::answer(pending.reply, result);
         }
     }
@@ -55,6 +60,14 @@ impl Capture {
         {
             self.finish(Err("no frame was captured within four seconds; the window may be occluded or minimised".into()));
         }
+    }
+
+    pub(super) fn report(&self) -> serde_json::Value {
+        serde_json::json!({
+            "pending":self.path().is_some(),
+            "path":self.path().or_else(|| self.completed.as_ref().and_then(|result| result.as_ref().ok()).map(PathBuf::as_path)),
+            "error":self.completed.as_ref().and_then(|result| result.as_ref().err())
+        })
     }
 
     fn answer(reply: Option<Sender<String>>, result: Result<(), String>) {
@@ -82,14 +95,18 @@ mod tests {
         let now = Instant::now();
         let (first, first_reply) = channel();
         let (second, second_reply) = channel();
-        capture.request("first.png".into(), Some(first), now);
-        capture.request("second.png".into(), Some(second), now);
-        capture.request("keyboard.png".into(), None, now);
+        capture.request("first.png".into(), Some(first), now).unwrap();
+        assert!(capture.request("second.png".into(), Some(second), now).is_err());
         assert_eq!(capture.path(), Some(Path::new("first.png")));
+        assert_eq!(capture.report()["pending"], true);
+        assert_eq!(capture.report()["path"], "first.png");
         assert!(second_reply.try_recv().unwrap().starts_with("error:"));
         assert_eq!(first_reply.try_recv(), Err(TryRecvError::Empty));
         capture.finish(Ok(()));
         assert_eq!(first_reply.try_recv().unwrap(), "ok");
+        assert_eq!(capture.report()["pending"], false);
+        assert_eq!(capture.report()["path"], "first.png");
+        assert!(capture.report()["error"].is_null());
         assert!(capture.path().is_none());
     }
 
@@ -97,9 +114,12 @@ mod tests {
     fn write_failure_reaches_the_caller_and_releases_the_slot() {
         let mut capture = Capture::default();
         let (reply, response) = channel();
-        capture.request("failed.png".into(), Some(reply), Instant::now());
+        capture.request("failed.png".into(), Some(reply), Instant::now()).unwrap();
         capture.finish(Err("disk full".into()));
         assert_eq!(response.try_recv().unwrap(), "error: disk full");
+        assert_eq!(capture.report()["error"], "disk full");
+        assert_eq!(capture.report()["pending"], false);
+        assert!(capture.report()["path"].is_null());
         assert!(capture.path().is_none());
     }
 
@@ -108,7 +128,7 @@ mod tests {
         let mut capture = Capture::default();
         let now = Instant::now();
         let (reply, response) = channel();
-        capture.request("late.png".into(), Some(reply), now);
+        capture.request("late.png".into(), Some(reply), now).unwrap();
         for _ in 0..10_000 {
             capture.expire(now + TIMEOUT - Duration::from_nanos(1));
         }
@@ -120,13 +140,13 @@ mod tests {
             "an expired request cannot write later"
         );
 
-        capture.request("fresh.png".into(), None, now + TIMEOUT);
+        capture.request("fresh.png".into(), None, now + TIMEOUT).unwrap();
         capture.expire(now + TIMEOUT);
         assert!(
             capture.path().is_some(),
             "the new request gets its own deadline"
         );
         capture.expire(now + TIMEOUT * 2);
-        assert!(capture.path().is_none(), "keyboard captures also expire");
+        assert!(capture.path().is_none(), "companion captures also expire");
     }
 }

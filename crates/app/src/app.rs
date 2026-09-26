@@ -2,6 +2,7 @@
 
 mod capture;
 mod tuning_control;
+mod companion_control;
 mod control;
 #[cfg(test)]
 mod tests;
@@ -30,7 +31,6 @@ use crate::presentation::{
     replace_horde,
 };
 use crate::time::Clock;
-use crate::ui::{MenuRequest, SceneChoice};
 
 /// Owns the native app and connects gameplay to presentation.
 /// `gfx` and `game` have no dependency on each other.
@@ -38,10 +38,11 @@ use crate::ui::{MenuRequest, SceneChoice};
 pub(crate) struct App {
     window: Option<Arc<Window>>,
     tuning_saved: arpg_sim::Tuning,
-    tuning_message: String,
-    tuning_error: bool,
-    tuning_server: Option<crate::tuning::Server>,
+    companion_message: String,
+    companion_error: bool,
+    companion_server: Option<crate::companion::Server>,
     tuning_path: std::path::PathBuf,
+    scene_catalog: Option<Result<Vec<std::path::PathBuf>, String>>,
     renderer: Option<Renderer>,
     /// Ground and prop resources exist together once GPU initialization succeeds.
     world_assets: Option<WorldAssets<MeshAsset>>,
@@ -57,8 +58,6 @@ pub(crate) struct App {
     audio: crate::audio::Audio,
     /// Game ids and ticks are scoped to this playtest generation.
     run_id: u64,
-    /// Numbers keyboard screenshots within this process; paths may exist from an earlier run.
-    captures: u32,
     /// Frames skipped because the surface had none to give — occluded,
     /// resized behind our back, or lost. Reported alongside `frames` so a
     /// suspiciously fast run is self-diagnosing rather than mysterious.
@@ -102,24 +101,12 @@ struct Deferred {
     reply: Option<std::sync::mpsc::Sender<String>>,
 }
 
-/// One notch of zoom per keypress.
-const ZOOM_STEP: f32 = 1.2;
-const _: () = assert!(ZOOM_STEP > 1.0, "a step of 1 or less makes the zoom keys inert or inverted");
-
-/// Where `P` writes screenshots. The system temp directory unless told
-/// otherwise, so a stray keypress never litters the working tree.
-fn capture_dir() -> std::path::PathBuf {
-    std::env::var_os("ARPG_CAPTURE_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-}
-
 /// Preserve the file identity in diagnostics from either caller.
 fn read_scene(path: &std::path::Path) -> Result<Scene, String> {
     arpg_content::load_scene(path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
-/// Discovery happens only when the picker opens. Do not parse here: a broken
+/// Discovery happens at startup and explicit refresh. Do not parse here: a broken
 /// file remains selectable so its load error can be shown without losing a run.
 fn scene_catalog(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
     let read = || -> std::io::Result<Vec<std::path::PathBuf>> {
@@ -182,38 +169,19 @@ impl App {
             .summary())
     }
 
-    /// Both native keys and harness keys execute menu requests at this same
-    /// between-tick boundary. No file I/O or game replacement happens in HUD drawing.
     fn handle_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
         if key == KeyCode::F4 {
             if pressed && !repeat {
-                if let Err(error) = self.open_tuning_companion() {
+                if let Err(error) = self.open_companion() {
                     log::error!("{error}");
-                    self.tuning_message = error;
-                    self.tuning_error = true;
+                    self.companion_message = error;
+                    self.companion_error = true;
                 }
                 self.input.release_all();
             }
             return true;
         }
-        let consumed = self.input.on_key(key, pressed, repeat);
-        match self.input.menu_mut().take_request() {
-            Some(MenuRequest::RefreshScenes) => {
-                self.input.menu_mut().set_catalog(scene_catalog(std::path::Path::new("scenes")));
-            }
-            Some(MenuRequest::Start(choice)) => {
-                let result = match choice {
-                    SceneChoice::Restart => self.restart_playtest(),
-                    SceneChoice::Boot => self.start_playtest(Scene::boot()),
-                    SceneChoice::File { path, .. } => self.start_scene_file(&path),
-                };
-                if let Err(error) = result {
-                    self.input.menu_mut().set_error(error);
-                }
-            }
-            None => {}
-        }
-        consumed
+        self.input.on_key(key, pressed, repeat)
     }
 
     fn start_scene_file(&mut self, path: &std::path::Path) -> Result<(), String> {
@@ -281,27 +249,6 @@ impl App {
 
     fn ready_reply(&self) -> String {
         format!("ready run={} tick=0 hash={:016x}", self.run_id, self.game.hash())
-    }
-
-    /// One-shot debug shortcuts bypass the tick-sampled gameplay action layer.
-    /// Menu handling must get first refusal, especially for Escape. Vsync,
-    /// screenshots and exit are handled in `window_event`; these edit the
-    /// world or camera. Debug keys must remain disjoint from game bindings.
-    fn on_debug_key(&mut self, key: KeyCode) {
-        match key {
-            KeyCode::F3 => self.collision_debug.set_enabled(!self.collision_debug.enabled(), &self.game),
-            KeyCode::Equal => {
-                if let Some(c) = &mut self.camera {
-                    c.zoom_by(1.0 / ZOOM_STEP);
-                }
-            }
-            KeyCode::Minus => {
-                if let Some(c) = &mut self.camera {
-                    c.zoom_by(ZOOM_STEP);
-                }
-            }
-            _ => {}
-        }
     }
 
     /// One frame: measure it, run whatever ticks it bought, then draw.
@@ -427,19 +374,15 @@ impl App {
             let size = self.window.as_ref().expect("rendering has a window").inner_size();
             self.enemy_feedback.draw(&self.game, alpha, camera,
                 Vec2::new(size.width as f32, size.height as f32), &mut sink);
-            hud::draw(
+            hud::draw_player(
                 renderer.glyphs(),
-                self.input.menu(),
                 self.game.attack_status(),
                 self.game.player_health(),
-                self.game.selected_scene_name().unwrap_or("--"),
                 Vec2::new(size.width as f32, size.height as f32),
                 &mut sink,
             );
-            if !self.input.menu().open() {
-                hud::draw_encounters(renderer.glyphs(), self.game.encounters(),
-                    Vec2::new(size.width as f32, size.height as f32), &mut sink);
-            }
+            hud::draw_encounters(renderer.glyphs(), self.game.encounters(),
+                Vec2::new(size.width as f32, size.height as f32), &mut sink);
         }
 
         // Count presentation, not redraw attempts: occluded surfaces can skip
@@ -486,22 +429,6 @@ impl App {
             focused: self.window.as_ref().is_some_and(|window| window.has_focus()),
             occluded: self.occluded,
         });
-
-        if self.clock.hud_due()
-            && let Some(window) = &self.window
-        {
-            window.set_title(&format!(
-                "arpg — {:.2}ms  {:.0}fps  N={}  ({} instances){}",
-                self.clock.frame_ms(),
-                self.clock.fps(),
-                self.game.enemy_count(),
-                world_assets.instance_count()
-                    + self.collision_debug.drawings().len()
-                    + usize::from(self.character_preview.is_some())
-                    + self.horde_preview.as_ref().map_or(0, LoadedHorde::instance_count),
-                if renderer.vsync() { "  [vsync]" } else { "  [uncapped]" },
-            ));
-        }
     }
 
     pub(crate) fn run() {
@@ -559,9 +486,10 @@ impl ApplicationHandler for App {
         self.camera = Some(camera);
         self.window = Some(window);
         self.harness = harness::start();
-        match crate::tuning::Server::start(crate::tuning::socket_path()) {
-            Ok(server) => self.tuning_server = Some(server),
-            Err(error) => log::error!("tuning socket: {error}"),
+        self.scene_catalog = Some(scene_catalog(std::path::Path::new("scenes")));
+        match crate::companion::Server::start(crate::companion::socket_path()) {
+            Ok(server) => self.companion_server = Some(server),
+            Err(error) => log::error!("companion socket: {error}"),
         }
         // GPU and asset loading are startup work, not elapsed play time.
         self.clock = Clock::default();
@@ -608,24 +536,9 @@ impl ApplicationHandler for App {
                 };
                 let pressed = key_event.state == ElementState::Pressed;
 
-                // The harness uses this same route. A modal UI event must not
-                // also fire a debug command (especially Escape -> quit).
                 let consumed = self.handle_key(key, pressed, key_event.repeat);
-
-                if !consumed && pressed && !key_event.repeat {
-                    match key {
-                        KeyCode::Escape => event_loop.exit(),
-                        KeyCode::KeyV => {
-                            self.renderer.as_mut().expect("initialized").toggle_vsync();
-                            self.perf.reset();
-                        }
-                        KeyCode::KeyP => {
-                            let path = capture_dir().join(format!("arpg-{:04}.png", self.captures));
-                            self.captures += 1;
-                            self.capture.request(path, None, std::time::Instant::now());
-                        }
-                        _ => self.on_debug_key(key),
-                    }
+                if !consumed && pressed && !key_event.repeat && key == KeyCode::Escape {
+                    event_loop.exit();
                 }
             }
 
@@ -655,7 +568,7 @@ impl ApplicationHandler for App {
             return;
         }
 
-        self.drain_tuning();
+        self.drain_companion();
         if let Some(window) = &self.window {
             window.request_redraw();
         }

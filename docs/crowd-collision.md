@@ -93,7 +93,7 @@ Diagnostic phase counts are exposed through StepObserver, never read by gameplay
 
 ## Measuring and limits
 
-Use F2's **Crowd stress — 10,000 seekers** scene, wait for the crowd to compress,
+Start **Crowd stress — 10,000 seekers** through the companion, wait for the crowd to compress,
 then follow [performance telemetry](performance.md). Compare crowd time per tick,
 candidate/possible-pair counts and frame percentiles. Repeat with movement and
 attacks; retain the actual population because defeats reduce workload.

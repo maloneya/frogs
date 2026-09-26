@@ -9,6 +9,13 @@ use arpg_gfx::{OrthoCamera, Renderer};
 use glam::Vec2;
 
 impl App {
+    pub(super) fn render_instance_count(&self) -> u64 {
+        u64::from(self.character_preview.is_some())
+            + self.horde_preview.as_ref().map_or(0, |horde| horde.instance_count() as u64)
+            + self.world_assets.as_ref().map_or(0, |world| world.instance_count() as u64)
+            + self.collision_debug.drawings().len() as u64
+    }
+
     /// Applies whatever the control socket has sent since the last frame.
     ///
     /// Runs between redraws. Injected action edges wait for the next simulation tick.
@@ -28,9 +35,11 @@ impl App {
             }
             let now = std::time::Instant::now();
             let answer = match command {
-                Command::TuningEdit(edit) => match self.edit_tuning(edit) {
-                    Ok(message) => message, Err(error) => format!("error: {error}"),
-                },
+                Command::TuningEdit(edit) => {
+                    let result = self.edit_tuning(edit);
+                    self.companion_result(&result);
+                    result.unwrap_or_else(|error| format!("error: {error}"))
+                }
                 Command::ShowCharacter(path) => match self.show_character(path) {
                     Ok(answer) => answer,
                     Err(error) => format!("error: {error}"),
@@ -121,7 +130,7 @@ impl App {
                     if self.renderer.is_none() {
                         "error: no renderer yet".to_string()
                     } else {
-                        self.capture.request(path, Some(reply), now);
+                        let _ = self.capture.request(path, Some(reply), now);
                         continue; // Capture owns the reply through write, timeout or cancellation.
                     }
                 }
@@ -183,16 +192,7 @@ impl App {
                     self.collision_debug.set_enabled(on, &self.game);
                     format!("debug collision {}", if on { "on" } else { "off" })
                 }
-                Command::SetVsync(on) => match self.renderer.as_mut() {
-                    Some(renderer) => {
-                        if renderer.vsync() != on {
-                            renderer.toggle_vsync();
-                            self.perf.reset();
-                        }
-                        format!("vsync {}", renderer.vsync())
-                    }
-                    None => "error: no renderer yet".to_string(),
-                },
+                Command::SetVsync(on) => self.set_vsync(on).unwrap_or_else(|error| format!("error: {error}")),
                 Command::Quit => {
                     if let Some(trial) = self.trial.take() { trial.finish("error: cancelled by quit".into()); }
                     quit = true;
@@ -259,12 +259,13 @@ impl App {
         );
         out.text("sim_hash", &format!("{:016x}", self.game.hash()));
         out.object("sim", |sim| self.game.report(sim));
-        out.object("ui", |ui| self.input.menu().report(ui));
         out.object("tuning", |out| {
             out.bool("unsaved", self.game.tuning() != self.tuning_saved);
             out.text("path", &self.tuning_path.display().to_string());
-            out.text("message", &self.tuning_message);
-            out.bool("error", self.tuning_error);
+        });
+        out.object("companion", |out| {
+            out.text("message", &self.companion_message);
+            out.bool("error", self.companion_error);
         });
         out.object("world_assets", |out| {
             if let Some(world) = &self.world_assets {
@@ -297,13 +298,7 @@ impl App {
                 .world_assets
                 .as_ref()
                 .map_or(0, |world| world.instance_count() as u64);
-            r.int(
-                "instances",
-                player_instances
-                    + horde_instances
-                    + static_instances
-                    + self.collision_debug.drawings().len() as u64,
-            );
+            r.int("instances", self.render_instance_count());
             let effect_vertices = self.world_assets.as_ref()
                 .map_or(0, |world| world.torches.effects().len());
             r.int("effect_vertices", effect_vertices as u64);

@@ -119,7 +119,7 @@ def commands(name, artifact, root=ROOT):
     if name == "tests":
         return ["cargo", "test", "--workspace"]
     if name == "companion":
-        return [sys.executable, "scripts/tuning.py", "test"]
+        return [sys.executable, "scripts/companion.py", "test"]
     if name == "docs":
         return ["cargo", "doc", "--workspace", "--lib", "--bins", "--no-deps", "--document-private-items"]
     if name.startswith("scenarios-"):

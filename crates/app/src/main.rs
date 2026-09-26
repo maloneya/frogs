@@ -6,7 +6,7 @@
 //! in that vocabulary. The dependency runs one way, and `app` is the only module
 //! that sees both sides.
 
-mod tuning;
+mod companion;
 mod app;
 mod audio;
 mod collision_debug;
@@ -20,7 +20,6 @@ mod torch;
 mod time;
 mod perf;
 mod trial;
-mod ui;
 
 fn main() {
     // RUST_LOG=info to see adapter selection and wgpu diagnostics.

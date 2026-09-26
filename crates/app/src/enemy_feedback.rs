@@ -15,7 +15,7 @@ const WIDTH: f32 = 32.0;
 const HEIGHT: f32 = 5.0;
 /// Above the ordinary enemy's head, in world metres.
 const ANCHOR_HEIGHT: f32 = 1.35;
-/// Leave room for menus and readouts in the shared quad buffer.
+/// Leave room for gameplay HUD in the shared quad buffer.
 const MAX_VISIBLE: usize = 1024;
 const _: () = assert!(MAX_VISIBLE * 2 + 2048 <= arpg_gfx::MAX_QUADS);
 

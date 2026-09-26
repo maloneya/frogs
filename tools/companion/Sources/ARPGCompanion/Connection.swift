@@ -16,6 +16,37 @@ struct Attribute: Decodable, Identifiable, Sendable {
     var id: String { key }
 }
 
+struct SceneFile: Decodable, Identifiable, Sendable {
+    let path: String
+    let label: String
+    var id: String { path }
+}
+
+struct SceneSnapshot: Decodable, Sendable {
+    let files: [SceneFile]
+    let error: String?
+    let current: String?
+    let run: UInt64
+    let tick: UInt64
+}
+
+struct CaptureSnapshot: Decodable, Sendable {
+    let pending: Bool
+    let path: String?
+    let error: String?
+}
+
+struct DebugSnapshot: Decodable, Sendable {
+    let collision: Bool
+    let vsync: Bool?
+    let view_height: Double?
+    let fps: Double
+    let frame_ms: Double
+    let enemies: UInt64
+    let instances: UInt64
+    let capture: CaptureSnapshot
+}
+
 struct Snapshot: Decodable, Sendable {
     let session: UInt32
     let fields: [Attribute]
@@ -24,6 +55,8 @@ struct Snapshot: Decodable, Sendable {
     let message: String
     let error: Bool
     let busy: Bool
+    let scenes: SceneSnapshot
+    let debug: DebugSnapshot
     var groups: [String] {
         fields.reduce(into: []) { if !$0.contains($1.group) { $0.append($1.group) } }
     }
@@ -36,14 +69,22 @@ struct Reply: Decodable, Sendable {
 }
 
 enum Operation: String, Encodable, Sendable {
-    case state, set, save, revert, defaults, restart
+    case state, set, save, revert, defaults, restart, collision, vsync, zoom, capture
+    case refreshScenes = "refresh_scenes"
+    case startScene = "start_scene"
+    case defaultScene = "default_scene"
 }
+
+enum ZoomDirection: String, Encodable, Sendable { case `in`, out }
 
 struct Request: Encodable, Sendable {
     let op: Operation
     var session: UInt32? = nil
     var key: String? = nil
     var value: Double? = nil
+    var path: String? = nil
+    var enabled: Bool? = nil
+    var direction: ZoomDirection? = nil
 }
 
 struct ConnectionError: LocalizedError {

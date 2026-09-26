@@ -68,12 +68,12 @@ attack motion/potential reach; they are not solid geometry clipped by walls.
 
 The shared [wall asset](../assets/world/wall/README.md) supplies height and
 appearance. App scales its unit footprint to the authoritative rectangle and
-uses its exact yaw. The simulation never reads the mesh. Existing F3 body and
+uses its exact yaw. The simulation never reads the mesh. Companion-enabled body and
 attack outlines remain circular; wall footprints are available in the report.
 Lighting/shadows and enemy route planning are unchanged. Seekers can pile up
 against a wall until the player goes around it.
 
-Choose **Walls — movement and attack cover** in F2. Walk toward the long wall,
+Start `walls.ron` from the companion Scenes tab. Walk toward the long wall,
 slide along it, try all three attacks, and go around its right end. The nearby
 enemy behind it should remain shielded. The rotated wall tests diagonal sliding.
 The same file is exercised by the wall scenarios in `scenarios/`; geometry,

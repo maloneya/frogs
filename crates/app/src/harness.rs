@@ -41,7 +41,7 @@ pub(crate) struct Request {
 }
 
 pub(crate) enum Command {
-    TuningEdit(crate::tuning::Edit),
+    TuningEdit(crate::companion::Edit),
     Cursor(glam::Vec2),
     /// Atomically load and select one app-global player character.
     ShowCharacter(PathBuf),
@@ -157,7 +157,7 @@ fn parse(line: &str) -> Result<Command, String> {
 
     Ok(match verb {
         "tuning" => {
-            use crate::tuning::Edit;
+            use crate::companion::Edit;
             let usage = "tuning save|revert|defaults|restart|set <key> <value>";
             let command = match arg {
                 Some("save") => Command::TuningEdit(Edit::Save),

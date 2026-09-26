@@ -87,6 +87,7 @@ fi
 
 printf '==> cargo build --release\n'
 cargo build --release -p arpg
+python3 scripts/companion.py build
 
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
@@ -95,15 +96,15 @@ mkdir -p "$payload"
 
 cp target/release/arpg "$payload/arpg"
 
-# The app reads `scenes` relative to the working directory (crates/app/src/app.rs,
-# scene_catalog), so the F2 picker is empty unless the game is launched from the
-# extracted folder. play.command is what makes that true for a double-click.
+# Both the game and companion use paths relative to the extracted folder.
 cp -R scenes "$payload/scenes"
+mkdir -p "$payload/target"
+cp -R "target/ARPG Companion.app" "$payload/target/ARPG Companion.app"
 
 cat > "$payload/play.command" <<'LAUNCHER'
 #!/bin/sh
-# Double-click me. The cd is load-bearing: the scene picker (F2) looks for
-# `scenes` in the working directory, which Finder otherwise sets to your home.
+# Double-click me. The game looks for scenes and the companion bundle in the
+# working directory, which Finder otherwise sets to your home.
 cd "$(dirname "$0")" || exit 1
 exec ./arpg
 LAUNCHER
@@ -133,14 +134,18 @@ If macOS refuses to open it
 
 Controls
     WASD / arrows   move
-    space           swing
-    F1              attack tuning panel   (Left/Right adjust recovery, R resets)
-    F2              scene picker          (Up/Down select, Enter starts fresh)
-    [ / ]           halve / double the horde
-    - / =           zoom
-    V               toggle vsync
-    P               screenshot (to \$TMPDIR)
+    mouse           aim
+    1 / left click  Cleave
+    2 / right click Slam
+    3 / space       Disintegrate
+    E               interact
+    F4              open ARPG Companion
     Esc             quit
+
+ARPG Companion
+    Scenes          start a scene file, restart current, or load default horde
+    Tuning          adjust runtime values and save tuning
+    Debug           collision outlines, vsync, zoom, readouts and screenshots
 
 Requires an Apple Silicon Mac with Metal. Built from $(git rev-parse --short HEAD).
 READER

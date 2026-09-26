@@ -44,7 +44,7 @@ readable and reviewable at any population. Deliberate individual placements
 still belong in `bodies`; never emit thousands of them from a script.
 
 Write a descriptively named `.ron` regular file directly inside `scenes/` so the
-F2 picker discovers it. Give it a useful display name. Existing files in that
+companion Scenes tab discovers it. Give it a useful display name. Existing files in that
 directory are working examples; do not add a duplicate schema or generator.
 Keep configuration within the available vocabulary. Identify any missing engine
 capability before expanding a scene-authoring task into engine work.
@@ -70,8 +70,8 @@ the scenario skill. Resolve failures before calling the configuration ready.
 Use the [playtest skill](../playtest/SKILL.md) when the task needs visual or
 interactive verification. Drive the app through its harness.
 
-Explain how to select the scene in F2, what to try, and what was asserted.
-Reopen the picker to discover added files. Selecting a file reads its latest
+Explain how to start the scene in the companion Scenes tab, what to try, and what was asserted.
+Click Refresh files to discover added files. Starting a file reads its latest
 contents; **Restart current** repeats the cached snapshot. After a restart,
 discard old run-scoped identities. Report any remaining human feel question
 without presenting it as a passed automated check.

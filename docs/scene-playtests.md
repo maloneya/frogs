@@ -68,36 +68,29 @@ working-directory-dependent boot fallback.
 
 See [runtime tuning](tuning.md) for the native F4 companion, live attributes and saved settings.
 
-## In-game picker
+## Companion scene controls
 
-`F2` opens the scene picker. W/S or Up/Down navigate, Enter starts fresh and closes, and
-`F2` / `Esc` closes. The world keeps running
-while either panel captures gameplay input.
+Press **F4** to open [ARPG Companion](companion.md) and choose **Scenes**.
+**Restart current** uses the cached snapshot; **Default horde** starts the built-in
+scene. Select a `.ron` file and click **Start selected** to read it again and start
+fresh. The catalog lists sorted regular files directly inside `scenes/`, relative
+to the game's working directory. It is scanned at startup and on **Refresh files**,
+not on every state poll. A missing directory leaves the built-in buttons usable.
 
-The first two choices are **Restart current (cached snapshot)** and **Default
-horde**, followed by sorted `.ron` regular files directly inside `scenes/`,
-relative to the working directory. The directory is scanned each time the
-picker opens. Files are read only on selection, so choosing a file again picks
-up edits; restarting the current snapshot does not. Broken files stay visible.
-A missing directory still leaves both built-in choices available.
+Scene starts use the same validated boundary as the harness. Read, parse or
+validation errors appear in the companion and preserve the current playtest.
+Repair the file and click **Start selected** to retry. The game keeps running;
+its input is released when focus moves to the companion.
 
-Starting uses exactly the harness's fresh-start boundary. Success closes the
-panel; a read, parse, or validation failure keeps it open with an error and
-preserves the current run. Repair the file and press Enter to retry. Long labels
-and errors are shortened on screen; the full error is in `state.ui`. The list
-scrolls to keep the selected row visible and adapts to the window height.
-
-The picker is also drivable with `tap f2`, `tap up`, `tap down`, and `tap enter`.
-`state.ui` reports whether it is open, its entries, the selected index, and any
-error. App tests compare picker starts with direct file loads at tick zero,
-exercise failure and retry, and verify modal input. HUD tests assert scrolling
-and text bounds without a GPU.
+App tests compare companion starts with direct file loads at tick zero, exercise
+failure and retry, and verify that restart discards pending input and effects.
+The former in-game picker, menu input bindings and `state.ui` report are removed.
 
 ## Content and execution
 
 ### Playable catalog
 
-F2 offers **Default horde** (1,024 stationary enemies) and these files:
+The companion offers **Default horde** (1,024 stationary enemies) and these files:
 
 | File | Encounter |
 |---|---|
@@ -124,7 +117,7 @@ with no change to that swing's timing or geometry. Held beams can begin when
 the swing finishes. Separate regression scenarios assert each attack's timing,
 reach, hit order, impulse, and subsequent movement.
 
-Mechanism fixtures live inline in `scenarios/`; they are not picker entries.
+Mechanism fixtures live inline in `scenarios/`; they are not companion catalog entries.
 
 ### Scene format
 

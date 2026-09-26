@@ -15,7 +15,6 @@
 //! of quads a test can inspect — see the tests at the bottom, which never
 //! create a device.
 
-use crate::ui::Menu;
 use crate::input::ATTACK_BINDINGS;
 use arpg_gfx::{Glyphs, Quad, QuadSink};
 use arpg_sim::{AttackProfile, AttackStatus};
@@ -39,36 +38,6 @@ const INK: Vec4 = Vec4::new(0.95, 0.95, 0.90, 1.0);
 /// bug that only appears in half the world.
 const PANEL: Vec4 = Vec4::new(0.004, 0.005, 0.008, 0.62);
 
-/// Fills the frame's overlay.
-///
-/// Takes the metrics rather than a renderer, because placement depends on
-/// nothing else — and a signature that says so is one a test can satisfy with
-/// no window and no device.
-///
-/// Viewport size bounds the scene list and external labels on small windows.
-pub(crate) fn draw(
-    font: &Glyphs,
-    menu: &Menu,
-    attack: AttackStatus,
-    player_health: u8,
-    current: &str,
-    viewport: Vec2,
-    sink: &mut QuadSink<'_>,
-) {
-    if menu.open() {
-        draw_picker(font, menu, current, viewport, sink);
-        return;
-    }
-    let width = viewport.x - 2.0 * (MARGIN + PADDING);
-    if width < font.measure("...") || viewport.y < 2.0 * (MARGIN + PADDING) + font.line_height() {
-        return;
-    }
-    let mut hint = Text::default();
-    hint.label(font, "F2: scenes", width);
-    draw_panel(font, &[hint], width.min(font.measure("F2: scenes")), MARGIN, None, sink);
-    draw_player(font, attack, player_health, viewport, sink);
-}
-
 const HEALTH_FILL: Vec4 = Vec4::new(0.55, 0.035, 0.045, 1.0);
 const ACTIVE_SLOT: Vec4 = Vec4::new(0.025, 0.18, 0.25, 1.0);
 const SLOT: Vec4 = Vec4::new(0.025, 0.03, 0.04, 1.0);
@@ -83,9 +52,9 @@ fn player_panel_height(font: &Glyphs) -> f32 {
 
 /// Read-only health and fixed bindings. Highlight the committed swing, not the
 /// next requested profile: pressing Slam during Cleave must not light up Slam.
-fn draw_player(font: &Glyphs, attack: AttackStatus, health: u8, viewport: Vec2, sink: &mut QuadSink<'_>) {
+pub(crate) fn draw_player(font: &Glyphs, attack: AttackStatus, health: u8, viewport: Vec2, sink: &mut QuadSink<'_>) {
     let height = player_panel_height(font);
-    let minimum_top = MARGIN + font.line_height() + 2.0 * PADDING + GAP;
+    let minimum_top = MARGIN;
     let font = &font.scaled(PLAYER_TEXT_SCALE);
     let columns = ATTACK_BINDINGS.len() as f32;
     let widest_label = ATTACK_BINDINGS.iter()
@@ -137,7 +106,7 @@ fn draw_player(font: &Glyphs, attack: AttackStatus, health: u8, viewport: Vec2, 
     }
 }
 
-/// Gameplay progress sits below the scene hint and above the player HUD.
+/// Gameplay progress sits above the player HUD.
 /// The number of rows is bounded by both game admission and viewport height.
 pub(crate) fn draw_encounters<'a>(
     font: &Glyphs,
@@ -147,7 +116,7 @@ pub(crate) fn draw_encounters<'a>(
 ) {
     let width = (viewport.x - 2.0 * (MARGIN + PADDING)).min(900.0);
     let line_step = font.line_height() + 8.0;
-    let top = MARGIN + 2.0 * PADDING + line_step;
+    let top = MARGIN;
     let bottom = viewport.y - MARGIN - player_panel_height(font) - GAP;
     let available = ((bottom - top - 2.0 * PADDING) / line_step).max(0.0) as usize;
     if available == 0 || width < font.measure("...") { return; }
@@ -161,7 +130,7 @@ pub(crate) fn draw_encounters<'a>(
     if count == 0 { return; }
     let lines = &lines[..count];
     let measured = lines.iter().map(|line| font.measure(line.as_str())).fold(0.0, f32::max);
-    draw_panel(font, lines, measured, top, None, sink);
+    draw_panel(font, lines, measured, top, sink);
 }
 
 fn encounter_line(line: &mut Text, name: &str, state: arpg_game::EncounterState) {
@@ -171,64 +140,17 @@ fn encounter_line(line: &mut Text, name: &str, state: arpg_game::EncounterState)
         EncounterPhase::Ready => "Activate switch (E)",
         EncounterPhase::Running => "Defeat enemies",
         EncounterPhase::Succeeded => "Complete",
-        EncounterPhase::Failed => "Time up - F2 to restart",
-        EncounterPhase::Orphaned => "Unavailable - F2 to restart",
+        EncounterPhase::Failed => "Time up",
+        EncounterPhase::Orphaned => "Unavailable",
     };
     write!(line, "{name}: {}/{}  {seconds}s  {status}", state.defeated, state.target).expect("validated name and bounded numeric fields fit");
 }
 
-/// A bounded window into the catalog, with no allocation or I/O per frame.
-fn draw_picker(font: &Glyphs, menu: &Menu, current: &str, viewport: Vec2, sink: &mut QuadSink<'_>) {
-    let width = (viewport.x - 2.0 * (MARGIN + PADDING)).min(900.0);
-    let line_step = font.line_height() + 8.0;
-    let available = ((viewport.y - 2.0 * (MARGIN + PADDING) + 8.0) / line_step).max(0.0) as usize;
-    if available == 0 || width < font.measure("...") {
-        return;
-    }
-    const VISIBLE_ROWS: usize = 6;
-    const FIXED_ROWS: usize = 5; // Title, current scene, count, and two control hints.
-    const ERROR_ROWS: usize = 2;
-    let mut lines: [Text; VISIBLE_ROWS + FIXED_ROWS + ERROR_ROWS] =
-        core::array::from_fn(|_| Text::default());
-    let picker = menu.picker();
-    let overhead = FIXED_ROWS + if picker.error().is_some() { ERROR_ROWS } else { 0 };
-    let (count, highlight) = if available <= overhead {
-        lines[0].label(font, "Enlarge window for scene picker. F2/Esc closes.", width);
-        (1, None)
-    } else {
-        lines[0].label(font, "SCENE PLAYTESTS", width);
-        write!(lines[1], "Current: ").expect("literal fits");
-        lines[1].label(font, current, width);
-        let range = picker.visible((available - overhead).min(VISIBLE_ROWS));
-        let highlight = 2 + picker.selected() - range.start;
-        let mut count = 2;
-        for index in range.clone() {
-            lines[count].label(font, picker.entries()[index].label(), width);
-            count += 1;
-        }
-        write!(lines[count], "{}-{} of {}", range.start + 1, range.end, picker.entries().len())
-            .expect("numbers fit");
-        lines[count].fit(font, width);
-        count += 1;
-        if let Some(error) = picker.error() {
-            lines[count].label(font, "Could not load. Current playtest continues.", width);
-            lines[count + 1].label(font, error, width);
-            count += 2;
-        }
-        lines[count].label(font, "W/S or Up/Down: navigate   Enter: select/close", width);
-        lines[count + 1].label(font, "F2/Esc: close   World keeps running", width);
-        (count + 2, Some(highlight))
-    };
-    draw_panel(font, &lines[..count], width, MARGIN, highlight, sink);
-}
-
-/// Both menus submit the scrim, selection, and glyphs in the same order.
 fn draw_panel(
     font: &Glyphs,
     lines: &[Text],
     width: f32,
     top: f32,
-    highlight: Option<usize>,
     sink: &mut QuadSink<'_>,
 ) {
     let line_step = font.line_height() + 8.0;
@@ -237,17 +159,6 @@ fn draw_panel(
         Vec4::new(MARGIN, top, width + 2.0 * PADDING, height + 2.0 * PADDING),
         PANEL,
     ));
-    if let Some(row) = highlight {
-        sink.push(Quad::solid(
-            Vec4::new(
-                MARGIN + PADDING / 2.0,
-                top + PADDING + row as f32 * line_step - 3.0,
-                width + PADDING,
-                font.line_height() + 6.0,
-            ),
-            Vec4::new(0.018, 0.09, 0.13, 0.9),
-        ));
-    }
     for (index, line) in lines.iter().enumerate() {
         font.layout(
             line.as_str(),
@@ -260,7 +171,7 @@ fn draw_panel(
 }
 
 /// Formatting storage with a loud bound, rather than silent truncation of a
-/// number the designer is tuning. `write_str` accepts only complete UTF-8.
+/// gameplay number. `write_str` accepts only complete UTF-8.
 struct Text {
     bytes: [u8; 128],
     len: usize,
@@ -274,7 +185,7 @@ impl Default for Text {
 
 impl Text {
     /// External names cannot inject rows, exceed stack capacity, or require a
-    /// glyph outside the atlas. The real path stays untouched in the UI model.
+    /// glyph outside the atlas. Labels remain presentation-only.
     fn label(&mut self, font: &Glyphs, label: &str, width: f32) {
         for ch in label.chars() {
             if self.len == self.bytes.len() {
@@ -293,7 +204,7 @@ impl Text {
             return;
         }
         while self.len > 0 && font.measure(self.as_str()) + font.measure("...") > width {
-            self.len -= 1; // Picker text is ASCII, including every formatted literal.
+            self.len -= 1; // HUD text is ASCII, including every formatted literal.
         }
         self.write_str("...").expect("shortened text has suffix room");
     }
@@ -340,38 +251,9 @@ mod tests {
     }
 
     #[test]
-    fn picker_scrolls_and_bounds_external_text_to_the_viewport() {
+    fn external_labels_are_bounded_and_cannot_inject_rows() {
         let font = Glyphs::system();
-        let mut menu = Menu::default();
-        menu.on_key(crate::ui::MenuKey::Scenes);
-        let long = "long scene\n名".repeat(40);
-        menu.set_catalog(Ok((0..20)
-            .map(|i| std::path::PathBuf::from(format!("{i}-{long}.ron")))
-            .collect()));
-        for _ in 0..100 {
-            menu.on_key(crate::ui::MenuKey::Next);
-        }
-        assert_eq!(menu.picker().selected(), 21);
-        assert_eq!(menu.picker().visible(4), 18..22);
-        menu.set_error("A file error\nwith a long path: ".repeat(50));
-        for viewport in [Vec2::new(1280.0, 720.0), Vec2::new(500.0, 500.0), Vec2::new(180.0, 180.0)]
-        {
-            let mut buf = QuadBuffer::default();
-            draw_picker(&font, &menu, &long, viewport, &mut buf.sink());
-            let quads = buf.as_slice();
-            let panel = quads[0].rect();
-            assert!(panel.x + panel.z <= viewport.x && panel.y + panel.w <= viewport.y);
-            for quad in &quads[1..] {
-                let r = quad.rect();
-                assert!(r.x >= panel.x && r.y >= panel.y, "{r} vs {panel}");
-                assert!(
-                    r.x + r.z <= panel.x + panel.z && r.y + r.w <= panel.y + panel.w,
-                    "{r} vs {panel}"
-                );
-            }
-        }
-        assert_eq!(menu.picker().selected(), 21, "drawing never changes selection");
-        assert!(menu.take_request().is_some(), "drawing cannot consume a request");
+        let long = "long name\n名".repeat(40);
         let mut text = Text::default();
         text.label(&font, &long, 300.0);
         assert!(text.as_str().ends_with("..."));

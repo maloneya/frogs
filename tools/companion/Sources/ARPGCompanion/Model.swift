@@ -9,6 +9,7 @@ final class Model: ObservableObject {
     @Published private(set) var notice = "Waiting for the game…"
     @Published private(set) var failed = false
     @Published var drafts: [String: String] = [:]
+    var editable: Bool { connected && !busy && state?.busy == false }
     let socketPath: String
     private var inFlight = false
     private var refreshFinished: CheckedContinuation<Void, Never>?
@@ -74,7 +75,7 @@ final class Model: ObservableObject {
         do {
             let reply = try await exchange(command)
             guard let snapshot = reply.state else {
-                throw ConnectionError(message: reply.error ?? "Game returned no settings")
+                throw ConnectionError(message: reply.error ?? "Game returned no state")
             }
             let reconnecting = !connected || state?.session != snapshot.session
             if reconnecting { drafts.removeAll() }

@@ -10,25 +10,54 @@ pub(crate) enum Edit {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ZoomDirection { In, Out }
+
+pub(crate) enum Control {
+    Tuning(Edit),
+    RefreshScenes,
+    StartScene(PathBuf),
+    DefaultScene,
+    Collision(bool),
+    Vsync(bool),
+    Zoom(ZoomDirection),
+    Capture(PathBuf),
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Command {
     State {},
     Set { session: u32, key: String, value: f32 },
     Save { session: u32 }, Revert { session: u32 }, Defaults { session: u32 }, Restart { session: u32 },
+    RefreshScenes { session: u32 },
+    StartScene { session: u32, path: PathBuf },
+    DefaultScene { session: u32 },
+    Collision { session: u32, enabled: bool },
+    Vsync { session: u32, enabled: bool },
+    Zoom { session: u32, direction: ZoomDirection },
+    Capture { session: u32, path: PathBuf },
 }
 
 impl Command {
-    pub(crate) fn edit(self) -> Result<Option<Edit>, String> {
-        let (session, edit) = match self {
+    pub(crate) fn control(self) -> Result<Option<Control>, String> {
+        let (session, control) = match self {
             Self::State {} => return Ok(None),
-            Self::Set { session, key, value } => (session, Edit::Set(TuningField::named(&key).ok_or("Unknown tuning field")?, value)),
-            Self::Save { session } => (session, Edit::Save),
-            Self::Revert { session } => (session, Edit::Revert),
-            Self::Defaults { session } => (session, Edit::Defaults),
-            Self::Restart { session } => (session, Edit::Restart),
+            Self::Set { session, key, value } => (session, Control::Tuning(Edit::Set(TuningField::named(&key).ok_or("Unknown tuning field")?, value))),
+            Self::Save { session } => (session, Control::Tuning(Edit::Save)),
+            Self::Revert { session } => (session, Control::Tuning(Edit::Revert)),
+            Self::Defaults { session } => (session, Control::Tuning(Edit::Defaults)),
+            Self::Restart { session } => (session, Control::Tuning(Edit::Restart)),
+            Self::RefreshScenes { session } => (session, Control::RefreshScenes),
+            Self::StartScene { session, path } => (session, Control::StartScene(path)),
+            Self::DefaultScene { session } => (session, Control::DefaultScene),
+            Self::Collision { session, enabled } => (session, Control::Collision(enabled)),
+            Self::Vsync { session, enabled } => (session, Control::Vsync(enabled)),
+            Self::Zoom { session, direction } => (session, Control::Zoom(direction)),
+            Self::Capture { session, path } => (session, Control::Capture(path)),
         };
         if session != std::process::id() { return Err("Game restarted; review current values before editing".into()); }
-        Ok(Some(edit))
+        Ok(Some(control))
     }
 }
 
@@ -39,8 +68,8 @@ pub(crate) struct Request {
 }
 
 pub(crate) fn socket_path() -> PathBuf {
-    std::env::var_os("ARPG_TUNING_SOCKET").map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target/tuning.sock"))
+    std::env::var_os("ARPG_COMPANION_SOCKET").map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target/companion.sock"))
 }
 
 /// One bounded request at a time. A stalled companion cannot block the game loop.
@@ -79,11 +108,11 @@ impl Server {
                 match listener.accept() {
                     Ok((stream, _)) => serve(stream, &tx),
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(20)),
-                    Err(e) => { log::warn!("tuning accept: {e}"); break; }
+                    Err(e) => { log::warn!("companion accept: {e}"); break; }
                 }
             }
         });
-        log::info!("tuning listening on {}", path.display());
+        log::info!("companion listening on {}", path.display());
         Ok(Self { requests, path, inode, stop, worker: Some(worker) })
     }
 }

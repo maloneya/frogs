@@ -82,7 +82,7 @@ melee profile ends the channel on the next tick.
 `Game::beam` exposes the authoritative capsule; `state.sim.beam` reports its
 endpoints and tuning. `channeling` and `channel_tick` report active state and
 pulse clock. Traces emit channel start/stop and individual damage events.
-`attack_discs` continues to describe melee only, so F3's disc overlay does not
+`attack_discs` continues to describe melee only, so the collision disc overlay does not
 outline this capsule. Restart clears channel state; scene eviction needs no
 beam target cleanup because pulses retain no target identities. Completed-tick
 damage positions are historical outcomes: they survive target removal and

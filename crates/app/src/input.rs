@@ -5,12 +5,11 @@
 
 use winit::{event::MouseButton, keyboard::KeyCode};
 
-use crate::ui::{Menu, MenuKey};
 use arpg_core::{Action, ActionMask, Actions, InputState};
 use arpg_sim::AttackProfile;
 
 /// Fixed attacks, in deterministic input priority order. HUD and input use
-/// this same table; there is no mutable loadout or menu selection to reset.
+/// this same table; there is no mutable loadout to reset.
 pub(crate) const ATTACK_BINDINGS: [(Action, AttackProfile, &str); 3] = [
     (Action::Attack, AttackProfile::Cleave, "1/LMB"),
     (Action::AttackSecondary, AttackProfile::Slam, "2/RMB"),
@@ -33,39 +32,34 @@ pub(crate) const ATTACK_BINDINGS: [(Action, AttackProfile, &str); 3] = [
 ///
 /// Note the same action appearing twice. That is the case the naive
 /// implementation gets wrong — see `down` below.
-// Both contexts share key names, while only the game column can mint Actions.
-type Binding = (&'static str, KeyCode, Option<Action>, Option<MenuKey>);
+type Binding = (&'static str, KeyCode, Option<Action>);
 const BINDINGS: &[Binding] = &[
-    ("w", KeyCode::KeyW, Some(Action::MoveUp), Some(MenuKey::Previous)),
-    ("s", KeyCode::KeyS, Some(Action::MoveDown), Some(MenuKey::Next)),
-    ("a", KeyCode::KeyA, Some(Action::MoveLeft), None),
-    ("d", KeyCode::KeyD, Some(Action::MoveRight), None),
-    ("up", KeyCode::ArrowUp, Some(Action::MoveUp), Some(MenuKey::Previous)),
-    ("down", KeyCode::ArrowDown, Some(Action::MoveDown), Some(MenuKey::Next)),
-    ("left", KeyCode::ArrowLeft, Some(Action::MoveLeft), None),
-    ("right", KeyCode::ArrowRight, Some(Action::MoveRight), None),
-    ("1", KeyCode::Digit1, Some(Action::Attack), None),
-    ("2", KeyCode::Digit2, Some(Action::AttackSecondary), None),
-    ("3", KeyCode::Digit3, Some(Action::AttackTertiary), None),
-    ("space", KeyCode::Space, Some(Action::AttackTertiary), None),
-    ("e", KeyCode::KeyE, Some(Action::Interact), None),
-    ("f2", KeyCode::F2, None, Some(MenuKey::Scenes)),
-    ("f4", KeyCode::F4, None, None),
-    ("enter", KeyCode::Enter, None, Some(MenuKey::Accept)),
-    ("escape", KeyCode::Escape, None, Some(MenuKey::Close)),
+    ("w", KeyCode::KeyW, Some(Action::MoveUp)),
+    ("s", KeyCode::KeyS, Some(Action::MoveDown)),
+    ("a", KeyCode::KeyA, Some(Action::MoveLeft)),
+    ("d", KeyCode::KeyD, Some(Action::MoveRight)),
+    ("up", KeyCode::ArrowUp, Some(Action::MoveUp)),
+    ("down", KeyCode::ArrowDown, Some(Action::MoveDown)),
+    ("left", KeyCode::ArrowLeft, Some(Action::MoveLeft)),
+    ("right", KeyCode::ArrowRight, Some(Action::MoveRight)),
+    ("1", KeyCode::Digit1, Some(Action::Attack)),
+    ("2", KeyCode::Digit2, Some(Action::AttackSecondary)),
+    ("3", KeyCode::Digit3, Some(Action::AttackTertiary)),
+    ("space", KeyCode::Space, Some(Action::AttackTertiary)),
+    ("e", KeyCode::KeyE, Some(Action::Interact)),
+    ("f4", KeyCode::F4, None),
 ];
 
 /// The one input route used by window events and injected harness keys.
-/// Context changes discard held gameplay and latched edges; a key held across
+/// Restarts discard held gameplay and latched edges; a key held across
 /// a transition must be released and pressed again before it can act.
 #[derive(Default)]
 pub(crate) struct Controls {
     state: InputState,
-    /// Keys accepted by gameplay. Separate from physical state so a held key
-    /// swallowed by the menu cannot reappear when the menu closes.
+    /// Keys accepted by gameplay. Separate from physical state so a key
+    /// held across a restart cannot act in the new run.
     accepted: u32,
-    menu: Menu,
-    /// Physical keys, including those swallowed by the menu.
+    /// Physical keys, including those held across a restart.
     down: u32,
     mouse_down: [bool; 2],
     mouse_accepted: [bool; 2],
@@ -73,45 +67,22 @@ pub(crate) struct Controls {
 }
 
 impl Controls {
-    /// Returns whether the event was handled, including modal unbound keys and
-    /// duplicate presses. Only unhandled events may reach app debug shortcuts.
-    pub(crate) fn on_key(
-        &mut self,
-        key: KeyCode,
-        pressed: bool,
-        repeat: bool,
-    ) -> bool {
-        let was_open = self.menu.open();
-        let binding = BINDINGS.iter().enumerate().find(|(_, (_, bound, ..))| *bound == key);
-        let menu_key = binding.and_then(|(_, (_, _, _, menu))| *menu);
-        let consumed = was_open || matches!(menu_key, Some(MenuKey::Scenes));
-        if repeat {
-            return consumed;
-        }
-        let Some((index, _)) = binding else { return consumed };
+    /// Repeats and duplicate presses cannot mint another gameplay edge.
+    pub(crate) fn on_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
+        let Some((index, _)) = BINDINGS.iter().enumerate().find(|(_, (_, bound, ..))| *bound == key)
+            else { return false; };
+        if repeat { return true; }
         let bit = 1 << index;
         if pressed {
-            if self.down & bit != 0 {
-                return true; // A duplicate press has no effect in either context.
-            }
+            if self.down & bit != 0 { return true; }
             self.down |= bit;
+            self.accepted |= bit;
         } else {
             self.down &= !bit;
+            self.accepted &= !bit;
         }
-        if pressed && let Some(menu_key) = menu_key {
-            self.menu.on_key(menu_key);
-        }
-        if was_open != self.menu.open() {
-            self.clear_gameplay();
-        } else if !consumed {
-            if pressed {
-                self.accepted |= bit;
-            } else {
-                self.accepted &= !bit;
-            }
-            self.sync();
-        }
-        consumed
+        self.sync();
+        true
     }
 
     /// Cancel accepted input and pending edges together, without forgetting
@@ -122,15 +93,14 @@ impl Controls {
         self.state = InputState::default();
     }
 
-    /// Restart discards gameplay and the scene picker, but a physically held key
+    /// Restart discards gameplay, but a physically held key
     /// must still be released before it can act in the new playtest.
     pub(crate) fn restart(&mut self) {
         self.clear_gameplay();
-        self.menu = Menu::default();
         self.aim = CursorAim::default();
     }
 
-    /// Focus loss discards held keys and unsampled edges, but preserves the menu.
+    /// Focus loss discards held keys and unsampled edges.
     pub(crate) fn release_all(&mut self) {
         self.down = 0;
         self.mouse_down = [false; 2];
@@ -147,7 +117,7 @@ impl Controls {
         };
         if self.mouse_down[index] == pressed { return; }
         self.mouse_down[index] = pressed;
-        self.mouse_accepted[index] = pressed && !self.menu.open();
+        self.mouse_accepted[index] = pressed;
         self.sync();
     }
 
@@ -162,7 +132,7 @@ impl Controls {
     pub(crate) fn cursor_left(&mut self) { self.aim.cursor = CursorPosition::Retained; }
 
     pub(crate) fn aim(&mut self, camera: &arpg_gfx::OrthoCamera, viewport: (u32, u32), player: glam::Vec3) -> arpg_core::AimDir {
-        if !self.menu.open() { self.aim.update(camera, viewport, player); }
+        self.aim.update(camera, viewport, player);
         self.aim.direction
     }
 
@@ -193,7 +163,7 @@ impl Controls {
     /// while Up is still held. The table costs only a handful of comparisons.
     fn sync(&mut self) {
         let mut held = ActionMask::EMPTY;
-        for (i, (_, _, action, _)) in BINDINGS.iter().enumerate() {
+        for (i, (_, _, action)) in BINDINGS.iter().enumerate() {
             if self.accepted & (1u32 << i) != 0
                 && let Some(action) = action
             {
@@ -205,15 +175,6 @@ impl Controls {
         }
         self.state.set_held(held);
     }
-
-    pub(crate) fn menu(&self) -> &Menu {
-        &self.menu
-    }
-
-    pub(crate) fn menu_mut(&mut self) -> &mut Menu {
-        &mut self.menu
-    }
-
 }
 
 /// Absence of a screen coordinate is a device state; the aim is always valid.
@@ -349,63 +310,20 @@ mod tests {
     }
 
     #[test]
-    fn picker_navigation_is_modal_and_does_not_leak_keys() {
-        let mut controls = Controls::default();
-        controls.on_key(KeyCode::ArrowUp, true, false);
-        tap(&mut controls, "f2");
-        assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
-        assert!(matches!(
-            controls.menu_mut().take_request(),
-            Some(crate::ui::MenuRequest::RefreshScenes)
-        ));
-        for _ in 0..10 {
-            tap(&mut controls, "down");
-        }
-        assert_eq!(controls.menu().picker().selected(), 1, "selection clamps at the last row");
-        tap(&mut controls, "right");
-        tap(&mut controls, "escape");
-        assert!(!controls.menu().open());
-        controls.on_key(KeyCode::ArrowUp, true, true);
-        assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
-        controls.on_key(KeyCode::ArrowUp, false, false);
-        controls.on_key(KeyCode::ArrowUp, true, false);
-        assert!(controls.sample().held(Action::MoveUp));
-        tap(&mut controls, "f2");
-        tap(&mut controls, "f2");
-        assert!(!controls.menu().open());
-        assert!(controls.menu_mut().take_request().is_none());
-    }
-
-    #[test]
-    fn modal_transitions_discard_edges_and_require_fresh_gameplay_presses() {
+    fn restart_discards_edges_and_requires_fresh_gameplay_presses() {
         let mut controls = Controls::default();
         controls.on_key(KeyCode::Space, true, false);
         controls.on_key(KeyCode::KeyW, true, false);
-        // Open before any tick has consumed the attack edge.
-        tap(&mut controls, "f2");
-        assert!(controls.menu().open());
-        let actions = controls.sample();
-        assert!(!actions.just_pressed(Action::AttackTertiary));
-        assert_eq!(actions.move_axis(), glam::Vec2::ZERO);
-        tap(&mut controls, "right");
-        for key in ["space", "1", "2", "3"] {
-            tap(&mut controls, key);
-        }
-        let actions = controls.sample();
-        assert_eq!(controls.attack_input(actions), (None, false, false));
-        assert_eq!(controls.held().move_axis(), glam::Vec2::ZERO);
-
-        let esc = key_named("escape").unwrap();
-        assert!(controls.on_key(esc, true, false), "closing must consume Escape");
-        assert!(!controls.menu().open());
-        assert!(controls.on_key(esc, true, false), "a duplicate must not reach quit");
-        // A held W cannot start moving through repeat OR duplicate injection.
+        controls.restart();
+        assert!(!controls.sample().just_pressed(Action::AttackTertiary));
         controls.on_key(KeyCode::KeyW, true, true);
         controls.on_key(KeyCode::KeyW, true, false);
         assert_eq!(controls.sample().move_axis(), glam::Vec2::ZERO);
         controls.on_key(KeyCode::KeyW, false, false);
         controls.on_key(KeyCode::KeyW, true, false);
         assert!(controls.sample().held(Action::MoveUp));
+        tap(&mut controls, "space"); // Still held across restart: release first.
+        assert!(!controls.sample().just_pressed(Action::AttackTertiary));
         tap(&mut controls, "space");
         assert!(controls.sample().just_pressed(Action::AttackTertiary));
         assert!(!controls.sample().just_pressed(Action::AttackTertiary));
@@ -479,35 +397,36 @@ mod tests {
     #[test]
     fn an_unknown_name_is_not_a_key() {
         assert_eq!(key_named("q"), None);
-        assert_eq!(key_named("f1"), None);
+        for old_key in ["f1", "f2", "f3", "enter", "escape", "v", "p", "-", "="] {
+            assert_eq!(key_named(old_key), None);
+        }
         let mut controls = Controls::default();
         assert!(!controls.on_key(KeyCode::F1, true, false));
-        assert!(!controls.menu().open());
         assert_eq!(key_named(""), None);
     }
 
-    /// Unbound keys must fall through untouched, so the debug keys keep working.
+    /// Unbound keys must fall through untouched, so the app can handle its launcher and exit keys.
     #[test]
     fn an_unbound_key_changes_nothing() {
         let mut input = Controls::default();
         input.on_key(KeyCode::KeyV, true, false);
         assert_eq!(input.down, 0);
     }
-    /// E follows the same edge latch and modal capture as attacks. Two nearby
+    /// E follows the same edge latch as attacks. Two nearby
     /// objects make a repeated edge a gameplay bug, even for one-shot objects.
     #[test]
-    fn interaction_is_one_edge_and_is_captured_by_menus() {
+    fn interaction_is_one_edge_and_restart_discards_unsampled_presses() {
         let mut controls = Controls::default();
         controls.on_key(KeyCode::KeyE, true, false);
         assert!(controls.sample().just_pressed(Action::Interact));
         assert!(!controls.sample().just_pressed(Action::Interact));
         controls.on_key(KeyCode::KeyE, true, true);
         assert!(!controls.sample().just_pressed(Action::Interact));
-        tap(&mut controls, "f2");
-        tap(&mut controls, "e");
+        controls.on_key(KeyCode::KeyE, false, false);
+        controls.on_key(KeyCode::KeyE, true, false);
+        controls.restart();
         assert!(!controls.sample().just_pressed(Action::Interact));
-        tap(&mut controls, "escape");
-        assert!(!controls.sample().just_pressed(Action::Interact));
+        controls.on_key(KeyCode::KeyE, false, false);
         tap(&mut controls, "e");
         assert!(controls.sample().just_pressed(Action::Interact));
     }
@@ -548,20 +467,18 @@ mod aiming_tests {
     }
 
     #[test]
-    fn menu_captures_mouse_and_aim_and_keyboard_release_does_not_cancel_mouse() {
-        let camera = arpg_gfx::OrthoCamera::new(800, 600);
+    fn restart_clears_mouse_and_keyboard_release_does_not_cancel_mouse() {
         let mut controls = Controls::default();
         controls.on_mouse(MouseButton::Left, true);
         assert!(controls.sample().just_pressed(Action::Attack));
         controls.on_key(KeyCode::Digit1, true, false);
         controls.on_key(KeyCode::Digit1, false, false);
         assert!(controls.held().contains(Action::Attack));
-        controls.on_key(KeyCode::F2, true, false);
-        controls.on_cursor(Vec2::new(750.0, 300.0)).unwrap();
-        assert_eq!(controls.aim(&camera, (800, 600), Vec3::ZERO), arpg_core::AimDir::FORWARD);
+        controls.restart();
         assert!(!controls.sample().just_pressed(Action::Attack));
-        controls.on_key(KeyCode::Escape, true, false);
         assert!(!controls.held().contains(Action::Attack));
+        controls.on_mouse(MouseButton::Left, true);
+        assert!(!controls.sample().just_pressed(Action::Attack));
         controls.on_mouse(MouseButton::Left, false);
         controls.on_mouse(MouseButton::Left, true);
         assert!(controls.sample().just_pressed(Action::Attack));
