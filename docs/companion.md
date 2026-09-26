@@ -13,12 +13,13 @@ Press **F4** in the game to open or focus **ARPG Companion**, or use
 other. The companion reconnects when the game returns. The game keeps running
 while the companion has focus; focus loss releases gameplay input.
 
-- **Scenes:** select a file and click **Start selected** to read its current
-  contents. **Restart current** repeats the cached scene with current tuning;
-  **Default horde** starts the built-in scene. **Refresh files** rescans `scenes/`.
-  Files are sorted by path and malformed files remain selectable so their errors
-  can be read. A failed start preserves the current run and pending work. See
-  [scene lifecycle](scene-playtests.md).
+- **Scenes:** select a file and click **Open selected**, or **New scene**, to edit
+  its starting layout on the top-down map. Place enemies, sources and formations;
+  drag walls into rectangles. Select and drag objects to move them, or use the
+  inspector for exact values. **Save & play** saves and starts the layout;
+  **Restart current** repeats the last loaded layout with current tuning.
+  **Default horde** starts the built-in scene. Refresh rescans `scenes/`.
+  See [scene editing](scene-editor.md) and [scene lifecycle](scene-playtests.md).
 - **Tuning:** edit type-wide values at runtime, save them, revert saved values,
   or reset defaults. See [runtime tuning](tuning.md) for application timing and
   persistence.
@@ -69,7 +70,7 @@ Use the `session` from the latest state reply for every mutation; the example
 number above is a placeholder. A stale session is refused before any command.
 Replies contain `ok`, `error`, and a `state` snapshot with catalog metadata,
 accepted and saved values, saved-file path, status, game process identity, scene catalog, and presentation readouts.
-Malformed requests return `ok: false` and an error. Input is bounded to 4096 bytes.
+Malformed requests return `ok: false` and an error. Input and native responses are bounded to 8 MiB; ordinary state replies remain small.
 The socket thread handles I/O; the game's main loop validates and applies edits
 between ticks, then replies. The request queue holds at most one command;
 additional requests receive a busy error while the game is stalled. Expired
@@ -79,8 +80,11 @@ state and never automatically resends an edit.
 The companion refreshes every half second, including changes made through the
 harness. These small snapshots do not serialize the world. Drafts survive normal
 refreshes. An edit reserves the controls while it waits for a refresh, so
-clicks cannot queue out of order. Disconnects disable editing and discard drafts; reconnection fetches
-a fresh catalog and accepted state. A changed process identity also clears drafts.
+clicks cannot queue out of order. Disconnects disable submitting edits and discard unsubmitted tuning text; reconnection fetches
+a fresh catalog and accepted state. A changed process identity also clears tuning text drafts.
+Scene documents are returned only by `scene_editor` requests, never by polling.
+Their accepted drafts and undo history survive disconnection and process changes;
+only submitting further edits requires a connection. See [editor protocol](scene-editor.md#protocol).
 The game alone advances simulation; neither UI drawing nor socket polling steps it.
 Performance trials refuse companion commands other than state queries; close the companion when measuring
 to avoid its polling/rendering overhead.

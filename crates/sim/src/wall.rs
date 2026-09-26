@@ -3,7 +3,7 @@
 use crate::{ARENA_HALF, Fnv, SceneError, SceneId};
 use arpg_core::Report;
 use glam::Vec2;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Admission bound for live wall rectangles, independent of circular bodies.
 pub const MAX_WALLS: usize = 256;
@@ -12,7 +12,7 @@ const SKIN: f32 = 0.00001;
 /// Bounded work when a sweep meets several faces. Unspent motion is discarded.
 const CONTACT_LIMIT: usize = 8;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WallInput {
     centre: (f32, f32),
@@ -25,8 +25,8 @@ struct WallInput {
 /// metres; yaw follows rendering (+Z turns toward +X). File decoding uses the
 /// same constructor as typed callers. Dimensions must be at least one cm and
 /// every corner must fit inside the arena.
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(try_from = "WallInput")]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(try_from = "WallInput", into = "WallInput")]
 pub struct Wall {
     centre: Vec2,
     half: Vec2,
@@ -447,6 +447,11 @@ fn arena_hit(start: Vec2, delta: Vec2, limit: f32) -> Option<WallHit> {
         }
     }
     nearest
+}
+
+
+impl From<Wall> for WallInput {
+    fn from(wall: Wall) -> Self { Self { centre: wall.centre.into(), size: (wall.half * 2.0).into(), yaw: wall.yaw } }
 }
 
 #[cfg(test)]

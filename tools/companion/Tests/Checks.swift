@@ -123,6 +123,9 @@ func editAdmissionWaitsForRefreshWithoutQueuingMoreEdits() async {
     precondition(model.busy) // controls disable before the waiting edit reaches the wire
     let admitted = await model.send(Request(op: .set, key: field.key, value: 20))
     precondition(!admitted)
+    model.acceptEditor(try! sceneDocument("Busy draft"), action: "new")
+    let sceneAdmitted = await model.editScene(.object(["action": .string("rename"), "name": .string("Lost edit")]))
+    precondition(!sceneAdmitted && model.editor?.name == "Busy draft")
     model.drafts[field.key] = "newer text"
     await peer.resumeRead()
     _ = await refresh.value
@@ -206,6 +209,9 @@ struct Checks {
     @MainActor static func main() async throws {
         try await draftsSurviveRefreshButNeverReconnect()
         try await invalidTextNeverLeavesTheCompanion()
+        try await sceneDraftsSurviveDisconnectAndUndoAcrossSave()
+        try sceneJSONPreservesExactIntegers()
+        sceneCoordinatesRoundTrip()
         await localTransportFailsClearlyWithoutAGame()
         await editAdmissionWaitsForRefreshWithoutQueuingMoreEdits()
         print("Native companion: draft, validation, reconnect and transport checks passed")
@@ -233,6 +239,93 @@ struct Checks {
             await model.action(.save)
             print("Native companion: live game edit, refusal, save, revert, defaults and restart passed")
             try await liveToolingChecks(model)
+            try await liveSceneEditorChecks(model)
         }
     }
+}
+
+private func sceneDocument(_ name: String, path: String? = nil, revision: String? = nil) throws -> SceneDocument {
+    let data = try JSONSerialization.data(withJSONObject: [
+        "scene": ["engine": ["name": name], "future_relationship": ["body": 3]],
+        "name": name, "objects": [], "selected": NSNull(), "path": path as Any? ?? NSNull(),
+        "revision": revision as Any? ?? NSNull(), "arena_half": 96, "player_radius": 0.3,
+        "trees": [], "torches": [], "relationships": 1
+    ])
+    return try JSONDecoder().decode(SceneDocument.self, from: data)
+}
+
+@MainActor
+func sceneDraftsSurviveDisconnectAndUndoAcrossSave() async throws {
+    let peer = Peer()
+    let model = Model(path: "unused", exchange: { try await peer.exchange($0) })
+    await model.send(Request(op: .state))
+    let first = try sceneDocument("Original", path: "/scenes/a.ron", revision: "one")
+    model.acceptEditor(first, action: "open")
+    precondition(!model.editorDirty)
+    let changed = try sceneDocument("Changed")
+    model.acceptEditor(changed, action: "edit")
+    precondition(model.editorDirty && model.editorPath == "/scenes/a.ron")
+    await peer.disconnect()
+    await model.send(Request(op: .state))
+    precondition(!model.connected && model.editor?.scene == changed.scene)
+    let accepted = await model.editScene(.object(["action": .string("rename"), "name": .string("Offline edit")]))
+    precondition(!accepted && model.editor?.scene == changed.scene)
+    await peer.restart()
+    await model.send(Request(op: .state))
+    precondition(model.connected && model.editor?.scene == changed.scene)
+    model.acceptEditor(try sceneDocument("Changed", path: "/scenes/a.ron", revision: "two"), action: "save")
+    precondition(!model.editorDirty)
+    model.undoScene()
+    precondition(model.editor?.scene == first.scene && model.editorDirty)
+    precondition(model.editorRevision == "two", "Undo must not revert the disk revision")
+    model.redoScene()
+    precondition(model.editor?.scene == changed.scene && !model.editorDirty)
+    let encoded = try JSONEncoder().encode(changed.scene)
+    let decoded = try JSONDecoder().decode(JSONValue.self, from: encoded)
+    precondition(decoded == changed.scene)
+}
+
+func sceneJSONPreservesExactIntegers() throws {
+    let source = "[9007199254740993,18446744073709551615,-9223372036854775808,1.25,true]".data(using: .utf8)!
+    let value = try JSONDecoder().decode(JSONValue.self, from: source)
+    precondition(value == .array([.unsigned(9_007_199_254_740_993), .unsigned(UInt64.max), .signed(Int64.min), .number(1.25), .bool(true)]))
+    let encoded = try JSONEncoder().encode(value)
+    precondition(encoded == source, "Unedited authored values must survive the native editor exactly")
+}
+
+func sceneCoordinatesRoundTrip() {
+    let view = SceneViewport(centreX: 7, centreZ: -3, span: 48)
+    for size in [(400.0, 300.0), (700.0, 800.0)] {
+        let (a,b) = view.screen(x: 4, z: 8, width: size.0, height: size.1)
+        let (x,z) = view.world(x: a, y: b, width: size.0, height: size.1, snap: 0)
+        precondition(abs(x-4)<0.000001 && abs(z-8)<0.000001)
+        let (c,d) = view.screen(x: 4.2, z: -8.3, width: size.0, height: size.1)
+        let snapped = view.world(x: c, y: d, width: size.0, height: size.1, snap: 0.5)
+        precondition(snapped.0 == 4 && snapped.1 == -8.5)
+    }
+}
+
+@MainActor
+func liveSceneEditorChecks(_ model: Model) async throws {
+    let run = model.state!.scenes.run
+    let created = await model.send(Request(op: .sceneEditor, request: EditorRequest(action: "new")))
+    precondition(created)
+    await model.editScene(.object(["action": .string("add"), "kind": .string("source"), "pos": .point(8, 8)]))
+    precondition(!model.failed && model.editor!.objects.count == 1)
+    let source = model.editor!.objects[0]
+    await model.editScene(.object(["action": .string("duplicate"), "target": source.target, "offset": .point(3, 0)]))
+    precondition(!model.failed && model.editor!.objects.count == 2)
+    model.undoScene(); precondition(model.editor!.objects.count == 1)
+    model.redoScene(); precondition(model.editor!.objects.count == 2)
+    await model.editScene(.object(["action": .string("set"), "target": source.target, "field": .string("radius"), "value": .number(-2)]))
+    precondition(model.failed && model.editor!.objects[0].radius == 2)
+    precondition(model.state!.scenes.run == run)
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent("arpg-edited-\(UUID().uuidString).ron").path
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    await model.saveScene(path: path, play: true)
+    precondition(!model.failed && !model.editorDirty && model.state!.scenes.run == run + 1)
+    let reopened = await model.send(Request(op: .sceneEditor, request: EditorRequest(action: "open", path: path)))
+    precondition(reopened)
+    precondition(model.editor!.objects.count == 2)
+    print("Native companion: live scene edit, duplicate, undo/redo, refusal, save/play and reopen passed")
 }

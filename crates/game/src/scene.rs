@@ -4,7 +4,7 @@ use crate::tree::{Trees, TreeSpec};
 
 use arpg_core::Report;
 use arpg_sim::{Fnv, SceneId, World};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use crate::chest::{ChestSpec, Chests};
 use crate::door::{DoorSpec, Doors};
 use crate::encounter::{EncounterSpec, Encounters};
@@ -12,7 +12,7 @@ use crate::enemy_attack::{EnemyAttackSpec, EnemyAttacks};
 use crate::torch::{Torches, TorchSpec};
 
 /// Authored gameplay wraps the engine definition without copying its fields.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GameScene {
     /// Physical content, still defined and validated by sim.
@@ -208,4 +208,43 @@ pub(crate) fn fingerprint(world: &World, decorations: (&Torches, &Trees), doors:
     attacks.hash(&mut hash);
     hash.u64(world.hash());
     hash.finish()
+}
+
+impl GameScene {
+    /// Remove an explicit body without retargeting gameplay links. Referenced
+    /// bodies must remain until their relationship is removed by its author.
+    pub fn remove_body(&mut self, index: usize) -> Result<(), &'static str> {
+        use crate::EncounterStart;
+        if index >= self.engine.bodies.len() { return Err("body no longer exists"); }
+        if self.doors.iter().any(|s| s.body == index)
+            || self.chests.iter().any(|s| s.body == index)
+            || self.enemy_attack.is_some_and(|s| s.body == index)
+            || self.encounters.iter().any(|s| matches!(s.start, EncounterStart::Activated(i) if i == index))
+        { return Err("This body is used by a door, chest, attack or encounter and cannot be deleted."); }
+        self.engine.bodies.remove(index);
+        for s in &mut self.doors { if s.body > index { s.body -= 1; } }
+        for s in &mut self.chests { if s.body > index { s.body -= 1; } }
+        if let Some(s) = &mut self.enemy_attack && s.body > index { s.body -= 1; }
+        for s in &mut self.encounters {
+            let EncounterStart::Activated(i) = &mut s.start;
+            if *i > index { *i -= 1; }
+        }
+        Ok(())
+    }
+
+    /// Remove an unreferenced source and remap surviving encounter groups.
+    pub fn remove_source(&mut self, index: usize) -> Result<(), &'static str> {
+        use crate::EncounterObjective;
+        if index >= self.engine.sources.len() { return Err("source no longer exists"); }
+        if self.encounters.iter().any(|s| {
+            let EncounterObjective::Defeat(goal) = &s.objective;
+            goal.sources.contains(&index)
+        }) { return Err("This source belongs to an encounter and cannot be deleted."); }
+        self.engine.sources.remove(index);
+        for s in &mut self.encounters {
+            let EncounterObjective::Defeat(goal) = &mut s.objective;
+            for i in &mut goal.sources { if *i > index { *i -= 1; } }
+        }
+        Ok(())
+    }
 }

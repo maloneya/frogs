@@ -3,10 +3,10 @@
 use crate::encounter::EncounterEvent;
 use arpg_core::Report;
 use arpg_sim::{EntityId, Fnv, GameplayAccess, InteractionState, SceneId, TraceSink};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A locked chest bound to an explicit, non-interactable static scene body.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChestSpec {
     /// Index in the engine scene's explicit bodies.

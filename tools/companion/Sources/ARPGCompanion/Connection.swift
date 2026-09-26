@@ -23,6 +23,7 @@ struct SceneFile: Decodable, Identifiable, Sendable {
 }
 
 struct SceneSnapshot: Decodable, Sendable {
+    let directory: String?
     let files: [SceneFile]
     let error: String?
     let current: String?
@@ -66,10 +67,12 @@ struct Reply: Decodable, Sendable {
     let ok: Bool
     let error: String?
     let state: Snapshot?
+    let editor: SceneDocument?
 }
 
 enum Operation: String, Encodable, Sendable {
     case state, set, save, revert, defaults, restart, collision, vsync, zoom, capture
+    case sceneEditor = "scene_editor"
     case refreshScenes = "refresh_scenes"
     case startScene = "start_scene"
     case defaultScene = "default_scene"
@@ -85,6 +88,7 @@ struct Request: Encodable, Sendable {
     var path: String? = nil
     var enabled: Bool? = nil
     var direction: ZoomDirection? = nil
+    var request: EditorRequest? = nil
 }
 
 struct ConnectionError: LocalizedError {
@@ -134,7 +138,7 @@ actor Connection {
         }
         var response = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
-        while response.count <= 262_144 {
+        while response.count <= 8 * 1024 * 1024 {
             let count = Darwin.read(fd, &buffer, buffer.count)
             if count < 0 && errno == EINTR { continue }
             guard count > 0 else { throw ConnectionError(message: "Game disconnected or did not reply. Refresh before retrying an edit.") }

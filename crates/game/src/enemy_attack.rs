@@ -8,7 +8,7 @@
 
 use arpg_core::Report;
 use arpg_sim::{EntityId, Fnv, MeleeView, SceneId, TICK_HZ, TraceSink};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use crate::encounter::EncounterEvent;
 
 /// Health available at the beginning of every run.
@@ -18,7 +18,7 @@ pub const PLAYER_MAX_HEALTH: u8 = 5;
 const DAMAGE_INTERVAL_TICKS: u32 = TICK_HZ;
 
 /// Binds the scene's one melee attacker to an explicit seeking body.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnemyAttackSpec {
     /// Index in the engine scene's explicit bodies.

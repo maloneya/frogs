@@ -573,6 +573,7 @@ fn companion_controls_refuse_stale_sessions_and_performance_trials() {
         json!({"op":"refresh_scenes"}), json!({"op":"collision", "enabled":true}),
         json!({"op":"vsync", "enabled":false}), json!({"op":"zoom", "direction":"in"}),
         json!({"op":"capture", "path":"unused.png"}),
+        json!({"op":"scene_editor", "request":{"action":"new"}}),
     ];
     for mut command in commands.clone() {
         command["session"] = json!(0);
@@ -613,4 +614,61 @@ fn companion_zoom_uses_the_camera_and_preserves_gameplay() {
     assert_eq!(app.game.hash(), before);
     assert_eq!(companion(&mut app, json!({"op":"capture", "path":"unused.png"}))["ok"], false);
     assert!(app.capture.path().is_none());
+}
+
+#[test]
+fn scene_editor_save_play_is_transactional_and_preserves_tuning() {
+    use serde_json::json;
+    let directory = std::env::temp_dir().join(format!("arpg-editor-play-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("authored.ron");
+    let _ = std::fs::remove_file(&path);
+    let mut app = App::default();
+    app.start_playtest(pair()).unwrap();
+    let tuning = app.game.tuning().with(arpg_sim::TuningField::SlamImpulse, 42.0).unwrap();
+    app.game.set_tuning(tuning);
+    let before = app.game.hash();
+    let run = app.run_id;
+    let new = companion(&mut app, json!({"op":"scene_editor","request":{"action":"new"}}));
+    assert_eq!(new["ok"], true);
+    let edited = companion(&mut app, json!({"op":"scene_editor","request":{"action":"edit", "scene":new["editor"]["scene"], "edit":{"action":"add","kind":"source","pos":[8.0,8.0]}}}));
+    assert_eq!(edited["ok"], true);
+    assert_eq!(app.game.hash(), before, "authoring must not mutate gameplay");
+    let scene = edited["editor"]["scene"].clone();
+    // Predict refusal before either file creation or live replacement, including
+    // malformed dimensions that the preview must not subtract unchecked.
+    for (columns, rows) in [(0, 2), (2, 0)] {
+        let mut invalid = scene.clone();
+        invalid["engine"]["grids"] = json!([{"origin":[0.0,0.0],"columns":columns,"rows":rows,"spacing":1.0,"what":{"seeks":true}}]);
+        for play in [false, true] {
+            let refused = companion(&mut app, json!({"op":"scene_editor","request":{"action":"save","scene":invalid,"path":path,"revision":null,"play":play}}));
+            assert_eq!(refused["ok"], false);
+            assert_eq!(app.game.hash(), before);
+            assert_eq!(app.run_id, run);
+            assert!(!path.exists());
+        }
+    }
+    let save = |path: &std::path::Path, revision: serde_json::Value| json!({"op":"scene_editor","request":{"action":"save","scene":scene,"path":path,"revision":revision,"play":true}});
+    let bad = companion(&mut app, save(&directory.join("absent/file.ron"), json!(null)));
+    assert_eq!(bad["ok"], false);
+    assert_eq!(app.game.hash(), before);
+    assert_eq!(app.run_id, run);
+    let saved = companion(&mut app, save(&path, json!(null)));
+    assert_eq!(saved["ok"], true);
+    assert_eq!(app.run_id, run + 1);
+    assert_eq!(app.game.tick(), 0);
+    assert_eq!(app.game.tuning(), tuning);
+    let mut expected = arpg_game::Game::from_scene(&arpg_content::load_scene(&path).unwrap()).unwrap();
+    expected.set_tuning(tuning);
+    assert_eq!(app.game.hash(), expected.hash());
+    let after = app.game.hash();
+    std::fs::write(&path, "// edited outside companion\n").unwrap();
+    let refused = companion(&mut app, save(&path, saved["editor"]["revision"].clone()));
+    assert_eq!(refused["ok"], false);
+    assert_eq!(app.game.hash(), after);
+    assert_eq!(app.run_id, run + 1);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "// edited outside companion\n");
+    let state: serde_json::Value = serde_json::from_str(&app.companion_reply(crate::companion::Command::State {})).unwrap();
+    assert!(state["editor"].is_null());
+    std::fs::remove_dir_all(directory).unwrap();
 }

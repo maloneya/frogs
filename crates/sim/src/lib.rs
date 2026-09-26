@@ -127,10 +127,10 @@ const ENEMY_SPACING: f32 = 0.7;
 /// exactly in hardware, so bodies may interpenetrate and the image stays
 /// correct — which leaves the radius as a pure feel knob, answerable to how
 /// dense the crowd should be and to nothing else.
-const ENEMY_RADIUS: f32 = 0.25;
+pub const ENEMY_RADIUS: f32 = 0.25;
 
 /// Player collision footprint, independent of the authored mesh.
-const PLAYER_RADIUS: f32 = 0.3;
+pub const PLAYER_RADIUS: f32 = 0.3;
 
 /// Centre distance where an enemy rests against the player.
 pub(crate) const PLAYER_ENEMY_CONTACT_DISTANCE: f32 = PLAYER_RADIUS + ENEMY_RADIUS;

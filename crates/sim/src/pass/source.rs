@@ -50,7 +50,7 @@ use core::fmt;
 
 use arpg_core::Report;
 use glam::Vec2;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::angle::GOLDEN_ANGLE;
 use crate::hash::Fnv;
@@ -112,7 +112,7 @@ impl fmt::Display for SourceId {
 ///
 /// Three kinds of question rather than three phrasings of one: what time it is,
 /// how many bodies exist, and where the player is standing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
 pub enum Condition {
     /// Fire on the cadence, always. The default.
     #[default]
@@ -308,7 +308,7 @@ impl Source {
 /// Public fields allow authored scene descriptions and direct callers to build
 /// a specification. The harness decodes this same schema. A specification is
 /// not a live source until the conversion validates it.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceSpec {
     /// Initially enabled by default. False creates a ready but dormant source.

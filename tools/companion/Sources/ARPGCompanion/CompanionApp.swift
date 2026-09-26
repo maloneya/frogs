@@ -21,9 +21,16 @@ struct CompanionApp: App {
     var body: some Scene {
         Window("ARPG Companion", id: "companion") {
             CompanionView(model: model)
-                .task { await model.poll() }
+                .task {
+                    let args = CommandLine.arguments
+                    if let flag = args.firstIndex(of: "--scene"), args.indices.contains(flag + 1) {
+                        await model.send(Request(op: .state))
+                        await model.send(Request(op: .sceneEditor, request: EditorRequest(action: "open", path: args[flag + 1])))
+                    }
+                    await model.poll()
+                }
         }
-        .defaultSize(width: 860, height: 720)
+        .defaultSize(width: 1120, height: 800)
         .windowResizability(.contentMinSize)
     }
 }
@@ -98,7 +105,7 @@ struct CompanionView: View {
                 Spacer(minLength: 0)
                 if model.state?.busy == true { Text("Performance trial").foregroundStyle(.secondary) }
             }.font(.caption).padding(16)
-        }.frame(minWidth: 760, minHeight: 540)
+        }.frame(minWidth: 960, minHeight: 640)
         .onChange(of: model.state?.session) { _, _ in sceneSelection = nil }
         .onChange(of: model.state?.scenes.files.map(\.path)) { _, paths in
             if !(paths?.contains { $0 == sceneSelection } ?? false) { sceneSelection = nil }

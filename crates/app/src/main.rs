@@ -7,6 +7,7 @@
 //! that sees both sides.
 
 mod companion;
+mod scene_editor;
 mod app;
 mod audio;
 mod collision_debug;

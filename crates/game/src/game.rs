@@ -88,10 +88,16 @@ impl Game {
     /// Runtime identities are scoped to the new run, as with `from_scene`.
     /// Type-wide runtime tuning is preserved.
     pub fn start_scene(&mut self, scene: &GameScene) -> Result<(), SceneError> {
+        *self = self.prepare_scene(scene)?;
+        Ok(())
+    }
+
+    /// Prepare the same complete replacement as `start_scene`, retaining tuning,
+    /// without changing this game. Authoring can finish saving before committing it.
+    pub fn prepare_scene(&self, scene: &GameScene) -> Result<Self, SceneError> {
         let mut replacement = Self::from_scene(scene)?;
         replacement.world.set_tuning(self.world.tuning());
-        *self = replacement;
-        Ok(())
+        Ok(replacement)
     }
 
     /// Restarts from the cached description without consulting the filesystem.

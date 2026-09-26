@@ -143,7 +143,7 @@ Controls
     Esc             quit
 
 ARPG Companion
-    Scenes          start a scene file, restart current, or load default horde
+    Scenes          edit scene layouts, save and play, or restart current
     Tuning          adjust runtime values and save tuning
     Debug           collision outlines, vsync, zoom, readouts and screenshots
 

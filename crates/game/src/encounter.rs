@@ -7,21 +7,21 @@ use arpg_core::Report;
 use arpg_sim::{
     Defeat, EntityId, Fnv, GameplayAccess, InteractionState, SceneId, SourceId, TraceSink,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 
 /// Bounded live encounter count, also bounding the presentation workload.
 pub const MAX_ENCOUNTERS: usize = 16;
 
 /// One authored activation condition.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum EncounterStart {
     /// Index of an explicit interactable body in this scene.
     Activated(usize),
 }
 
 /// Defeats from a scene-local group of sources, within a fixed tick budget.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DefeatObjective {
     /// Distinct engine source indices; defines this encounter's enemy group.
@@ -33,14 +33,14 @@ pub struct DefeatObjective {
 }
 
 /// Supported objective rules; each variant owns its evaluation semantics.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum EncounterObjective {
     /// Count defeats from the declared source group.
     Defeat(DefeatObjective),
 }
 
 /// Typed effects. Targets are scene-local door or chest indices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum EncounterAction {
     /// Unlock a gameplay door; opening still needs a fresh interaction.
     UnlockDoor(usize),
@@ -49,7 +49,7 @@ pub enum EncounterAction {
 }
 
 /// A complete encounter composition, installed independently for each scene copy.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EncounterSpec {
     /// Unique scene-local label, 1–48 printable ASCII characters.

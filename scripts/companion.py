@@ -46,6 +46,7 @@ if __name__ == "__main__":
         checks = SCRATCH / "CompanionChecks"
         subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "6", "-warnings-as-errors",
                         str(sources / "Connection.swift"), str(sources / "Model.swift"),
+                        str(sources / "SceneDocument.swift"),
                         str(ROOT / "tools/companion/Tests/Checks.swift"),
                         "-o", str(checks)], check=True)
         subprocess.run([str(checks)], check=True)

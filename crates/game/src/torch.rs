@@ -2,15 +2,15 @@
 
 use arpg_core::{MAX_POINT_LIGHTS, PointLight, Report};
 use arpg_sim::{Fnv, SceneId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One authored torch. Its position is the illumination centre in world metres.
 /// Construction and deserialization share validation; fields cannot bypass it.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
-#[serde(try_from = "RawTorch")]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(try_from = "RawTorch", into = "RawTorch")]
 pub struct TorchSpec(PointLight);
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RawTorch {
     position: (f32, f32, f32),
@@ -128,5 +128,12 @@ impl Torches {
                 }
             }
         });
+    }
+}
+
+impl From<TorchSpec> for RawTorch {
+    fn from(torch: TorchSpec) -> Self {
+        let light = torch.light();
+        Self { position: light.position().into(), colour: light.colour().into(), intensity: light.intensity(), range: light.range() }
     }
 }

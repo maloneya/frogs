@@ -2,13 +2,13 @@
 use arpg_core::Report;
 use arpg_sim::{Fnv, SceneId, ARENA_HALF};
 use glam::Vec2;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Shared admission and presentation bound across all live scenes.
 pub const MAX_TREES: usize = 128;
 
 /// The authored woodland mesh catalog.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TreeKind {
     /// Tiered evergreen.
     Pine,
@@ -19,8 +19,8 @@ pub enum TreeKind {
 }
 
 /// Grounded, metre-scale tree with a validated solid trunk footprint.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
-#[serde(try_from = "RawTree")]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(try_from = "RawTree", into = "RawTree")]
 pub struct TreeSpec {
     kind: TreeKind,
     position: Vec2,
@@ -28,7 +28,7 @@ pub struct TreeSpec {
     scale: f32,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RawTree { kind: TreeKind, position: (f32, f32), yaw: f32, scale: f32 }
 impl TryFrom<RawTree> for TreeSpec {
@@ -124,4 +124,8 @@ impl Trees {
             }
         });
     }
+}
+
+impl From<TreeSpec> for RawTree {
+    fn from(tree: TreeSpec) -> Self { Self { kind: tree.kind, position: tree.position.into(), yaw: tree.yaw, scale: tree.scale } }
 }

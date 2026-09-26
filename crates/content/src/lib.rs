@@ -179,3 +179,110 @@ mod tuning_tests {
         }
     }
 }
+
+/// Read an authoring document with a revision for detecting external edits.
+/// The revision includes comments and formatting as well as semantic content.
+pub fn read_scene_document(path: &Path) -> Result<(arpg_game::GameScene, String), String> {
+    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let scene = parse_scene(&text).map_err(|error| error.to_string())?;
+    arpg_game::Game::from_scene(&scene).map_err(|error| error.to_string())?;
+    Ok((scene, text_revision(&text)))
+}
+
+fn text_revision(text: &str) -> String {
+    let mut hash = arpg_sim::Fnv::default();
+    hash.usize(text.len());
+    for byte in text.bytes() { hash.u64(u64::from(byte)); }
+    format!("{:016x}", hash.finish())
+}
+
+/// Validate and atomically save a complete scene. A missing revision means a
+/// new file; existing files require the revision obtained when opening them.
+/// Leading line comments survive canonical serialization of the scene data.
+pub fn save_scene_document(path: &Path, scene: &arpg_game::GameScene, revision: Option<&str>) -> Result<String, String> {
+    use std::io::Write;
+    arpg_game::Game::from_scene(scene).map_err(|error| error.to_string())?;
+    let previous = match std::fs::read_to_string(path) {
+        Ok(text) => {
+            if revision != Some(text_revision(&text).as_str()) {
+                return Err("Scene file changed or already exists. Reopen it or save under a new name.".into());
+            }
+            Some(text)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && revision.is_none() => None,
+        Err(error) => return Err(format!("Cannot save scene: {error}")),
+    };
+    let header: String = previous.as_deref().unwrap_or("").lines()
+        .take_while(|line| line.trim().starts_with("//") || line.trim().is_empty())
+        .map(|line| format!("{line}\n")).collect();
+    let text = header + &ron::ser::to_string_pretty(scene, ron::ser::PrettyConfig::default())
+        .map_err(|error| error.to_string())? + "\n";
+    let temporary = path.with_extension(format!("ron.{}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)
+        .map_err(|error| error.to_string())?;
+    let result = (|| -> Result<(), String> {
+        file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        // Recheck after serialization/writing; refuse a changed baseline.
+        let current = std::fs::read_to_string(path);
+        let unchanged = match (&previous, &current) {
+            (Some(old), Ok(current)) => old == current,
+            (None, Err(error)) => error.kind() == std::io::ErrorKind::NotFound,
+            _ => false,
+        };
+        if !unchanged { return Err("Scene changed during save; reopen before saving.".into()); }
+        if previous.is_none() {
+            // hard_link is create-only, so a concurrent new file cannot be lost.
+            std::fs::hard_link(&temporary, path).map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_file(&temporary);
+        } else { std::fs::rename(&temporary, path).map_err(|e| e.to_string())?; }
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result?;
+    Ok(text_revision(&text))
+}
+
+#[cfg(test)]
+mod scene_document_tests {
+    use super::*;
+
+    #[test]
+    fn every_authored_scene_round_trips_through_the_owning_schema() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes");
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|v| v.to_str()) != Some("ron") { continue; }
+            let original = load_scene(&path).unwrap();
+            let text = ron::ser::to_string_pretty(&original, ron::ser::PrettyConfig::default()).unwrap();
+            let decoded = parse_scene(&text).unwrap();
+            assert_eq!(arpg_game::Game::from_scene(&original).unwrap().hash(),
+                arpg_game::Game::from_scene(&decoded).unwrap().hash(), "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn scene_saves_refuse_conflicts_and_invalid_data_without_losing_file_or_header() {
+        let path = std::env::temp_dir().join(format!("arpg-scene-save-{}.ron", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut scene = arpg_game::GameScene::default();
+        scene.engine.name = "Before".into();
+        let revision = save_scene_document(&path, &scene, None).unwrap();
+        assert!(save_scene_document(&path, &scene, None).is_err());
+        let original = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, format!("// Keep this playtest question.\n{original}")).unwrap();
+        assert!(save_scene_document(&path, &scene, Some(&revision)).is_err());
+        let (_, revision) = read_scene_document(&path).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        scene.engine.grids.push(arpg_sim::BodyGrid { origin: (0.0, 0.0), columns: 0, rows: 2, spacing: 1.0, what: arpg_sim::Template::BODY });
+        assert!(save_scene_document(&path, &scene, Some(&revision)).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        scene.engine.grids.clear();
+        scene.engine.name = "After".into();
+        let next = save_scene_document(&path, &scene, Some(&revision)).unwrap();
+        assert_ne!(next, revision);
+        assert!(std::fs::read_to_string(&path).unwrap().starts_with("// Keep this playtest question.\n"));
+        assert_eq!(load_scene(&path).unwrap().engine.name, "After");
+        std::fs::remove_file(path).unwrap();
+    }
+}

@@ -72,14 +72,14 @@ See [runtime tuning](tuning.md) for the native F4 companion, live attributes and
 
 Press **F4** to open [ARPG Companion](companion.md) and choose **Scenes**.
 **Restart current** uses the cached snapshot; **Default horde** starts the built-in
-scene. Select a `.ron` file and click **Start selected** to read it again and start
-fresh. The catalog lists sorted regular files directly inside `scenes/`, relative
+scene. Select a `.ron` file and click **Open selected** to read its authored layout
+into the [scene editor](scene-editor.md), then **Save & play** to save and start fresh. The catalog lists sorted regular files directly inside `scenes/`, relative
 to the game's working directory. It is scanned at startup and on **Refresh files**,
 not on every state poll. A missing directory leaves the built-in buttons usable.
 
 Scene starts use the same validated boundary as the harness. Read, parse or
 validation errors appear in the companion and preserve the current playtest.
-Repair the file and click **Start selected** to retry. The game keeps running;
+Repair the file and click **Open selected** to retry. The game keeps running;
 its input is released when focus moves to the companion.
 
 App tests compare companion starts with direct file loads at tick zero, exercise

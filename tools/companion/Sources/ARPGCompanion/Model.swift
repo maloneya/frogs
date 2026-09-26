@@ -8,6 +8,14 @@ final class Model: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var notice = "Waiting for the game…"
     @Published private(set) var failed = false
+    @Published private(set) var editor: SceneDocument?
+    @Published var editorSelection: String?
+    @Published private(set) var editorPath: String?
+    @Published private(set) var editorRevision: String?
+    @Published private(set) var undoScenes: [SceneDocument] = []
+    @Published private(set) var redoScenes: [SceneDocument] = []
+    private var savedScene: JSONValue?
+    var editorDirty: Bool { editor.map { $0.scene != savedScene } ?? false }
     @Published var drafts: [String: String] = [:]
     var editable: Bool { connected && !busy && state?.busy == false }
     let socketPath: String
@@ -81,6 +89,9 @@ final class Model: ObservableObject {
             if reconnecting { drafts.removeAll() }
             state = snapshot
             connected = true
+            if reply.ok, let document = reply.editor, let request = request.request {
+                acceptEditor(document, action: request.action)
+            }
             // Polls must not erase a local validation error while its draft remains.
             if request.op != .state || reconnecting || drafts.isEmpty {
                 notice = reply.error ?? snapshot.message
@@ -94,5 +105,47 @@ final class Model: ObservableObject {
             failed = true
             return false
         }
+    }
+}
+
+
+extension Model {
+    @discardableResult
+    func editScene(_ edit: JSONValue) async -> Bool {
+        guard let editor else { return false }
+        return await send(Request(op: .sceneEditor, request: EditorRequest(action: "edit", scene: editor.scene, edit: edit)))
+    }
+
+    func acceptEditor(_ document: SceneDocument, action: String) {
+        if action == "edit" {
+            if let editor { undoScenes.append(editor); if undoScenes.count > 32 { undoScenes.removeFirst() } }
+            redoScenes.removeAll()
+        } else if action == "new" || action == "open" {
+            undoScenes.removeAll(); redoScenes.removeAll()
+        }
+        editor = document
+        if action != "save" { editorSelection = document.selected ?? document.objects.first?.id }
+        if action != "edit" {
+            editorPath = document.path; editorRevision = document.revision
+            savedScene = action == "new" ? nil : document.scene
+        }
+    }
+
+    func undoScene() {
+        guard !busy, let previous = undoScenes.popLast() else { return }
+        if let editor { redoScenes.append(editor) }
+        editor = previous; editorSelection = previous.selected
+    }
+
+    func redoScene() {
+        guard !busy, let next = redoScenes.popLast() else { return }
+        if let editor { undoScenes.append(editor) }
+        editor = next; editorSelection = next.selected
+    }
+
+    func saveScene(path: String, play: Bool) async {
+        guard let editor else { return }
+        await send(Request(op: .sceneEditor, request: EditorRequest(action: "save", scene: editor.scene,
+            path: path, revision: path == editorPath ? editorRevision : nil, play: play)))
     }
 }

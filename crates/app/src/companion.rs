@@ -14,6 +14,7 @@ pub(crate) enum Edit {
 pub(crate) enum ZoomDirection { In, Out }
 
 pub(crate) enum Control {
+    SceneEditor(Box<crate::scene_editor::Request>),
     Tuning(Edit),
     RefreshScenes,
     StartScene(PathBuf),
@@ -27,6 +28,7 @@ pub(crate) enum Control {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Command {
+    SceneEditor { session: u32, request: Box<crate::scene_editor::Request> },
     State {},
     Set { session: u32, key: String, value: f32 },
     Save { session: u32 }, Revert { session: u32 }, Defaults { session: u32 }, Restart { session: u32 },
@@ -43,6 +45,7 @@ impl Command {
     pub(crate) fn control(self) -> Result<Option<Control>, String> {
         let (session, control) = match self {
             Self::State {} => return Ok(None),
+            Self::SceneEditor { session, request } => (session, Control::SceneEditor(request)),
             Self::Set { session, key, value } => (session, Control::Tuning(Edit::Set(TuningField::named(&key).ok_or("Unknown tuning field")?, value))),
             Self::Save { session } => (session, Control::Tuning(Edit::Save)),
             Self::Revert { session } => (session, Control::Tuning(Edit::Revert)),
@@ -135,8 +138,8 @@ fn serve(mut stream: UnixStream, tx: &SyncSender<Request>) {
     if stream.set_read_timeout(Some(timeout)).is_err() || stream.set_write_timeout(Some(timeout)).is_err() { return; }
     let read = || -> Result<Command, String> {
         let mut line = String::new();
-        BufReader::new((&stream).take(4097)).read_line(&mut line).map_err(|e| e.to_string())?;
-        if line.len() > 4096 || !line.ends_with('\n') { return Err("Expected a JSON line of at most 4096 bytes".into()); }
+        BufReader::new((&stream).take(8 * 1024 * 1024 + 1)).read_line(&mut line).map_err(|e| e.to_string())?;
+        if line.len() > 8 * 1024 * 1024 || !line.ends_with('\n') { return Err("Expected a JSON line of at most 8 MiB".into()); }
         serde_json::from_str(&line).map_err(|e| e.to_string())
     };
     let result = read().and_then(|command| {

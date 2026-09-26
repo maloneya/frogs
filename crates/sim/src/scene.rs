@@ -9,14 +9,14 @@ use core::fmt;
 
 use arpg_core::Report;
 use glam::Vec2;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{EntityId, Fnv, SourceId, SourceSpec, Template};
 #[cfg(test)]
 use crate::Condition;
 
 /// One authored body, independent of its eventual runtime identity.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Placed {
     /// World-space ground position `(x, z)`.
@@ -28,7 +28,7 @@ pub struct Placed {
 
 /// A one-time rectangular spawn layout. Expansion happens at scene load, not
 /// over simulation ticks; every generated body uses the ordinary placement door.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BodyGrid {
     /// First body's world-space ground position `(x, z)`.
@@ -81,7 +81,7 @@ impl BodyGrid {
 
 /// A reusable description. Loading it twice creates two independent instances.
 /// The player belongs to the world, not to this disposable content.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scene {
     /// Solid static ground rectangles, independent of circular body placements.

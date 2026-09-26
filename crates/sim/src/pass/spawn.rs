@@ -47,7 +47,7 @@
 //! reproduce the decision exactly.
 
 use glam::Vec2;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::hash::Fnv;
 use crate::members::Members;
@@ -84,7 +84,7 @@ const _: () = assert!(QUEUE_CAPACITY > 0, "a zero-length queue would refuse ever
 /// in whichever crate reads the file — costs an edit per behaviour per copy and
 /// fails in the direction nothing reports: a forgotten copy leaves the new
 /// behaviour unreachable rather than breaking a build.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Template {
     /// Whether the body chases the player. See [`crate::pass::seek`].
