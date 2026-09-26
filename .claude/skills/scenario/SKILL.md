@@ -3,9 +3,10 @@ name: scenario
 description: Write, run and update headless scenarios for simulation and gameplay behaviour, regressions, timing assertions and golden traces. Use live playtesting for rendering and device integration.
 ---
 
-# Scenarios
+# Headless scenarios
 
-Scenarios drive `Game::step` without a GPU, window or wall-clock pacing. They
+Scenes are playable content; scenarios test rules and compositions. They drive
+`Game::step` without a GPU, window or wall-clock pacing. They
 assert checkpoints, final state and optional golden traces. Every run also
 replays and compares Game hashes tick by tick. Repeatability alone does not
 prove the intended behaviour, so explicit predictions are required.
@@ -15,9 +16,8 @@ prove the intended behaviour, so explicit predictions are required.
 cargo run --quiet -p scenario -- scenarios/
 ```
 
-Run the full scenario gate after the focused case, then the other
-[repository checks](../../../CLAUDE.md#checks-and-commands). Hooks are specific to
-Claude Code; other agents must run the commands explicitly.
+Run a focused case while iterating, then the shared
+[full verification](../../../docs/verification.md), which includes all scenarios.
 
 ## Start from the owning definitions
 
@@ -50,15 +50,12 @@ See [retreating attacks](../../../scenarios/retreating_attacks_keep_their_aim.ro
 `dir` is world space, with ground coordinates `(x, z)`. Screen-direction mapping
 belongs to app/camera. Start with zero enemies unless the crowd is the subject;
 otherwise contact can change a movement prediction. Place bodies deliberately
-through setup actions or a scene rather than depending on the default grid.
+through setup actions or a scene; a fresh Game starts empty.
 
-Read tuning at its owner before calculating an expectation: movement in
-[walk](../../../crates/sim/src/pass/walk.rs), turning in
-[face](../../../crates/sim/src/pass/face.rs), bounds in
-[World](../../../crates/sim/src/lib.rs). In the example, distance is speed times
-fixed tick duration times thirty. Explain that calculation to the user when it
-helps them understand the behaviour. Keep float tolerances smaller than the
-one-tick error the assertion should detect.
+Read [tuning](../../../crates/sim/src/tuning.rs), [turning](../../../crates/sim/src/pass/face.rs)
+and [bounds](../../../crates/sim/src/lib.rs) before predicting. Distance above is
+speed × fixed tick duration × 30. Keep tolerances below the one-tick error the
+assertion should detect.
 
 ## Time and identity
 
@@ -142,11 +139,6 @@ an extra hit or an early spawn; that is why the event sequence matters.
 and assertions. Use release for performance conclusions. It measures mean step
 cost, not worst-tick latency or render performance.
 
-Replay divergence suggests nondeterministic input, ordering, randomness or
-presentation feedback. Use the first divergent tick to investigate; repeated
-runs can miss nondeterminism, so passing replay is evidence rather than a proof
-for every possible execution.
-
-Scenarios cannot judge combat feel, rendering, OS input delivery or real input
-latency. Use the [playtest skill](../playtest/SKILL.md) for live checks and report
-those results separately from durable behaviour assertions.
+Investigate replay divergence at the first differing tick: input, ordering,
+randomness or presentation feedback. For rendering/input integration use the
+[playtest guide](../playtest/SKILL.md); combat feel needs a human trial.

@@ -1,72 +1,48 @@
 # Runtime tuning
 
-Tuning is a tab in the native [ARPG Companion](companion.md). Build it once from
-the repository root:
-
-```sh
-python3 scripts/dev.py
-```
-
-The development launcher opens **ARPG Companion** alongside the game.
-`python3 scripts/companion.py open` builds and opens just the companion. Open **Tuning**, select a type in the sidebar,
-edit a numeric field and press Return to apply it. Escape discards that draft.
-Native steppers apply immediately; Reset beside a field restores its built-in
-value. Closing the companion leaves the game running.
+Open **Tuning** in [ARPG Companion](companion.md). Select a type, enter a numeric
+value and press Return; Escape discards text. Steppers apply immediately, and a
+field's Reset restores its built-in value. Stars mark differences from saved values.
 
 **Save tuning** writes accepted values to `tuning.ron` in the game's working
 directory. Unsubmitted text is not saved. **Revert saved** restores the last
-successfully loaded/saved values. **Reset defaults** restores built-in values
-without overwriting the file. Stars mark differences from saved values.
-**Restart encounter** repeats the cached scene with current tuning.
+successfully loaded/saved values. **Reset defaults** changes live values without
+writing the file. **Restart scene** repeats the cached layout with current tuning.
+Scene files do not contain these type-wide settings; see the
+[editor state model](scene-editor.md#build-play-adjust).
 
-The first catalog covers player movement speed, monster walk/run/sprint speeds,
-monster acceleration, and Cleave/Slam impulse. The authoritative catalog, units,
-ranges and defaults are in [sim tuning](../crates/sim/src/tuning.rs). Swift has
-no copy of that list: the game sends it with the accepted values. The panel
-shows the derived monster motor speed ceiling; raise acceleration when exploring
-speeds above that ceiling. These are type-wide settings, including existing
-monsters, rather than edits to individual bodies.
+[Sim's catalog](../crates/sim/src/tuning.rs) owns keys, units, ranges, defaults and
+validation. Swift displays that catalog rather than copying it. The derived
+monster motor speed ceiling shows when acceleration limits the requested speed.
+Settings apply to existing and future members of a type, not individual bodies.
 
-Movement uses accepted settings on the next tick. Physical momentum still
-applies, so zero monster speed does not instantly erase carried motion. Melee
-changes affect subsequent swings; an in-flight swing keeps its captured impulse.
-Additive loading, eviction, new scene starts and restart preserve tuning.
-Animation keeps its bounded buckets and authored reference speeds.
+Movement uses accepted settings on the next tick. Zero monster speed does not
+erase carried momentum. Melee changes affect subsequent swings; an active swing
+keeps its captured impulse. Scene starts, restart, additive loads and eviction
+preserve tuning. Animation retains its bounded buckets and authored reference speeds.
 
-Invalid edits leave live state and queued work untouched. Validation belongs to
-sim, shared by files, harness and companion. Accepted tuning participates in
-simulation hashes and emits `TuningChanged` events at the between-tick boundary.
-Files must contain the complete catalog. Failed saves preserve the previous file
-and saved baseline. An invalid startup file leaves built-in tuning active; the
-companion displays the load error. Use `ARPG_TUNING_FILE=/path/to/tuning.ron`
-for a separate experiment.
+Invalid edits preserve live state and queued work. Accepted values enter simulation
+hashes and emit `TuningChanged` between ticks. Files require the complete catalog;
+failed saves preserve the previous file/baseline. Invalid startup content leaves
+defaults active and reports the error. Use `ARPG_TUNING_FILE` for an isolated experiment.
 
-## Harness and verification
+## Automation and evidence
 
-The opt-in [live harness](../.claude/skills/playtest/SKILL.md) remains independent:
+The [harness](../.claude/skills/playtest/SKILL.md) supports:
 
 ```text
 tuning set player_speed 6
-tuning set slam_impulse 24
 tuning save
 tuning revert
 tuning defaults
 tuning restart
-state
 ```
 
-Field keys come from the owning catalog. `state.sim.tuning` reports accepted
-values; `state.tuning` reports persistence. `state.companion` reports the latest
-command status and any error. The harness has no
-panel pointer, keyboard, capture, or window lifecycle commands.
+`state.sim.tuning` reports accepted values; `state.tuning` reports persistence;
+`state.companion` reports command status/errors. See [native checks and capture](companion.md#checks-and-capture)
+for testing the UI.
 
-`python3 scripts/companion.py test` tests the native model and builds the app bundle.
-Full repository verification includes that check. For a self-capture of the
-native tuning view, launch the built executable with
-`ARPG_COMPANION_CAPTURE=/tmp/tuning.png target/"ARPG Companion.app"/Contents/MacOS/ARPGCompanion --socket <path> --tab tuning`.
-This captures the companion's own view, without desktop capture or input injection.
-
-A scenario's `tuning` timeline contains complete validated settings before the
-named zero-based tick. See [runtime player tuning](../scenarios/runtime_player_tuning.ron)
-and the monster, Cleave and Slam scenarios beside it. These verify timing and
-physical consequences; whether a combination feels satisfying needs playtesting.
+A scenario's `tuning` timeline supplies complete settings before its named
+zero-based tick. [Runtime player tuning](../scenarios/runtime_player_tuning.ron)
+and adjacent monster/Cleave/Slam cases assert timing and physical consequences.
+Combat feel remains a playtest judgement.

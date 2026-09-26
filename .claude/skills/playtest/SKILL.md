@@ -1,40 +1,40 @@
 ---
 name: playtest
-description: Drive the running arpg app through ARPG_HARNESS for visual checks, input integration, screenshots and render measurements. Use the engine socket rather than OS key injection or desktop capture; use scenarios for headless behavioural assertions.
+description: Drive arpg through ARPG_HARNESS for visual checks, input integration, screenshots and render measurements. Use scenarios for headless behavioural assertions.
 ---
 
 # Live playtesting
 
-Use the game's harness for input, state, trace and capture. OS key injection can
-reach the wrong app; desktop capture depends on focus and permissions. Harness
-input works without focus, but screenshots still require presenting frames:
-keep the window visible and the display awake. Search [traps](../../../docs/traps.md)
-when observations are surprising.
+Use the game harness, not OS key injection or desktop capture. Harness input
+works without focus; screenshots require presenting frames, so keep the window
+visible and display awake. Search [traps](../../../docs/traps.md) for surprising
+observations. For human authoring, use the [scene editor](../../../docs/scene-editor.md).
 
 ## Launch and drive
 
 ```sh
 . "$HOME/.cargo/env"
 cargo build --release
-ARPG_HARNESS=/tmp/arpg.sock RUST_LOG=arpg=info,arpg_gfx=info ./target/release/arpg
+ARPG_HARNESS=/tmp/arpg.sock ARPG_COMPANION_SOCKET=/tmp/arpg-tools.sock ARPG_TUNING_FILE=/tmp/arpg-tuning.ron RUST_LOG=arpg=info,arpg_gfx=info ./target/release/arpg
 ```
 
-Launch the last command as a background process using your execution tool.
-Wait for the socket with a bounded timeout and check startup output if it fails.
-Use a fresh socket path if another instance is running; do not remove its socket.
-Send one command per connection:
+Run the last command in the background with your execution tool. Choose unused
+paths for each session; never remove another instance's socket. Wait with a bounded
+timeout and inspect startup output on failure. Harness sessions start empty and
+skip the interactive scene preference, so load content explicitly:
 
 ```sh
 sock() { echo "$1" | nc -U /tmp/arpg.sock; }
+sock 'scene start scenes/seekers.ron'
 sock state
 sock 'hold d 500'
 sock 'shot /tmp/arpg-frame.png'
 sock quit
 ```
 
-Each command replies at its documented boundary. `hold` waits for release;
-`shot` waits for the PNG write or an error; `spawn` replies when queued and the
-body lands on a later tick. The game continues stepping between commands.
+Send one command per connection. `hold` replies after release; `shot` after PNG
+write/error; `spawn` when queued, before its body lands on the next tick. Game
+keeps stepping between commands.
 
 | Operation | Commands |
 |---|---|
@@ -49,100 +49,57 @@ body lands on a later tick. The game continues stepping between commands.
 | Presentation | `vsync on\|off`, `debug collision on\|off` |
 | Exit | `quit` |
 
-The command parser is in [harness](../../../crates/app/src/harness.rs). Spawn and source payloads decode the simulation-owned `Placed` and `SourceSpec`
-RON descriptions, including templates, cadence and conditions; see
-[source enablement](../../../docs/source-enablement.md).
+[Harness](../../../crates/app/src/harness.rs) owns command syntax; sim owns RON
+spawn/source payloads. Key names come from [BINDINGS](../../../crates/app/src/input.rs);
+unknown-key replies list them. `cursor` uses physical window pixels and the native
+ground-projection path. See [controls](../../../README.md#controls) and [aiming](../../../docs/aiming.md).
 
-See [ARPG Companion](../../../docs/companion.md) for native scene, tuning and debug controls, standalone launching and self-capture.
+Use authored scenes for repeatable setups, one-off spawn/impulse commands for
+probing. [Scene lifetime](../../../docs/scene-playtests.md) defines start versus
+restart and run-scoped IDs. [Companion](../../../docs/companion.md) documents its
+separate socket, launching and native self-capture.
 
-Key names come from [BINDINGS](../../../crates/app/src/input.rs); an unknown key
-reply lists them. `cursor <x> <y>` supplies physical window pixels through
-the same cursor path as native pointer movement. Aim starts at world +Z and
-retains its last valid direction on cursor loss or at the player.
-The live controls are WASD/arrows to move, cursor to aim, left click for Cleave, right click for Slam, and Space for Disintegrate;
-keys 1, 2 and 3 also use those slots. See
-[attack bindings](../../../docs/scene-playtests.md) for the fixed controls.
-A swing holds its starting direction through recovery while walking
-continues freely. `tap 1` swings and `tap e` interacts. Use `python3 scripts/dev.py`
-to launch the game and native companion together. Scene selection and debug controls live there; the game has no debug
-menus. Use explicit harness commands for automation.
+## Predict and observe
 
-Choose population size and seeking in authored scene bodies or grids, then start
-that scene for a fresh trial. Scene restart restores the cached snapshot;
-starting the file again rereads it. Discard old IDs after a new run.
-See [scene playtests](../../../docs/scene-playtests.md).
-
-## Observe and predict
-
-Read JSON by field name with `jq`:
+Read JSON by field name:
 
 ```sh
-sock state | jq '.sim.tick, .sim.player_pos'
+sock state | jq '.sim.tick, .sim.player_pos, .sim.bodies'
 sock state | jq '.render.frames, .render.skipped'
-sock state | jq '.sim.bodies'
 ```
 
-Body reports are keyed by stable ID and include position, physical velocity
-(including enemy locomotion) and inverse mass. The `gaits` object reports each
-chaser's chosen gait and desired speed. State is derived from authoritative data, but reporting changes
-still require verification; adding a storage field does not automatically make
-its value visible. Trace shows transitions between state samples. A dropped
-event count means history was truncated.
+Bodies are keyed by stable ID, with position, physical velocity and inverse mass;
+`gaits` reports chosen gait and desired speed. Trace records transitions; dropped
+events mean history was truncated. Verify that new reported fields reflect the
+owner rather than assuming storage automatically makes them visible.
 
-Predict from the current owning constants before measuring. A walk in open
-ground covers speed times fixed tick duration per tick. A wall-clock `hold`
-does not guarantee an exact tick count, and contact or carried motion can alter
-the result. Use a scenario when exact tick timing is the question. Explain the
-expected effect and observed result separately from whether it feels good.
+Predict from current owning constants. An open-ground walk covers speed × fixed
+tick duration per tick; wall-clock `hold` does not guarantee a tick count, and
+contacts/momentum can change the result. Use [scenarios](../scenario/SKILL.md)
+for exact timing and assertions. Keep measured behaviour separate from feel.
 
-## Screenshots and performance
+## Capture and performance
 
-`shot` writes the app's own image; inspect that file directly. A covered window
-can time out. Capture also reports write failure and rejects a second request
-while one is pending. The companion Debug tab or `debug collision on` displays authoritative collision
-geometry; see [collision debug](../../../docs/collision-debug.md).
+Inspect the file written by `shot`. Covered windows can time out; overlapping
+captures and write failures are reported. `debug collision on` exposes
+[authoritative outlines](../../../docs/collision-debug.md).
 
-Measure release builds with the window visible and frontmost and display awake.
-Record the scene, population and present mode. Compare rendered frames, skipped
-frames and simulation ticks across the same timed interval. Repeat short samples
-and report their spread; the best sample estimates attainable throughput under
-intermittent background throttling, not typical frame pacing.
+Measure release builds with a visible frontmost window and awake display. Close
+the companion, warm up the chosen workload, reset telemetry, measure, then export
+once. Record population, present mode, rendered/skipped frames and ticks. Repeat
+samples and report variation. Uncapped runs measure throughput; vsync runs help
+assess pacing. Smoothed FPS and renderer CPU time do not establish GPU duration.
+The [performance guide](../../../docs/performance.md) owns timing boundaries and
+interpretation; use its benchmark runner for regression comparisons:
 
-Measure uncapped to expose throughput differences and under vsync for play feel.
-Similar rates can mean throttling, a real bottleneck or a workload already near
-the display limit; investigate rather than declaring the measurement invalid.
-The frame-time EMA hides variance. For simulation cost alone, use the scenario
-runner's step budget. Keep historical numbers out of current tuning decisions.
+```sh
+python3 scripts/perf.py run --mode live --output target/perf/new-run.json
+```
 
-Prefer `perf` for timing: it reports a bounded frame window with percentiles,
-phase timings and ticks per frame without hashing or serializing world state.
-Warm up, send `perf reset`, wait for the sample interval, then query `perf`.
-Use `perf samples` for chronological frame details, including enemy/contact
-counts. Export once after the interval rather than polling raw samples.
-See [performance telemetry](../../../docs/performance.md) for measurement
-boundaries, automatic resets, retention and interpretation limits.
+Exit 2 is inconclusive, never a pass. Preserve gates and baseline evidence.
+For camera/animation changes use core's elapsed-time half-life helpers and
+compare frame rates; fixed per-frame fractions change behaviour with FPS.
 
-For presentation smoothing, use `arpg_core::damp` or `damp_vec3`: their elapsed-time
-half-life stays consistent across frame rates. A fixed fraction per frame does
-not. Compare at different frame rates when changing camera or animation timing.
-
-## Finish
-
-Run the [repository checks](../../../CLAUDE.md#checks-and-commands), including
-scenario assertions for changed simulation/gameplay behaviour. A screenshot or
-manual reading of state cannot replace those assertions. Report how the user
-can repeat the trial, what was verified, and the remaining feel question.
-
-The harness exercises bindings and app input handling but bypasses OS event
-delivery. Its injection timing does not measure real keyboard latency. It also
-cannot judge whether the combat is satisfying; that needs the user's playtest.
-
-## Repeatable regression comparisons
-
-For live performance changes use `python3 scripts/perf.py run --mode live --output target/perf/<new-name>.json`.
-The runner discovers compatible saved baselines; `--baseline <saved-result.json>`
-selects one explicitly. The versioned suite drives exact tick schedules, records
-conditions and rejects invalid evidence.
-Read [the benchmark contract](../../../docs/performance.md#repeatable-benchmark-suite)
-for workload selection, exit statuses and baseline handling. Exit 2 means
-inconclusive; do not report it as a pass or adjust thresholds to make it pass.
+Run the [repository checks](../../../docs/verification.md), then report the
+repeatable trial, evidence and remaining feel question. Harness injection tests
+bindings/app handling, not OS event delivery or physical keyboard latency.

@@ -157,16 +157,12 @@ are checked after collection. Failures during assessment or archiving preserve
 collected trials and any completed absolute assessment at the requested output,
 with an infrastructure failure and an inconclusive overall verdict. Saved raw
 trials can be compared again without measuring again.
-Archived results preserve the original verdict and raw
-observations; publication does not certify that a measurement passed.
 
-Evidence schema 2 requires living/corpse population telemetry. Schema 1 artifacts
-are retired, with no migration or invented measurements. The old repository
-artifacts were removed; Git retains their history. Automatic discovery records
-unsupported or unversioned manifests in `baseline_exclusions` and does not open
-their artifacts. Explicit use of an old result is rejected. New archives stamp
-the schema in both manifest and result; validation contract changes must update
-this version. Retirement leaves relative evidence missing, never a relative pass.
+Evidence schema 2 requires living/corpse population telemetry and appears in both
+manifest and result. Validation-contract changes must update the version.
+Unsupported/unversioned manifests enter `baseline_exclusions` without opening
+their artifacts; explicit use is rejected. Missing compatible evidence never
+counts as a relative pass.
 
 [The suite](../benchmarks/suite.json) owns workload selection, warm-up/sample ticks,
 three repetitions, absolute budgets and comparison tolerances. It covers sparse
@@ -247,9 +243,8 @@ All repetitions must fall below an absolute budget to pass it; all must exceed i
 to establish a regression. Relative pass requires the candidate's slowest trial
 within tolerance of the baseline's fastest; regression requires the candidate's
 fastest beyond tolerance of the baseline's slowest. Overlap is inconclusive.
-This deliberately leaves small or noisy changes undecided instead of selecting
-the most flattering sample. Inspect the recorded ranges and repeat under stable
-conditions; never widen a gate or replace a baseline just to turn it green.
+Inspect uncertain ranges and repeat under stable conditions; never widen a gate
+or replace a baseline just to turn it green.
 
 ## Agent maintenance contract
 

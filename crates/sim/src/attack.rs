@@ -8,9 +8,7 @@ use crate::swing::Swing;
 
 /// Authored attacks available to the player today.
 ///
-/// These are game content, not debug-menu rows. The menu and scenario runner
-/// select the same identity that a future skill or weapon will select; neither
-/// authors an attack by replaying a sequence of UI increments.
+/// Gameplay input and scenario commands share these identities.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 pub enum AttackProfile {
     /// A broad, fast arc with a short shove that keeps survivors in follow-up reach.

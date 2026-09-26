@@ -2,7 +2,8 @@
 
 The asset boundary accepts two deliberately small Blender-to-GLB paths: a baked
 static world mesh and a one-skin character with a bounded transform-clip catalog.
-Neither is a general scene loader.
+These import reusable assets. Compose their supported placements in the
+[scene editor](scene-editor.md); a GLB does not define the playable scene.
 
 ## Blender convention
 
@@ -122,8 +123,8 @@ character GLB is not required to contain a joint called `Weapon`.
 The ordinary-horde contract is a smaller view of the same interchange format:
 it requires only `Idle` and `Run`. `horde show <path.glb>` selects one shared
 character, including all its parts and materials, then groups live enemies into
-four stable phases for each role. The phase comes from stable entity identity rather than authored or
-stored randomness. Startup loads `assets/characters/basic-player/basic-player.glb`
+bounded [gait/phase buckets](crowd-collision.md#gaits-and-pushing). Phase comes
+from stable entity identity, not authored or stored randomness. Startup loads `assets/characters/basic-player/basic-player.glb`
 for the player and `assets/characters/basic-enemy/basic-enemy.glb` for the horde,
 using the existing role scales and tints. Asset paths
 are resolved from the build-time repository location, independently of the launch

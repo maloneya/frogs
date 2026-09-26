@@ -1,7 +1,7 @@
 # Rectangular walls
 
-Scenes author `engine.walls` using the simulation-owned
-[`Wall`](../crates/sim/src/wall.rs) definition:
+Draw walls in the [scene editor](scene-editor.md#placement-and-map). Saved
+`engine.walls` use the simulation-owned [`Wall`](../crates/sim/src/wall.rs):
 
 ```ron
 walls: [
@@ -23,8 +23,7 @@ is `(SceneId, authored index)`. Installing a scene creates its walls; eviction
 removes them together, and restart rebuilds the cached scene. Clearing enemies
 preserves walls. The hash includes authoritative geometry and ownership;
 `state.sim.scenes.walls` reports the same rectangles under `cN/index` keys.
-Doors currently retain their existing circular prop geometry; they do not bind
-wall rectangles in this slice.
+Doors use circular prop geometry, not wall rectangles.
 
 ## Motion
 
@@ -70,10 +69,10 @@ The shared [wall asset](../assets/world/wall/README.md) supplies height and
 appearance. App scales its unit footprint to the authoritative rectangle and
 uses its exact yaw. The simulation never reads the mesh. Companion-enabled body and
 attack outlines remain circular; wall footprints are available in the report.
-Lighting/shadows and enemy route planning are unchanged. Seekers can pile up
+Walls do not occlude lighting, and seekers have no route planning. They can pile up
 against a wall until the player goes around it.
 
-Start `walls.ron` from the companion Scenes tab. Walk toward the long wall,
+Open `walls.ron` in Scenes and **Save & play**. Walk toward the long wall,
 slide along it, try all three attacks, and go around its right end. The nearby
 enemy behind it should remain shielded. The rotated wall tests diagonal sliding.
 The same file is exercised by the wall scenarios in `scenarios/`; geometry,

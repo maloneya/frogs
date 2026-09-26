@@ -1,76 +1,64 @@
 ---
 name: create-scene
-description: Create or revise arpg scene files for repeatable fresh playtests, with a scenario that verifies the same authored content. Use for encounter setups and configuration comparisons in scenes/.
+description: Build or revise playable arpg scenes through the native editor or the shared RON format; playtest compositions and preserve intended gameplay with scenarios.
 ---
 
 # Create a scene
 
-Produce a focused playtest configuration whose purpose survives beyond this
-conversation. Keep authored content in `scenes/` and assertions in `scenarios/`.
+Scenes in `scenes/` are game content. Scenarios in `scenarios/` are automated
+inputs/assertions. Use the [scene editor guide](../../../docs/scene-editor.md)
+for the human build–play–adjust loop and current tooling limits.
 
-## Decide what the trial should reveal
+## Choose the composition
 
-State the playtest question from the user's request. For example, “three approach
-angles to test swing coverage” explains why the configuration exists. Record
-that purpose in a comment at the top of the scene, along with the intended player
-action and what to watch for. Ask only when a missing choice materially changes
-the trial; otherwise state a reasonable assumption and proceed.
+State what the player should try and what the scene should reveal. Put a short
+purpose/playtest note in leading line comments, which editor saves preserve.
+Use deliberate placements; keep unrelated content constant when comparing variants.
+Proceed with reasonable defaults unless a missing choice changes the trial materially.
 
-Use deliberate placements and only the population needed for that question.
-For comparisons, keep unrelated content constant and explain the changed variable
-in each file. Separate measurable predictions from feel judgments left to the
-person playing.
+Prefer composing existing rules over adding engine code for an encounter. Use
+**Save as…** to explore a scene already referenced by regression tests. Identify
+missing authoring controls separately from genuinely missing gameplay rules.
 
-## Author against the current engine
+## Author with one vocabulary
 
-Read [scene playtests](../../../docs/scene-playtests.md) and the relevant sim
-definitions: [Scene, Placed and BodyGrid](../../../crates/sim/src/scene.rs),
-[Template](../../../crates/sim/src/pass/spawn.rs), and
-[SourceSpec](../../../crates/sim/src/pass/source.rs). These types own the
-schema; use them over remembered fields or older examples. Read tuning constants
-at their definition when calculating a prediction.
+People can place enemies, formations, sources, walls, trees and campfires and
+edit lighting in the companion. Agents may author the same RON directly or use
+the [editor protocol](../../../docs/scene-editor.md#protocol); no UI automation or
+parallel scene schema is required. Both routes validate through Game.
 
-For gameplay relationships, also read [encounters](../../../docs/encounters.md)
-and the owning definitions in `crates/game/src/scene.rs` and
-`crates/game/src/encounter.rs`. A complete `GameScene` wraps physical fields
-under `engine` and optionally adds `encounters`. Every scene file uses
-this complete definition.
-Do not duplicate the engine schema to add a gameplay relationship.
+Read [GameScene](../../../crates/game/src/scene.rs) and the relevant owners:
+[physical Scene/BodyGrid](../../../crates/sim/src/scene.rs),
+[Template](../../../crates/sim/src/pass/spawn.rs),
+[SourceSpec](../../../crates/sim/src/pass/source.rs), and
+[encounters](../../../docs/encounters.md) for relationships. Read tuning from its
+owner when predicting an outcome. Existing files are examples, not a schema authority.
 
-Author a regular arrangement as a `grids` entry rather than as generated
-`bodies`. A rank-and-file crowd is `origin`, `columns`, `rows` and `spacing`,
-and it expands at load through the same placement path, so the file stays
-readable and reviewable at any population. Deliberate individual placements
-still belong in `bodies`; never emit thousands of them from a script.
+Use `grids` for regular crowds, individual `bodies` for deliberate placements.
+Name the scene and save a `.ron` regular file directly inside `scenes/` for catalog
+discovery. Doors, chests and encounter bindings still need RON authoring; the
+editor preserves them. Inline comments are lost on editor save, so do not rely
+on them as the only explanation of index bindings. Runtime tuning is saved
+separately from the scene.
 
-Write a descriptively named `.ron` regular file directly inside `scenes/` so the
-companion Scenes tab discovers it. Give it a useful display name. Existing files in that
-directory are working examples; do not add a duplicate schema or generator.
-Keep configuration within the available vocabulary. Identify any missing engine
-capability before expanding a scene-authoring task into engine work.
+## Verify and hand off
 
-## Verify the same file
+Validate/load the authored content and use the [playtest guide](../playtest/SKILL.md)
+when appearance or feel is the question. Exploratory placement and lighting do
+not need a new automated scenario for every iteration. When a gameplay composition
+is intended to remain reliable, create/update assertions loading the actual file:
 
-Use the [scenario skill](../scenario/SKILL.md) to create or update an assertion
-file that loads this scene through `setup.scenes: [File("../scenes/name.ron")]`.
-Do not copy its bodies and sources into a second setup. See the
-[shared-file example](../../../scenarios/a_playtest_scene_starts_ready_at_tick_zero.ron).
+```ron
+setup: (scenes: [File("../scenes/name.ron")]),
+```
 
-Predict before running. Assert the meaningful setup and any intended sim
-behavior, using checkpoints where timing matters. A checkpoint at `at: 0`
-observes the first completed step, not untouched setup. A subjective feel trial
-still needs checkable conditions that make the trial valid; assertions cannot
-prove that combat feels good.
+Do not copy its layout into a second setup. The [scenario guide](../scenario/SKILL.md)
+covers predictions, intermediate ticks, refusal and replay; a checkpoint at zero
+observes the first completed step. Changes to simulation/gameplay rules still
+require passing scenarios. Review any existing tests that reference edited files;
+do not bless failures without understanding the changed outcome.
 
-Run the relevant scenario, then the full scenario gate using the commands in
-the scenario skill. Resolve failures before calling the configuration ready.
-
-## Hand off a repeatable trial
-
-Use the [playtest skill](../playtest/SKILL.md) when the task needs visual or
-interactive verification. Drive the app through its harness.
-
-Explain how to start the scene in the companion Scenes tab, what to try, and what was asserted.
-Click Refresh files to discover added files. Open selected reads the latest layout; Save & play saves and starts it; **Restart scene** repeats the cached snapshot. After a restart,
-discard old run-scoped identities. Report any remaining human feel question
-without presenting it as a passed automated check.
+Run the applicable [repository checks](../../../docs/verification.md). Hand off
+what to try, what was verified and the remaining feel question. Link to the
+[editor workflow](../../../docs/scene-editor.md#build-play-adjust) for opening,
+saving, playing and repeating it rather than duplicating those instructions.

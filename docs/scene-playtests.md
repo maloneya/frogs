@@ -1,208 +1,103 @@
-# Scene playtests
+# Scene lifetime and automation
 
-The first use is repeatable fresh playtests: switch configurations without
-relaunching the game. A scene describes disposable content; a playtest owns the
-world and player. Restarting constructs a fresh world, then calls the same
-scene instantiation door that additive loading uses.
+Use the [scene editor](scene-editor.md) to build playable content. This page owns
+its loading, restart and identity contracts. Both the app and headless scenario
+runner drive `Game`; content decodes the same `GameScene` for either caller.
 
-The app and scenario runner own a `Game`, which wraps the engine world.
-They step and observe it through the same entry point. Game owns the cached
-restart description and atomically replaces the complete run on start/restart.
-Game-owned relationships and engine resources share one eviction boundary. Additive loads
-and eviction preserve the restart choice, even if its live instance is removed.
-Run-scoped identity rules stay the same.
+## Start, restart and startup
 
-The `sim` report includes `restart.available`, plus
-`restart.name` and `restart.content_hash` when a snapshot is selected. The latter
-is the hexadecimal fingerprint of the snapshot instantiated with built-in tuning,
-computed once when the snapshot is validated. Live runtime tuning survives
-restart separately and participates in the active engine hash. The `sim_hash` and ready-reply hash cover the
-active engine, gameplay relationships, and the restart effect. `Game::engine_hash` remains
-available for comparing engine state independently of the restart choice.
+A successful start installs a fresh world/player at tick zero and caches the
+validated scene as its restart snapshot. Restart rebuilds that snapshot with
+current runtime tuning. It does not reread the file. Additive loads and eviction
+leave the restart choice intact, even after evicting its live instance.
 
-## Driving it
+The app resets player motion, attacks/recovery, accepted input, accumulator,
+feedback, audio and camera follow/lead only after replacement succeeds. Held
+physical keys must be released before acting again. Pending harness actions,
+trials and captures receive cancellation replies. Zoom, vsync and runtime tuning
+persist. Failed construction or an exhausted run ID preserves the current run
+and accepted pending work.
 
-Launch from the repository:
+Interactive launches reread the last successfully played path from
+`target/last-scene.json`. No preference, a missing file or invalid content leaves
+an empty player world; errors appear in the companion. Opening or saving without
+playing does not select a startup scene. This preference is app-local, outside
+Game state and replay.
 
-```sh
-. "$HOME/.cargo/env" && ARPG_HARNESS=/tmp/arpg.sock cargo run --release
-```
+Harness launches neither restore nor overwrite it. Set `ARPG_SESSION_FILE` to
+an isolated path when explicitly testing restoration.
 
-Send one command per connection:
+## Harness commands
+
+Launch with the [live playtest guide](../.claude/skills/playtest/SKILL.md), then send
+one command per connection:
 
 ```sh
 echo 'scene start scenes/soul_trial.ron' | nc -U /tmp/arpg.sock
-echo 'scene start scenes/seekers.ron' | nc -U /tmp/arpg.sock
 echo 'scene restart' | nc -U /tmp/arpg.sock
-echo 'state' | nc -U /tmp/arpg.sock
-```
-
-`scene start <path>` reads the file and starts a fresh playtest. `scene restart`
-reuses the selected parsed snapshot, so editing a file does not silently change
-a repeated trial. Start the path again to pick up edits. Paths are relative to
-the game's working directory, or absolute; the entire remainder is the path,
-so spaces need no quoting inside the command itself.
-
-Both reply `ready` only after the world is installed at tick zero, with its
-initial hash and a new run id. The game continues running after the reply.
-State reports the selected label, run id, current hash, and actual scene
-membership. Trace replies also identify the run. Entity, source, and scene ids
-are scoped to that run: discard previously read ids after restarting.
-
-Additive lifecycle controls exercise the underlying mechanism independently:
-
-```sh
 echo 'scene add scenes/three_enemy_spawners.ron' | nc -U /tmp/arpg.sock
 echo 'scene list' | nc -U /tmp/arpg.sock
 echo 'scene evict c1' | nc -U /tmp/arpg.sock
 ```
 
-Use the id returned by `scene add` or `scene list`. Adding the same file twice
-creates independent instances. Eviction removes that instance's bodies,
-sources, descendants, and queued emissions. It preserves the player and other
-content. Restart removes additive instances as well as the previous player.
+Start reads the file; restart uses the cached description. Paths resolve from
+the game's working directory unless absolute. Everything after `scene start`
+or `scene add` is the path, including spaces. Start/restart reply `ready` with
+the tick-zero hash and new run ID after installation; simulation then continues.
+Discard previously read entity, source and scene IDs when the run changes.
 
-Interactive launches reopen the last successfully played scene file through the
-same loader. The local path preference lives in `target/last-scene.json`; it is
-not part of authored content or deterministic Game state. On first launch, or
-when that file is missing or invalid, the game starts with an empty player world.
-Choose a scene in the separately launched companion. There is no hidden horde fallback.
+Add installs an independent instance in the current world; use its returned ID
+or `scene list` for eviction. Eviction removes its bodies, sources, descendants,
+queued emissions and game-owned resources, preserving the player and other
+instances. An enemy remains owned by its originating instance wherever it moves.
+Restart clears additive instances too. Reload recreates authored content; this
+is not save-game persistence or streaming residency.
 
-Harness launches neither restore nor overwrite this preference. Set
-`ARPG_SESSION_FILE` to an isolated preference path to test restoration explicitly.
-Opening or saving a draft without playing does not change the startup scene;
-restarting still uses its cached snapshot, while a new launch rereads the file.
+## Content and admission
 
-See [runtime tuning](tuning.md) for the native companion, live attributes and saved settings.
-
-## Companion scene controls
-
-Run `python3 scripts/dev.py` to launch the game and [ARPG Companion](companion.md), then choose **Scenes**.
-**Restart scene** uses the cached snapshot. Select a `.ron` file and click **Open selected** to read its authored layout
-into the [scene editor](scene-editor.md), then **Save & play** to save and start fresh. The catalog lists sorted regular files directly inside `scenes/`, relative
-to the game's working directory. It is scanned at startup and on **Refresh files**,
-not on every state poll. A missing directory still allows creating and saving a new scene.
-
-Scene starts use the same validated boundary as the harness. Read, parse or
-validation errors appear in the companion and preserve the current playtest.
-Repair the file and click **Open selected** to retry. The game keeps running;
-its input is released when focus moves to the companion.
-
-App tests compare companion starts with direct file loads at tick zero, exercise
-failure and retry, and verify that restart discards pending input and effects.
-The former in-game picker, menu input bindings and `state.ui` report are removed.
-
-## Content and execution
-
-### Playable catalog
-
-The companion lists authored scene files, including:
-
-| File | Encounter |
-|---|---|
-| `single_enemy.ron` | One seeker deals contact damage without interrupting movement |
-| `seekers.ron` | Three approaching seekers |
-| `soul_trial.ron` | A timed defeat encounter rewards a chest unlock |
-| `three_enemy_spawners.ron` | Three approach directions build toward twelve seekers |
-| `two_torches.ron` | Three stationary monsters under neutral lighting |
-
-The bottom HUD shows current/max player health with a proportional bar and one
-box per bound ability. The ability in progress stays highlighted through its
-startup, hit and recovery; the other boxes read **Busy** until it finishes. A
-held beam reads **Channeling**. The HUD reads game state without changing it.
-
-Attacks use fixed bindings, shown in the HUD:
-
-- **1 / left click:** Cleave, a broad arc.
-- **2 / right click:** Slam, a centred expanding shockwave with equal outward knockback in every direction.
-- **3 / Space:** Disintegrate, a beam. Hold to channel and release to stop.
-
-Each tick accepts one attack input. New presses win over held buttons; ties
-use slot order (1, then 2, then 3). A press during an active swing is dropped,
-with no change to that swing's timing or geometry. Held beams can begin when
-the swing finishes. Separate regression scenarios assert each attack's timing,
-reach, hit order, impulse, and subsequent movement.
-
-Mechanism fixtures live inline in `scenarios/`; they are not companion catalog entries.
-
-### Scene format
-
-Scenes may also own [stationary torches](lighting.md). They participate in the
-same admission, eviction and cached-restart boundaries. The scene environment selects ambient and directional illumination independently of torches; omission uses neutral daylight.
+[GameScene](../crates/game/src/scene.rs) wraps physical
+[Scene](../crates/sim/src/scene.rs) content under `engine` and adds trees,
+[lighting](lighting.md), [encounters, doors and chests](encounters.md), and enemy
+attack relationships. The content crate decodes these owning types directly.
 
 ```ron
 (
     engine: (
         name: "Small encounter",
-        bodies: [
-            (pos: (0.0, 4.0)),
-            (pos: (4.0, 4.0), what: (seeks: true)),
-        ],
-        grids: [
-            (origin: (-6.0, 8.0), columns: 8, rows: 4, spacing: 0.7,
-             what: (seeks: true)),
-        ],
-        sources: [
-            (pos: (12.0, 0.0), radius: 3.0, every: 60,
-             when: FewerThan(12), what: (seeks: true)),
-        ],
-    )
+        bodies: [(pos: (0.0, 4.0), what: (seeks: true))],
+        grids: [(origin: (-6.0, 8.0), columns: 8, rows: 4, spacing: 0.7,
+                 what: (seeks: true))],
+        sources: [(pos: (12.0, 0.0), radius: 3.0, every: 60,
+                   when: FewerThan(12), what: (seeks: true))],
+    ),
 )
 ```
 
-Coordinates are world `(x, z)`. `Scene`, `Placed`, `BodyGrid`, `Template`, and
-`SourceSpec` live in sim; `GameScene` wraps them under `engine` and adds
-gameplay relationships. The content library reads `GameScene` directly.
-Source population conditions still count the whole world's enemies, not just
-their scene.
+Coordinates are world `(x, z)` in metres. Source population conditions count
+all world enemies. `BodyGrid` expands once through ordinary placement: explicit
+bodies first, then grids in list order, columns along +X fastest and rows along
++Z. Placement order matters to scenario `nth` bindings and deterministic hashes.
+Grid validation checks nonzero dimensions, finite positive spacing, far-corner
+arithmetic and capacity before expansion. Use grids for regular crowds instead
+of thousands of generated body entries.
 
-A `BodyGrid` is shorthand for placements rather than a new kind of content. It
-expands once at load, through the same door `bodies` uses, so no later pass can
-tell the two apart. Authored `bodies` are placed first, then each grid in list
-order; inside a grid, `columns` along +X vary fastest and `rows` step along +Z.
-That order is the contract, because scenario `nth` assertions, eviction and the
-determinism hash all address bodies by placement order.
+Instantiation is synchronous between ticks. Complete validation precedes mutation;
+accepted queued spawns retain their reserved capacity. Authored placements bypass
+the bounded spawn-request queue but use the same placement implementation.
+Success installs every placement and source without hidden ticks; sources first
+evaluate on the next tick. Large loads can therefore hitch. Long-lived streaming
+would also need to address historical source-registry holes.
 
-Admission validates nonzero `rows` and `columns`, a positive finite `spacing`,
-and runs the placement arithmetic on the far corner before a single body
-exists — a bad field in a grid is thousands of bad bodies otherwise. Capacity is
-charged from the dimensions, so an oversized grid is refused without being
-expanded. A 128x128 horde can be described with one grid entry rather than
-16,384 individual placements.
+## Observation and tests
 
-```text
-scene file -> content library -> GameScene description
-                                     |
-                    Game prepares the complete lifecycle operation
-                                     |
-                 +-------------------+------------------+
-                 |                                      |
-         fresh playtest                           additive load
-         World::empty()                           existing World
-                 |                                      |
-                 +---------- World::load_scene ---------+
-                                     |
-                        ready scene instance + owned ids
-                                     |
-                   sources -> owned requests -> spawn grants
-```
+State reports the selected name, run ID, active hash and live membership; trace
+replies identify their run. `sim.restart` exposes `available`, and when selected,
+`name` and `content_hash`. That fingerprint describes the cached scene instantiated
+with built-in tuning; current tuning is hashed separately. `sim_hash` covers
+active engine/game state and the restart effect; `Game::engine_hash` isolates
+physical state. All owned resources participate in eviction, restart and reports.
 
-Instantiation is synchronous between ticks. Content validation and body
-capacity checks happen before mutation. Already queued spawns retain capacity;
-authored placements use the common placement implementation without squeezing
-through the 256-request queue. Success means every placement and source is
-installed. No hidden ticks run. Sources first evaluate on the next tick.
-
-Fresh restart resets player motion, attack state and per-attack recovery,
-accepted gameplay input, the accumulator, and camera follow/lead. Type-wide
-runtime tuning survives restart. Held
-physical keys require release before acting again. Old delayed harness actions
-and captures receive cancellation replies. Construction failure leaves the
-current playtest untouched. Renderer settings such as zoom and vsync persist.
-
-## Verification and next boundaries
-
-The scenario runner accepts `setup.scenes` and timed `scenes` operations:
+Scenarios can load the playable file and add/evict instances on a timeline:
 
 ```ron
 setup: (scenes: [File("../scenes/seekers.ron")]),
@@ -212,46 +107,14 @@ scenes: [
 ],
 ```
 
-References resolve relative to the scenario file, once before both replay runs.
-Eviction, source, and encounter indices refer to load order, starting with setup,
-then ascending tick order, preserving file order at equal ticks. Validation and
-execution share this order. Placed body numbering includes authored bodies,
-then ordinary setup actions, then later loads and emissions in execution order.
-`scene_count` and existing body/source assertions inspect the result.
+File references resolve relative to the scenario, once before both replay runs.
+Scene indices follow setup order, then ascending tick and authored order within
+a tick. Placed-body numbering includes setup scenes, setup actions, then later
+loads/emissions in execution order. Stable spawn tickets and completed-tick
+outcomes preserve bindings independently of diagnostic trace retention.
 
-Step-time budgets measure `Game::step`, including the engine schedule. Setup,
-hashing, and assertions remain outside the timer.
-
-The lifecycle scenario asserts surviving identities and positions, source
-descendants, reload, and load-then-evict before a source's first tick. Unit tests
-cover capacity refusal, stale queued ownership, slot reuse, hashing,
-and the app's complete restart boundary. CLI tests reject bad or unreachable
-commands even with blessing enabled. Runtime placement tracking uses spawn
-request tickets and authoritative completed-tick outcomes; clearing or wrapping
-diagnostic history cannot renumber the bodies an assertion refers to.
-
-Public game lifecycle tests also cover failed replacement preserving its
-snapshot and accepted pending work, restart after additive loading and eviction,
-reset of interaction/motion/attack state, and hashing of distinct restart choices
-when their active engine worlds are identical. App cleanup runs only after the
-game operation succeeds; invalid content and exhausted run ids preserve the
-current run without cancelling its inputs or capture requests.
-
-These instances are disposable. An enemy following the player elsewhere still
-belongs to its originating instance and disappears on eviction. Reload recreates
-authored content. Persistence, ownership transfer, proximity residency, partial
-activation, background file loading, and changing arena bounds remain separate
-design work. Synchronous instantiation can hitch for large scenes. Source ids
-still retain the existing registry's historical holes; long-lived streaming
-will need to revisit that storage assumption.
-
-## Gameplay scene composition
-
-All scenes wrap physical content in `GameScene.engine` and optionally add
-encounters, doors, chests, lights and an enemy attack relationship. Inline scenario
-references use `Inline(...)` with the same complete definition as file references.
-See [encounters](encounters.md) for validation and lifecycle rules;
-`scenes/soul_trial.ron` is the playable encounter, with dedicated completion
-and timeout scenarios.
-
-Rectangular scene walls use `engine.walls`; see [wall geometry and playtesting](walls.md).
+Use the [scenario guide](../.claude/skills/scenario/SKILL.md) for assertions and
+timing. Public Game tests cover restart, refused replacement, stale IDs and
+pending work; app tests cover input/presentation cleanup. The scenario timeline
+has no restart operation. [Verification](verification.md) runs these alongside
+scene round-trip and native editor checks.

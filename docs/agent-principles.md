@@ -1,69 +1,56 @@
 # Why we build this way
 
-[CLAUDE.md](../CLAUDE.md) contains the working rules. This page explains the
-three design priorities behind them.
+[CLAUDE.md](../CLAUDE.md) contains the working rules. These principles explain
+how scene authoring, engine work and verification fit together.
 
-## A world governed by rules
+## Build through play
 
-Simulation first means that outcomes follow from the state of the world and
-its rules. Shared mechanisms let different mechanics affect each other without
-requiring a special case for every pair. That gives players room to discover
-uses the developer did not anticipate.
+Scenes are the working material of the game. Compose a situation in the
+[editor](scene-editor.md), play it, adjust placement or tuning, and repeat.
+Prefer a new arrangement of existing rules over code written for one encounter.
+A row of enemies beside a wall can reveal more about knockback than another
+abstract mechanic proposal.
 
-For example, a swing submits an impulse. Physics carries velocity, transfers
-momentum through contacts and settles motion. A struck enemy can push another
-body outside the hitbox because both participate in the same rules. Putting
-that transfer inside the attack would make it available only to attacks.
+The engine supplies validated rules; the scene combines them; the companion
+makes iteration fast. A missing authoring control is a tooling gap, not a reason
+to put a scene-specific exception in simulation. Add a new mechanic only when
+an actual playtest needs behaviour the current vocabulary cannot express.
 
-Separate the physical mechanism from the gameplay relationship using it. Sim
-owns source enablement; game owns which interaction starts a source. This lets
-us test enablement by itself, then test the composed mechanic and its timing.
-It also keeps rendering and animation from becoming hidden gameplay inputs.
+Keep authored content separate from its running instance. A death or moved enemy
+must not silently rewrite the starting layout. A scene can be a disposable
+experiment or durable game content; both use the same format and load boundary.
 
-Composition does not require a general framework. Start with the concrete
-interaction, identify the shared rule, and give each participant only the
-access it needs. Verify both isolated behaviour and a meaningful combination.
-Consistent outcomes can be surprising to the player without being accidental
-consequences of invalid state.
+## Rules that compose
 
-## Make mistakes difficult to express
+An attack submits an impulse. Shared physics carries motion through contacts,
+so the struck enemy can push another body outside the hitbox. Putting that
+transfer inside the attack would make it available only to attacks.
 
-An agent can forget a convention, duplicate a schema, omit cleanup or accept a
-plausible-looking output. More emphatic instructions do not prevent those errors.
-The design should reject them at the narrowest shared boundary.
+Sim owns physical mechanisms; game owns relationships such as which interaction
+enables a source. Test the mechanism and its meaningful combinations. Consistent
+rules allow surprising play without a special case for every pair of mechanics.
+This does not require a general framework or a scripting language.
 
-A private validated value protects every caller. A pass given an impulse sink
-cannot overwrite positions. A scene operation owning all resources can clean
-up the relationship and its endpoints together. These safeguards reduce how
-much context an agent needs to make a local change correctly.
+## Make mistakes difficult
 
-Types cannot prove every behavioural property. Timing, deterministic ordering
-and interactions need executable examples: predict an outcome, assert the
-relevant ticks, and verify that a plausible wrong implementation would fail.
-Replay proves repeatability, not that the repeated result is the intended one.
-A golden trace needs review for the same reason.
+A private validated value protects every caller, including files and tooling.
+A pass given an impulse sink cannot overwrite positions. A scene owner can
+remove relationships and their resources together. Prefer these safeguards over
+instructions a caller may forget; see [enforcement](invariants.md).
 
-Read-only reports explain what exists; traces explain what happened between
-observations. Neither substitutes for assertions. Keep diagnostic data separate
-from gameplay inputs so observation cannot alter the system under test.
+Types cannot prove timing or gameplay outcomes. Scenarios drive the same Game
+with predicted inputs and assertions. Replay establishes repeatability, not
+correctness; traces explain transitions, but never drive gameplay. When a
+composition becomes a regression case, load its actual scene file instead of
+maintaining a second layout in the test.
 
-No repository is made unbreakable by documentation. The useful question is:
-what catches this specific mistake, and can a caller bypass that safeguard?
-[The enforcement guide](invariants.md) points to the mechanisms to inspect.
+## Learn through small changes
 
-## Learn through small, working systems
+Explain the rule, its visible effect and the tradeoff. For example, fixed ticks
+keep attack duration independent of rendering speed; interpolation smooths the
+picture without changing combat. A short cause-and-effect explanation is more
+useful than a tour of every file.
 
-The user is learning game development. A change should leave them with an
-understanding of the system as well as working code. Explain the concept when
-it becomes relevant, show how it affects play, and identify the tradeoff in the
-chosen design. Define unfamiliar terms before relying on them.
-
-For example: a fixed timestep advances the world in equal time intervals. That
-makes attack duration independent of rendering speed; interpolation smooths the
-picture between those updates without changing the result. This connects the
-implementation to something the player can see and the scenario can assert.
-
-Keep explanations proportional to the change. A short cause-and-effect example
-usually teaches more than a tour of every file. Deliver one running system,
-show how to exercise it, and report what was tested. Whether combat feels good
-remains a human playtest judgement, distinct from mechanical correctness.
+Deliver a running change and a repeatable way to try it. Separate mechanical
+verification from the user's judgement of feel. Neither a passing scenario nor
+an editor feature establishes that combat is fun.

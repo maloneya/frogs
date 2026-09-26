@@ -40,14 +40,11 @@ spatial state fields as metres. Convert assets authored in centimetres at the
 import boundary. Metres are a measurement convention, not a requirement for
 realistic character proportions, movement speeds or weapon reach.
 
-Today this is a documented contract. Floats and vectors do not carry units, so
-the compiler cannot detect a distance accidentally supplied in centimetres or
-pixels. A type alias or a constant equal to one would not provide that protection
-either. Stronger enforcement would require distinct distance, position and speed
-types at the APIs that accept those quantities, with explicit conversions at
-rendering and import boundaries. Such types can prevent incompatible quantities
-being mixed; they cannot detect an author choosing the wrong numeric value.
+The [scene editor](scene-editor.md#placement-and-map) displays a metre grid,
+world-axis compass and exact coordinates. Camera projection changes the visible
+grid shape; snapping still uses world X/Z. Wall/tree inspectors show rotation
+in degrees, while scene files store yaw in radians.
 
-A future metre grid, reference cube or distance ruler would make the convention
-visible during playtests. Those are presentation aids; their dimensions should
-come from the same world measurements the simulation uses.
+Floats/vectors do not carry unit types: validation bounds values but cannot detect
+an author entering centimetres or pixels as metres. Keep conversions at the
+input/import boundary.

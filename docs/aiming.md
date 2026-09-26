@@ -1,7 +1,7 @@
 # Aiming while moving
 
 WASD/arrows control travel; the cursor controls aim. Attack buttons use the
-slots described in [playtest controls](scene-playtests.md). A swing starts once
+[fixed slots](../README.md#controls). A swing starts once
 per press. Holding its button does not repeat it, and presses during a swing
 are dropped. Beam attacks instead channel while their button is held. A new swing immediately takes the current aim and holds that
 direction through recovery. Walking and external impulses continue normally.
@@ -12,7 +12,7 @@ pass's rate.
 non-finite directions are rejected at construction. `app::input` projects
 physical cursor pixels through the current camera onto the ground. At the
 player's feet, outside the window, or after focus loss it retains its last
-valid direction. Menus suspend aim updates and capture attack input. Restart
+valid direction. Focus loss releases gameplay input. Restart
 restores the initial +Z aim and clears accepted input.
 
 The scenario keyboard driver supplies movement as aim and retains it while

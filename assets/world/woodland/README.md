@@ -18,8 +18,8 @@ blender --background --factory-startup --python-exit-code 1 --python assets/worl
 Add `-- /tmp/arpg-woodland` to export in isolation. Two clean builds must produce
 identical GLBs. The asset importer tests enforce opaque, grounded, bounded meshes.
 
-The app renders one campfire per scene light, replacing the old plinth-and-pole
-stand. Flame geometry is unlit presentation above the logs; the scene's light
+Place campfires and trees in the [scene editor](../../../docs/scene-editor.md).
+The app renders one campfire per scene point light. Flame geometry is unlit presentation above the logs; the scene's light
 settings still determine illumination. See [lighting](../../../docs/lighting.md).
 
 Scenes place trees through the game-owned `TreeSpec` in `trees`:

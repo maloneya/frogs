@@ -1,7 +1,7 @@
 //! Authored content and the lifetime of one instantiation of it.
 //!
-//! Loading is synchronous between ticks in this first slice. Validation and
-//! capacity admission precede every mutation, so success means fully installed
+//! Loading is synchronous between ticks. Validation and capacity admission
+//! precede every mutation, so success means fully installed
 //! and failure leaves the world untouched. Streaming policy and file I/O do
 //! not belong here. Runtime instances own ids, never body storage.
 

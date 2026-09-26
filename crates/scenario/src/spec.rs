@@ -157,7 +157,7 @@ pub(crate) struct ChannelSpan {
     pub(crate) ticks: u64,
 }
 
-/// The same authored attack identity selected by the in-game panel.
+/// The same authored attack identity used by gameplay input.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttackProfileAt {

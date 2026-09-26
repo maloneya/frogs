@@ -20,7 +20,8 @@ The outlines describe gameplay hitboxes, not the animated weapon mesh.
 Outlines lie on the ground plane, are unlit, and remain visible through assets.
 They never write depth. The renderer reuses one 48-segment circle and draws all
 outlines in one instanced line draw. Disabling the view submits no debug draw.
-This first slice has no contacts, normals, velocities, selection, or history.
+It does not draw contacts, normals, velocities or history; editor selection is
+separate from this runtime view.
 
 `state.collision_debug` reports `enabled`, `sample_tick`, `disc_count`, and
 `discs` keyed by stable entity identity. Each disc includes `centre` and `radius`.

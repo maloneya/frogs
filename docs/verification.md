@@ -1,116 +1,82 @@
 # Verification evidence
 
-The completion command is `python3 scripts/verify.py full`. It runs Clippy,
-workspace tests, private Rustdoc, native companion tests/build and all scenarios with replay. Release benchmarks
-are required every **10 relevant commits**, and agents may run them sooner when
-useful (for example, investigating a slowdown or validating an optimization).
-
-The runner counts commits since each mode's last successful checkpoint on the
-current Git ancestry. Relevant paths are defined once in
-[`scripts/verify.py`](../scripts/verify.py): runtime crates, assets, scenes,
-scripts and build inputs; Markdown edits are excluded. Dirty edits are tested
-but do not increment the commit counter. A dirty run checkpoints its HEAD, so
-its eventual commit still counts toward the next checkpoint.
-
-Headless and live modes have independent counters. Missing, damaged or unavailable
-checkpoint evidence makes that mode due immediately. Failed or inconclusive runs
-do not advance the checkpoint. A successful mode advances independently even if
-another check fails, provided the source stayed unchanged. Checkpoints are local evidence under `target/verify`;
-a new checkout or removal of that evidence requires an initial benchmark run.
-The runner records the counters and required checks in its result. Benchmark
-samples are fresh whenever a mode is selected; this cadence is not a claim that
-intervening changes have measured performance coverage.
+The completion command is:
 
 ```sh
-python3 scripts/verify.py quick              # partial correctness feedback
-python3 scripts/verify.py correctness        # all correctness, no benchmarks
-python3 scripts/verify.py full               # correctness + any due benchmarks
-python3 scripts/verify.py full --performance # agent discretion: both modes now
-python3 scripts/verify.py full --live        # agent discretion: live mode now
+python3 scripts/verify.py full
 ```
 
-`quick` runs Clippy, workspace tests and the small scenario suite; it cannot
-certify completion. `correctness` runs every correctness check and reports any due
-benchmarks as omitted; it does not certify those benchmarks. `--only` likewise
-selects an explicitly partial check.
-Headless benchmarks measure Game step cost; live benchmarks measure real-time
-presentation. Headless evidence never certifies frame pacing or GPU behaviour.
-Existing scenario timing assertions remain correctness smoke gates.
+It runs Clippy, workspace tests (including GPU tests), private Rustdoc, native
+companion tests/build, and every scenario with replay. Headless/live release
+benchmarks are independently due every **10 relevant commits**, or immediately
+when checkpoint evidence is unavailable. Relevant paths and check commands are
+owned by [verify.py](../scripts/verify.py); Markdown is excluded from benchmark
+cadence. Dirty edits are checked but do not increment the commit counter; their
+eventual commit does. Successful modes advance their own checkpoint only if
+source stayed unchanged. Headless evidence cannot certify rendering performance.
 
-The runner prints omitted required checks and writes a structured result under
-`target/verify/run-*/verification.json`. Exit 0 means the requested checks passed,
-1 means failure, and 2 means inconclusive evidence. Read `complete` and coverage
-before claiming completion. A complete result certifies the required checks for
-this change; benchmarks are included only when due or explicitly requested.
-Never widen a budget or replace a baseline merely to clear a failure; see
-[performance evidence](performance.md#agent-maintenance-contract) for measurement
-and baseline requirements.
+## Choosing checks
 
-All scenarios still run and replay in full verification. The explicit
-[extended manifest](../scenarios/suites.json) contains population-scale and long
-encounter cases with a reason for each. Every other `.ron` file belongs to the
-fast suite, including newly added scenarios. Manifest entries naming missing files fail;
-there is no filename heuristic that silently drops new coverage. Removing a
-scenario requires preserving its distinct failure coverage elsewhere, not merely
-meeting a target count.
+| Command suffix | Coverage |
+|---|---|
+| `quick` | Partial: Clippy, workspace tests, fast scenarios |
+| `correctness` | All correctness; reports due benchmarks as omitted |
+| `full` | All correctness and due benchmarks |
+| `full --performance` | Also force both benchmark modes |
+| `full --live` | Also force live benchmarks |
+| `--only <check>` | Explicitly partial selection |
 
-## Reusing successful checks
+Run focused checks while editing, then `full` for completion. Hooks use this
+same runner; their presence does not prove execution. GPU tests require a real
+adapter; scenarios need no GPU/window. Rustdoc is separate from Clippy/tests.
 
-Successful correctness checks are keyed by the complete tracked and unignored
-source/data contents, command, compiler, machine and build settings. Dirty and
-new files participate; an old commit name cannot disguise an edited checkout.
-Each cache entry points to original logs and evidence with integrity digests.
-Missing or changed evidence runs the check again. Failures and source changes
-during a check are never cached as passes. `--fresh` forces execution.
+Results live in `target/verify/run-*/verification.json`. Read `coverage`,
+`omitted`, `complete` and source identity. Exit 0 means requested checks passed,
+1 means failure, 2 means inconclusive. A partial pass cannot certify omitted
+checks. Preserve failures and uncertainty; never widen a budget or bless a trace
+to clear a gate. [Performance policy](performance.md#agent-maintenance-contract)
+owns measurement and baseline requirements.
 
-This deliberately uses a conservative whole-checkout key rather than a guessed
-change-impact map. The first change invalidates correctness evidence; repeated
-calls by hooks, agents or a final report reuse the same verified result. Performance
-measurements are not cached by this layer. Their independent baseline selection,
-compatibility and local metric assessment belong to the
-[performance runner](performance.md#repeatable-benchmark-suite).
+## Reuse and retry
 
-An explicitly classified benchmark infrastructure failure (for example, a corrupt
-eligible baseline or a failed release build) defers automatic retries for identical
-source, command, environment and baseline-store contents. The runner retains the
-original failure evidence, still runs correctness checks, and returns inconclusive
-with that benchmark uncertified. This never advances a checkpoint or reuses a
-timing pass. Changed inputs or damaged failure evidence cause a fresh attempt.
-Use `--performance`, `--live`, or `--only performance-headless|performance-live`
-to retry explicitly after repairing an external condition. `--fresh` only affects
-correctness reuse. Noisy timings, regressions and measurement failures are not
-suppressed by this mechanism.
+Successful correctness checks are keyed by all tracked/unignored source and data
+contents, command, toolchain, machine and build settings. New/dirty files count.
+The whole-checkout key deliberately avoids guessed change-impact rules. Entries
+link to integrity-checked logs/evidence; missing, damaged or changed evidence
+reruns the check. Failures and checks spanning source changes never cache as passes.
+`--fresh` forces correctness execution.
 
-`--only clippy` is an explicitly partial entry point for edit hooks. The stop hook
-runs `full` and benefits from already completed checks. These hooks are one client
-of the same runner, not a separate definition of what verification means.
+Performance samples are fresh whenever a mode is selected. An explicitly
+classified infrastructure failure can defer automatic retries for identical
+source, command, environment and baseline-store contents. Correctness still runs;
+the result remains inconclusive, with no benchmark checkpoint or timing pass.
+Changed inputs or damaged evidence trigger a retry. Use `--performance`, `--live`
+or `--only performance-headless|performance-live` after repairing the condition.
+`--fresh` does not override this deferral. Noisy timing, regressions and measurement
+failures are never suppressed by it.
 
-## Finding expensive scenarios
+## Scenario coverage and evidence
 
-Both scenario suites save per-scenario timing evidence. For a focused command:
+[The suite manifest](../scenarios/suites.json) explicitly assigns expensive cases
+to the extended suite; every other `.ron` is fast. Full verification runs both.
+Missing manifest files fail, and no filename heuristic silently drops coverage.
+Preserve a removed scenario's distinct assertions elsewhere.
+
+Both suites save per-case timings. For a focused profile:
 
 ```sh
 cargo run --quiet -p scenario -- --timings /tmp/scenario-timings.json scenarios/walk_east.ron
 ```
 
-The output path must be new. Timings distinguish first-run setup, simulation,
-hashing, assertions, other runner work, and the entire replay. They are observation
-costs, never simulation inputs, and cannot change replay hashes. The existing
-`max_mean_step_micros` assertion still measures only `Game::step`. Total elapsed
-time includes parsing and reporting too, so it need not equal the listed phases
-exactly. Use these measurements to choose a cheaper fixture or remove duplicate
-coverage; do not weaken a correctness assertion to make a slow test green.
+Choose a new output path. Timings distinguish setup, simulation, hashing,
+assertions and replay; they never enter simulation. `max_mean_step_micros`
+measures only `Game::step`. Use evidence to choose cheaper fixtures or remove
+redundant checks without weakening predictions.
 
-## Events and identities
-
-`Game::set_trace_retention` controls recent history; zero disables it. Capture
-limits and retention are validated against the engine-owned `MAX_TRACE_EVENTS`;
-rejected limits preserve existing history and capture.
-
-Scenario spawn bindings use authoritative request tickets and completed-tick
-outcomes. Diagnostic retention cannot change which entity an assertion names.
-Event assertions select typed kinds and require the exact ordered sequence within
-that scope. An unrelated gait event does not invalidate a source-cadence test;
-an extra source firing does. Selected-event capture is independently bounded and
-fails explicitly on overflow, even if the live debug ring is disabled or cleared.
-See the [scenario guide](../.claude/skills/scenario/SKILL.md) for authored syntax.
+The [scenario guide](../.claude/skills/scenario/SKILL.md) owns tick/identity and
+assertion syntax. Bindings use authoritative spawn tickets/completed-tick
+outcomes, independent of trace retention. Selected-event assertions require
+exact ordered sequences and reject overflow; unrelated event kinds do not fail
+them. Diagnostic history is bounded by `MAX_TRACE_EVENTS`; zero retention disables
+it, and rejected limits preserve accepted history/capture. Neither reports nor
+replay substitute for predicted outcomes or human playtesting.

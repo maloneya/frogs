@@ -7,10 +7,13 @@ trial uses eight sources around a central light and rewards a chest opening. Mul
 entries run independently in the same scene, and loading the scene twice makes
 independent copies of every relationship.
 
-For an ordinary new encounter, edit a scene and add a scenario. There is no need
-to read the simulation schedule or change the runtime. The authoritative schema
-is [EncounterSpec](../crates/game/src/encounter.rs); door content is defined by
-[DoorSpec](../crates/game/src/door.rs). The content decoder rejects unknown fields.
+Build the layout in the [scene editor](scene-editor.md), then author relationship
+bindings in RON; the UI preserves them but cannot create them yet. Reopen after
+external edits before saving from the companion. Ordinary encounters compose
+existing rules without runtime changes. [EncounterSpec](../crates/game/src/encounter.rs),
+[DoorSpec](../crates/game/src/door.rs) and [ChestSpec](../crates/game/src/chest.rs)
+own the schema; unknown fields are rejected. Preserve intended outcomes with
+a scenario loading that file.
 
 ```ron
 encounters: [(
@@ -25,10 +28,10 @@ The numbers bind to **authored scene entries**, never current dense storage rows
 `Activated` addresses an explicit engine body; the objective
 addresses engine sources; `UnlockDoor` addresses `doors`; `UnlockChest` addresses `chests`.
 References are resolved once to generational body IDs and monotonic source IDs.
-Reordering valid authored entries can change their meaning: keep a short label
-comment beside endpoints and review bindings when reordering. This first version
-uses the existing scene index convention rather than introducing a second name
-registry. Names on encounters are display labels, unique within a scene.
+Manual reordering can change valid bindings; review every referenced index.
+Keep binding explanations in leading comments, since editor saves drop inline
+comments. Editor deletion remaps surviving links or refuses required endpoints;
+duplication does not copy relationships. Encounter names are unique display labels.
 
 ## What composes
 
@@ -55,7 +58,6 @@ lossless defeat outcomes. Manual removal, scene eviction, unrelated enemies,
 and recycled body slots cannot award progress. `FewerThan` still gates on the
 world's enemy population; the playable trial uses cadence alone so another
 encounter cannot hold its source closed through that global condition.
-
 
 Every source and controlled door or chest has one gameplay controller within the scene.
 Admission rejects conflicting encounters,
@@ -117,7 +119,7 @@ through the opened door. The playable scene has both
 
 ## Extending a rule
 
-An ordinary encounter is data. A genuinely new objective needs a typed variant,
+A new objective needs a typed variant,
 its narrowly scoped evaluation, shared observation vocabulary and a focused
 scenario. Keep physical facts in sim and gameplay relationships in game. There
 is deliberately no arbitrary expression evaluator, callback registry or script
