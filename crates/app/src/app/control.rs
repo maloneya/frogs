@@ -28,6 +28,9 @@ impl App {
             }
             let now = std::time::Instant::now();
             let answer = match command {
+                Command::TuningEdit(edit) => match self.edit_tuning(edit) {
+                    Ok(message) => message, Err(error) => format!("error: {error}"),
+                },
                 Command::ShowCharacter(path) => match self.show_character(path) {
                     Ok(answer) => answer,
                     Err(error) => format!("error: {error}"),
@@ -124,7 +127,9 @@ impl App {
                 }
                 Command::State => self.report_state(),
                 Command::PerfTrial(spec) => {
-                    if self.renderer.is_none() {
+                    if self.game.tuning() != arpg_sim::Tuning::default() {
+                        "error: performance trials require default tuning".into()
+                    } else if self.renderer.is_none() {
                         "error: no renderer yet".into()
                     } else if let Err(error) = self.restart_playtest() {
                         format!("error: {error}")
@@ -255,6 +260,12 @@ impl App {
         out.text("sim_hash", &format!("{:016x}", self.game.hash()));
         out.object("sim", |sim| self.game.report(sim));
         out.object("ui", |ui| self.input.menu().report(ui));
+        out.object("tuning", |out| {
+            out.bool("unsaved", self.game.tuning() != self.tuning_saved);
+            out.text("path", &self.tuning_path.display().to_string());
+            out.text("message", &self.tuning_message);
+            out.bool("error", self.tuning_error);
+        });
         out.object("world_assets", |out| {
             if let Some(world) = &self.world_assets {
                 world.report(out);

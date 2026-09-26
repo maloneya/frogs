@@ -39,7 +39,7 @@ impl AttackProfile {
     /// Resolves this authored profile into the complete runtime value a swing
     /// captures. Channels return `None`; their capsule and cadence belong to [`crate::Beam`].
     #[must_use]
-    pub fn resolve(self) -> Option<ResolvedAttack> {
+    pub fn resolve(self, tuning: crate::Tuning) -> Option<ResolvedAttack> {
         let (startup, active, recovery, shape, knockback) = match self {
             Self::Disintegrate => return None,
             // Melee deals two of an ordinary enemy's three health points.
@@ -47,8 +47,8 @@ impl AttackProfile {
             // Crowd-control content uses the same impulse and swept-disc doors
             // as other physical producers. At unit enemy mass and 0.9 retention, free travel is
             // roughly impulse / 6 metres; contacts distribute it through the rank.
-            Self::Cleave => (6, 6, 10, shape((-1.8, 1.2, 1.1), (1.8, 1.2, 1.1)), 6.0),
-            Self::Slam => (9, 5, 16, shape((0.0, 0.0, 1.4), (0.0, 0.0, 4.2)), 72.0),
+            Self::Cleave => (6, 6, 10, shape((-1.8, 1.2, 1.1), (1.8, 1.2, 1.1)), tuning.get(crate::TuningField::CleaveImpulse)),
+            Self::Slam => (9, 5, 16, shape((0.0, 0.0, 1.4), (0.0, 0.0, 4.2)), tuning.get(crate::TuningField::SlamImpulse)),
         };
         Some(ResolvedAttack::try_new(
             startup,
@@ -298,7 +298,7 @@ impl ResolvedAttack {
 
 impl Default for ResolvedAttack {
     fn default() -> Self {
-        AttackProfile::default().resolve().expect("default is a swing")
+        AttackProfile::default().resolve(crate::Tuning::default()).expect("default is a swing")
     }
 }
 
@@ -452,9 +452,9 @@ mod tests {
 
     #[test]
     fn every_authored_profile_resolves_to_a_distinct_valid_attack() {
-        let attacks: Vec<_> = AttackProfile::ALL.into_iter().filter_map(AttackProfile::resolve).collect();
+        let attacks: Vec<_> = AttackProfile::ALL.into_iter().filter_map(|profile| profile.resolve(crate::Tuning::default())).collect();
         assert_eq!(attacks.len(), 2);
-        assert!(AttackProfile::Disintegrate.resolve().is_none());
+        assert!(AttackProfile::Disintegrate.resolve(crate::Tuning::default()).is_none());
         for (index, resolved) in attacks.iter().enumerate() {
             assert!(attacks[index + 1..].iter().all(|other| other != resolved));
         }

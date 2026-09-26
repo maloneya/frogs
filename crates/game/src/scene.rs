@@ -122,7 +122,7 @@ impl std::error::Error for SceneError {}
 /// The fingerprint is computed at the only construction door, never per tick.
 pub(crate) struct RestartScene {
     scene: GameScene,
-    initial_hash: u64,
+    content_hash: u64,
 }
 
 /// Complete validated replacement, ready for atomic installation by Game.
@@ -151,8 +151,8 @@ impl RestartScene {
             trees: &mut trees, torches: &mut torches, doors: &mut doors,
             chests: &mut chests, encounters: &mut encounters, attacks: &mut attacks,
         })?;
-        let initial_hash = fingerprint(&world, (&torches, &trees), &doors, &chests, &encounters, &attacks);
-        let snapshot = Self { scene: scene.clone(), initial_hash };
+        let content_hash = fingerprint(&world, (&torches, &trees), &doors, &chests, &encounters, &attacks);
+        let snapshot = Self { scene: scene.clone(), content_hash };
         Ok(PreparedScene { world, trees, torches, doors, chests, encounters, attacks, restart: snapshot })
     }
 
@@ -161,17 +161,18 @@ impl RestartScene {
     }
 
     pub(crate) fn hash(&self, out: &mut Fnv) {
-        let Self { scene: _, initial_hash } = self;
-        // Restart reconstructs precisely this validated initial world. Equivalent
+        let Self { scene: _, content_hash } = self;
+        // This fingerprints content instantiated with built-in tuning. Live tuning
+        // is hashed by World and survives restart separately. Equivalent
         // authored spellings can share a fingerprint because their future effect
         // is identical. The snapshot cannot be edited after this is computed.
-        out.u64(*initial_hash);
+        out.u64(*content_hash);
     }
 
     pub(crate) fn report(&self, out: &mut Report) {
-        let Self { scene, initial_hash } = self;
+        let Self { scene, content_hash } = self;
         out.text("name", &scene.engine.name);
-        out.text("initial_hash", &format!("{initial_hash:016x}"));
+        out.text("content_hash", &format!("{content_hash:016x}"));
     }
 }
 

@@ -454,7 +454,7 @@ mod tests {
             game.set_attack_profile(profile);
             let mut effects = AttackEffects::default();
             let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
-            let Some(resolved) = profile.resolve() else { continue };
+            let Some(resolved) = profile.resolve(arpg_sim::Tuning::default()) else { continue };
             let close = resolved.startup() + resolved.active();
             for elapsed in 0..close + 12 {
                 game.step(dt, Intent::new(MoveDir::new(Vec3::X), arpg_core::AimDir::new(Vec3::X).unwrap(), elapsed == 0));

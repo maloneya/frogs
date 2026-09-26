@@ -23,9 +23,6 @@ const _: () = assert!(PLAYER_INV_MASS > 0.0 && PLAYER_INV_MASS < ENEMY_INV_MASS)
 /// Retain 90% of carried speed per simulation tick (60 Hz), after collisions.
 /// Geometric decay gives a free body a total travel of v / 6 world units.
 const RETAIN: f32 = 0.9;
-/// Maximum powered acceleration/braking, in metres per second squared.
-const DRIVE_ACCELERATION: f32 = 30.0;
-const _: () = assert!(DRIVE_ACCELERATION > 0.0);
 /// Snap the invisible tail to rest, so a settled body really has zero velocity.
 const REST_SPEED: f32 = 0.001;
 const _: () = assert!(RETAIN > 0.0 && RETAIN < 1.0 && REST_SPEED > 0.0);
@@ -105,24 +102,29 @@ pub(crate) struct DriveSink<'a> {
 }
 
 impl DriveSink<'_> {
-    pub(crate) fn toward(&mut self, id: EntityId, desired: Vec2, dt: Dt) {
+    pub(crate) fn toward(&mut self, id: EntityId, desired: Vec2, dt: Dt, acceleration: f32) {
         assert!(desired.is_finite() && desired.length_squared().is_finite());
         let Some(row) = self.physics.who.index(id) else { return };
         let motion = &mut self.physics.rows[row];
         if motion.inverse_mass == 0.0 { return; }
         assert!(!motion.driven, "a body may receive only one motor request per tick");
         motion.velocity *= RETAIN;
-        motion.velocity += (desired - motion.velocity).clamp_length_max(DRIVE_ACCELERATION * dt.secs());
+        motion.velocity += (desired - motion.velocity).clamp_length_max(acceleration * dt.secs());
         motion.driven = true;
     }
 }
 
 /// Conservative discrete braking speed: leave enough distance to stop after
 /// this tick's movement. Rationalized form avoids cancellation near arrival.
-pub(crate) fn stopping_speed(distance: f32, dt: Dt) -> f32 {
-    let step = DRIVE_ACCELERATION * dt.secs();
-    let twice_work = 2.0 * DRIVE_ACCELERATION * distance;
+pub(crate) fn stopping_speed(distance: f32, dt: Dt, acceleration: f32) -> f32 {
+    let step = acceleration * dt.secs();
+    let twice_work = 2.0 * acceleration * distance;
     twice_work / ((step * step + twice_work).sqrt() + step)
+}
+
+/// Solves v = RETAIN*v + acceleration*dt for the motor's steady speed.
+pub(crate) fn motor_speed_limit(acceleration: f32) -> f32 {
+    acceleration * Dt::SECS / (1.0 - RETAIN)
 }
 
 impl ImpulseSink<'_> {

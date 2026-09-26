@@ -50,6 +50,7 @@ const BINDINGS: &[Binding] = &[
     ("space", KeyCode::Space, Some(Action::AttackTertiary), None),
     ("e", KeyCode::KeyE, Some(Action::Interact), None),
     ("f2", KeyCode::F2, None, Some(MenuKey::Scenes)),
+    ("f4", KeyCode::F4, None, None),
     ("enter", KeyCode::Enter, None, Some(MenuKey::Accept)),
     ("escape", KeyCode::Escape, None, Some(MenuKey::Close)),
 ];

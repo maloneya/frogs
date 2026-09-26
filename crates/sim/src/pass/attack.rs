@@ -122,7 +122,7 @@ impl Default for Attack {
             swing: None,
             channel: None,
             profile: AttackProfile::default(),
-            resolved: AttackProfile::default().resolve(),
+            resolved: AttackProfile::default().resolve(crate::Tuning::default()),
             // Match physical admission, as defeat storage does. Neither the
             // first tick nor a wide hit against an existing crowd may allocate.
             struck: Vec::with_capacity(crate::MAX_BODIES),
@@ -198,12 +198,19 @@ impl Attack {
         })
     }
 
-    pub(crate) fn set_profile(&mut self, profile: AttackProfile) -> bool {
-        let resolved = profile.resolve();
+    pub(crate) fn set_profile(&mut self, profile: AttackProfile, tuning: crate::Tuning) -> bool {
+        let resolved = profile.resolve(tuning);
         let changed = self.profile != profile || self.resolved != resolved;
         self.profile = profile;
         self.resolved = resolved;
         changed
+    }
+
+    pub(crate) fn retune(&mut self, tuning: crate::Tuning) {
+        // Preserve the independently edited recovery and the in-flight snapshot.
+        if let (Some(current), Some(updated)) = (self.resolved, self.profile.resolve(tuning)) {
+            self.resolved = Some(updated.with_recovery(current.recovery()));
+        }
     }
 
     pub(crate) fn set_recovery(&mut self, recovery: RecoveryTicks) -> bool {
@@ -493,7 +500,7 @@ mod tests {
     #[test]
     fn channel_presence_and_damage_clock_reach_hash_and_report() {
         let mut state = Attack::default();
-        state.set_profile(AttackProfile::Disintegrate);
+        state.set_profile(AttackProfile::Disintegrate, crate::Tuning::default());
         let hash = |state: &Attack| {
             let mut hash = crate::hash::Fnv::default();
             state.hash(&mut hash);

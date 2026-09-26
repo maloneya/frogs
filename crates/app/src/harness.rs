@@ -41,6 +41,7 @@ pub(crate) struct Request {
 }
 
 pub(crate) enum Command {
+    TuningEdit(crate::tuning::Edit),
     Cursor(glam::Vec2),
     /// Atomically load and select one app-global player character.
     ShowCharacter(PathBuf),
@@ -155,6 +156,25 @@ fn parse(line: &str) -> Result<Command, String> {
     };
 
     Ok(match verb {
+        "tuning" => {
+            use crate::tuning::Edit;
+            let usage = "tuning save|revert|defaults|restart|set <key> <value>";
+            let command = match arg {
+                Some("save") => Command::TuningEdit(Edit::Save),
+                Some("revert") => Command::TuningEdit(Edit::Revert),
+                Some("defaults") => Command::TuningEdit(Edit::Defaults),
+                Some("restart") => Command::TuningEdit(Edit::Restart),
+                Some("set") => {
+                    let field = it.next().and_then(arpg_sim::TuningField::named).ok_or("unknown tuning field")?;
+                    let value = it.next().ok_or(usage)?.parse::<f32>().map_err(|_| usage)?;
+                    arpg_sim::Tuning::default().with(field, value)?;
+                    Command::TuningEdit(Edit::Set(field, value))
+                }
+                _ => return Err(usage.into()),
+            };
+            if it.next().is_some() { return Err(usage.into()); }
+            command
+        }
         "cursor" => {
             let usage = "expected: cursor <finite physical x> <finite physical y>";
             let x = arg.ok_or(usage)?.parse::<f32>().map_err(|_| usage)?;

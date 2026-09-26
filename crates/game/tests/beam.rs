@@ -91,7 +91,7 @@ fn beam_waits_for_the_entire_committed_swing_and_release_resets_cadence() {
     let mut game = Game::empty();
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
     game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, true));
-    let swing = AttackProfile::Cleave.resolve().unwrap();
+    let swing = AttackProfile::Cleave.resolve(arpg_sim::Tuning::default()).unwrap();
     let duration = swing.startup() + swing.active() + swing.recovery().get();
     game.set_attack_profile(AttackProfile::Disintegrate);
     for _ in 1..duration {

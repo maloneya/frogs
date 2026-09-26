@@ -25,7 +25,7 @@ fn committed_swings_sound_at_activation_and_misses_have_no_impact() {
         let mut game = Game::empty();
         let mut audio = Audio::default();
         game.set_attack_profile(profile);
-        let attack = profile.resolve().unwrap();
+        let attack = profile.resolve(arpg_sim::Tuning::default()).unwrap();
         for elapsed in 0..attack.startup() + attack.active() + attack.recovery().get() + 2 {
             step(&mut game, &mut audio, intent(Vec3::ZERO, elapsed == 0));
             if elapsed == 1 { game.set_attack_profile(AttackProfile::Disintegrate); }
@@ -48,7 +48,7 @@ fn a_slam_hitting_multiple_enemies_produces_one_contact_cue() {
     let mut game = Game::from_scene(&scene).unwrap();
     game.set_attack_profile(AttackProfile::Slam);
     let mut audio = Audio::default();
-    let resolved = AttackProfile::Slam.resolve().unwrap();
+    let resolved = AttackProfile::Slam.resolve(arpg_sim::Tuning::default()).unwrap();
     for elapsed in 0..resolved.startup() + resolved.active() + 1 {
         step(&mut game, &mut audio, intent(Vec3::ZERO, elapsed == 0));
         assert_eq!(audio.cues[Cue::Impact as usize], u64::from(elapsed >= resolved.startup()));

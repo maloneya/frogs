@@ -19,7 +19,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-CORRECTNESS = ("clippy", "tests", "docs", "scenarios-fast", "scenarios-extended")
+CORRECTNESS = ("clippy", "tests", "docs", "companion", "scenarios-fast", "scenarios-extended")
 PERFORMANCE = ("performance-headless", "performance-live")
 CHECKS = CORRECTNESS + PERFORMANCE
 PERFORMANCE_INTERVAL = 10
@@ -89,6 +89,7 @@ def context():
             hardware[field] = subprocess.check_output(["sysctl", "-n", field], text=True).strip()
     return {"hardware": hardware, "rustc": subprocess.check_output(["rustc", "-Vv"], text=True),
             "cargo": subprocess.check_output(["cargo", "-V"], text=True),
+            "swift": subprocess.check_output(["swift", "--version"], text=True, stderr=subprocess.STDOUT),
             "python": sys.version, "machine": platform.platform(),
             "environment": digest(packed(env)), "cargo_config": configs}
 
@@ -117,6 +118,8 @@ def commands(name, artifact, root=ROOT):
         return ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
     if name == "tests":
         return ["cargo", "test", "--workspace"]
+    if name == "companion":
+        return [sys.executable, "scripts/tuning.py", "test"]
     if name == "docs":
         return ["cargo", "doc", "--workspace", "--lib", "--bins", "--no-deps", "--document-private-items"]
     if name.startswith("scenarios-"):

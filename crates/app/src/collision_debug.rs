@@ -179,7 +179,7 @@ mod tests {
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         game.step(dt, Intent::new(MoveDir::new(Vec3::Z), arpg_core::AimDir::new(Vec3::Z).unwrap(), false));
         debug.rebuild(&game);
-        assert_eq!(debug.drawings()[0].centre().z, arpg_sim::WALK_PER_TICK);
+        assert_eq!(debug.drawings()[0].centre().z, (arpg_sim::Tuning::default().get(arpg_sim::TuningField::PlayerSpeed) * arpg_sim::Dt::SECS));
         assert_eq!(debug.tick, game.tick());
         debug.rebuild(&Game::empty());
         assert_eq!(

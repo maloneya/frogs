@@ -477,3 +477,91 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
     app.enemy_feedback.observe(&app.game);
     assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 0.0);
 }
+
+#[test]
+fn tuning_edits_save_restore_and_restart_through_the_shared_app_boundary() {
+    use crate::tuning::Edit;
+    use arpg_sim::{Tuning, TuningField};
+    let directory = std::env::temp_dir().join(format!("arpg-tuning-test-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("tuning.ron");
+    let mut app = App { tuning_path: path.clone(), ..Default::default() };
+    app.start_playtest(Scene::default()).unwrap();
+    let pending = app.game.request_spawn(Vec2::new(20.0, 0.0), arpg_sim::Template::BODY).unwrap();
+    let before = app.game.hash();
+    assert!(app.edit_tuning(Edit::Set(TuningField::PlayerSpeed, f32::NAN)).is_err());
+    assert_eq!(app.game.hash(), before);
+    for dt in Accumulator::default().pending(arpg_sim::Dt::SECS) {
+        app.game.step(dt, Intent::new(MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
+    }
+    assert_eq!(app.game.spawn_outcomes()[0].ticket, pending);
+    app.edit_tuning(Edit::Set(TuningField::PlayerSpeed, 3.0)).unwrap();
+    app.edit_tuning(Edit::Save).unwrap();
+    assert_eq!(arpg_content::load_tuning(&path).unwrap(), app.game.tuning());
+    app.edit_tuning(Edit::Defaults).unwrap();
+    assert_eq!(app.game.tuning(), Tuning::default());
+    app.edit_tuning(Edit::Revert).unwrap();
+    app.edit_tuning(Edit::Restart).unwrap();
+    assert_eq!(app.game.tuning().get(TuningField::PlayerSpeed), 3.0);
+    app.tuning_path = directory.join("missing-parent").join("tuning.ron");
+    let saved = app.tuning_saved;
+    app.edit_tuning(Edit::Set(TuningField::PlayerSpeed, 4.0)).unwrap();
+    assert!(app.edit_tuning(Edit::Save).is_err());
+    assert_eq!(app.tuning_saved, saved);
+    assert_eq!(arpg_content::load_tuning(&path).unwrap(), saved);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn companion_catalog_edits_errors_and_harness_changes_share_authority() {
+    use crate::tuning::{Command, Edit};
+    use arpg_sim::TuningField;
+    let mut app = App::default();
+    let read = |app: &mut App, command| -> serde_json::Value {
+        serde_json::from_str(&app.tuning_reply(command)).unwrap()
+    };
+    let initial = read(&mut app, Command::State {});
+    let fields = initial["state"]["fields"].as_array().unwrap();
+    assert_eq!(fields.len(), TuningField::ALL.len());
+    for (entry, field) in fields.iter().zip(TuningField::ALL) {
+        assert_eq!(entry["key"], field.attribute().key);
+        assert_eq!(entry["value"].as_f64().unwrap() as f32, app.game.tuning().get(field));
+    }
+    let before = app.game.hash();
+    let stale = read(&mut app, Command::Set { session: 0, key: "player_speed".into(), value: 50.0 });
+    assert_eq!(stale["ok"], false);
+    assert_eq!(app.game.hash(), before);
+    for (key, value) in [("player_speed", -1.0), ("missing", 3.0), ("slam_impulse", f32::INFINITY)] {
+        let reply = read(&mut app, Command::Set { session: std::process::id(), key: key.into(), value });
+        assert_eq!(reply["ok"], false);
+        assert_eq!(app.game.hash(), before);
+    }
+    let reply = read(&mut app, Command::Set { session: std::process::id(), key: "player_speed".into(), value: 4.0 });
+    assert_eq!(reply["ok"], true);
+    assert_eq!(reply["state"]["fields"][0]["value"], 4.0);
+    assert_eq!(reply["state"]["unsaved"], true);
+    app.edit_tuning(Edit::Set(TuningField::PlayerSpeed, 7.0)).unwrap();
+    assert_eq!(read(&mut app, Command::State {})["state"]["fields"][0]["value"], 7.0);
+}
+
+#[test]
+fn expired_companion_edit_cannot_mutate_later() {
+    use std::io::{Read, Write};
+    let path = std::env::temp_dir().join(format!("arpg-expired-{}.sock", std::process::id()));
+    let server = crate::tuning::Server::start(path.clone()).unwrap();
+    let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
+    writeln!(stream, "{}", serde_json::json!({"op":"set","session":std::process::id(),"key":"player_speed","value":4})).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap(); // server's bounded reply wait expires
+    assert!(response.contains("did not reply"), "{response}");
+    // A stalled game has room for one request, even after its caller times out.
+    let mut second = std::os::unix::net::UnixStream::connect(&path).unwrap();
+    second.write_all(b"{\"op\":\"state\"}\n").unwrap();
+    response.clear();
+    second.read_to_string(&mut response).unwrap();
+    assert!(response.contains("Game is busy"), "{response}");
+    let mut app = App { tuning_server: Some(server), ..Default::default() };
+    let before = app.game.hash();
+    app.drain_tuning();
+    assert_eq!(app.game.hash(), before);
+}

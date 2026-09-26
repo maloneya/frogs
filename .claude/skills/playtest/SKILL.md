@@ -45,12 +45,15 @@ body lands on a later tick. The game continues stepping between commands.
 | Sources | `source (pos: (<x>, <z>), every: <ticks>)`, `source remove\|enable\|disable <id>` |
 | Scenes | `scene start <path>`, `scene restart`, `scene add <path>`, `scene evict <id>`, `scene list` |
 | Assets | `character\|horde show <path.glb>`, `character\|horde clear` |
+| Tuning | `tuning set <key> <value>`, `tuning save\|revert\|defaults\|restart` |
 | Presentation | `vsync on\|off`, `debug collision on\|off` |
 | Exit | `quit` |
 
 The command parser is in [harness](../../../crates/app/src/harness.rs). Spawn and source payloads decode the simulation-owned `Placed` and `SourceSpec`
 RON descriptions, including templates, cadence and conditions; see
 [source enablement](../../../docs/source-enablement.md).
+
+See [runtime tuning](../../../docs/tuning.md) for the native companion, F4 launch and self-capture.
 
 Key names come from [BINDINGS](../../../crates/app/src/input.rs); an unknown key
 reply lists them. `cursor <x> <y>` supplies physical window pixels through

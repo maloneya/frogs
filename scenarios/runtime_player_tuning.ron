@@ -1,0 +1,20 @@
+(
+    description: "Speed changes apply before their tick: 6 ticks at 9m/s = .9m, then 6 at 3m/s = .3m. Zero speed stops powered walking.",
+    inputs: [(at: 0, ticks: 18, dir: (1.0, 0.0))],
+    tuning: [
+        (at: 6, values: { PlayerSpeed: 3.0, MonsterWalk: 1.5, MonsterRun: 2.5, MonsterSprint: 4.0, MonsterAcceleration: 30.0, CleaveImpulse: 6.0, SlamImpulse: 72.0 }),
+        (at: 12, values: { PlayerSpeed: 0.0, MonsterWalk: 1.5, MonsterRun: 2.5, MonsterSprint: 4.0, MonsterAcceleration: 30.0, CleaveImpulse: 6.0, SlamImpulse: 72.0 }),
+    ],
+    checkpoints: [
+        (at: 5, expect: (player_pos: (x: 0.9, z: 0.0, tol: 0.00001))),
+        (at: 6, expect: (player_pos: (x: 0.95, z: 0.0, tol: 0.00001))),
+        (at: 11, expect: (player_pos: (x: 1.2, z: 0.0, tol: 0.00001))),
+        (at: 12, expect: (player_pos: (x: 1.2, z: 0.0, tol: 0.00001))),
+    ],
+    budget: (ticks: 18),
+    expect: (player_pos: (x: 1.2, z: 0.0, tol: 0.00001),
+        events: (kinds: [TuningChanged], sequence: [
+            (6, TuningChanged(field: PlayerSpeed, value: 3.0)),
+            (12, TuningChanged(field: PlayerSpeed, value: 0.0)),
+        ])),
+)

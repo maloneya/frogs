@@ -1,0 +1,19 @@
+(
+    description: "A Slam impulse edit during startup preserves the first hit, changes the next swing, and still integrates through shared physics on the following tick.",
+    setup: (actions: [Place((0, 1.5))]),
+    attack_profiles: [(at: 0, profile: Slam)],
+    attacks: [0, 30],
+    tuning: [(at: 1, values: { PlayerSpeed: 9.0, MonsterWalk: 1.5, MonsterRun: 2.5, MonsterSprint: 4.0,
+        MonsterAcceleration: 30.0, CleaveImpulse: 6.0, SlamImpulse: 12.0 })],
+    despawns: [(at: 29, body: 0)],
+    spawns: [(at: 30, pos: (0, 1.5))],
+    checkpoints: [
+        (at: 8, expect: (struck: 0, bodies: [(nth: 0, velocity: (x: 0.0, z: 0.0, tol: 0.00001))])),
+        (at: 9, expect: (struck: 1, bodies: [(nth: 0, velocity: (x: 0.0, z: 72.0, tol: 0.00001))])),
+        (at: 10, expect: (bodies: [(nth: 0, pos: (x: 0, z: 2.7, tol: 0.00001))])),
+        (at: 39, expect: (struck: 1, bodies: [(nth: 1, velocity: (x: 0.0, z: 12.0, tol: 0.00001))])),
+    ],
+    budget: (ticks: 41),
+    expect: (bodies: [(nth: 1, health: 1, pos: (x: 0, z: 1.7, tol: 0.00001))],
+        events: (kinds: [TuningChanged], sequence: [(1, TuningChanged(field: SlamImpulse, value: 12.0))])),
+)

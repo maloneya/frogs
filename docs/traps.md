@@ -14,6 +14,17 @@ sleeping display may stop presentation. An unfocused but visible window can work
 The capture owner rejects overlapping requests and reports write failures or a
 four-second timeout. Capture is not independent of window visibility.
 
+## Native companion capture is black or omits the sidebar
+
+**Cause:** AppKit view captures leave undrawn regions transparent; macOS glass
+navigation sidebars can omit their composited content from `cacheDisplay` even
+when their native table has rows. This is a capture limitation, not evidence of
+an empty tuning catalog (2026-09-26).
+**Check:** inspect the PNG alpha and the game's tuning `state` reply.
+**Safeguard:** companion self-capture composites over the resolved native window
+background. The small settings view uses a standard `HSplitView` and plain list,
+which also avoids unnecessary navigation containers and captures its rows.
+
 ## Frame rate is absurd, zero, or faster for a heavier scene
 
 **Cause:** occlusion can skip draws; display sleep can stop presentation;

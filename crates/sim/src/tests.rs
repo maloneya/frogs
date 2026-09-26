@@ -250,8 +250,8 @@ fn player_presentation_carries_identity_transform_movement_and_attack() {
     let player = world.player_presentation(Alpha::ONE);
     assert_eq!(player.id(), id);
     assert_eq!(player.ground_position().y, 0.0);
-    assert!((player.ground_position().x - WALK_PER_TICK).abs() < 1.0e-6);
-    assert_eq!(player.displacement(), Vec2::X * WALK_PER_TICK);
+    assert!((player.ground_position().x - (Tuning::default().get(TuningField::PlayerSpeed) * Dt::SECS)).abs() < 1.0e-6);
+    assert_eq!(player.displacement(), Vec2::X * (Tuning::default().get(TuningField::PlayerSpeed) * Dt::SECS));
     assert_eq!(player.facing(), world.player_facing());
     assert_eq!(player.attack().phase, AttackPhase::Startup);
     assert_eq!(
@@ -373,7 +373,7 @@ fn an_empty_horde_is_a_legal_world() {
     assert_eq!(world.contacts(), 0, "an empty arena reported a contact");
 
     // Movement is then exactly the constant, with nothing to interfere.
-    let expected = 30.0 * pass::walk::PER_TICK;
+    let expected = 30.0 * Tuning::default().get(TuningField::PlayerSpeed) * Dt::SECS;
     assert!((world.player_pos().x - expected).abs() < 1e-4);
 
     assert_eq!(world.enemy_presentations(Alpha::ONE).count(), 0);
@@ -615,7 +615,7 @@ fn a_steady_state_frame_allocates_nothing() {
     for profile in AttackProfile::ALL {
         let mut world = world_with_enemies(512);
         world.set_attack_profile(profile);
-        let attack = profile.resolve();
+        let attack = profile.resolve(crate::Tuning::default());
         let duration = attack.map_or(60, |attack| attack.startup() + attack.active() + attack.recovery().get());
 
         world.step(dt, Intent::new(east, AimDir::new(east.as_vec3()).expect("nonzero test movement"), false));

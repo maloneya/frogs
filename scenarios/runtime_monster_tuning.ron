@@ -1,0 +1,34 @@
+(
+    description: "Existing monsters decelerate toward new gait speeds; newly spawned monsters accelerate toward the same values.",
+    setup: (actions: [Place((20.0, 0.0)), Seek(0)]),
+    tuning: [(at: 5, values: { PlayerSpeed: 9.0, MonsterWalk: 1.0, MonsterRun: 1.0,
+        MonsterSprint: 1.0, MonsterAcceleration: 30.0, CleaveImpulse: 6.0, SlamImpulse: 72.0 }),
+        (at: 8, values: { PlayerSpeed: 9.0, MonsterWalk: 10.0, MonsterRun: 10.0,
+            MonsterSprint: 10.0, MonsterAcceleration: 300.0, CleaveImpulse: 6.0, SlamImpulse: 72.0 }),
+    ],
+    spawns: [(at: 5, pos: (-20.0, 0.0), what: (seeks: true))],
+    checkpoints: [
+        (at: 4, expect: (bodies: [(nth: 0, velocity: (x: -2.04755, z: 0.0, tol: 0.00001))])),
+        (at: 5, expect: (bodies: [
+            (nth: 0, velocity: (x: -1.342795, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 0.5, z: 0.0, tol: 0.00001)),
+        ])),
+        (at: 6, expect: (bodies: [
+            (nth: 0, velocity: (x: -1.0, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 0.95, z: 0.0, tol: 0.00001)),
+        ])),
+    ],
+    budget: (ticks: 11),
+    expect: (bodies: [
+        (nth: 0, velocity: (x: -10.0, z: 0.0, tol: 0.00001)),
+        (nth: 1, velocity: (x: 10.0, z: 0.0, tol: 0.00001)),
+    ], events: (kinds: [TuningChanged], sequence: [
+        (5, TuningChanged(field: MonsterWalk, value: 1.0)),
+        (5, TuningChanged(field: MonsterRun, value: 1.0)),
+        (5, TuningChanged(field: MonsterSprint, value: 1.0)),
+        (8, TuningChanged(field: MonsterWalk, value: 10.0)),
+        (8, TuningChanged(field: MonsterRun, value: 10.0)),
+        (8, TuningChanged(field: MonsterSprint, value: 10.0)),
+        (8, TuningChanged(field: MonsterAcceleration, value: 300.0)),
+    ])),
+)

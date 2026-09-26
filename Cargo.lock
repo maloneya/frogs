@@ -173,6 +173,8 @@ dependencies = [
  "kira",
  "log",
  "pollster",
+ "serde",
+ "serde_json",
  "toml_edit",
  "winit",
 ]

@@ -86,18 +86,22 @@ impl Game {
     /// the previous snapshot untouched. Success replaces the whole Game, so
     /// future gameplay fields cannot survive by being omitted from a reset list.
     /// Runtime identities are scoped to the new run, as with `from_scene`.
+    /// Type-wide runtime tuning is preserved.
     pub fn start_scene(&mut self, scene: &GameScene) -> Result<(), SceneError> {
-        let replacement = Self::from_scene(scene)?;
+        let mut replacement = Self::from_scene(scene)?;
+        replacement.world.set_tuning(self.world.tuning());
         *self = replacement;
         Ok(())
     }
 
     /// Restarts from the cached description without consulting the filesystem.
     /// Additive loads and eviction never change the selected snapshot.
+    /// Current runtime tuning is preserved.
     pub fn restart(&mut self) -> Result<(), RestartError> {
         let snapshot = self.restart.as_ref().ok_or(RestartError::NoScene)?;
-        let replacement = Self::from_scene(snapshot.description())
+        let mut replacement = Self::from_scene(snapshot.description())
             .map_err(RestartError::InvalidScene)?;
+        replacement.world.set_tuning(self.world.tuning());
         *self = replacement;
         Ok(())
     }
@@ -167,6 +171,12 @@ impl Game {
         }
         hash.finish()
     }
+
+    /// Accepted type-wide simulation tuning.
+    pub fn tuning(&self) -> arpg_sim::Tuning { self.world.tuning() }
+
+    /// Applies complete validated settings between ticks; survives scene replacement.
+    pub fn set_tuning(&mut self, tuning: arpg_sim::Tuning) { self.world.set_tuning(tuning); }
 
     /// Engine-only fingerprint for comparing physical state independently of restart.
     #[must_use]

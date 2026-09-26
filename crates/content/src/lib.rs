@@ -22,17 +22,17 @@ fn parse_scene(source: &str) -> Result<arpg_game::GameScene, ron::error::Spanned
 /// File errors remain distinguishable from syntax/schema errors.
 #[derive(Debug)]
 pub enum LoadError {
-    /// The scene file could not be read.
+    /// The content file could not be read.
     Read(std::io::Error),
-    /// The content was not a valid scene description.
+    /// The content did not match its owning schema.
     Parse(ron::error::SpannedError),
 }
 
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Read(error) => write!(f, "read scene: {error}"),
-            Self::Parse(error) => write!(f, "parse scene: {error}"),
+            Self::Read(error) => write!(f, "read content: {error}"),
+            Self::Parse(error) => write!(f, "parse content: {error}"),
         }
     }
 }
@@ -125,6 +125,57 @@ mod tests {
             r#"(engine: (name: "game"), source_controls: [])"#,
         ] {
             assert!(parse_scene(source).is_err(), "invalid scene passed: {source}");
+        }
+    }
+}
+
+/// Reads a complete runtime tuning file through sim's validated schema.
+pub fn load_tuning(path: &Path) -> Result<arpg_sim::Tuning, LoadError> {
+    let source = std::fs::read_to_string(path).map_err(LoadError::Read)?;
+    parse_tuning(&source).map_err(LoadError::Parse)
+}
+
+/// Decodes complete settings without mutating a running game.
+pub fn parse_tuning(source: &str) -> Result<arpg_sim::Tuning, ron::error::SpannedError> {
+    ron::from_str(source)
+}
+
+/// Atomically replaces a tuning file; failed writes preserve its previous contents.
+pub fn save_tuning(path: &Path, tuning: arpg_sim::Tuning) -> Result<(), String> {
+    use std::io::Write;
+    let text = ron::ser::to_string_pretty(&tuning, ron::ser::PrettyConfig::default())
+        .map_err(|error| error.to_string())?;
+    let temporary = path.with_extension(format!("ron.{}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)
+        .map_err(|error| error.to_string())?;
+    let result = (|| -> std::io::Result<()> {
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result.map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tuning_tests {
+    use super::*;
+    use arpg_sim::{Tuning, TuningField};
+
+    #[test]
+    fn complete_files_round_trip_and_invalid_inputs_are_rejected() {
+        let tuning = Tuning::default().with(TuningField::SlamImpulse, 17.0).unwrap();
+        let source = ron::ser::to_string(&tuning).unwrap();
+        assert_eq!(parse_tuning(&source).unwrap(), tuning);
+        for source in [
+            "{}".to_string(),
+            source.replace("SlamImpulse:17.0", "SlamImpulse:17.0,SlamImpulse:17.0"),
+            source.replace("SlamImpulse:17.0", "SlamImpulse:NaN"),
+            source.replace("SlamImpulse:17.0", "SlamImpulse:-1.0"),
+            source.replace("SlamImpulse:17.0", "SlamImpulse:1001.0"),
+            source.replace("SlamImpulse", "UnknownAttribute"),
+        ] {
+            assert!(parse_tuning(&source).is_err(), "{source}");
         }
     }
 }

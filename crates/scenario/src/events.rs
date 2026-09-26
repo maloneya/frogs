@@ -15,6 +15,11 @@ pub(crate) struct Events {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum ExpectedEvent {
+    TuningChanged {
+        field: arpg_sim::TuningField,
+        #[serde(deserialize_with = "crate::spec::tolerance")]
+        value: f32,
+    },
     GaitsChanged { walking: usize, running: usize, sprinting: usize },
     SceneLoaded { id: String },
     SceneEvicted { id: String },
@@ -52,6 +57,7 @@ pub(crate) enum ExpectedEvent {
 impl ExpectedEvent {
     pub(crate) fn kind(&self) -> EventKind {
         match self {
+            Self::TuningChanged { .. } => EventKind::TuningChanged,
             Self::GaitsChanged { .. } => EventKind::GaitsChanged,
             Self::SceneLoaded { .. } => EventKind::SceneLoaded,
             Self::SceneEvicted { .. } => EventKind::SceneEvicted,
@@ -83,6 +89,8 @@ impl ExpectedEvent {
 
     pub(crate) fn matches(&self, actual: Event) -> bool {
         match (self, actual) {
+            (Self::TuningChanged { field, value }, Event::TuningChanged { field: actual, value: changed }) =>
+                *field == actual && *value == changed,
             (Self::GaitsChanged { walking, running, sprinting }, Event::GaitsChanged { walking: w, running: r, sprinting: s }) =>
                 (*walking, *running, *sprinting) == (w, r, s),
             (Self::SceneLoaded { id }, Event::SceneLoaded { id: actual })

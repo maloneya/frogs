@@ -63,16 +63,6 @@ impl Failure {
     }
 }
 
-/// One tick of walking, used only to phrase error sizes in a comparable unit —
-/// never as a diagnosis. An earlier version guessed at a cause and was
-/// confidently wrong, which is worse than no hint: it spends the reader's
-/// attention pointing away from it.
-///
-/// Taken from `sim` rather than copied. `WALK_PER_TICK` is exported for exactly
-/// this consumer, and a hand-written `9.0 / 60.0` beside it goes stale the day
-/// `PLAYER_SPEED` changes — reporting a wrong tick count in every failure.
-use arpg_sim::WALK_PER_TICK as TICK_OF_WALKING;
-
 /// Fail closed on assertions that would otherwise never execute or be ignored.
 /// The shared `Expect` keeps one definition of state assertions. Its trace field
 /// is whole-run only; validating that restriction avoids duplicating the schema
@@ -94,7 +84,8 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     for (name, at) in scenario.attacks.iter().map(|&at| ("attacks", at))
         .chain(scenario.interactions.iter().map(|&at| ("interactions", at)))
         .chain(scenario.spawns.iter().map(|command| ("spawns", command.at)))
-        .chain(scenario.impulses.iter().map(|command| ("impulses", command.at))) {
+        .chain(scenario.impulses.iter().map(|command| ("impulses", command.at)))
+        .chain(scenario.tuning.iter().map(|command| ("tuning", command.at))) {
         if at >= scenario.budget.ticks {
             failures.push(Failure::new(name, "a tick inside the budget".into(), at.to_string()));
         }
@@ -354,6 +345,9 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                         }
                     }
                 }
+            }
+            for command in scenario.tuning.iter().filter(|command| command.at == tick) {
+                game.set_tuning(command.values);
             }
             for command in scenario.attack_recovery.iter().filter(|command| command.at == tick) {
                 game.set_attack_recovery(command.recovery);
@@ -621,11 +615,7 @@ fn check_state(
                     want.expected(),
                     format!("({:.4}, {:.4})", got.x, got.z),
                 )
-                .with_note(format!(
-                    "off by {off:.4}, tolerance {:.4} — that is {:.2} ticks of walking",
-                    want.tol,
-                    off / TICK_OF_WALKING,
-                )),
+                .with_note(format!("position error {off:.4} metres; tolerance {:.4} metres", want.tol)),
             );
         }
     }

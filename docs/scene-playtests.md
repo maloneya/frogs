@@ -13,10 +13,10 @@ and eviction preserve the restart choice, even if its live instance is removed.
 Run-scoped identity rules stay the same.
 
 The `sim` report includes `restart.available`, plus
-`restart.name` and `restart.initial_hash` when a snapshot is selected. The latter
-is the hexadecimal fingerprint of the snapshot's initial engine and gameplay state, computed
-once when the snapshot is validated. It is immutable, so it cannot drift from
-the description. The `sim_hash` and ready-reply hash cover the
+`restart.name` and `restart.content_hash` when a snapshot is selected. The latter
+is the hexadecimal fingerprint of the snapshot instantiated with built-in tuning,
+computed once when the snapshot is validated. Live runtime tuning survives
+restart separately and participates in the active engine hash. The `sim_hash` and ready-reply hash cover the
 active engine, gameplay relationships, and the restart effect. `Game::engine_hash` remains
 available for comparing engine state independently of the restart choice.
 
@@ -65,6 +65,8 @@ content. Restart removes additive instances as well as the previous player.
 Boot uses the established horde grid, constructed in code as `Scene::boot` and
 installed by the same loader. There is no scene environment variable or
 working-directory-dependent boot fallback.
+
+See [runtime tuning](tuning.md) for the native F4 companion, live attributes and saved settings.
 
 ## In-game picker
 
@@ -192,8 +194,9 @@ authored placements use the common placement implementation without squeezing
 through the 256-request queue. Success means every placement and source is
 installed. No hidden ticks run. Sources first evaluate on the next tick.
 
-Fresh restart also resets player motion, attack state and tuning, pending UI
-edits, accepted gameplay input, the accumulator, and camera follow/lead. Held
+Fresh restart resets player motion, attack state and per-attack recovery,
+accepted gameplay input, the accumulator, and camera follow/lead. Type-wide
+runtime tuning survives restart. Held
 physical keys require release before acting again. Old delayed harness actions
 and captures receive cancellation replies. Construction failure leaves the
 current playtest untouched. Renderer settings such as zoom and vsync persist.

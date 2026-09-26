@@ -44,6 +44,13 @@ const _: () = assert!(CAPACITY > 0, "a zero-length trace silently records nothin
 /// that occur rarely: a hitbox opening, a hit landing, hitstop starting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
+    /// Accepted type-wide edit before the named tick.
+    TuningChanged {
+        /// Attribute edited.
+        field: crate::TuningField,
+        /// Accepted value.
+        value: f32,
+    },
     /// Gait transitions aggregated per tick to keep dense crowds from flooding
     /// the trace. Individual current choices remain available through World::gait.
     GaitsChanged {
@@ -211,6 +218,8 @@ pub enum Event {
 /// Event categories for diagnostic selection; payloads remain in [`Event`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 pub enum EventKind {
+    /// A runtime tuning edit.
+    TuningChanged,
     /// The `GaitsChanged` transition.
     GaitsChanged,
     /// The `Activated` transition.
@@ -270,6 +279,7 @@ impl Event {
     #[must_use]
     pub fn kind(self) -> EventKind {
         match self {
+            Self::TuningChanged { .. } => EventKind::TuningChanged,
             Self::GaitsChanged { .. } => EventKind::GaitsChanged,
             Self::Activated { .. } => EventKind::Activated,
             Self::SceneLoaded { .. } => EventKind::SceneLoaded,
@@ -306,6 +316,7 @@ impl fmt::Display for Event {
     /// noise that hides the one line that mattered.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::TuningChanged { field, value } => write!(f, "tuning {}={value}", field.attribute().key),
             Self::GaitsChanged { walking, running, sprinting } =>
                 write!(f, "gaits walk={walking} run={running} sprint={sprinting}"),
             Self::Activated { id } => write!(f, "activated id={id}"),

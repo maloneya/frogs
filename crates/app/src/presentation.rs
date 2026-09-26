@@ -477,12 +477,15 @@ enum HordeRole {
 }
 
 impl HordeRole {
+    // Animation buckets use built-in reference speeds. Runtime tuning changes
+    // actual displacement, which selects a bucket; it must not redefine what
+    // the authored Run clip represents or divide by a user-selected zero speed.
     fn from_displacement(displacement: glam::Vec2) -> Self {
         use arpg_sim::Gait;
         let speed = displacement.length() / arpg_sim::Dt::SECS;
         if displacement.length_squared() <= 1.0e-8 { Self::Idle }
-        else if speed < (Gait::Walk.speed() + Gait::Run.speed()) * 0.5 { Self::Walk }
-        else if speed < (Gait::Run.speed() + Gait::Sprint.speed()) * 0.5 { Self::Run }
+        else if speed < (arpg_sim::Tuning::default().gait_speed(Gait::Walk) + arpg_sim::Tuning::default().gait_speed(Gait::Run)) * 0.5 { Self::Walk }
+        else if speed < (arpg_sim::Tuning::default().gait_speed(Gait::Run) + arpg_sim::Tuning::default().gait_speed(Gait::Sprint)) * 0.5 { Self::Run }
         else { Self::Sprint }
     }
 
@@ -492,8 +495,8 @@ impl HordeRole {
         use arpg_sim::Gait;
         match self {
             Self::Idle | Self::Run => 1.0,
-            Self::Walk => f64::from(Gait::Walk.speed() / Gait::Run.speed()),
-            Self::Sprint => f64::from(Gait::Sprint.speed() / Gait::Run.speed()),
+            Self::Walk => f64::from(arpg_sim::Tuning::default().gait_speed(Gait::Walk) / arpg_sim::Tuning::default().gait_speed(Gait::Run)),
+            Self::Sprint => f64::from(arpg_sim::Tuning::default().gait_speed(Gait::Sprint) / arpg_sim::Tuning::default().gait_speed(Gait::Run)),
         }
     }
 }

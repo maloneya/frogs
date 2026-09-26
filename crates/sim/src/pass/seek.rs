@@ -21,21 +21,11 @@ pub enum Gait {
     Walk,
     /// Ordinary pursuit.
     Run,
-    /// Fast burst, still slower than the player.
+    /// Fast burst; its target speed is runtime tuning.
     Sprint,
 }
 
 impl Gait {
-    /// Desired free-space speed in metres per second.
-    #[must_use]
-    pub const fn speed(self) -> f32 {
-        match self {
-            Self::Walk => 1.5,
-            Self::Run => 2.5,
-            Self::Sprint => 4.0,
-        }
-    }
-
     /// Stable label shared by reports and scenario diagnostics.
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -80,20 +70,17 @@ impl Gait {
     }
 }
 
-const _: () = assert!(Gait::Walk.speed() > 0.0
-    && Gait::Walk.speed() < Gait::Run.speed()
-    && Gait::Run.speed() < Gait::Sprint.speed()
-    && Gait::Sprint.speed() < super::walk::PLAYER_SPEED);
-
 /// Reads post-player-walk positions and grants no structural capabilities.
 /// The motor changes velocity now; motion::integrate moves it later this tick,
 /// before contacts exchange the resulting momentum. Near arrival, braking keeps
 /// an unimpeded chaser from continually walking into the player.
+#[expect(clippy::too_many_arguments, reason = "separate read slices, motor capability, tuning and tick inputs keep pass access explicit")]
 pub(crate) fn seek(
     seekers: &Members,
     bodies: &Slots,
     pos: &[Vec2],
     mut drive: DriveSink<'_>,
+    tuning: crate::Tuning,
     tick: u64,
     dt: Dt,
     mut trace: TraceSink<'_>,
@@ -109,9 +96,9 @@ pub(crate) fn seek(
         if changed {
             changed_counts[match gait { Gait::Walk => 0, Gait::Run => 1, Gait::Sprint => 2 }] += 1;
         }
-        let speed = gait.speed().min(stopping_speed(remaining, dt));
+        let speed = tuning.gait_speed(gait).min(stopping_speed(remaining, dt, tuning.get(crate::TuningField::MonsterAcceleration)));
         let desired = if remaining > 0.0 { to_target / distance * speed } else { Vec2::ZERO };
-        drive.toward(id, desired, dt);
+        drive.toward(id, desired, dt, tuning.get(crate::TuningField::MonsterAcceleration));
     }
     let [walking, running, sprinting] = changed_counts;
     if walking + running + sprinting > 0 {

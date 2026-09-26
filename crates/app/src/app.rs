@@ -1,6 +1,7 @@
 //! Native lifecycle, playtest replacement and the simulation-to-render frame loop.
 
 mod capture;
+mod tuning_control;
 mod control;
 #[cfg(test)]
 mod tests;
@@ -36,6 +37,11 @@ use crate::ui::{MenuRequest, SceneChoice};
 #[derive(Default)]
 pub(crate) struct App {
     window: Option<Arc<Window>>,
+    tuning_saved: arpg_sim::Tuning,
+    tuning_message: String,
+    tuning_error: bool,
+    tuning_server: Option<crate::tuning::Server>,
+    tuning_path: std::path::PathBuf,
     renderer: Option<Renderer>,
     /// Ground and prop resources exist together once GPU initialization succeeds.
     world_assets: Option<WorldAssets<MeshAsset>>,
@@ -179,6 +185,17 @@ impl App {
     /// Both native keys and harness keys execute menu requests at this same
     /// between-tick boundary. No file I/O or game replacement happens in HUD drawing.
     fn handle_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
+        if key == KeyCode::F4 {
+            if pressed && !repeat {
+                if let Err(error) = self.open_tuning_companion() {
+                    log::error!("{error}");
+                    self.tuning_message = error;
+                    self.tuning_error = true;
+                }
+                self.input.release_all();
+            }
+            return true;
+        }
         let consumed = self.input.on_key(key, pressed, repeat);
         match self.input.menu_mut().take_request() {
             Some(MenuRequest::RefreshScenes) => {
@@ -495,6 +512,7 @@ impl App {
         event_loop.set_control_flow(ControlFlow::Poll);
         let mut app = App::default();
         app.start_playtest(Scene::boot()).expect("valid built-in boot scene");
+        app.load_saved_tuning();
         event_loop.run_app(&mut app).expect("run app");
     }
 }
@@ -541,6 +559,10 @@ impl ApplicationHandler for App {
         self.camera = Some(camera);
         self.window = Some(window);
         self.harness = harness::start();
+        match crate::tuning::Server::start(crate::tuning::socket_path()) {
+            Ok(server) => self.tuning_server = Some(server),
+            Err(error) => log::error!("tuning socket: {error}"),
+        }
         // GPU and asset loading are startup work, not elapsed play time.
         self.clock = Clock::default();
     }
@@ -633,6 +655,7 @@ impl ApplicationHandler for App {
             return;
         }
 
+        self.drain_tuning();
         if let Some(window) = &self.window {
             window.request_redraw();
         }

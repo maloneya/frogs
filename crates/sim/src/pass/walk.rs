@@ -5,15 +5,6 @@ use glam::{Vec2, Vec3Swizzles};
 
 use crate::Dt;
 
-/// How fast the character walks, in world units per second.
-///
-/// `pub(crate)` so that [`crate::pass::seek`] can assert against it: a horde
-/// that is not slower than the player cannot be outrun, and kiting is the whole
-/// of ARPG movement. That comparison has to be a compile error rather than a
-/// note, and it can only be one if both constants are visible to each other.
-pub(crate) const PLAYER_SPEED: f32 = 9.0;
-const _: () = assert!(PLAYER_SPEED > 0.0);
-
 /// Integrates one tick of movement.
 ///
 /// **Instantaneous, deliberately.** Full speed on the first tick and a dead
@@ -24,13 +15,9 @@ const _: () = assert!(PLAYER_SPEED > 0.0);
 ///
 /// `dir` is world-space and already unit-or-zero, because [`MoveDir`] is the
 /// only door and it normalises. So this does not have to check.
-pub(crate) fn walk(pos: &mut Vec2, dir: MoveDir, dt: Dt) {
-    *pos += dir.as_vec3().xz() * PLAYER_SPEED * dt.secs();
+pub(crate) fn walk(pos: &mut Vec2, dir: MoveDir, dt: Dt, speed: f32) {
+    *pos += dir.as_vec3().xz() * speed * dt.secs();
 }
-
-/// One tick of walking, in world units. Exposed because a scenario failure is
-/// far easier to read when the error is expressed in ticks than in units.
-pub const PER_TICK: f32 = PLAYER_SPEED * Dt::SECS;
 
 #[cfg(test)]
 mod tests {
@@ -42,8 +29,7 @@ mod tests {
     /// a rate that is simply the wrong rate: replacing `dt.secs()` with a
     /// hard-coded number passes every replay test, because both runs then use
     /// the same wrong value and agree perfectly. Only a prediction from
-    /// `PLAYER_SPEED` catches it, which is why this test exists beside the
-    /// constant rather than somewhere that tests the world.
+    /// the selected tuning catches it.
     #[test]
     fn walking_covers_the_speed_it_claims() {
         let mut acc = Accumulator::default();
@@ -52,10 +38,10 @@ mod tests {
 
         let mut pos = Vec2::ZERO;
         for _ in 0..6 {
-            walk(&mut pos, east, dt);
+            walk(&mut pos, east, dt, crate::Tuning::default().get(crate::TuningField::PlayerSpeed));
         }
 
-        let predicted = PLAYER_SPEED * 6.0 * Dt::SECS;
+        let predicted = crate::Tuning::default().get(crate::TuningField::PlayerSpeed) * 6.0 * Dt::SECS;
         assert!((pos.x - predicted).abs() < 1e-5, "walked {} in 6 ticks, predicted {predicted}", pos.x);
         assert_eq!(pos.y, 0.0, "walking along +X moved the other axis");
     }
@@ -66,7 +52,7 @@ mod tests {
         let dt = acc.pending(Dt::SECS).next().expect("one tick");
 
         let mut pos = Vec2::new(3.0, -4.0);
-        walk(&mut pos, MoveDir::NONE, dt);
+        walk(&mut pos, MoveDir::NONE, dt, 9.0);
         assert_eq!(pos, Vec2::new(3.0, -4.0));
     }
 }

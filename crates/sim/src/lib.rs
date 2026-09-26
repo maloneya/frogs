@@ -64,10 +64,8 @@ pub use trace::{Event, EventKind, MAX_TRACE_EVENTS, Trace, TraceSink};
 mod access;
 pub use access::{GameplayAccess, MeleeView};
 
-/// One tick of walking, in world units. Re-exported because a scenario or a
-/// harness reading a position is almost always trying to work out how many
-/// ticks of movement it is looking at.
-pub use pass::walk::PER_TICK as WALK_PER_TICK;
+mod tuning;
+pub use tuning::{Tuning, TuningField, TuningAttribute};
 
 /// Blends between two facings the short way round.
 ///
@@ -334,6 +332,7 @@ struct Player {
 /// What exists: the horde, the player, and the bookkeeping the two seams —
 /// [`World::player_presentation`] and [`World::trace`] — hand out.
 pub struct World {
+    tuning: Tuning,
     bodies: Bodies,
     player: Player,
     /// Simulation ticks completed since this world was created.
@@ -412,6 +411,7 @@ impl World {
     #[must_use]
     pub fn empty() -> Self {
         Self {
+            tuning: Tuning::default(),
             bodies: Bodies::default(),
             player: Player::default(),
             tick: 0,
@@ -595,6 +595,7 @@ impl World {
             contacts: _,
             crowd_contacts: _,
             crowd_grid: _,
+            tuning: _,
         } = self;
 
         let _ = defeats; // Between-tick removals never manufacture combat outcomes.
@@ -653,11 +654,26 @@ impl World {
         self.player.attack.status()
     }
 
+    /// Current type-wide gameplay settings.
+    pub fn tuning(&self) -> Tuning { self.tuning }
+
+    /// Applies a validated complete edit between ticks. Movement uses it on the
+    /// next tick; in-flight attacks retain their captured values.
+    pub fn set_tuning(&mut self, tuning: Tuning) {
+        for field in TuningField::ALL {
+            if self.tuning.get(field) != tuning.get(field) {
+                self.trace.sink(self.tick).emit(Event::TuningChanged { field, value: tuning.get(field) });
+            }
+        }
+        self.tuning = tuning;
+        self.player.attack.retune(tuning);
+    }
+
     /// Selects authored attack content for subsequent swings. The profile is
     /// resolved before entering the attack state; an in-flight swing keeps the
     /// profile and complete runtime value it captured when it began.
     pub fn set_attack_profile(&mut self, profile: AttackProfile) {
-        if self.player.attack.set_profile(profile) {
+        if self.player.attack.set_profile(profile, self.tuning) {
             self.trace.sink(self.tick).emit(Event::AttackProfileChanged { profile });
         }
     }
@@ -720,6 +736,7 @@ impl World {
             contacts,
             crowd_contacts,
             crowd_grid: _,
+            tuning,
             trace,
         } = self;
         let Player {
@@ -728,6 +745,7 @@ impl World {
             attack,
         } = player;
 
+        out.object("tuning", |out| tuning.report(out));
         bodies.physics.report(&bodies.pos, &bodies.slots, out);
         bodies.health.report(out);
         bodies.interactions.report(out);
@@ -759,7 +777,7 @@ impl World {
                 let gait = self.gait(id).expect("live seeker");
                 out.object(&id.to_string(), |out| {
                     out.text("gait", gait.label());
-                    out.num("desired_speed", gait.speed());
+                    out.num("desired_speed", tuning.gait_speed(gait));
                 });
             }
         });
@@ -897,7 +915,7 @@ impl World {
             &self.bodies.pos,
             &mut self.bodies.prev_pos,
         );
-        pass::walk::walk(&mut self.bodies.pos[0], move_dir, dt);
+        pass::walk::walk(&mut self.bodies.pos[0], move_dir, dt, self.tuning.get(TuningField::PlayerSpeed));
         // Chasers read post-walk positions, then request bounded acceleration.
         // Integration and contacts below carry their running momentum onward.
         pass::seek::seek(
@@ -905,6 +923,7 @@ impl World {
             &self.bodies.slots,
             &self.bodies.pos,
             self.bodies.physics.drive(),
+            self.tuning,
             self.tick,
             dt,
             trace.reborrow(),
@@ -1033,6 +1052,7 @@ impl World {
             contacts,
             crowd_contacts,
             crowd_grid: _,
+            tuning,
             trace,
         } = self;
 
@@ -1057,6 +1077,7 @@ impl World {
             prev_pos: enemy_prev,
         } = bodies;
         let mut h = Fnv::default();
+        tuning.hash(&mut h);
         h.usize(defeats.len());
         for defeat in defeats {
             defeat.body.hash_into(&mut h);

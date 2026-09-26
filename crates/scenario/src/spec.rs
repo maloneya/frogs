@@ -59,6 +59,10 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) attack_profiles: Vec<AttackProfileAt>,
 
+    /// Complete validated tuning edits before the named tick.
+    #[serde(default)]
+    pub(crate) tuning: Vec<TuningAt>,
+
     /// External momentum changes, applied before the named tick.
     #[serde(default)]
     pub(crate) impulses: Vec<ImpulseAt>,
@@ -631,4 +635,12 @@ pub(crate) struct ChestExpect {
     pub(crate) scene: usize,
     pub(crate) chest: usize,
     pub(crate) state: Option<arpg_game::ChestState>,
+}
+
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TuningAt {
+    pub(crate) at: u64,
+    pub(crate) values: arpg_sim::Tuning,
 }

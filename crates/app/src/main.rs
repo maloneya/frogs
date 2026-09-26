@@ -6,6 +6,7 @@
 //! in that vocabulary. The dependency runs one way, and `app` is the only module
 //! that sees both sides.
 
+mod tuning;
 mod app;
 mod audio;
 mod collision_debug;
