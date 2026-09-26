@@ -49,7 +49,7 @@ pub use pass::source::SourceState;
 use pass::source::Sources;
 /// Who asks for spawns, and when. See [`crate::pass::source`] for why a source
 /// is its own thing rather than a behaviour on a body.
-pub use pass::source::{Condition, Placement, Source, SourceId, SourceSpec};
+pub use pass::source::{Condition, Source, SourceId, SourceSpec};
 use pass::spawn::SpawnQueue;
 /// What to make, and what behaviours it should be granted. See
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
@@ -1128,21 +1128,6 @@ impl World {
     /// of the body's size rather than state.
     pub fn player_pos(&self) -> Vec3 {
         on_ground(self.bodies.pos[0], PLAYER_HALF_HEIGHT)
-    }
-
-    /// Where the character should be *drawn* this frame, blended between the
-    /// last two ticks.
-    ///
-    /// Separate from [`World::player_pos`] rather than replacing it, because
-    /// the two answer different questions and confusing them is how
-    /// presentation leaks into simulation. `player_pos` is where the character
-    /// **is** — what a hitbox is tested against, what a scenario asserts on,
-    /// what the harness reports. This is where it *appears*, which is a
-    /// fractional tick behind and is nobody's business but the renderer's and
-    /// the camera's.
-    #[must_use]
-    pub fn player_pos_at(&self, alpha: Alpha) -> Vec3 {
-        on_ground(self.drawn_player(alpha).0, PLAYER_HALF_HEIGHT)
     }
 
     /// Immutable player facts for animation and other presentation systems.

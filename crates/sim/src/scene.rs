@@ -11,7 +11,9 @@ use arpg_core::Report;
 use glam::Vec2;
 use serde::Deserialize;
 
-use crate::{Condition, EntityId, Fnv, SourceId, SourceSpec, Template};
+use crate::{EntityId, Fnv, SourceId, SourceSpec, Template};
+#[cfg(test)]
+use crate::Condition;
 
 /// One authored body, independent of its eventual runtime identity.
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -125,25 +127,7 @@ impl Scene {
             count = count.checked_add(grid.validate()?).ok_or(SceneError::Capacity)?;
         }
         for source in sources {
-            let SourceSpec { pos, radius, every: _, when, what, enabled: _ } = source;
-            if !Vec2::from(*pos).is_finite()
-                || !radius.is_finite()
-                || *radius < 0.0
-                || !(Vec2::from(*pos).abs() + Vec2::splat(*radius)).is_finite()
-            {
-                return Err(SceneError::Invalid(
-                    "source position/radius must be finite; radius must be nonnegative",
-                ));
-            }
-            let extent = Vec2::from(*pos).abs() + Vec2::splat(*radius);
-            if !what.valid_at(extent) {
-                return Err(SceneError::Invalid("invalid source template or static placement extent"));
-            }
-            if let Condition::PlayerWithin(r) = when
-                && (!r.is_finite() || *r < 0.0)
-            {
-                return Err(SceneError::Invalid("source proximity must be finite and nonnegative"));
-            }
+            crate::Source::try_from(*source).map_err(SceneError::Invalid)?;
         }
         Ok(count)
     }
@@ -364,7 +348,7 @@ impl crate::World {
             self.scenes.record_body(owner, id);
         }
         for source in &scene.sources {
-            let id = self.sources.add_owned((*source).into(), Some(owner));
+            let id = self.sources.add_owned(crate::Source::try_from(*source).expect("scene admission validated every source"), Some(owner));
             self.scenes.record_source(owner, id);
             self.trace.sink(self.tick).emit(crate::Event::SourceAdded { id });
         }

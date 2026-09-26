@@ -18,7 +18,7 @@
 //!
 //! A source is four independent choices, each small:
 //!
-//! - **cadence** — [`Source::every`], in ticks;
+//! - **cadence** — [`SourceSpec::every`], in ticks;
 //! - **condition** — [`Condition`], the gate checked when the cadence is ready;
 //! - **placement** — [`Placement`], where the body goes;
 //! - **template** — [`crate::Template`], what it is when it gets there.
@@ -127,7 +127,7 @@ pub enum Condition {
     /// Fire only while the player is within this distance of the placement's
     /// anchor.
     ///
-    /// Measured from where the source puts things — see [`Placement::anchor`] —
+    /// Measured from the source position in [`SourceSpec::pos`],
     /// so a source does not carry a second position that could disagree with
     /// the first.
     PlayerWithin(f32),
@@ -163,7 +163,7 @@ impl Condition {
 
 /// Where a source puts what it makes.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Placement {
+enum Placement {
     /// Always the same ground-plane point.
     At(Vec2),
     /// Spread around a circle, one step of the golden angle per emission.
@@ -186,28 +186,6 @@ pub enum Placement {
 }
 
 impl Placement {
-    /// The placement a centre and a radius describe.
-    ///
-    /// **A radius of zero is [`Placement::At`], not a ring of nothing.** A
-    /// `Ring` of radius zero would put every body on the centre and step an
-    /// angle that changes nothing, so the two spellings are not interchangeable
-    /// and a copy of this rule that drifted would be a placement that silently
-    /// stopped spreading.
-    ///
-    /// It had two call sites the moment it existed — the scenario runner and
-    /// the harness, in different crates — and now has one, because both of them
-    /// describe a source as a [`SourceSpec`] and this is what the conversion
-    /// calls. That is the shape worth keeping: a rule reachable only through the
-    /// single door every description passes through cannot be half-applied.
-    #[must_use]
-    pub fn around(centre: Vec2, radius: f32) -> Self {
-        if radius > 0.0 {
-            Self::Ring { centre, radius }
-        } else {
-            Self::At(centre)
-        }
-    }
-
     /// Where the `nth` body from this source goes.
     fn point(self, nth: u32) -> Vec2 {
         match self {
@@ -279,56 +257,17 @@ impl SourceState {
 /// Deserialised through [`SourceSpec`], which is the only written form of one
 /// and the only `Deserialize` path to this type.
 #[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(from = "SourceSpec")]
+#[serde(try_from = "SourceSpec")]
 pub struct Source {
     placement: Placement,
     what: Template,
-    /// Ticks between emissions. Never zero — see [`Source::every`].
+    /// Ticks between emissions. Never zero — see [`SourceSpec::every`].
     every: u32,
     condition: Condition,
     state: SourceState,
 }
 
 impl Source {
-    /// A source that fires every tick the condition allows.
-    ///
-    /// **Starts ready**, so it fires on the first tick it is evaluated rather
-    /// than after one cadence. Otherwise the first body of every level would
-    /// arrive at a time nobody wrote down.
-    #[must_use]
-    pub const fn new(placement: Placement, what: Template) -> Self {
-        Self {
-            placement,
-            what,
-            every: 1,
-            condition: Condition::Always,
-            state: SourceState { enabled: true, countdown: 0, emitted: 0 },
-        }
-    }
-
-    /// Sets the cadence, in ticks. Clamped to at least 1, because a cadence of
-    /// zero is not "as fast as possible" — it is a division by nothing, and the
-    /// smallest real interval is one tick.
-    #[must_use]
-    pub const fn every(mut self, ticks: u32) -> Self {
-        self.every = if ticks == 0 { 1 } else { ticks };
-        self
-    }
-
-    /// Sets the gate checked when the cadence comes ready.
-    #[must_use]
-    pub const fn when(mut self, condition: Condition) -> Self {
-        self.condition = condition;
-        self
-    }
-
-    /// Sets initial enablement. Disabling preserves cadence and ring progress.
-    #[must_use]
-    pub const fn enabled(mut self, enabled: bool) -> Self {
-        self.state.enabled = enabled;
-        self
-    }
-
     fn hash_into(&self, h: &mut Fnv) {
         // Exhaustive, as every hash in this crate is: a new axis stops this
         // compiling until someone has decided it is state.
@@ -361,15 +300,14 @@ impl Source {
 /// change to it; that obligation belongs here, where somebody about to rename
 /// one is already looking, rather than in a duplicate in another crate.
 ///
-/// **Every axis goes through the validating constructor for it.** Because this
-/// is the only way to deserialise a [`Source`], `radius: 0.0` becomes
-/// [`Placement::At`] and `every: 0` becomes a cadence of one, with no caller
-/// able to reach a `Source` that skipped either rule.
+/// Conversion to [`Source`] validates every field before a source can enter a
+/// world. Deserialization uses that same conversion; scene admission and direct
+/// callers cannot apply different rules. Zero radius denotes a point placement,
+/// and a zero cadence is normalized to one tick.
 ///
-/// The fields are public so the harness can fill one in field by field. That is
-/// deliberate rather than lax: a new axis then stops the harness compiling until
-/// somebody has decided which flag fills it, which is the check a text protocol
-/// otherwise has no way to get.
+/// Public fields allow authored scene descriptions and direct callers to build
+/// a specification. The harness decodes this same schema. A specification is
+/// not a live source until the conversion validates it.
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceSpec {
@@ -405,14 +343,33 @@ fn enabled_by_default() -> bool {
     true
 }
 
-impl From<SourceSpec> for Source {
-    fn from(spec: SourceSpec) -> Self {
-        let SourceSpec { pos, radius, every, when, what, enabled } = spec;
+impl TryFrom<SourceSpec> for Source {
+    type Error = &'static str;
 
-        Source::new(Placement::around(Vec2::new(pos.0, pos.1), radius), what)
-            .every(every)
-            .when(when)
-            .enabled(enabled)
+    fn try_from(spec: SourceSpec) -> Result<Self, Self::Error> {
+        let SourceSpec { pos, radius, every, when, what, enabled } = spec;
+        let centre = Vec2::from(pos);
+        if !centre.is_finite() || !radius.is_finite() || radius < 0.0
+            || !(centre.abs() + Vec2::splat(radius)).is_finite()
+        {
+            return Err("source position/radius must be finite; radius must be nonnegative");
+        }
+        if !what.valid_at(centre.abs() + Vec2::splat(radius)) {
+            return Err("invalid source template or static placement extent");
+        }
+        if let Condition::PlayerWithin(distance) = when
+            && (!distance.is_finite() || distance < 0.0)
+        {
+            return Err("source proximity must be finite and nonnegative");
+        }
+        Ok(Self {
+            placement: if radius == 0.0 { Placement::At(centre) }
+                else { Placement::Ring { centre, radius } },
+            what,
+            every: every.max(1),
+            condition: when,
+            state: SourceState { enabled, countdown: 0, emitted: 0 },
+        })
     }
 }
 
@@ -590,7 +547,8 @@ mod tests {
     fn disabling_does_not_cancel_an_accepted_source_emission() {
         let mut world = World::empty();
         let id = world.add_source(
-            Source::new(Placement::At(Vec2::new(20.0, 0.0)), Template::BODY).every(2),
+            Source::try_from(SourceSpec { pos: (20.0, 0.0), radius: 0.0, every: 2,
+                when: Condition::Always, what: Template::BODY, enabled: true }).unwrap(),
         );
         // Exercise the interval between decision and drain directly: the
         // enablement setter has no authority over an already accepted request.

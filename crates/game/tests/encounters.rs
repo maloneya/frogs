@@ -258,7 +258,7 @@ fn removing_a_pending_start_or_source_cannot_retarget_a_replacement() {
         } else {
             let removed_source = game.scene_sources(id).unwrap()[0];
             assert!(game.remove_source(removed_source));
-            let _ = game.add_source(source((0.0, 95.7)).into());
+            let _ = game.add_source(source((0.0, 95.7)).try_into().unwrap());
         }
         step(&mut game, 1, true);
         assert_eq!(game.encounter_state(id, 0).unwrap().phase, Phase::Orphaned);

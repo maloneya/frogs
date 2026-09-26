@@ -25,7 +25,7 @@ mod quad;
 mod text;
 
 pub use camera::OrthoCamera;
-pub use arpg_core::{DirectionalLight, PointLight};
+pub use arpg_core::PointLight;
 pub use debug::DebugDisc;
 pub use effect::{EffectVertex, MAX_EFFECT_VERTICES};
 pub use frame::RenderFrame;
@@ -346,7 +346,7 @@ impl Renderer {
         capture_path: Option<&std::path::Path>,
     ) -> FrameOutcome {
         let RenderFrame {
-            camera, lights, directional_lights, meshes, character, horde, overlay, debug_discs, effects,
+            camera, lights, meshes, character, horde, overlay, debug_discs, effects,
         } = input;
 
         // Acquiring a swapchain image can fail in several recoverable ways —
@@ -403,7 +403,7 @@ impl Renderer {
             });
 
         self.camera.upload(&self.queue, camera);
-        self.camera.upload_lights(&self.queue, lights, directional_lights);
+        self.camera.upload_lights(&self.queue, lights);
         self.static_meshes.upload(&self.queue, meshes);
         let effect_count = self.effects.upload(&self.queue, effects);
         let debug_count = self.debug.upload(&self.queue, debug_discs);
@@ -542,7 +542,7 @@ mod tests {
         let binding = CameraBinding::new(device);
         binding.upload_lights(queue, &[PointLight::new(
             Vec3::new(40.0, 100.0, 30.0), Vec3::ONE, 12_000.0, 1_000.0,
-        )], &[]);
+        )]);
         binding
     }
 

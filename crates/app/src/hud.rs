@@ -64,8 +64,8 @@ pub(crate) fn draw(
         return;
     }
     let mut hint = Text::default();
-    hint.label(font, "F2: scenes   F4: scene set piece", width);
-    draw_panel(font, &[hint], width.min(font.measure("F2: scenes   F4: scene set piece")), MARGIN, None, sink);
+    hint.label(font, "F2: scenes", width);
+    draw_panel(font, &[hint], width.min(font.measure("F2: scenes")), MARGIN, None, sink);
     draw_player(font, attack, player_health, viewport, sink);
 }
 

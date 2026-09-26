@@ -1,5 +1,4 @@
 use crate::tree::{Trees, TreeSpec};
-use crate::set_piece::{self, SetPieces};
 use crate::scene::{GameScene, LiveSceneState, RestartError, RestartScene, SceneError, fingerprint};
 use arpg_core::{Intent, Report};
 use crate::torch::{Torches, TorchSpec};
@@ -29,7 +28,6 @@ pub struct Game {
     restart: Option<RestartScene>,
     trees: Trees,
     torches: Torches,
-    set_pieces: SetPieces,
     doors: Doors,
     chests: Chests,
     encounters: Encounters,
@@ -56,7 +54,6 @@ impl Game {
             restart: None,
             trees: Trees::default(),
             torches: Torches::default(),
-            set_pieces: SetPieces::default(),
             doors: Doors::default(),
             chests: Chests::default(),
             encounters: Encounters::default(),
@@ -68,13 +65,12 @@ impl Game {
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
-        let crate::scene::PreparedScene { world, trees, torches, set_pieces, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
+        let crate::scene::PreparedScene { world, trees, torches, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
         Ok(Self {
             world,
             restart: Some(restart),
             trees,
             torches,
-            set_pieces,
             doors,
             chests,
             encounters,
@@ -112,7 +108,7 @@ impl Game {
         self.restart.as_ref().map(|snapshot| snapshot.description().engine.name.as_str())
     }
 
-    /// Advances set pieces, consumes prior interactions, steps physics, then resolves encounters.
+    /// Consumes prior interactions, steps physics, then resolves encounters.
     ///
     /// Neither adapter owns a second schedule. Exhaustive destructuring forces
     /// any future gameplay state to receive an explicit scheduling decision.
@@ -127,7 +123,6 @@ impl Game {
             restart: _,
             trees: _,
             torches: _,
-            set_pieces,
             doors,
             chests,
             encounters,
@@ -136,7 +131,6 @@ impl Game {
             corpses,
         } = self;
         let tick = world.tick();
-        set_piece::advance(set_pieces, tick);
         let (mut access, _) = world.encounter_access();
         let mut trace = encounter_trace.sink(tick);
         door::advance(doors, &mut access, &mut trace);
@@ -157,7 +151,6 @@ impl Game {
             restart,
             trees,
             torches,
-            set_pieces,
             doors,
             chests,
             encounters,
@@ -166,7 +159,7 @@ impl Game {
             corpses,
         } = self;
         let mut hash = Fnv::default();
-        hash.u64(fingerprint(world, (torches, trees), set_pieces, doors, chests, encounters, attacks));
+        hash.u64(fingerprint(world, (torches, trees), doors, chests, encounters, attacks));
         corpses.hash(&mut hash);
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
@@ -188,7 +181,6 @@ impl Game {
             restart,
             trees,
             torches,
-            set_pieces,
             doors,
             chests,
             encounters,
@@ -199,7 +191,6 @@ impl Game {
         world.report(out);
         trees.report(out);
         torches.report(out);
-        set_pieces.report(out);
         doors.report(out);
         chests.report(out);
         encounters.report(out);
@@ -221,7 +212,6 @@ impl Game {
             restart: _,
             trees,
             torches,
-            set_pieces,
             doors,
             chests,
             encounters,
@@ -229,7 +219,7 @@ impl Game {
             attacks,
             corpses: _, // Additive loads retain existing corpses.
         } = self;
-        scene.install(world, LiveSceneState { trees, torches, set_pieces, doors, chests, encounters, attacks })
+        scene.install(world, LiveSceneState { trees, torches, doors, chests, encounters, attacks })
     }
 
     /// Evicts a live instance and its descendants; preserves the restart snapshot.
@@ -241,7 +231,6 @@ impl Game {
             restart: _,
             trees,
             torches,
-            set_pieces,
             doors,
             chests,
             encounters,
@@ -254,7 +243,6 @@ impl Game {
         }
         trees.evict(id);
         torches.evict(id);
-        set_pieces.evict(id);
         doors.evict(id);
         chests.evict(id);
         encounters.evict(id);
@@ -357,8 +345,7 @@ impl Game {
     pub fn set_trace_retention(&mut self, capacity: usize) -> Result<(), &'static str> {
         Trace::<arpg_sim::Event>::validate_limit(capacity)?;
         self.world.set_trace_retention(capacity)?;
-        self.encounter_trace.set_retention(capacity)?;
-        self.set_pieces.set_trace_retention(capacity)
+        self.encounter_trace.set_retention(capacity)
     }
 
     /// Collect all diagnostic streams independently of their retention rings.
@@ -366,8 +353,7 @@ impl Game {
     pub fn capture_trace(&mut self, limit: usize) -> Result<(), &'static str> {
         Trace::<arpg_sim::Event>::validate_limit(limit)?;
         self.world.capture_trace(limit)?;
-        self.encounter_trace.capture(limit, |_| true)?;
-        self.set_pieces.capture_trace(limit)
+        self.encounter_trace.capture(limit, |_| true)
     }
 
     /// Render complete captured streams, or fail closed on any overflow.
@@ -375,7 +361,6 @@ impl Game {
         Some(render_events(
             self.world.trace().captured()?.iter().copied(),
             self.encounter_trace.captured()?.iter().copied(),
-            self.set_pieces.trace().captured()?.iter().copied(),
         ))
     }
 
@@ -384,7 +369,6 @@ impl Game {
         self.world.capture_events(limit, kinds)?;
         // A filtered engine stream cannot be rendered as a complete multi-stream log.
         self.encounter_trace.stop_capture();
-        self.set_pieces.stop_capture();
         Ok(())
     }
 
@@ -397,7 +381,6 @@ impl Game {
     pub fn clear_trace(&mut self) {
         self.world.clear_trace();
         self.encounter_trace.clear();
-        self.set_pieces.clear_trace();
     }
 
     /// Reads tick-stamped engine events; observation cannot mutate them.
@@ -464,12 +447,6 @@ impl Game {
     #[must_use]
     pub fn player_pos(&self) -> Vec3 {
         self.world.player_pos()
-    }
-
-    /// Player presentation position interpolated between completed ticks.
-    #[must_use]
-    pub fn player_pos_at(&self, alpha: Alpha) -> Vec3 {
-        self.world.player_pos_at(alpha)
     }
 
     /// Immutable player facts for asset-driven presentation.
@@ -617,7 +594,7 @@ impl Game {
     /// Dropped events across all bounded diagnostic streams.
     #[must_use]
     pub fn trace_dropped(&self) -> usize {
-        self.world.trace().dropped() + self.encounter_trace.dropped() + self.set_pieces.trace().dropped()
+        self.world.trace().dropped() + self.encounter_trace.dropped()
     }
 
     /// Engine diagnostics followed by a labelled gameplay stream. Each stream
@@ -625,7 +602,7 @@ impl Game {
     /// a chronology between external commands and the gameplay pass.
     #[must_use]
     pub fn render_trace_since(&self, since: u64) -> String {
-        render_events(self.world.trace().since(since), self.encounter_trace.since(since), self.set_pieces.trace().since(since))
+        render_events(self.world.trace().since(since), self.encounter_trace.since(since))
     }
 }
 
@@ -653,34 +630,10 @@ impl Game {
     }
 }
 
-impl Game {
-    /// Queue a named scene-owned moment. Retriggering restarts it on the next tick.
-    /// Missing names and stale scene identities return false without changing state.
-    #[must_use]
-    pub fn trigger_set_piece(&mut self, scene: SceneId, name: &str) -> bool {
-        self.set_pieces.trigger(scene, name)
-    }
-    /// Observe a moment by its stable scene identity and authored name.
-    pub fn set_piece_state(&self, scene: SceneId, name: &str) -> Option<crate::SetPieceState> {
-        self.set_pieces.state(scene, name)
-    }
-    /// Scene installation order, then authored order; no mutable storage escapes.
-    pub fn set_pieces(&self) -> impl Iterator<Item = (SceneId, &str, crate::SetPieceState)> {
-        self.set_pieces.iter()
-    }
-    /// Active distant light contributions, in deterministic authored order.
-    pub fn directional_lights(&self) -> impl Iterator<Item = arpg_core::DirectionalLight> + '_ {
-        self.set_pieces.lights()
-    }
-    /// Tick-stamped set-piece transitions, independent of authoritative state.
-    pub fn set_piece_trace(&self) -> &Trace<crate::SetPieceEvent> { self.set_pieces.trace() }
-}
-
 /// Streams have an explicit order, rather than inventing cross-stream chronology.
 fn render_events(
     engine: impl Iterator<Item = (u64, arpg_sim::Event)>,
     encounters: impl Iterator<Item = (u64, EncounterEvent)>,
-    pieces: impl Iterator<Item = (u64, crate::SetPieceEvent)>,
 ) -> String {
         use std::fmt::Write as _;
         let mut out = String::new();
@@ -691,11 +644,6 @@ fn render_events(
         if encounters.peek().is_some() {
             out.push_str("# encounters\n");
             for (tick, event) in encounters { let _ = writeln!(out, "{tick} {event}"); }
-        }
-        let mut pieces = pieces.peekable();
-        if pieces.peek().is_some() {
-            out.push_str("# set pieces\n");
-            for (tick, event) in pieces { let _ = writeln!(out, "{tick} {event}"); }
         }
         out
 }

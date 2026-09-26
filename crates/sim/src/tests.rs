@@ -535,7 +535,8 @@ fn every_field_of_the_world_reaches_the_hash() {
         // A source's own state decides when and where the next body appears,
         // so two worlds agreeing on every body still diverge from here.
         ("sources", |w| {
-            w.add_source(Source::new(Placement::At(Vec2::ZERO), Template::BODY));
+            w.add_source(Source::try_from(SourceSpec { pos: (0.0, 0.0), radius: 0.0, every: 1,
+                when: Condition::Always, what: Template::BODY, enabled: true }).unwrap());
         }),
     ];
 
@@ -906,9 +907,8 @@ fn a_held_back_source_fires_the_instant_its_condition_opens() {
 
     let far = Vec2::new(30.0, 0.0);
     world.add_source(
-        Source::new(Placement::At(far), Template::BODY)
-            .every(60)
-            .when(Condition::PlayerWithin(5.0)),
+        Source::try_from(SourceSpec { pos: far.into(), radius: 0.0, every: 60,
+            when: Condition::PlayerWithin(5.0), what: Template::BODY, enabled: true }).unwrap(),
     );
 
     // Long enough that a source counting down regardless would have come round
@@ -934,14 +934,8 @@ fn a_held_back_source_fires_the_instant_its_condition_opens() {
 fn a_population_condition_fills_to_its_number_and_stops() {
     let mut world = World::empty();
     world.add_source(
-        Source::new(
-            Placement::Ring {
-                centre: Vec2::new(30.0, 0.0),
-                radius: 3.0,
-            },
-            Template::BODY,
-        )
-        .when(Condition::FewerThan(3)),
+        Source::try_from(SourceSpec { pos: (30.0, 0.0), radius: 3.0, every: 1,
+            when: Condition::FewerThan(3), what: Template::BODY, enabled: true }).unwrap(),
     );
 
     for _ in 0..60 {
@@ -970,10 +964,8 @@ fn a_population_condition_fills_to_its_number_and_stops() {
 fn a_removed_source_stops_and_its_name_stays_dead() {
     let mut world = World::empty();
 
-    let id = world.add_source(Source::new(
-        Placement::At(Vec2::new(30.0, 0.0)),
-        Template::BODY,
-    ));
+    let id = world.add_source(Source::try_from(SourceSpec { pos: (30.0, 0.0), radius: 0.0, every: 1,
+        when: Condition::Always, what: Template::BODY, enabled: true }).unwrap());
     for _ in 0..5 {
         world.step(tick_dt(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
@@ -989,7 +981,8 @@ fn a_removed_source_stops_and_its_name_stays_dead() {
     }
     assert_eq!(world.enemy_count(), made, "a removed source kept spawning");
 
-    let newcomer = world.add_source(Source::new(Placement::At(Vec2::ZERO), Template::BODY));
+    let newcomer = world.add_source(Source::try_from(SourceSpec { pos: (0.0, 0.0), radius: 0.0, every: 1,
+                when: Condition::Always, what: Template::BODY, enabled: true }).unwrap());
     assert_ne!(newcomer, id, "a source id was recycled, which its lack of a generation forbids");
     assert!(!world.remove_source(id), "the dead name resolved to the source that came after it");
 }
@@ -1000,13 +993,8 @@ fn a_removed_source_stops_and_its_name_stays_dead() {
 #[test]
 fn a_ring_does_not_stack_what_it_makes() {
     let mut world = World::empty();
-    world.add_source(Source::new(
-        Placement::Ring {
-            centre: Vec2::new(30.0, 0.0),
-            radius: 3.0,
-        },
-        Template::BODY,
-    ));
+    world.add_source(Source::try_from(SourceSpec { pos: (30.0, 0.0), radius: 3.0, every: 1,
+        when: Condition::Always, what: Template::BODY, enabled: true }).unwrap());
 
     // One tick each, and read the positions before the solver has had a chance
     // to separate anything — so this measures the placement, not the response

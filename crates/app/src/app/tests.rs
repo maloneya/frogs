@@ -18,6 +18,33 @@ use super::*;
 use crate::harness::Command;
 
 #[test]
+fn invalid_harness_sources_preserve_pending_work() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App { game: Game::empty(), harness: Some(rx), ..Default::default() };
+    let ticket = app.game.request_spawn(Vec2::new(20.0, 0.0), arpg_sim::Template::BODY).unwrap();
+    let before = (app.game.hash(), app.game.trace().render());
+    for input in [
+        "source (pos: (0.0, 0.0), radius: -1.0)",
+        "source (pos: (0.0, 0.0), when: PlayerWithin(-3.0))",
+        "source (pos: (NaN, 0.0))",
+    ] {
+        let (reply, response) = std::sync::mpsc::channel();
+        let spec = arpg_content::parse_source(input.strip_prefix("source ").unwrap()).unwrap();
+        tx.send(Request { command: Command::Source(spec), reply }).unwrap();
+        assert!(!app.drain_harness());
+        assert!(response.try_recv().unwrap().starts_with("error:"));
+        assert_eq!((app.game.hash(), app.game.trace().render()), before);
+    }
+    for dt in arpg_sim::Accumulator::default().pending(arpg_sim::Dt::SECS) {
+        app.game.step(dt, arpg_core::Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
+    }
+    assert_eq!(app.game.source_count(), 0);
+    assert_eq!(app.game.enemy_count(), 1);
+    assert_eq!(app.game.spawn_outcomes()[0].ticket, ticket);
+    assert!(app.game.spawn_outcomes()[0].entity.is_some());
+}
+
+#[test]
 fn a_capture_without_a_renderer_is_rejected_immediately() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut app = App {
@@ -449,40 +476,4 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
     assert!(app.game.evict_scene(owner));
     app.enemy_feedback.observe(&app.game);
     assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 0.0);
-}
-
-#[test]
-fn f4_and_harness_trigger_the_scene_owned_moment_and_respect_menu_capture() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/soul_trial.ron");
-    let authored = arpg_content::load_scene(&path).unwrap();
-    let mut app = App { game: Game::from_scene(&authored).unwrap(), ..Default::default() };
-    let id = app.game.scene_instances().next().unwrap().0;
-    app.handle_key(KeyCode::F2, true, false);
-    app.handle_key(KeyCode::F4, true, false);
-    assert_eq!(app.game.set_piece_state(id, "reveal_horde"), Some(arpg_game::SetPieceState::Inactive));
-    app.handle_key(KeyCode::F4, false, false);
-    app.handle_key(KeyCode::Escape, true, false);
-    assert!(app.handle_key(KeyCode::F4, true, false));
-    assert_eq!(app.game.set_piece_state(id, "reveal_horde"), Some(arpg_game::SetPieceState::Queued));
-    let dt = arpg_sim::Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
-    app.game.step(dt, arpg_core::Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
-    assert!(app.handle_key(KeyCode::F4, true, false), "duplicate press is swallowed");
-    assert_eq!(app.game.set_piece_state(id, "reveal_horde"), Some(arpg_game::SetPieceState::Running { elapsed_ticks: 0 }));
-    app.handle_key(KeyCode::F4, false, false);
-    // Add another moment to test ambiguous selection, without duplicating the
-    // full forest and exhausting the independent tree admission capacity.
-    app.game.load_scene(&arpg_game::GameScene {
-        set_pieces: authored.set_pieces.clone(),
-        ..arpg_game::GameScene::default()
-    }).unwrap();
-    let before = app.game.hash();
-    app.handle_key(KeyCode::F4, true, false);
-    assert_eq!(app.game.hash(), before, "ambiguous shortcut must not choose a scene arbitrarily");
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.harness = Some(rx);
-    let (reply, response) = std::sync::mpsc::channel();
-    tx.send(Request { command: Command::TriggerSetPiece { scene: id, name: "reveal_horde".into() }, reply }).unwrap();
-    assert!(!app.drain_harness());
-    assert!(response.recv().unwrap().starts_with("queued set-piece"));
-    assert_eq!(app.game.set_piece_state(id, "reveal_horde"), Some(arpg_game::SetPieceState::Queued));
 }

@@ -393,3 +393,122 @@ fn timing_evidence_preserves_results_and_cannot_overwrite_existing_evidence() {
     assert!(!repeated.status.success(), "existing evidence was overwritten: {repeated_text}");
     assert_eq!(std::fs::read_to_string(path).unwrap(), saved);
 }
+
+fn refuses(source: &str, diagnostic: &str) {
+    let fixture = Fixture::new(source);
+    for flags in [&[][..], &["--bless"][..]] {
+        let (output, text) = fixture.run(flags);
+        assert_eq!(output.status.code(), Some(1), "invalid scenario passed or panicked: {source}\n{text}");
+        assert!(text.contains(diagnostic), "missing {diagnostic}: {text}");
+    }
+}
+
+#[test]
+fn every_float_prediction_rejects_invalid_numbers_at_final_and_checkpoints() {
+    let mut predictions = Vec::new();
+    for number in ["NaN", "inf", "-inf"] {
+        predictions.push(format!("facing: (value: {number}, tol: 0.0)"));
+        for field in ["x", "z"] {
+            let pair = if field == "x" { format!("x: {number}, z: 0.0") }
+                else { format!("x: 0.0, z: {number}") };
+            for name in ["player_pos", "player_velocity"] {
+                predictions.push(format!("{name}: ({pair}, tol: 0.0)"));
+            }
+            for name in ["pos", "velocity"] {
+                predictions.push(format!("bodies: [(nth: 0, {name}: ({pair}, tol: 0.0))]"));
+            }
+        }
+    }
+    for tolerance in ["NaN", "inf", "-inf", "-0.1"] {
+        predictions.push(format!("facing: (value: 0.0, tol: {tolerance})"));
+        for name in ["player_pos", "player_velocity"] {
+            predictions.push(format!("{name}: (x: 0.0, z: 0.0, tol: {tolerance})"));
+        }
+        for name in ["pos", "velocity"] {
+            predictions.push(format!("bodies: [(nth: 0, {name}: (x: 0.0, z: 0.0, tol: {tolerance}))]"));
+        }
+    }
+    for prediction in predictions {
+        for assertion in [format!("expect: ({prediction})"),
+            format!("checkpoints: [(at: 0, expect: ({prediction}))]")] {
+            refuses(&format!("(setup: (actions: [Place((20.0, 0.0))]), budget: (ticks: 1), {assertion})"), "could not parse");
+        }
+    }
+}
+
+#[test]
+fn event_predictions_and_performance_limits_refuse_invalid_numbers() {
+    for value in ["(NaN, 0.0)", "(0.0, inf)", "(-inf, 0.0)"] {
+        refuses(&format!("(budget: (ticks: 1), expect: (events: (kinds: [Impulsed], sequence: [(0, Impulsed(id: (0, 0), source: None, value: {value}, tolerance: 0.0))])))"), "could not parse");
+    }
+    for tolerance in ["NaN", "inf", "-inf", "-0.1"] {
+        refuses(&format!("(budget: (ticks: 1), expect: (events: (kinds: [Impulsed], sequence: [(0, Impulsed(id: (0, 0), source: None, value: (0.0, 0.0), tolerance: {tolerance}))])))"), "could not parse");
+    }
+    for limit in ["NaN", "inf", "-inf", "0.0", "-1.0"] {
+        refuses(&format!("(budget: (ticks: 0, max_mean_step_micros: {limit}))"), "budget.max_mean_step_micros");
+    }
+}
+
+#[test]
+fn every_timeline_command_must_be_reachable() {
+    for at in ["2", "18446744073709551615"] {
+        for (name, command) in [
+            ("attacks", at.to_owned()),
+            ("interactions", at.to_owned()),
+            ("spawns", format!("(at: {at}, pos: (20.0, 0.0))")),
+            ("impulses", format!("(at: {at}, target: Player, value: (1.0, 0.0))")),
+            ("aims", format!("(at: {at}, dir: (1.0, 0.0))")),
+            ("attack_recovery", format!("(at: {at}, recovery: 1)")),
+            ("attack_profiles", format!("(at: {at}, profile: Slam)")),
+            ("scenes", format!("(at: {at}, action: Evict(0))")),
+            ("despawns", format!("(at: {at}, body: 0)")),
+            ("source_switches", format!("(at: {at}, source: 0, enabled: true)")),
+            ("remove_sources", format!("(at: {at}, source: 0)")),
+        ] {
+            refuses(&format!("(setup: (sources: [(pos: (20.0, 0.0))]), budget: (ticks: 2), {name}: [{command}])"), name);
+        }
+    }
+    refuses("(attacks: [0], budget: (ticks: 0))", "attacks");
+    refuses("(budget: (ticks: 18446744073709551615))", "budget");
+}
+
+#[test]
+fn movement_and_channel_spans_cannot_be_empty_truncated_or_overflowed() {
+    for (at, ticks) in [(0, 0), (2, 1), (1, 2), (1, u64::MAX), (u64::MAX, 1)] {
+        for name in ["inputs", "channels"] {
+            let dir = if name == "inputs" { ", dir: (1.0, 0.0)" } else { "" };
+            refuses(&format!("(budget: (ticks: 2), {name}: [(at: {at}, ticks: {ticks}{dir})])"), name);
+        }
+    }
+    for dir in ["(NaN, 0.0)", "(0.0, inf)", "(-inf, 1.0)", "(3.4028235e38, 0.0)", "(1.0e-40, 0.0)"] {
+        refuses(&format!("(budget: (ticks: 2), inputs: [(at: 0, ticks: 2, dir: {dir})])"), "inputs");
+    }
+}
+
+#[test]
+fn valid_numeric_and_timeline_boundaries_still_run() {
+    // A setup-only observation is valid; zero is an exact tolerance.
+    let fixture = Fixture::new("(budget: (ticks: 0), expect: (player_pos: (x: 0.0, z: 0.0, tol: 0.0), facing: (value: 0.0, tol: 0.0)))");
+    let (output, text) = fixture.run(&[]);
+    assert!(output.status.success(), "{text}");
+    for dir in ["(1.0, 0.0)", "(2.0, 0.0)"] {
+        // One span ends exactly at the budget; the last input wins the overlap.
+        let fixture = Fixture::new(&format!("(budget: (ticks: 2), inputs: [(at: 0, ticks: 2, dir: {dir}), (at: 1, ticks: 1, dir: (0.0, 0.0))], channels: [(at: 0, ticks: 2)], interactions: [1], spawns: [(at: 1, pos: (20.0, 0.0))], impulses: [(at: 1, target: Player, value: (0.0, 0.0))], attacks: [1], checkpoints: [(at: 0, expect: (player_pos: (x: 0.15, z: 0.0, tol: 0.00001)))], expect: (enemy_count: 1, player_pos: (x: 0.15, z: 0.0, tol: 0.00001)))"));
+        let (output, text) = fixture.run(&[]);
+        assert!(output.status.success(), "{dir}: {text}");
+    }
+}
+
+#[test]
+fn missing_setup_targets_and_dead_position_predictions_cannot_pass() {
+    for actions in ["Despawn(0)", "Seek(0)",
+        "Place((20.0, 0.0)), Despawn(0), Despawn(0)",
+        "Place((20.0, 0.0)), Despawn(0), Seek(0)",
+        "Place((20.0, 0.0)), Seek(0), Seek(0)"] {
+        refuses(&format!("(setup: (actions: [{actions}]), budget: (ticks: 0))"), "setup");
+    }
+    for assertion in ["expect: (bodies: [(nth: 0, alive: false, pos: (x: 20.0, z: 0.0, tol: 0.0))])",
+        "checkpoints: [(at: 0, expect: (bodies: [(nth: 0, alive: false, pos: (x: 20.0, z: 0.0, tol: 0.0))]))]"] {
+        refuses(&format!("(setup: (actions: [Place((20.0, 0.0)), Despawn(0)]), budget: (ticks: 1), {assertion})"), "bodies[0].pos");
+    }
+}

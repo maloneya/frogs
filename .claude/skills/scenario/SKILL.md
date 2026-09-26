@@ -90,6 +90,12 @@ indices refer to load order. Read [scene semantics](../../../docs/scene-playtest
 when combining setup and timeline loads. Missing targets and unreachable
 commands must fail rather than silently disappear.
 
+Every command tick must be below the budget. Movement and channel spans must be
+nonempty and fit completely inside it; the runner never truncates a span. A
+zero-tick budget is valid for setup-only assertions. Numeric predictions must
+be finite and tolerances finite and nonnegative, including event payloads and
+checkpoints. Requesting a dead body's position fails even alongside `alive: false`.
+
 ## Composition examples
 
 - [Physical motion](../../../scenarios/an_impulse_moves_and_damps.ron):

@@ -79,6 +79,34 @@ use arpg_sim::WALK_PER_TICK as TICK_OF_WALKING;
 /// just to remove one field from checkpoints.
 pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     let mut failures = Vec::new();
+    // Every tick needs one entry in each schedule and the replay hash buffer.
+    // Reject arithmetic/allocation-layout overflow before creating live state.
+    let entry_bytes = size_of::<MoveDir>().max(size_of::<AimDir>()).max(size_of::<u64>());
+    if usize::try_from(scenario.budget.ticks).ok()
+        .and_then(|ticks| ticks.checked_mul(entry_bytes))
+        .is_none_or(|bytes| bytes > isize::MAX as usize) {
+        failures.push(Failure::new("budget", "a representable schedule length".into(), scenario.budget.ticks.to_string()));
+    }
+    if let Some(limit) = scenario.budget.max_mean_step_micros
+        && (!limit.is_finite() || limit <= 0.0) {
+        failures.push(Failure::new("budget.max_mean_step_micros", "a finite positive limit".into(), limit.to_string()));
+    }
+    for (name, at) in scenario.attacks.iter().map(|&at| ("attacks", at))
+        .chain(scenario.interactions.iter().map(|&at| ("interactions", at)))
+        .chain(scenario.spawns.iter().map(|command| ("spawns", command.at)))
+        .chain(scenario.impulses.iter().map(|command| ("impulses", command.at))) {
+        if at >= scenario.budget.ticks {
+            failures.push(Failure::new(name, "a tick inside the budget".into(), at.to_string()));
+        }
+    }
+    for span in &scenario.inputs {
+        validate_span("inputs", span.at, span.ticks, scenario.budget.ticks, &mut failures);
+        let direction = Vec3::new(span.dir.0, 0.0, span.dir.1);
+        if !direction.is_finite()
+            || (direction != Vec3::ZERO && MoveDir::new(direction) == MoveDir::NONE) {
+            failures.push(Failure::new("inputs", "zero or a finite normalizable movement direction".into(), format!("{:?}", span.dir)));
+        }
+    }
     if let Some(events) = &scenario.expect.events
         && (scenario.expect.trace.is_some() || events.kinds.is_empty() || events.sequence.len() >= arpg_sim::MAX_TRACE_EVENTS || events.sequence.iter().any(|(tick, event)|
             *tick >= scenario.budget.ticks || !events.kinds.contains(&event.kind()))) {
@@ -98,11 +126,6 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
         None => source < scenario.setup.sources.len(),
         Some(nth) => scenes.get(nth).is_some_and(|scene| source < scene.engine.sources.len()),
     };
-    for command in &scenario.set_pieces {
-        if command.at >= scenario.budget.ticks || command.scene >= scenes.len() {
-            failures.push(Failure::new("set_pieces", "an authored scene and reachable tick".into(), format!("{command:?}")));
-        }
-    }
     for command in &scenario.source_switches {
         if command.at >= scenario.budget.ticks || !source_exists(command.scene, command.source) {
             failures.push(Failure::new(
@@ -115,18 +138,6 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     for expect in std::iter::once(&scenario.expect)
         .chain(scenario.checkpoints.iter().map(|checkpoint| &checkpoint.expect))
     {
-        for item in &expect.set_pieces {
-            if item.scene >= scenes.len() {
-                failures.push(Failure::new("set_pieces", "an authored scene".into(), item.scene.to_string()));
-            }
-        }
-        if let Some(lights) = &expect.directional_lights {
-            for value in lights {
-                if !value.value.is_finite() || value.value < 0.0 || !value.tol.is_finite() || value.tol < 0.0 {
-                    failures.push(Failure::new("directional_lights", "finite nonnegative intensity and tolerance".into(), format!("{value:?}")));
-                }
-            }
-        }
         for torch in &expect.torches {
             if !scenes.get(torch.scene).is_some_and(|scene| torch.torch < scene.torches.len()) {
                 failures.push(Failure::new("torches", "an authored scene torch".into(),
@@ -178,9 +189,7 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
         }
     }
     for hold in &scenario.channels {
-        if hold.ticks == 0 || hold.at.checked_add(hold.ticks).is_none_or(|end| end > scenario.budget.ticks) {
-            failures.push(Failure::new("channels", "a nonempty span inside the budget".into(), format!("{} + {}", hold.at, hold.ticks)));
-        }
+        validate_span("channels", hold.at, hold.ticks, scenario.budget.ticks, &mut failures);
     }
     for command in &scenario.attack_recovery {
         if command.at >= scenario.budget.ticks {
@@ -220,6 +229,12 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     failures
 }
 
+fn validate_span(name: &str, at: u64, ticks: u64, budget: u64, failures: &mut Vec<Failure>) {
+    if ticks == 0 || at.checked_add(ticks).is_none_or(|end| end > budget) {
+        failures.push(Failure::new(name, "a nonempty span inside the budget".into(), format!("{at} + {ticks}")));
+    }
+}
+
 /// Runs the scenario to its budget.
 ///
 /// Deliberately mints its `Dt` from a real [`Accumulator`], one tick's worth at
@@ -256,13 +271,13 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             // `spec::Action` is designed to grow, so resolving a placement
             // number is written once rather than pasted into each new arm.
             Action::Despawn(nth) => {
-                if let Some(id) = placed.get(*nth).copied().flatten() {
-                    game.despawn_body(id);
+                if !placed.get(*nth).copied().flatten().is_some_and(|id| game.despawn_body(id)) {
+                    command_failures.push(Failure::new("setup Despawn", "a live removable body".into(), format!("placement {nth}")));
                 }
             }
             Action::Seek(nth) => {
-                if let Some(id) = placed.get(*nth).copied().flatten() {
-                    game.add_seek(id);
+                if !placed.get(*nth).copied().flatten().is_some_and(|id| game.add_seek(id)) {
+                    command_failures.push(Failure::new("setup Seek", "a live body accepting seek".into(), format!("placement {nth}")));
                 }
             }
         }
@@ -338,13 +353,6 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                             ));
                         }
                     }
-                }
-            }
-            for command in scenario.set_pieces.iter().filter(|command| command.at == tick) {
-                let accepted = instances.get(command.scene).copied().flatten()
-                    .is_some_and(|scene| game.trigger_set_piece(scene, &command.name));
-                if accepted != command.accepted {
-                    command_failures.push(Failure::new("set_pieces", format!("accepted={}", command.accepted), format!("accepted={accepted} at tick {tick}")));
                 }
             }
             for command in scenario.attack_recovery.iter().filter(|command| command.at == tick) {
@@ -479,9 +487,9 @@ fn input_schedule(scenario: &Scenario) -> Vec<MoveDir> {
     for span in &scenario.inputs {
         let dir = MoveDir::new(Vec3::new(span.dir.0, 0.0, span.dir.1));
         let from = span.at as usize;
-        let to = from.saturating_add(span.ticks as usize).min(budget);
+        let to = from.checked_add(span.ticks as usize).expect("validated input span");
 
-        for slot in schedule.iter_mut().take(to).skip(from) {
+        for slot in &mut schedule[from..to] {
             *slot = dir;
         }
     }
@@ -573,8 +581,6 @@ fn check_state(
         tree_count,
         torch_count,
         torches,
-        set_pieces,
-        directional_lights,
         bodies,
         trace: _,
         events: _,
@@ -626,7 +632,7 @@ fn check_state(
 
     if let Some(want) = facing {
         let got = game.player_facing();
-        if (got - want.value).abs() > want.tol {
+        if !want.matches(got) {
             failures.push(
                 Failure::new(
                     "facing",
@@ -671,19 +677,6 @@ fn check_state(
         let actual = instances.get(expected.scene).copied().flatten().and_then(|id| game.chest_state(id, expected.chest));
         if actual != expected.state {
             failures.push(Failure::new(&format!("chests[{}/{}]", expected.scene, expected.chest), format!("{:?}", expected.state), format!("{actual:?}")));
-        }
-    }
-    for expected in set_pieces {
-        let actual = instances.get(expected.scene).copied().flatten()
-            .and_then(|scene| game.set_piece_state(scene, &expected.name));
-        if actual != expected.state {
-            failures.push(Failure::new("set_pieces", format!("{:?}", expected.state), format!("{actual:?}")));
-        }
-    }
-    if let Some(expected) = directional_lights {
-        let actual: Vec<_> = game.directional_lights().map(|light| light.intensity()).collect();
-        if expected.len() != actual.len() || expected.iter().zip(&actual).any(|(want, got)| !got.is_finite() || (want.value - got).abs() > want.tol) {
-            failures.push(Failure::new("directional_lights", format!("{expected:?}"), format!("{actual:?}")));
         }
     }
     check_eq("tree_count", tree_count, game.trees().count(), &mut failures);
@@ -820,19 +813,16 @@ fn check_body(
     let Some(want) = &body.pos else { return };
 
     let Some(got) = game.body_pos(id) else {
-        // Only reported when the scenario did not already say it expects this.
-        // A file asserting `alive: false` and no position would otherwise fail
-        // twice for one fact.
-        if body.alive != Some(false) {
-            failures.push(
-                Failure::new(
-                    &format!("bodies[{}].pos", body.nth),
-                    format!("({:.4}, {:.4})", want.x, want.z),
-                    "the body is dead".into(),
-                )
-                .with_note(format!("{id} no longer names a live body")),
-            );
-        }
+        // A requested position must be observed even when alive:false also
+        // appears: asserting absence cannot disable another assertion.
+        failures.push(
+            Failure::new(
+                &format!("bodies[{}].pos", body.nth),
+                want.expected(),
+                "the body is dead".into(),
+            )
+            .with_note(format!("{id} no longer names a live body")),
+        );
         return;
     };
 
@@ -851,11 +841,9 @@ fn check_body(
 /// Refuses a checkpoint or final state with a position that is not a number.
 ///
 /// **Unconditional, like the replay check**, and for the same reason: it is a
-/// property every scenario should have and none would think to ask for. It is
-/// also the one failure a scenario's own assertions cannot catch. Every
-/// positional check here has the shape `if (got - want).length() > tolerance`,
-/// and `NaN > tolerance` is `false` — so a poisoned position sails through a
-/// prediction it does not remotely satisfy and reports success.
+/// property every scenario should have and none would think to ask for.
+/// Individual predictions reject non-finite observations too; this also checks
+/// bodies whose positions the scenario did not explicitly predict.
 ///
 /// **A backstop rather than the primary detector, and it is worth knowing
 /// which.** `pass::contain` clamps every position at the end of every tick, and

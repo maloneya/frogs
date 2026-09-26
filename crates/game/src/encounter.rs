@@ -161,11 +161,6 @@ impl std::fmt::Display for EncounterEvent {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Action {
-    Door(usize),
-    Chest(usize),
-}
 struct Encounter {
     owner: SceneId,
     name: String,
@@ -173,9 +168,9 @@ struct Encounter {
     sources: Vec<SourceId>,
     doors: Vec<usize>,
     chests: Vec<usize>,
-    on_start: Vec<Action>,
-    on_success: Vec<Action>,
-    on_failure: Vec<Action>,
+    on_start: Vec<EncounterAction>,
+    on_success: Vec<EncounterAction>,
+    on_failure: Vec<EncounterAction>,
     state: EncounterState,
 }
 #[derive(Default)]
@@ -273,15 +268,6 @@ impl Encounters {
         for spec in specs {
             let EncounterStart::Activated(start) = spec.start;
             let EncounterObjective::Defeat(objective) = &spec.objective;
-            let resolve = |actions: &[EncounterAction]| {
-                actions
-                    .iter()
-                    .map(|action| match *action {
-                        EncounterAction::UnlockDoor(index) => Action::Door(index),
-                        EncounterAction::UnlockChest(index) => Action::Chest(index),
-                    })
-                    .collect()
-            };
             let mut doors = Vec::new();
             let mut chests = Vec::new();
             for action in spec
@@ -309,9 +295,9 @@ impl Encounters {
                     .collect(),
                 doors,
                 chests,
-                on_start: resolve(&spec.on_start),
-                on_success: resolve(&spec.on_success),
-                on_failure: resolve(&spec.on_failure),
+                on_start: spec.on_start.clone(),
+                on_success: spec.on_success.clone(),
+                on_failure: spec.on_failure.clone(),
                 state: EncounterState {
                     phase: EncounterPhase::Ready,
                     defeated: 0,
@@ -369,8 +355,8 @@ impl Encounters {
                 out.usize(actions.len());
                 for action in actions {
                     match action {
-                        Action::Chest(index) => { out.usize(2); out.usize(*index); }
-                        Action::Door(index) => {
+                        EncounterAction::UnlockChest(index) => { out.usize(2); out.usize(*index); }
+                        EncounterAction::UnlockDoor(index) => {
                             out.usize(1);
                             out.usize(*index);
                         }
@@ -407,7 +393,7 @@ impl Encounters {
 }
 fn effects(
     owner: SceneId,
-    actions: &[Action],
+    actions: &[EncounterAction],
     doors: &mut Doors,
     chests: &mut Chests,
     access: &mut GameplayAccess<'_>,
@@ -415,8 +401,8 @@ fn effects(
 ) {
     for action in actions {
         match *action {
-            Action::Chest(index) => chests.unlock(owner, index, access, trace),
-            Action::Door(index) => doors.unlock(owner, index, access, trace),
+            EncounterAction::UnlockChest(index) => chests.unlock(owner, index, access, trace),
+            EncounterAction::UnlockDoor(index) => doors.unlock(owner, index, access, trace),
         }
     }
 }

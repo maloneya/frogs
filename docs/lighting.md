@@ -32,8 +32,7 @@ index identify a torch within a run; no mutable dense index escapes storage.
 and scene ownership, keyed by scene ID and authored index. The app rebuilds its lights, campfires and flames from Game's
 read-only observations. `state.world_assets.torch_instances` counts campfire meshes;
 render effect counts include flames and attack effects. Removing the final
-scene torch restores neutral scene lighting. Scene-owned
-[set pieces](set-pieces.md) may temporarily add distant light.
+scene torch restores neutral scene lighting.
 
 Both static and skinned surfaces use [one fragment-lighting function](../crates/gfx/src/lighting.wgsl).
 Each pixel sums the lights' direct contributions in linear colour before sRGB
@@ -44,8 +43,7 @@ smooth pools between its distant corners. Cost grows with the number of lights;
 the cap is a bounded starting point, not a performance guarantee.
 
 There is no simulated bounced light, shadow map, flicker, or bloom.
-An active set-piece light pulse can supply explicitly authored diffuse fill. Walls and
-characters do not block light. Faceted flames, attack effects, and UI are unlit
+Walls and characters do not block light. Faceted flames, attack effects, and UI are unlit
 geometry and do not themselves illuminate surfaces. The remaining playtest
 question is how much darkness feels good while moving and fighting.
 

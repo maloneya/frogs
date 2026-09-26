@@ -77,13 +77,6 @@ impl App {
                         format!("error: no live scene {id} in run {}", self.run_id)
                     }
                 }
-                Command::TriggerSetPiece { scene, name } => {
-                    if self.game.trigger_set_piece(scene, &name) {
-                        format!("queued set-piece {scene}/{name}")
-                    } else {
-                        format!("error: no set-piece {scene}/{name} in run {}", self.run_id)
-                    }
-                }
                 Command::ListScenes => {
                     let mut out = Report::default();
                     out.int("run_id", self.run_id);
@@ -165,11 +158,10 @@ impl App {
                     }
                 }
                 Command::Source(spec) => {
-                    // The conversion is where `Placement::around` and the
-                    // cadence clamp are applied, so the socket cannot reach a
-                    // source that skipped either.
-                    let id = self.game.add_source(spec.into());
-                    format!("source {id}")
+                    match spec.try_into() {
+                        Ok(source) => format!("source {}", self.game.add_source(source)),
+                        Err(error) => format!("error: {error}"),
+                    }
                 }
                 Command::SetSourceEnabled { id, enabled } => {
                     if self.game.set_source_enabled(id, enabled) {
@@ -356,7 +348,7 @@ impl App {
         out.push_str(&events);
         out.push_str(&format!(
             "# {} event(s)",
-            self.game.trace().since(tick).count() + self.game.encounter_trace().since(tick).count() + self.game.set_piece_trace().since(tick).count()
+            self.game.trace().since(tick).count() + self.game.encounter_trace().since(tick).count()
         ));
         out
     }

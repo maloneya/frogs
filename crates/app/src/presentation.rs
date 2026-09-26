@@ -55,7 +55,6 @@ pub(super) struct WorldAssets<T> {
     open_chests: Vec<Instance>,
     ground_instance: [Instance; 1],
     props: InstanceBuffer,
-    pub(super) directional_lights: Vec<arpg_core::DirectionalLight>,
     pub(super) torches: crate::torch::Torches,
 }
 
@@ -91,7 +90,6 @@ impl<T> WorldAssets<T> {
             )],
             props: InstanceBuffer::default(),
             torches: crate::torch::Torches::default(),
-            directional_lights: Vec::with_capacity(arpg_core::MAX_DIRECTIONAL_LIGHTS),
         })
     }
 

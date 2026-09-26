@@ -18,7 +18,13 @@ pub(crate) enum ExpectedEvent {
     GaitsChanged { walking: usize, running: usize, sprinting: usize },
     SceneLoaded { id: String },
     SceneEvicted { id: String },
-    Impulsed { id: (u32, u32), source: Option<(u32, u32)>, value: (f32, f32), tolerance: f32 },
+    Impulsed {
+        id: (u32, u32), source: Option<(u32, u32)>,
+        #[serde(deserialize_with = "crate::spec::finite_pair")]
+        value: (f32, f32),
+        #[serde(deserialize_with = "crate::spec::tolerance")]
+        tolerance: f32,
+    },
     Activated { id: (u32, u32) },
     Placed { id: (u32, u32) },
     Removed { id: (u32, u32) },

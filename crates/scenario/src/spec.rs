@@ -24,10 +24,6 @@ pub(crate) struct Scenario {
     /// Lifecycle operations before their named tick, in file order.
     #[serde(default)]
     pub(crate) scenes: Vec<SceneAt>,
-    /// Explicit set-piece requests before the named tick, after scene operations.
-    #[serde(default)]
-    pub(crate) set_pieces: Vec<SetPieceAt>,
-
     /// Applied in order, so a later span overwrites an earlier one where they
     /// overlap. Ticks outside every span get no input at all.
     #[serde(default)]
@@ -390,11 +386,6 @@ pub(crate) struct Expect {
     pub(crate) torch_count: Option<usize>,
     #[serde(default)]
     pub(crate) torches: Vec<TorchExpect>,
-    #[serde(default)]
-    pub(crate) set_pieces: Vec<SetPieceExpect>,
-    /// Ordered active light intensities; an empty list asserts darkness.
-    #[serde(default)]
-    pub(crate) directional_lights: Option<Vec<Approx>>,
     /// Predictions about individual bodies placed by [`Setup::actions`].
     #[serde(default)]
     pub(crate) bodies: Vec<BodyExpect>,
@@ -418,11 +409,13 @@ pub(crate) struct Expect {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Approx {
+    #[serde(deserialize_with = "finite")]
     pub(crate) value: f32,
     /// **For float accumulation, never for timing slop.** Under a fixed
     /// timestep the tick count is exact, so a tolerance wide enough to absorb a
     /// one-tick error is not a tolerance — it is the assertion being switched
     /// off. One tick of walking is 0.15 world units.
+    #[serde(deserialize_with = "tolerance")]
     pub(crate) tol: f32,
 }
 
@@ -430,24 +423,56 @@ pub(crate) struct Approx {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Approx2 {
+    #[serde(deserialize_with = "finite")]
     pub(crate) x: f32,
+    #[serde(deserialize_with = "finite")]
     pub(crate) z: f32,
     /// Euclidean distance, so this is a radius rather than a per-axis slack.
+    #[serde(deserialize_with = "tolerance")]
     pub(crate) tol: f32,
+}
+
+/// Prediction fields reject invalid numbers at deserialization, including in
+/// checkpoints and event payloads. NaN must never disable a comparison.
+pub(crate) fn finite<'de, D: serde::Deserializer<'de>>(input: D) -> Result<f32, D::Error> {
+    let value = f32::deserialize(input)?;
+    if !value.is_finite() {
+        return Err(serde::de::Error::custom("prediction must be finite"));
+    }
+    Ok(value)
+}
+
+pub(crate) fn tolerance<'de, D: serde::Deserializer<'de>>(input: D) -> Result<f32, D::Error> {
+    let value = finite(input)?;
+    if value < 0.0 {
+        return Err(serde::de::Error::custom("tolerance must be nonnegative"));
+    }
+    Ok(value)
+}
+
+pub(crate) fn finite_pair<'de, D: serde::Deserializer<'de>>(input: D) -> Result<(f32, f32), D::Error> {
+    let value = <(f32, f32)>::deserialize(input)?;
+    if !value.0.is_finite() || !value.1.is_finite() {
+        return Err(serde::de::Error::custom("prediction must be finite"));
+    }
+    Ok(value)
+}
+
+impl Approx {
+    pub(crate) fn matches(&self, got: f32) -> bool {
+        got.is_finite() && (got - self.value).abs() <= self.tol
+    }
 }
 
 impl Approx2 {
     /// How far `got` misses by, or `None` if it is within tolerance.
     ///
-    /// **One copy of this comparison, deliberately.** `run::check_finite`'s doc
-    /// names `(got - want).length() > tolerance` as *the* shape every positional
-    /// assertion has — and the reason a NaN slips through all of them. That
-    /// argument is about one shape; it stops being true the moment there are two
-    /// that can drift. It is also the only place the "`y` is world Z" convention
-    /// is applied on the way in.
+    /// Non-finite observations fail too. Double precision keeps subtraction
+    /// and distance finite across the full range of authored finite f32 values.
     pub(crate) fn off_by(&self, got: glam::Vec3) -> Option<f32> {
-        let off = (glam::Vec2::new(got.x, got.z) - glam::Vec2::new(self.x, self.z)).length();
-        (off > self.tol).then_some(off)
+        let off = (f64::from(got.x) - f64::from(self.x))
+            .hypot(f64::from(got.z) - f64::from(self.z));
+        (!off.is_finite() || off > f64::from(self.tol)).then_some(off as f32)
     }
 
     /// The prediction, as it appears in a failure.
@@ -606,21 +631,4 @@ pub(crate) struct ChestExpect {
     pub(crate) scene: usize,
     pub(crate) chest: usize,
     pub(crate) state: Option<arpg_game::ChestState>,
-}
-
-/// Scene load index and authored set-piece name; refusal can be asserted explicitly.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SetPieceAt {
-    pub(crate) at: u64,
-    pub(crate) scene: usize,
-    pub(crate) name: String,
-    pub(crate) accepted: bool,
-}
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SetPieceExpect {
-    pub(crate) scene: usize,
-    pub(crate) name: String,
-    pub(crate) state: Option<arpg_game::SetPieceState>,
 }

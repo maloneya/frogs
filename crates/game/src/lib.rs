@@ -24,8 +24,6 @@ pub use encounter::{DefeatObjective, EncounterAction, EncounterEvent, EncounterO
 mod chest;
 pub use chest::{ChestSpec, ChestState, MAX_CHESTS};
 
-mod set_piece;
-pub use set_piece::{LightPulse, SetPieceAction, SetPieceCue, SetPieceEvent, SetPieceSpec, SetPieceState, MAX_SET_PIECE_TICKS};
 
 mod tree;
 pub use tree::{TreeKind, TreeSpec, MAX_TREES};

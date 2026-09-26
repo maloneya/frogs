@@ -1,13 +1,13 @@
 //! The engine capability independently of its future gameplay controller.
 
 use arpg_core::{Intent, Report};
-use arpg_sim::{Accumulator, Dt, Placement, Source, SourceId, SourceState, Template, World};
-use glam::Vec2;
+use arpg_sim::{Accumulator, Dt, Condition, Source, SourceId, SourceSpec, SourceState, Template, World};
 
 #[test]
 fn setting_is_hashed_observable_idempotent_and_refuses_retired_names() {
     let mut world = World::empty();
-    let id = world.add_source(Source::new(Placement::At(Vec2::new(20.0, 0.0)), Template::BODY));
+    let id = world.add_source(Source::try_from(SourceSpec { pos: (20.0, 0.0), radius: 0.0, every: 1,
+        when: Condition::Always, what: Template::BODY, enabled: true }).unwrap());
     let enabled = world.hash();
     assert!(world.set_source_enabled(id, false));
     assert_ne!(enabled, world.hash());
@@ -23,7 +23,8 @@ fn setting_is_hashed_observable_idempotent_and_refuses_retired_names() {
     assert!(world.set_source_enabled(id, true));
     assert_eq!(world.hash(), enabled, "only the enablement bit changed, not the cadence");
     assert!(world.remove_source(id));
-    let next = world.add_source(Source::new(Placement::At(Vec2::new(30.0, 0.0)), Template::BODY));
+    let next = world.add_source(Source::try_from(SourceSpec { pos: (30.0, 0.0), radius: 0.0, every: 1,
+        when: Condition::Always, what: Template::BODY, enabled: true }).unwrap());
     assert_ne!(id, next);
     let before = (world.hash(), world.trace().render());
     assert!(!world.set_source_enabled(id, true));

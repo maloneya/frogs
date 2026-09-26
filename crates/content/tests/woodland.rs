@@ -25,4 +25,11 @@ fn tree_files_reject_invalid_fields_and_placements() {
     let hash = game.hash();
     game.restart().unwrap();
     assert_eq!(game.hash(), hash);
+    let owner = game.scene_instances().next().unwrap().0;
+    assert!(game.evict_scene(owner));
+    assert_eq!(game.trees().count(), 0);
+    assert_eq!(game.walls().count(), 0);
+    assert_eq!(game.torch_count(), 0);
+    assert_eq!(game.source_count(), 0);
+    assert_eq!(game.scene_count(), 0);
 }

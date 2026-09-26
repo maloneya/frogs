@@ -293,8 +293,8 @@ impl CameraBinding {
         Self { buffer, light, layout, bind_group }
     }
 
-    pub(crate) fn upload_lights(&self, queue: &wgpu::Queue, lights: &[crate::PointLight], directional: &[crate::DirectionalLight]) {
-        queue.write_buffer(&self.light, 0, bytemuck::bytes_of(&crate::lighting::LightUniform::new(lights, directional)));
+    pub(crate) fn upload_lights(&self, queue: &wgpu::Queue, lights: &[crate::PointLight]) {
+        queue.write_buffer(&self.light, 0, bytemuck::bytes_of(&crate::lighting::LightUniform::new(lights)));
     }
 
     /// Uploads the camera matrix for this view.

@@ -54,6 +54,25 @@ mod tests {
     use super::parse_scene;
 
     #[test]
+    fn source_decoding_and_direct_admission_share_validation() {
+        for fields in [
+            "pos: (NaN, 0.0)",
+            "pos: (0.0, 0.0), radius: -1.0",
+            "pos: (0.0, 0.0), radius: NaN",
+            "pos: (0.0, 0.0), when: PlayerWithin(-1.0)",
+            "pos: (0.0, 0.0), when: PlayerWithin(inf)",
+            "pos: (96.0, 0.0), what: (fixed: true)",
+            "pos: (0.0, 0.0), what: (fixed: true, seeks: true)",
+        ] {
+            let input = format!("({fields})");
+            let spec = super::parse_source(&input).unwrap();
+            assert!(arpg_sim::Source::try_from(spec).is_err(), "{input}");
+            assert!(ron::from_str::<arpg_sim::Source>(&input).is_err(), "{input}");
+        }
+        assert!(ron::from_str::<arpg_sim::Source>("(pos: (30.0, 0.0), every: 0)").is_ok());
+    }
+
+    #[test]
     fn wall_files_share_typed_validation_and_reject_unknown_height() {
         for fields in [
             "centre: (0.0, 2.0), size: (3.0, 0.0)",
@@ -94,28 +113,6 @@ mod tests {
             valid.replace("range: 14.0", "range: 14.0, typo: 1"),
         ] {
             assert!(parse_scene(&format!("(engine: (name: \"invalid\"), torches: [{invalid}])")).is_err(), "{invalid}");
-        }
-    }
-
-    #[test]
-    fn set_piece_files_use_the_validated_game_vocabulary() {
-        let valid = include_str!("../../../scenes/soul_trial.ron");
-        assert_eq!(parse_scene(valid).unwrap().set_pieces[0].name(), "reveal_horde");
-        for invalid in [
-            valid.replace("duration_ticks: 15", "duration_ticks: 0"),
-            valid.replace("duration_ticks: 15", "duration_ticks: 3601"),
-            valid.replace("at: 0", "at: 4294967295"),
-            valid.replace("(-0.5, 1.0, 0.3)", "(0.0, 0.0, 0.0)"),
-            valid.replace("(-0.5, 1.0, 0.3)", "(NaN, 1.0, 0.0)"),
-            valid.replace("fill: 0.12", "fill: 1.1"),
-            valid.replace("intensity: 2.0", "intensity: inf"),
-            valid.replace("colour: (0.55, 0.7, 1.0)", "colour: (-1.0, 0.7, 1.0)"),
-            valid.replace("at: 0,", "at: 0, typo: true,"),
-            valid.replace("fill: 0.12,", "fill: 0.12, typo: true,"),
-            valid.replace("name: \"reveal_horde\"", "name: \"bad name\""),
-            valid.replace("LightPulse", "UnknownAction"),
-        ] {
-            assert!(parse_scene(&invalid).is_err(), "invalid timeline admitted: {invalid}");
         }
     }
 

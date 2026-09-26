@@ -49,8 +49,8 @@ fn torch_pools_preserve_darkness_and_torchless_scenes_have_neutral_light() {
     });
     let view = colour.create_view(&Default::default());
     let depth = crate::create_depth(&device, N, N);
-    let render_with = |lights: &[PointLight], directional: &[DirectionalLight]| {
-        binding.upload_lights(&queue, lights, directional);
+    let render = |lights: &[PointLight]| {
+        binding.upload_lights(&queue, lights);
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -83,7 +83,6 @@ fn torch_pools_preserve_darkness_and_torchless_scenes_have_neutral_light() {
         queue.submit(Some(encoder.finish()));
         readback.to_rgba(&device).unwrap()
     };
-    let render = |lights: &[PointLight]| render_with(lights, &[]);
     let sample = |rgba: &[u8], position: Vec3| {
         let clip = camera.view_proj() * position.extend(1.0);
         let x = ((clip.x / clip.w * 0.5 + 0.5) * N as f32) as usize;
@@ -91,6 +90,7 @@ fn torch_pools_preserve_darkness_and_torchless_scenes_have_neutral_light() {
         let offset = (y * N as usize + x) * 4;
         [rgba[offset], rgba[offset + 1], rgba[offset + 2]]
     };
+    let neutral_frame = render(&[]);
     // Predict: warm bright centre, much dimmer at four metres, black beyond
     // eight. A light below the upward-facing floor illuminates none of it.
     let warm = Vec3::new(1.0, 0.5, 0.1);
@@ -148,44 +148,13 @@ fn torch_pools_preserve_darkness_and_torchless_scenes_have_neutral_light() {
             "{count} lights must add before sRGB encoding: {red_pixel:?} to {accumulated:?}"
         );
     }
-    // A zero-intensity authored torch selects the dark presentation while
-    // isolating directional-light maths from torchless scene illumination.
-    let render_authored = |lights: &[PointLight], directional: &[DirectionalLight]| {
-        if lights.is_empty() {
-            render_with(&[PointLight::new(Vec3::Y, Vec3::ONE, 0.0, 1.0)], directional)
-        } else { render_with(lights, directional) }
-    };
-    // Distant light reaches beyond the torch radius, composes with its pool,
-    // preserves orientation, and fades in linear colour before output encoding.
-    let flash = DirectionalLight::try_new(Vec3::Y, Vec3::Z, 0.8, 0.0).unwrap();
-    let distant = sample(&render_authored(&[], &[flash]), Vec3::X * 9.0);
-    assert!(distant[2] > 40 && distant[0] == 0 && distant[1] == 0, "distant light: {distant:?}");
-    let combined = sample(&render_authored(&[red], &[flash]), Vec3::ZERO);
-    let flash_centre = sample(&render_authored(&[], &[flash]), Vec3::ZERO);
-    assert_eq!(combined, [red_pixel[0], 0, flash_centre[2]]);
-    let half = sample(&render_authored(&[], &[flash.faded(0.5)]), Vec3::X * 9.0);
-    assert!((linear(half[2]) - linear(distant[2]) * 0.5).abs() < 0.006);
-    let below = DirectionalLight::try_new(-Vec3::Y, Vec3::Z, 0.8, 0.0).unwrap();
-    assert_eq!(sample(&render_authored(&[], &[below]), Vec3::ZERO), [0; 3]);
-    let fill = DirectionalLight::try_new(-Vec3::Y, Vec3::Z, 0.8, 0.5).unwrap();
-    assert_eq!(sample(&render_authored(&[], &[fill]), Vec3::X * 9.0), half);
-    let faint = flash.faded(0.1);
-    let all_slots = sample(&render_authored(&[], &[faint; MAX_DIRECTIONAL_LIGHTS]), Vec3::X * 9.0);
-    assert!((linear(all_slots[2]) - linear(distant[2]) * 0.8).abs() < 0.006);
     // Removing the final torch returns to visible neutral lighting, with no
     // stale coloured slots. It also covers distant floor pixels uniformly.
     let daylight = render(&[]);
+    assert_eq!(daylight, neutral_frame, "clearing lights restores the original neutral frame");
     let centre = sample(&daylight, Vec3::ZERO);
     assert!(centre[0] > 50 && centre[0] < 230, "readable floor: {centre:?}");
-    let neutral = DirectionalLight::try_new(Vec3::Y, Vec3::ONE,
-        0.22 + 0.35 / 1.25_f32.sqrt(), 0.0).unwrap();
-    assert_eq!(centre, sample(&render_authored(&[], &[neutral]), Vec3::ZERO),
-        "neutral illumination preserves the floor material colour");
     assert_eq!(sample(&daylight, Vec3::X * 9.0), centre);
-    let blue_daylight = sample(&render_with(&[], &[flash]), Vec3::ZERO);
-    assert_eq!(blue_daylight[0], centre[0]);
-    assert_eq!(blue_daylight[1], centre[1]);
-    assert!(blue_daylight[2] > centre[2], "set pieces add to neutral lighting");
 
 }
 
@@ -193,12 +162,6 @@ fn torch_pools_preserve_darkness_and_torchless_scenes_have_neutral_light() {
 fn gpu_admission_rejects_a_ninth_light() {
     let light = PointLight::new(Vec3::Y, Vec3::ONE, 1.0, 2.0);
     assert!(
-        std::panic::catch_unwind(|| LightUniform::new(&[light; MAX_POINT_LIGHTS + 1], &[])).is_err()
+        std::panic::catch_unwind(|| LightUniform::new(&[light; MAX_POINT_LIGHTS + 1])).is_err()
     );
-}
-
-#[test]
-fn gpu_admission_refuses_excess_directional_lights() {
-    let light = DirectionalLight::try_new(Vec3::Y, Vec3::ONE, 1.0, 0.0).unwrap();
-    assert!(std::panic::catch_unwind(|| LightUniform::new(&[], &[light; MAX_DIRECTIONAL_LIGHTS + 1])).is_err());
 }

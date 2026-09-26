@@ -82,7 +82,6 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
 
         let before = game.hash();
         for alpha in [Alpha::ZERO, clock.alpha(), Alpha::ONE] {
-            assert_eq!(game.player_pos_at(alpha), world.player_pos_at(alpha));
             let actual = game.player_presentation(alpha);
             let expected = world.player_presentation(alpha);
             assert_eq!(actual.id(), expected.id());

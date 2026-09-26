@@ -128,8 +128,6 @@ Mechanism fixtures live inline in `scenarios/`; they are not picker entries.
 
 Scenes may also own [stationary torches](lighting.md). They participate in the
 same admission, eviction and cached-restart boundaries; omission selects neutral lighting when no live scene owns a torch.
-Optional [set pieces](set-pieces.md) describe named finite moments, activated
-explicitly. Their first supported action is a distant-light pulse.
 
 ```ron
 (

@@ -1,14 +1,5 @@
-// A cadence of zero is not "as fast as possible", and not a division by
-// nothing: `Source::every` clamps it to one. This is the only assertion of
-// that rule anywhere.
-//
-// **It is here because the clamp moved.** It used to be applied by the scenario
-// runner's own translation from its own spec type; it is now applied by
-// `From<SourceSpec> for Source`, which is the single door every *written*
-// source comes through — a `.ron` file and the harness socket alike. A door
-// that stopped applying it would not fail quietly: `countdown = every - 1`
-// underflows a `u32` on the first tick the source fires, so this scenario
-// panics rather than drifts.
+// Source::try_from normalizes a zero cadence to one tick for every caller,
+// including authored scenarios and harness commands.
 //
 // Three ticks, a cadence of one, and a source that starts ready: three bodies.
 // The ring is wide enough that they never touch, so `crowd_contacts: 0` is the
