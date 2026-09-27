@@ -25,6 +25,7 @@ lint helps only when its command actually runs.
 | Concern | Owning implementation and checks |
 |---|---|
 | Crate boundaries and denied lints | [workspace manifest](../Cargo.toml), crate build scripts, [shared dependency guard](../build_support/dependencies.rs) |
+| Deterministic code's prohibited APIs | [shared Clippy configuration](../build_support/deterministic-clippy.toml), linked from sim/game; diagnostics explain the owning layer |
 | Stable identity and capability lifetime | [slots](../crates/sim/src/slots.rs), [members](../crates/sim/src/members.rs), body creation/removal in [World](../crates/sim/src/lib.rs) |
 | Fixed time and read-only presentation | [time](../crates/sim/src/time.rs), World presentation methods and adjacent tests |
 | Physical queries and restricted effects | [contact](../crates/sim/src/contact.rs), [motion](../crates/sim/src/pass/motion.rs), [attack](../crates/sim/src/pass/attack.rs) |
@@ -38,6 +39,23 @@ Exhaustive destructuring forces an edit when fields are added; it does not prove
 the author hashed, reported or cleaned up each field correctly. Inspect the
 implementation and its tests. Rustdoc checks Rust API links; prose claims and ordinary Markdown links still
 need review.
+
+Clippy runs through the existing verification runner and agent hooks. Workspace
+rules reject unnecessary mutable parameters, redundant clones, redundant `..`
+in otherwise exhaustive destructuring, and outer `#[allow]` attributes. Lint
+exceptions need a reason; unfulfilled expectations fail so stale exceptions do
+not silently accumulate. Sim/game also reject wildcard enum match arms: a new
+state needs an explicit decision. Intentionally partial observations can use a
+narrow, justified `#[expect]`.
+
+Sim/game share one Clippy configuration through their `clippy.toml` symlinks.
+It prohibits named clock, environment, unordered collection, I/O and process/thread
+entry points, including renamed imports. Their build-time dependency guards have
+an explicit exception for reading manifests. Other crates retain their adapter
+capabilities. These checks run under Clippy, not ordinary `cargo build`; the API
+list is not a complete side-effect sandbox, and no lint proves correct lifecycle
+handling or detects a second gameplay schema. Keep those checks at the owner and
+in outcome tests.
 
 When adding state, follow it through creation, mutation, removal, scene eviction,
 restart, observation and hashing. Exercise rejection and identity reuse where

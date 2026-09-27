@@ -139,7 +139,7 @@ impl Game {
         let (mut access, _) = world.encounter_access();
         let mut trace = encounter_trace.sink(tick);
         door::advance(doors, &mut access, &mut trace);
-        chest::advance(chests, &mut access, &mut trace);
+        chest::advance(chests, &access, &mut trace);
         encounter::begin(encounters, doors, chests, &mut access, &mut trace);
         world.step_observed(dt, intent, observer);
         crate::corpse::advance(corpses, world.defeats());

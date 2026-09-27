@@ -27,6 +27,7 @@ const REASON: &str = "sim must stay free of the graphics stack and of the window
 const ALLOWED: &[&str] = &["arpg-core", "glam", "serde"];
 
 #[path = "../../build_support/dependencies.rs"]
+#[expect(clippy::disallowed_methods, reason = "the build-time dependency guard reads manifests; simulation code cannot read files")]
 mod dependencies;
 
 fn main() {

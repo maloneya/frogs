@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         drop(server);
         assert!(!path.exists());
-        let server = Server::start(path.clone()).unwrap();
+        let server = Server::start(path).unwrap();
         drop(server);
     }
 

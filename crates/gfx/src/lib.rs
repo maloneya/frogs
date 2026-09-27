@@ -330,7 +330,7 @@ impl Renderer {
         self.vsync
     }
 
-    fn reconfigure(&mut self) {
+    fn reconfigure(&self) {
         self.surface.configure(&self.device, &self.config);
     }
 

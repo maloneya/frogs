@@ -1,0 +1,43 @@
+# Shared by crates/sim/clippy.toml and crates/game/clippy.toml via symlinks.
+# Clippy resolves these symbols, including renamed imports. This is a list of
+# prohibited entry points, not a proof that arbitrary code is deterministic.
+# Runtime inputs come from the caller; see docs/invariants.md and CLAUDE.md.
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "Simulation/gameplay iteration must have a defined order; use ordered storage. See docs/invariants.md." },
+    { path = "std::collections::HashSet", reason = "Simulation/gameplay iteration must have a defined order; use ordered storage. See docs/invariants.md." },
+    { path = "std::time::Instant", reason = "Use supplied fixed ticks; wall-clock measurement belongs in app/scenario. See crates/sim/src/time.rs." },
+    { path = "std::time::SystemTime", reason = "Use supplied fixed ticks; system time must not enter gameplay. See crates/sim/src/time.rs." },
+    { path = "std::fs::File", reason = "File I/O belongs in content or an adapter; pass complete typed data to sim/game." },
+    { path = "std::fs::OpenOptions", reason = "File I/O belongs in content or an adapter; pass complete typed data to sim/game." },
+    { path = "std::process::Command", reason = "Process startup belongs to the standalone launcher, never sim/game. See docs/companion.md." },
+    { path = "std::thread::Builder", reason = "Simulation/gameplay run on the caller's ordered schedule; adapters own threads." },
+    { path = "std::net::TcpListener", reason = "Network I/O belongs in an adapter; sim/game consume ordered inputs." },
+    { path = "std::net::TcpStream", reason = "Network I/O belongs in an adapter; sim/game consume ordered inputs." },
+    { path = "std::net::UdpSocket", reason = "Network I/O belongs in an adapter; sim/game consume ordered inputs." },
+    { path = "std::os::unix::net::UnixListener", reason = "Control sockets belong in app; sim/game consume ordered inputs." },
+    { path = "std::os::unix::net::UnixStream", reason = "Control sockets belong in app; sim/game consume ordered inputs." },
+    { path = "std::os::unix::net::UnixDatagram", reason = "Control sockets belong in app; sim/game consume ordered inputs." },
+]
+
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "Use supplied fixed ticks; wall-clock measurement belongs in app/scenario. See crates/sim/src/time.rs." },
+    { path = "std::time::SystemTime::now", reason = "Use supplied fixed ticks; system time must not enter gameplay. See crates/sim/src/time.rs." },
+    { path = "std::env::var", reason = "Adapters read the environment and supply validated inputs; sim/game must not read ambient configuration." },
+    { path = "std::env::var_os", reason = "Adapters read the environment and supply validated inputs; sim/game must not read ambient configuration." },
+    { path = "std::env::vars", reason = "Adapters read the environment and supply validated inputs; sim/game must not read ambient configuration." },
+    { path = "std::env::vars_os", reason = "Adapters read the environment and supply validated inputs; sim/game must not read ambient configuration." },
+    { path = "std::env::args", reason = "CLI parsing belongs in an adapter; pass typed inputs to sim/game." },
+    { path = "std::env::args_os", reason = "CLI parsing belongs in an adapter; pass typed inputs to sim/game." },
+    { path = "std::env::current_dir", reason = "Working-directory-dependent behavior belongs in content or an adapter, never sim/game." },
+    { path = "std::fs::read", reason = "Load files through content and pass typed data to sim/game." },
+    { path = "std::fs::read_to_string", reason = "Load files through content and pass typed data to sim/game." },
+    { path = "std::fs::read_dir", reason = "File discovery belongs in content or an adapter, never sim/game." },
+    { path = "std::fs::write", reason = "Persistence belongs in content; sim/game expose state rather than writing files." },
+    { path = "std::fs::remove_file", reason = "File lifetime belongs in content or an adapter, never sim/game." },
+    { path = "std::fs::rename", reason = "Persistence belongs in content; sim/game expose state rather than replacing files." },
+    { path = "std::fs::metadata", reason = "Filesystem-dependent behavior belongs in content or an adapter, never sim/game." },
+    { path = "std::thread::spawn", reason = "Simulation/gameplay run on the caller's ordered schedule; adapters own threads." },
+    { path = "std::thread::scope", reason = "Simulation/gameplay run on the caller's ordered schedule; adapters own threads." },
+    { path = "std::thread::sleep", reason = "Simulation advances through supplied ticks, never wall-clock waiting." },
+]

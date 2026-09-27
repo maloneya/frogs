@@ -146,20 +146,21 @@ impl Chests {
 /// A missing body becomes Missing, never Open, and stale IDs cannot act on replacements.
 pub(crate) fn advance(
     chests: &mut Chests,
-    access: &mut GameplayAccess<'_>,
+    access: &GameplayAccess<'_>,
     trace: &mut TraceSink<'_, EncounterEvent>,
 ) {
     for group in chests.rows.chunk_by_mut(|a, b| a.owner == b.owner) {
         for (nth, row) in group.iter_mut().enumerate() {
             let next = match row.state {
                 ChestState::Missing => continue,
-                _ if !access.contains(row.body) => ChestState::Missing,
+                ChestState::Locked | ChestState::Unlocked | ChestState::Open
+                    if !access.contains(row.body) => ChestState::Missing,
                 ChestState::Unlocked
                     if access.interaction(row.body) == Some(InteractionState::Activated) =>
                 {
                     ChestState::Open
                 }
-                _ => continue,
+                ChestState::Locked | ChestState::Unlocked | ChestState::Open => continue,
             };
             row.state = next;
             trace.emit(EncounterEvent::Chest {

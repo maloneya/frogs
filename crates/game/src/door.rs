@@ -139,14 +139,15 @@ pub(crate) fn advance(
         for (nth, row) in group.iter_mut().enumerate() {
             let next = match row.state {
                 DoorState::Open | DoorState::Missing => continue,
-                _ if !access.contains(row.body) => DoorState::Missing,
+                DoorState::Locked | DoorState::Unlocked
+                    if !access.contains(row.body) => DoorState::Missing,
                 DoorState::Unlocked
                     if access.interaction(row.body) == Some(InteractionState::Activated) =>
                 {
                     assert!(access.remove(row.body));
                     DoorState::Open
                 }
-                _ => continue,
+                DoorState::Locked | DoorState::Unlocked => continue,
             };
             row.state = next;
             trace.emit(EncounterEvent::Door {

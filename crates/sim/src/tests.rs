@@ -895,6 +895,7 @@ fn a_full_queue_refuses_out_loud() {
     assert_eq!(world.enemy_count(), QUEUE_CAPACITY, "the accepted requests were not all granted");
     assert_eq!(world.spawn_outcomes().iter().map(|result| result.ticket).collect::<Vec<_>>(), tickets);
     assert!(world.spawn_outcomes().iter().all(|result| result.entity.is_some()));
+    #[expect(clippy::wildcard_enum_match_arm, reason = "this assertion counts refusals; unrelated trace event kinds do not participate")]
     let refusals: Vec<_> = world
         .trace()
         .iter()

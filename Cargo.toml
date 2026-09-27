@@ -57,6 +57,7 @@ missing_docs = "warn"
 # this crate's contract", so what it reports is real: an item widened to reach
 # something rather than because it belongs in the interface.
 unreachable_pub = "deny"
+unfulfilled_lint_expectations = "deny"
 
 # Resolve Rust API links with cargo doc; clippy and cargo test do not check them.
 # Run --workspace --lib --bins --no-deps --document-private-items to include
@@ -71,6 +72,17 @@ unimplemented = "deny"
 dbg_macro = "deny"
 print_stdout = "deny"     # forces `log`, which keeps the frame path off stdout
 print_stderr = "deny"
+
+# Keep exceptions accountable and mutation authority no wider than necessary.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+needless_pass_by_ref_mut = "deny"
+rest_pat_in_fully_bound_structs = "deny"
+redundant_clone = "deny"
+
+# Only crates with a clippy.toml prohibition list restrict these APIs.
+disallowed_methods = "deny"
+disallowed_types = "deny"
 
 # Graphics crates are murderously slow when compiled unoptimized, and none of
 # this is our code to debug. Optimising dependencies while leaving our own crates

@@ -7,6 +7,9 @@
 //! unit is one metre, including scene inputs and reported positions. Linear
 //! speeds are metres per second. Tick counts remain counts, not seconds.
 
+// New simulation states must not disappear into a catch-all match arm.
+#![deny(clippy::wildcard_enum_match_arm)]
+
 use glam::{Vec2, Vec3};
 
 use arpg_core::{Intent, Report};

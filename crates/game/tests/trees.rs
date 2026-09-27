@@ -82,7 +82,7 @@ fn combined_wall_capacity_rejects_before_installing_trees_or_consuming_pending_w
     }
     let before = observed(&game);
     assert!(game.load_scene(&scene(TreeKind::Pine, 1)).is_err());
-    let mut oversized = authored.clone();
+    let mut oversized = authored;
     oversized.trees.push(tree(TreeKind::Pine));
     assert!(game.start_scene(&oversized).is_err());
     assert_eq!(observed(&game), before);

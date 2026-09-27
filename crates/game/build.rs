@@ -13,6 +13,7 @@ const REASON: &str = "game must remain deterministic and headless; it may depend
 const ALLOWED: &[&str] = &["arpg-core", "arpg-sim", "glam", "serde"];
 
 #[path = "../../build_support/dependencies.rs"]
+#[expect(clippy::disallowed_methods, reason = "the build-time dependency guard reads manifests; gameplay code cannot read files")]
 mod dependencies;
 
 fn main() {

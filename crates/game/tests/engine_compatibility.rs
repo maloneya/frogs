@@ -32,7 +32,7 @@ fn construction_matches_the_engine_scene_loading_path() {
         origin: (-10.85, -10.85), columns: 32, rows: 32, spacing: 0.7, what: Template::BODY,
     }], ..Default::default() };
     let world = World::from_scene(&scene).unwrap();
-    assert_same(&Game::from_scene(&scene.clone().into()).unwrap(), &world);
+    assert_same(&Game::from_scene(&scene.into()).unwrap(), &world);
 }
 
 #[test]
