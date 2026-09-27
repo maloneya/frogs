@@ -93,7 +93,7 @@ and discarded depth after the pass. Read the relevant owner/tests before changin
 
 ```sh
 python3 scripts/dev.py          # game + companion, independently running
-python3 scripts/verify.py full  # shared verification runner
+python3 scripts/verify.py full --snapshot  # verify captured inputs while edits continue
 ```
 
 Rust may need `. "$HOME/.cargo/env"`. `cargo run` launches only the game; use

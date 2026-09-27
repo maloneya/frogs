@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 
+sys.dont_write_bytecode = True
 import perf
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,7 +63,7 @@ def input_digest(path, active=frozenset()):
     raise ValueError("unsupported verification input: " + str(path))
 
 
-def source_identity(root=ROOT):
+def source_manifest(root=ROOT):
     """All tracked/unignored inputs, including dirty and untracked authored data.
 
     Ignore build outputs through Git's existing ignore rules. Track deletions and
@@ -70,12 +71,21 @@ def source_identity(root=ROOT):
     changes must invalidate verification rather than silently escaping the key.
     """
     names = subprocess.check_output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root)
+    return {os.fsdecode(name): input_digest(root / os.fsdecode(name))
+            for name in sorted(set(names.split(b"\0")) - {b""})}
+
+
+def manifest_identity(manifest):
     state = hashlib.sha256()
-    for name in sorted(set(names.split(b"\0")) - {b""}):
-        path = root / os.fsdecode(name)
+    for name in sorted(manifest, key=os.fsencode):
+        name = os.fsencode(name)
         state.update(name + b"\0")
-        state.update(input_digest(path).encode())
+        state.update(manifest[os.fsdecode(name)].encode())
     return state.hexdigest()
+
+
+def source_identity(root=ROOT):
+    return manifest_identity(source_manifest(root))
 
 
 def context():
@@ -251,16 +261,30 @@ def main(argv=None):
     parser.add_argument("--live", action="store_true", help="run live benchmarks now; needs an uninterrupted foreground session")
     parser.add_argument("--only", choices=CHECKS, help="one explicitly partial check (for hooks)")
     parser.add_argument("--fresh", action="store_true", help="do not reuse correctness results")
+    parser.add_argument("--snapshot", action="store_true", help="verify an isolated copy of current files while work continues")
+    parser.add_argument("--snapshot-result", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.only and (args.live or args.performance):
         parser.error("--only cannot be combined with --live or --performance")
+    if args.snapshot:
+        if args.snapshot_result:
+            parser.error("snapshot execution cannot create another snapshot")
+        import verify_snapshot
+        return verify_snapshot.run(ROOT, args)
     base = ROOT / "target/verify"
+    if args.snapshot_result:
+        base = args.snapshot_result.parent
     base.mkdir(parents=True, exist_ok=True)
-    artifact = Path(tempfile.mkdtemp(prefix="run-", dir=base))
+    artifact = args.snapshot_result or Path(tempfile.mkdtemp(prefix="run-", dir=base))
     required = list(CHECKS)
     result = {"schema": 1, "scope": args.scope, "checks": [], "coverage": [], "omitted": required.copy()}
     try:
         source = source_identity()
+        if args.snapshot_result:
+            captured = json.loads((artifact / "snapshot.json").read_text())
+            if source != captured["source"] or str(ROOT) != captured["workspace"]:
+                raise ValueError("snapshot no longer matches its captured inputs")
+            result["snapshot"] = captured
         machine = context()
         checkpoint = performance_checkpoint(ROOT, base)
         requested = list(PERFORMANCE) if args.performance else (["performance-live"] if args.live else [])

@@ -50,6 +50,11 @@ Use isolated worktrees for independently authorized coding tasks, or a single in
 
 **Acceptance:** editing the live checkout during a check cannot alter the snapshot. The completed report certifies that snapshot only. A changed live checkout is visibly unverified. No ad hoc copy lists, fixture restoration, or source-hash exemptions are needed.
 
+**Implemented:** `python3 scripts/verify.py full --snapshot` captures current inputs,
+checks them in an isolated checkout with a reusable private build cache, and saves
+the manifest and source archive. Reports distinguish snapshot coverage from whether
+the live checkout still matches. See [verification](verification.md#verify-while-work-continues).
+
 Owner: [verification runner](../scripts/verify.py). Estimated implementation effort: medium; likely highest ongoing payoff alongside fixture protection.
 
 **3. Make verification failures explain themselves in one response**

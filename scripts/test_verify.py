@@ -1,15 +1,20 @@
 """Verification cache cannot hide changed inputs, failed checks or missing evidence."""
+import argparse
 import contextlib
+import fcntl
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import verify
+import verify_snapshot
 
 
 class Workspace(unittest.TestCase):
@@ -35,6 +40,125 @@ class Workspace(unittest.TestCase):
 
     def next_run(self):
         self.artifact = Path(tempfile.mkdtemp(dir=self.root / "target"))
+
+    def snapshot(self):
+        state = self.root / "target/snapshot"
+        state.mkdir(exist_ok=True)
+        workspace = state / "workspace"
+        return workspace, verify_snapshot.capture(self.root, workspace, self.artifact)
+
+    def test_snapshot_preserves_dirty_new_deleted_executable_and_linked_inputs(self):
+        (self.root / "removed.rs").write_text("remove me")
+        subprocess.run(["git", "add", "removed.rs"], cwd=self.root, check=True)
+        (self.root / "removed.rs").unlink()  # Staged addition, unstaged deletion.
+        (self.root / "source.rs").write_text("dirty content")
+        script = self.root / "new.sh"
+        script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o755)
+        (self.root / "linked").symlink_to("source.rs")
+        workspace, captured = self.snapshot()
+        self.assertEqual(verify.source_identity(workspace), verify.source_identity(self.root))
+        self.assertEqual((workspace / "source.rs").read_text(), "dirty content")
+        self.assertFalse((workspace / "removed.rs").exists())
+        self.assertEqual(os.readlink(workspace / "linked"), "source.rs")
+        self.assertEqual((workspace / "new.sh").stat().st_mode & 0o777, 0o755)
+        self.assertEqual(verify_snapshot.git(workspace, "rev-parse", "HEAD"), verify_snapshot.git(self.root, "rev-parse", "HEAD"))
+        self.assertEqual(verify_snapshot.git(workspace, "ls-files", "--stage", "-z"),
+                         verify_snapshot.git(self.root, "ls-files", "--stage", "-z"))
+        with tarfile.open(captured["archive"]) as archive:
+            self.assertEqual(archive.extractfile("source.rs").read(), b"dirty content")
+            self.assertNotIn("removed.rs", archive.getnames())
+
+    def test_snapshot_preserves_staged_deletion_and_ignores_build_outputs(self):
+        subprocess.run(["git", "rm", "-q", "source.rs"], cwd=self.root, check=True)
+        (self.root / "target/live-build").write_text("not a source input")
+        workspace, _ = self.snapshot()
+        self.assertFalse((workspace / "source.rs").exists())
+        self.assertFalse((workspace / "target/live-build").exists())
+        self.assertEqual(verify.source_identity(workspace), verify.source_identity(self.root))
+
+    def test_snapshot_refuses_external_links_and_changes_during_copy(self):
+        (self.root / "external").symlink_to(self.temp.name)  # Absolute links can escape capture.
+        with self.assertRaises(ValueError):
+            self.snapshot()
+        (self.root / "external").unlink()
+        copy = verify_snapshot.shutil.copy2
+        def mutate(source, destination):
+            result = copy(source, destination)
+            if source.name == "source.rs":
+                (self.root / "added-during-capture").write_text("new input")
+            return result
+        with patch.object(verify_snapshot.shutil, "copy2", side_effect=mutate), \
+             self.assertRaisesRegex(ValueError, "changed during snapshot capture"):
+            self.snapshot()
+        self.assertFalse((self.root / "target/snapshot/workspace").exists())
+
+    def test_snapshot_checks_survive_live_edits_but_reject_their_own_mutations(self):
+        workspace, captured = self.snapshot()
+        command = [sys.executable, "-c", "from pathlib import Path; "
+                   "assert Path('source.rs').read_text() == 'first'; "
+                   f"Path({str(self.root / 'source.rs')!r}).write_text('live edit')"]
+        row = verify.run_check("tests", command, captured["source"], self.machine,
+                               self.artifact, self.cache, root=workspace)
+        self.assertEqual(row["exit_code"], 0)
+        comparison = verify_snapshot.live_comparison(captured)
+        self.assertFalse(comparison["matches"])
+        self.assertEqual(comparison["changed_paths"], ["source.rs"])
+        self.assertEqual((workspace / "source.rs").read_text(), "first")
+        self.next_run()
+        row = verify.run_check("tests", [sys.executable, "-c", "from pathlib import Path; Path('source.rs').write_text('bad')"],
+                               captured["source"], self.machine, self.artifact, self.cache, root=workspace)
+        self.assertEqual(row["exit_code"], 2)
+        self.assertIn("inputs changed", row["reason"])
+
+    def test_snapshot_reuses_private_build_directory_and_replaces_only_its_workspace(self):
+        workspace, _ = self.snapshot()
+        (workspace / "target/cache-marker").write_text("retain")
+        (self.root / "source.rs").write_text("second")
+        self.next_run()
+        next_workspace, captured = self.snapshot()
+        self.assertEqual(next_workspace, workspace)
+        self.assertEqual((workspace / "target/cache-marker").read_text(), "retain")
+        self.assertEqual((workspace / "source.rs").read_text(), "second")
+        self.assertTrue(verify_snapshot.live_comparison(captured)["matches"])
+
+    def test_snapshot_lock_refuses_concurrent_runs_without_touching_reserved_state(self):
+        state = self.root / "target/verify/snapshot"
+        state.mkdir(parents=True)
+        marker = state / "workspace"
+        marker.mkdir()
+        (marker / "reserved").write_text("do not touch")
+        args = argparse.Namespace(scope="full", only=None, fresh=False, live=False, performance=False)
+        with (state / "lock").open("a") as lock, contextlib.redirect_stdout(io.StringIO()):
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(verify_snapshot.run(self.root, args), 2)
+        self.assertEqual((marker / "reserved").read_text(), "do not touch")
+        result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
+        self.assertEqual(result["coverage"], [])
+        self.assertIn("another snapshot verification", result["reason"])
+
+    def test_snapshot_runner_reports_captured_child_result_despite_live_edits(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        (scripts / "verify.py").write_text("\n".join([
+            "import json, os, sys",
+            "from pathlib import Path",
+            "artifact = Path(sys.argv[sys.argv.index('--snapshot-result') + 1])",
+            "assert '--fresh' in sys.argv and '--only' in sys.argv",
+            "assert Path(os.environ['CARGO_TARGET_DIR']) == Path.cwd().parent / 'build'",
+            "assert Path('source.rs').read_text() == 'first'",
+            f"Path({str(self.root / 'source.rs')!r}).write_text('work continued')",
+            "result = dict(status='partial_pass', coverage=['tests'], omitted=['clippy'], complete=False)",
+            "(artifact / 'verification.json').write_text(json.dumps(result))",
+        ]))
+        args = argparse.Namespace(scope="full", only="tests", fresh=True, live=False, performance=False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(verify_snapshot.run(self.root, args), 0)
+        result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
+        self.assertEqual(result["status"], "partial_pass")
+        self.assertEqual(result["coverage"], ["tests"])
+        self.assertEqual(result["live_checkout"]["changed_paths"], ["source.rs"])
+        self.assertEqual(verify.source_identity(Path(result["snapshot"]["workspace"])), result["snapshot"]["source"])
 
     def test_success_reuses_exact_inputs_but_missing_or_changed_evidence_reruns(self):
         first = self.run_check("print('tested')")

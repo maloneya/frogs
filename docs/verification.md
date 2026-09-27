@@ -3,7 +3,7 @@
 The completion command is:
 
 ```sh
-python3 scripts/verify.py full
+python3 scripts/verify.py full --snapshot
 ```
 
 It runs Clippy, workspace tests (including GPU tests), private Rustdoc, native
@@ -27,7 +27,7 @@ source stayed unchanged. Headless evidence cannot certify rendering performance.
 | `full --live` | Also force live benchmarks; requires a foreground session |
 | `--only <check>` | Explicitly partial selection |
 
-Run focused checks while editing, then `full` for completion. Hooks use this
+Run focused checks while editing, then `full --snapshot` for completion. Hooks use this
 same runner; their presence does not prove execution. GPU tests require a real
 adapter; scenarios need no GPU/window. Rustdoc is separate from Clippy/tests.
 
@@ -45,6 +45,34 @@ Results live in `target/verify/run-*/verification.json`. Read `coverage`,
 checks. Preserve failures and uncertainty; never widen a budget or bless a trace
 to clear a gate. [Performance policy](performance.md#agent-maintenance-contract)
 owns measurement and baseline requirements.
+
+## Verify while work continues
+
+`--snapshot` captures the complete current checkout, including dirty files, new
+unignored files and deletions. It checks for changes during capture and refuses
+an inconsistent copy. Once it prints `Captured snapshot`, editing can continue:
+checks run against the captured files, and changes to those files still invalidate
+verification. Without this flag, checks run in place and require unchanged inputs
+throughout the run.
+
+The report's `snapshot.source` identifies the verified inputs; `live_checkout.matches`
+says whether the live files still matched when verification finished. A mismatch
+does not invalidate snapshot coverage, but the newer checkout remains unverified.
+`live_checkout.changed_paths` lists the differences. Each run saves `snapshot.json`
+with its input manifest and a hashed `source.tar` of the captured files alongside
+the usual logs. The revision is context, not a claim that only committed files ran.
+
+The isolated checkout lives at `target/verify/snapshot/workspace`, with its own
+reusable build cache at `target/verify/snapshot/build`. Its first build is cold;
+later runs reuse that cache without competing for the live checkout's build
+directory. One snapshot run at a time owns this workspace and cache; a second run
+refuses immediately. Historical source archives remain after the next capture
+replaces the workspace. Unmerged index entries and absolute/external source
+symlinks are refused because they cannot form this isolated candidate.
+
+Snapshot mode isolates source and build files, not machine load. Continue editing
+during correctness checks, but keep benchmark sessions free of competing builds
+and other heavy work. Live benchmarks still require their explicit foreground flag.
 
 ## Reuse and retry
 
