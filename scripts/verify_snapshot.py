@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 
 import verify
+import verify_summary
 
 
 def git(root, *args, data=None):
@@ -92,8 +93,7 @@ def live_comparison(captured):
     try:
         current = verify.source_manifest(Path(captured["origin"]))
         expected = captured["inputs"]
-        changed = sorted(name for name in current.keys() | expected.keys()
-                         if current.get(name) != expected.get(name))
+        changed = verify_summary.changed_paths(expected, current)
         return {"matches": not changed, "source": verify.manifest_identity(current), "changed_paths": changed}
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         return {"matches": False, "error": str(error)}
@@ -136,6 +136,10 @@ def run(root, args):
                   else "differs or could not be compared; this result certifies only the snapshot."), flush=True)
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         result.update(status="inconclusive", complete=False, reason=str(error), coverage=[], omitted=list(verify.CHECKS))
+        summary = verify_summary.runner_failure(str(error), root,
+            "python3 scripts/verify.py " + args.scope + " --snapshot" + (" --only " + args.only if args.only else ""))
+        result.setdefault("failures", []).append(summary)
+        verify_summary.display(summary)
         code = 2
     (artifact / "verification.json").write_text(json.dumps(result, indent=2) + "\n")
     print(result["status"] + ": " + str(artifact / "verification.json"), flush=True)

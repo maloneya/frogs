@@ -267,7 +267,7 @@ class Workspace(unittest.TestCase):
                            infrastructure_failure={"reason": "bad archive"})
             return row
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
-             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
              patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(verify.main(["full"]), 2)
@@ -337,6 +337,34 @@ class Workspace(unittest.TestCase):
         self.assertEqual(row["exit_code"], 2)
         self.assertFalse(self.cache.exists())
 
+    def test_completion_reports_failed_scenario_without_reading_log(self):
+        command = [sys.executable, "-c", "print('FAIL  position\\n        player x\\n          expected: 1\\n          actual: 2'); raise SystemExit(1)",
+                   "scenarios/position.ron"]
+        with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+             patch.object(verify, "commands", return_value=command), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(verify.main(["--only", "scenarios-fast"]), 1)
+        result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
+        failure = result["failures"][0]
+        self.assertEqual(failure["category"], "scenario")
+        self.assertEqual(failure["affected_paths"], ["scenarios/position.ron"])
+        self.assertIn("actual: 2", output.getvalue())
+        self.assertIn(failure["retry_command"], output.getvalue())
+        self.assertIn("scenarios-fast", result["omitted"])
+        self.assertEqual(result["coverage"], [])
+
+    def test_completion_reports_changed_paths_once_and_keeps_coverage_empty(self):
+        command = [sys.executable, "-c", "from pathlib import Path; Path('source.rs').write_text('changed')"]
+        with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+             patch.object(verify, "commands", return_value=command), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(verify.main(["--only", "tests"]), 2)
+        result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
+        self.assertEqual(result["source_changes"], ["source.rs"])
+        self.assertEqual(result["failures"][0]["affected_paths"], ["source.rs"])
+        self.assertEqual(output.getvalue().count("[source-change]"), 1)
+        self.assertEqual(result["coverage"], [])
+
     def test_arbitrary_inherited_environment_changes_context(self):
         with patch.object(verify.platform, "platform", return_value="test"), \
              patch.object(verify.subprocess, "check_output", return_value="tool version"), \
@@ -347,7 +375,7 @@ class Workspace(unittest.TestCase):
 
     def test_startup_failure_reports_all_checks_uncertified(self):
         with patch.object(verify, "ROOT", self.root), \
-             patch.object(verify, "source_identity", side_effect=ValueError("broken input")), \
+             patch.object(verify, "source_manifest", side_effect=ValueError("broken input")), \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(verify.main(["full"]), 2)
         result_path = next((self.root / "target/verify").glob("run-*/verification.json"))
@@ -361,7 +389,7 @@ class Workspace(unittest.TestCase):
             return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
                     "evidence": [{"path": "test.log"}]}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
-             patch.object(verify, "source_identity", side_effect=["before", "after"]), \
+             patch.object(verify, "source_manifest", side_effect=[{"source.rs": "before"}, {"source.rs": "after"}]), \
              patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake), \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(verify.main(["full"]), 2)
@@ -376,7 +404,7 @@ class Workspace(unittest.TestCase):
                     "evidence": [{"path": "test.log"}]}
         checkpoint = {"revision": "test", "commits_since_pass": {}, "due": []}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
-             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
              patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
              patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
              contextlib.redirect_stdout(io.StringIO()):
@@ -400,7 +428,7 @@ class Workspace(unittest.TestCase):
         }
         checkpoint = {"revision": "test", "commits_since_pass": {}, "due": list(verify.PERFORMANCE)}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
-             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
              patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
              patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run:
             for scope, expected in selections.items():
@@ -427,7 +455,7 @@ class Workspace(unittest.TestCase):
             return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
                     "evidence": [{"path": "test.log"}]}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
-             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
              patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
              patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
              contextlib.redirect_stdout(io.StringIO()):
@@ -443,7 +471,7 @@ class Workspace(unittest.TestCase):
             return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
                     "evidence": [{"path": "test.log"}]}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
-             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
              patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
              patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
              contextlib.redirect_stdout(io.StringIO()):
@@ -531,7 +559,7 @@ class Workspace(unittest.TestCase):
             return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
                     "evidence": [{"path": "test.log"}]}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
-             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
              patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake), \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(verify.main(["quick"]), 0)
@@ -543,7 +571,7 @@ class Workspace(unittest.TestCase):
         def uncertain(name, *args, **kwargs):
             return {**fake(name), "exit_code": 2}
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
-             patch.object(verify, "source_identity", return_value="same"), \
+             patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
              patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=uncertain), \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(verify.main(["--only", "clippy"]), 2)

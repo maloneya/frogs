@@ -76,6 +76,26 @@ and other heavy work. Live benchmarks still require their explicit foreground fl
 
 ## Reuse and retry
 
+Failed checks print a bounded diagnostic as soon as they finish and save it in
+the report's `failures` array. Each summary identifies the check, supported failure
+category, first useful diagnostic, affected paths when known, evidence location,
+next step and retry command with its working directory. Compiler locations and
+scenario expected/actual values are extracted from the log; benchmark categories
+come from structured measurement evidence. Unknown failures stay `unclassified`.
+Full logs and existing pass/fail, cache and benchmark retry rules remain authoritative.
+
+For source drift, `source_changes` lists changed inputs without their contents.
+Summaries show at most ten paths and 1,200 diagnostic characters; follow the
+evidence link for more. Deferred infrastructure failures retain the original
+diagnostic and are labeled repeated. Snapshot retry commands target the live
+checkout; a focused scenario command checks only the listed cases and does not
+certify a full suite. Live retries still need a reserved foreground session.
+
+Wait on running checks for useful intervals (usually 10–30 seconds). Read the
+completion summary before issuing separate log searches; poll sooner only when
+an interaction requires it. Source/build isolation permits editing during snapshot
+correctness checks, but does not isolate benchmarks from competing machine load.
+
 Successful correctness checks are keyed by all tracked/unignored source and data
 contents, command, toolchain, machine and build settings. New/dirty files count.
 The whole-checkout key deliberately avoids guessed change-impact rules. Entries

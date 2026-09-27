@@ -67,6 +67,13 @@ For agents, return bounded summaries and artifact paths. Wait on running checks 
 
 **Acceptance:** an agent can identify the cause and correct next command from the runner's first completion response. Measure extra diagnostic tool calls per failed check before and after. Implementation effort: small to medium.
 
+**Implemented:** the runner prints bounded failure summaries and stores them in
+`verification.json`, including diagnostic locations, known affected paths and a
+focused retry command. It distinguishes source drift, missing evidence, compiler
+and scenario/test failures, and structured benchmark outcomes; unknown failures
+remain unclassified. Regression tests require useful completion output without a
+separate log read. Session-level savings have not yet been measured.
+
 **4. Preserve the benchmark fixes already shipped**
 
 The corpse change added required telemetry. Older baseline records lacked it. Expensive measurements ran before baseline discovery, and the error path could discard measurements. Later work repeatedly encountered the same incompatibility. This was not evidence of a performance regression.

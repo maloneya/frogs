@@ -21,6 +21,7 @@ import time
 
 sys.dont_write_bytecode = True
 import perf
+import verify_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 CORRECTNESS = ("clippy", "tests", "docs", "companion", "scenarios-fast", "scenarios-extended")
@@ -166,7 +167,7 @@ def cached_record(cache, key, exit_code=0):
         return None
 
 
-def run_check(name, command, source, machine, artifact, cache, fresh=False, root=ROOT, retry=False):
+def run_check(name, command, source, machine, artifact, cache, fresh=False, root=ROOT, retry=False, source_inputs=None):
     performance = name in PERFORMANCE
     inputs = {**machine, "baseline_inputs": perf.evidence_identity()} if performance else machine
     key = cache_key(source, inputs, command, artifact)
@@ -178,6 +179,7 @@ def run_check(name, command, source, machine, artifact, cache, fresh=False, root
     old = None if fresh or name.startswith("performance-") else cached_record(cache, key)
     if old:
         return {**old, "cached": True}
+    before = source_inputs if source_inputs is not None else source_manifest(root)
     log = artifact / (name + ".log")
     started = time.monotonic()
     with log.open("x") as out:
@@ -198,9 +200,11 @@ def run_check(name, command, source, machine, artifact, cache, fresh=False, root
             pass  # Unclassified failures must not suppress future measurements.
     if extra.exists():
         record["evidence"].append({"path": str(extra), "sha256": digest(extra.read_bytes())})
-    if source_identity(root) != source:
+    after = source_manifest(root)
+    if manifest_identity(after) != source:
         record["exit_code"] = 2
         record["reason"] = "inputs changed during check; result cannot certify current source"
+        record["source_changes"] = verify_summary.changed_paths(before, after)
     if record["exit_code"] == 0 and not name.startswith("performance-"):
         cache.mkdir(parents=True, exist_ok=True)
         destination = cache / (key + ".json")
@@ -277,14 +281,17 @@ def main(argv=None):
     base.mkdir(parents=True, exist_ok=True)
     artifact = args.snapshot_result or Path(tempfile.mkdtemp(prefix="run-", dir=base))
     required = list(CHECKS)
-    result = {"schema": 1, "scope": args.scope, "checks": [], "coverage": [], "omitted": required.copy()}
+    result = {"schema": 1, "scope": args.scope, "checks": [], "coverage": [], "omitted": required.copy(), "failures": []}
+    retry_root = ROOT
     try:
-        source = source_identity()
+        before = source_manifest(ROOT)
+        source = manifest_identity(before)
         if args.snapshot_result:
             captured = json.loads((artifact / "snapshot.json").read_text())
             if source != captured["source"] or str(ROOT) != captured["workspace"]:
                 raise ValueError("snapshot no longer matches its captured inputs")
             result["snapshot"] = captured
+            retry_root = Path(captured["origin"])
         machine = context()
         checkpoint = performance_checkpoint(ROOT, base)
         requested = list(PERFORMANCE) if args.performance else (["performance-live"] if args.live else [])
@@ -307,24 +314,26 @@ def main(argv=None):
                   "then run: python3 scripts/verify.py --only performance-live", flush=True)
         for name in selected:
             print("Checking " + name + "…", flush=True)
-            row = run_check(name, commands(name, artifact), source, machine, artifact, base / "cache", args.fresh,
-                            retry=name in requested or args.only in PERFORMANCE)
+            row = run_check(name, commands(name, artifact, root=ROOT), source, machine, artifact, base / "cache", args.fresh,
+                            root=ROOT, retry=name in requested or args.only in PERFORMANCE, source_inputs=before)
             result["checks"].append(row)
             state = "deferred infrastructure failure" if row.get("deferred") else "cached pass" if row["cached"] else "pass" if row["exit_code"] == 0 else "inconclusive" if row["exit_code"] == 2 else "failed"
             print(f"  {state}: {row['seconds']:.2f}s; {row['evidence'][0]['path']}", flush=True)
-            if row.get("deferred"):
-                print("  Unchanged failure: " + row["infrastructure_failure"]["reason"] +
-                      "; retry explicitly with --only " + name, flush=True)
+            if row["exit_code"] != 0:
+                summary = verify_summary.failure(row, retry_root, checked_root=ROOT)
+                result["failures"].append(summary)
+                verify_summary.display(summary)
             if row.get("reason"):
-                print("  " + row["reason"], flush=True)
                 break
         result["coverage"] = [row["name"] for row in result["checks"] if row["exit_code"] == 0]
         result["omitted"] = [name for name in required if name not in result["coverage"]]
         codes = [row["exit_code"] for row in result["checks"]]
         code = 1 if any(c not in (0, 2) for c in codes) else 2 if 2 in codes else 0
-        if source_identity() != source:
+        after = source_manifest(ROOT)
+        if manifest_identity(after) != source:
             code = 2
             result["reason"] = "inputs changed during verification"
+            result["source_changes"] = verify_summary.changed_paths(before, after)
             result["coverage"] = []
             result["omitted"] = required.copy()
         result["complete"] = code == 0 and not result["omitted"]
@@ -333,6 +342,13 @@ def main(argv=None):
         result.update(status="inconclusive", complete=False, reason=str(error))
         code = 2
     path = artifact / "verification.json"
+    if result.get("reason") and not any(
+            failure["category"] == "source-change" and failure["affected_paths"] == result.get("source_changes")
+            for failure in result["failures"]):
+        summary = verify_summary.runner_failure(result["reason"], retry_root,
+            "python3 scripts/verify.py " + args.scope + " --snapshot", result.get("source_changes", []))
+        result["failures"].append(summary)
+        verify_summary.display(summary)
     path.write_text(json.dumps(result, indent=2) + "\n")
     print(result["status"] + ": " + str(path))
     if result["omitted"]:
