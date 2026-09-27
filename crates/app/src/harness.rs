@@ -24,7 +24,7 @@
 //! ```
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -309,11 +309,7 @@ pub(crate) fn start() -> Option<Receiver<Request>> {
     let path = std::env::var_os("ARPG_HARNESS")?;
     let path = PathBuf::from(path);
 
-    // A socket file outlives the process that made it, so a previous run's
-    // corpse would make bind fail with EADDRINUSE.
-    let _ = std::fs::remove_file(&path);
-
-    let listener = match UnixListener::bind(&path) {
+    let listener = match crate::local_socket::bind(&path) {
         Ok(l) => l,
         Err(e) => {
             log::error!("harness: cannot bind {}: {e}", path.display());

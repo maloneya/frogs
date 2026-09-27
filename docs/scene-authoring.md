@@ -47,6 +47,11 @@ returned by `open` or the previous `save`. Keep `editor.path` and `editor.revisi
 separately while editing: only `open` and `save` return disk identity. Revisions
 cover file bytes, including comments. On a conflict, save the draft to a new path
 or reopen and reapply the intended edits. Refused saves preserve existing files.
+Saves through this API take an OS directory lock through revision checking and
+replacement, so simultaneous agent/editor saves cannot both replace the same
+revision. The lock releases on process exit and creates no lock files. External
+editors do not participate; their changes are detected by the existing byte
+checks, which cannot exclude an external write racing the final replacement.
 
 ## Example: create, name, save
 

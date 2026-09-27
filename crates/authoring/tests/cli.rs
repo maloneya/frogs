@@ -14,6 +14,52 @@ fn call(request: Value, success: bool) -> Value {
 }
 
 #[test]
+fn concurrent_scene_saves_accept_exactly_one_writer_per_revision() {
+    let directory = std::env::temp_dir().join(format!("arpg-concurrent-save-{}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("scene.ron");
+    let new = call(json!({"action":"new"}), true);
+    let saved = call(json!({"action":"save", "document":new["editor"]["document"], "path":path}), true);
+    let before = std::fs::read(&path).unwrap();
+
+    // Hold the owner's lock while separate CLI processes submit the same
+    // revision. None may replace the file before the lock is released.
+    let lock = std::fs::File::open(&directory).unwrap();
+    lock.lock().unwrap();
+    let mut writers = Vec::new();
+    for index in 0..8 {
+        let name = format!("Writer {index}");
+        let mut document = new["editor"]["document"].clone();
+        document["scene"]["engine"]["name"] = json!(name);
+        let request = json!({"action":"save", "document":document, "path":path,
+            "revision":saved["editor"]["revision"]});
+        let mut child = Command::new(env!("CARGO_BIN_EXE_arpg-author"))
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(request.to_string().as_bytes()).unwrap();
+        writers.push((name, child));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let all_waiting = writers.iter_mut().all(|(_, child)| child.try_wait().unwrap().is_none());
+    let while_locked = std::fs::read(&path).unwrap();
+    drop(lock);
+
+    let mut accepted = Vec::new();
+    for (name, child) in writers {
+        let output = child.wait_with_output().unwrap();
+        let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["ok"], output.status.success());
+        if output.status.success() { accepted.push(name); }
+        else { assert!(response["error"].as_str().unwrap().contains("changed or already exists")); }
+    }
+    assert!(all_waiting, "scene saves bypassed the directory lock");
+    assert_eq!(while_locked, before, "a waiting save changed the file");
+    assert_eq!(accepted.len(), 1, "only one writer may consume a disk revision");
+    assert_eq!(call(json!({"action":"open", "path":path}), true)["editor"]["name"], accepted[0]);
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1, "saving leaves no lock or temporary files");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn agent_and_visual_edits_round_trip_into_the_same_playable_encounter() {
     let path = std::env::temp_dir().join(format!("arpg-cli-parity-{}.ron", std::process::id()));
     let _ = std::fs::remove_file(&path);

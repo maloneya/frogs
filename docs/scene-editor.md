@@ -123,8 +123,9 @@ player-start tool, arbitrary asset browser, terrain sculpting, audio placement
 or live-world capture. Assets follow the separate [Blender workflow](../.claude/skills/author-blender-asset/SKILL.md).
 
 Saving canonicalizes RON, preserves leading line comments and drops inline
-comments. Existing files require the revision read on open: an external edit
-causes refusal. Preserve a draft with **Save as…** to a new path before reopening
+comments. Existing files require the revision read on open: a detected external
+edit causes refusal. The [shared save API](scene-authoring.md) serializes agent
+and companion saves. Preserve a draft with **Save as…** to a new path before reopening
 a changed file. **Save & play** saves the validated file, then sends a load request.
 Validation, revision or write failure prevents that request. A failed load
 preserves the running game and reports that the file was saved.

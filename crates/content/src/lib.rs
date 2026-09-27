@@ -230,9 +230,18 @@ fn text_revision(text: &str) -> String {
 /// Validate and atomically save a complete scene. A missing revision means a
 /// new file; existing files require the revision obtained when opening them.
 /// Leading line comments survive canonical serialization of the scene data.
+/// Saves in the same directory serialize across processes. The advisory lock
+/// protects cooperating scene writers; external editors do not take this lock.
 pub fn save_scene_document(path: &Path, scene: &SceneDocument, revision: Option<&str>) -> Result<String, String> {
     use std::io::Write;
     scene.validate()?;
+    let path = std::path::absolute(path).map_err(|error| error.to_string())?;
+    let path = path.as_path();
+    // Lock the stable directory inode, not the file replaced by rename. Closing
+    // this handle (including on error/process exit) releases the macOS lock.
+    let directory = std::fs::File::open(path.parent().ok_or("Scene path needs a parent directory")?)
+        .map_err(|error| error.to_string())?;
+    directory.lock().map_err(|error| format!("Cannot lock scene directory: {error}"))?;
     let previous = match std::fs::read_to_string(path) {
         Ok(text) => {
             if revision != Some(text_revision(&text).as_str()) {

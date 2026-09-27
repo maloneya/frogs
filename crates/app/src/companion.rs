@@ -1,7 +1,7 @@
 //! Local companion transport. This thread decodes messages, never touches Game.
 use arpg_sim::TuningField;
 use serde::Deserialize;
-use std::{io::{BufRead, BufReader, Read, Write}, os::unix::{fs::{FileTypeExt, MetadataExt, PermissionsExt}, net::{UnixListener, UnixStream}},
+use std::{io::{BufRead, BufReader, Read, Write}, os::unix::{fs::MetadataExt, net::UnixStream},
     path::PathBuf, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{Receiver, Sender, SyncSender, channel, sync_channel}}, time::{Duration, Instant}};
 
 #[derive(Clone, Debug)]
@@ -82,19 +82,7 @@ pub(crate) struct Server {
 impl Server {
     pub(crate) fn start(path: PathBuf) -> Result<Self, String> {
         let path = std::path::absolute(path).map_err(|e| e.to_string())?;
-        if let Ok(meta) = std::fs::symlink_metadata(&path) {
-            // Never unlink a running peer, regular file or symlink. Only a refused
-            // connection to an actual socket proves a stale socket can be replaced.
-            if !meta.file_type().is_socket() { return Err(format!("{} is not a socket", path.display())); }
-            match UnixStream::connect(&path) {
-                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-                    std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-                }
-                _ => return Err(format!("{} is already in use", path.display())),
-            }
-        }
-        let listener = UnixListener::bind(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+        let listener = crate::local_socket::bind(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let inode = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?.ino();
         let (tx, requests) = sync_channel(1);
@@ -149,6 +137,7 @@ fn serve(mut stream: UnixStream, tx: &SyncSender<Request>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::{fs::PermissionsExt, net::UnixListener};
 
     #[test]
     fn strict_wire_commands_reject_unknown_duplicate_and_nonfinite_data() {

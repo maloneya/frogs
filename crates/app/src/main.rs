@@ -15,6 +15,7 @@ mod harness;
 mod hud;
 mod enemy_feedback;
 mod input;
+mod local_socket;
 mod presentation;
 mod torch;
 mod time;
