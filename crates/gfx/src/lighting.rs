@@ -16,15 +16,15 @@ impl LightUniform {
         assert!(lights.len() <= MAX_POINT_LIGHTS, "too many point lights");
         let mut uniform = Self {
             count: [lights.len() as u32, 0, 0, 0],
-            ambient: environment.ambient_colour().extend(environment.ambient_intensity()).to_array(),
-            directional: environment.directional_colour().extend(environment.directional_intensity()).to_array(),
+            ambient: environment.ambient_colour().to_vec3().extend(environment.ambient_intensity()).to_array(),
+            directional: environment.directional_colour().to_vec3().extend(environment.directional_intensity()).to_array(),
             direction: environment.direction().normalize().extend(0.0).to_array(),
             lights: [[[0.0; 4]; 2]; MAX_POINT_LIGHTS],
         };
         for (target, light) in uniform.lights.iter_mut().zip(lights) {
             *target = [
                 light.position().extend(light.range()).to_array(),
-                light.colour().extend(light.intensity()).to_array(),
+                light.colour().to_vec3().extend(light.intensity()).to_array(),
             ];
         }
         uniform

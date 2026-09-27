@@ -1,5 +1,7 @@
 //! Shared GPU representation of the base-colour material both asset paths use.
 
+use arpg_core::LinearRgba;
+
 use wgpu::util::DeviceExt as _;
 
 #[derive(Clone)]
@@ -97,10 +99,10 @@ pub(crate) struct Material {
 
 impl Material {
     pub(crate) fn new(device: &wgpu::Device, layout: &MaterialLayout,
-        texture: &MaterialTexture, base_color_factor: [f32; 4], label: &'static str) -> Self {
+        texture: &MaterialTexture, base_color_factor: LinearRgba, label: &'static str) -> Self {
         let factor = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label),
-            contents: bytemuck::cast_slice(&[base_color_factor]),
+            contents: bytemuck::cast_slice(&base_color_factor.to_array()),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         Self {

@@ -73,9 +73,5 @@ Walls do not occlude lighting, and seekers have no route planning. They can pile
 against a wall until the player goes around it.
 
 Open `walls.ron` in Scenes and **Save & play**. Walk toward the long wall,
-slide along it, try all three attacks, and go around its right end. The nearby
-enemy behind it should remain shielded. The rotated wall tests diagonal sliding.
-The same file is exercised by the wall scenarios in `scenarios/`; geometry,
-scene lifetime, refusal, crowd pressure and attack controls also run through
-Game tests. Automated checks establish physical rules; crowd feel and readability
-remain playtest judgments.
+slide along it, try all three attacks, and go around its right end. The enemy
+behind it should remain shielded. Try diagonal sliding at the rotated wall.

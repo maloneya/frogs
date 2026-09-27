@@ -3,30 +3,18 @@ use glam::{Mat4, Vec3};
 
 use arpg_core::{damp_vec3, MoveDir};
 
-/// A true isometric camera.
-///
-/// "Isometric" is a specific claim, not a vibe: an orthographic projection at
-/// 45° yaw and an elevation of `atan(1/√2)` ≈ 35.264°. At exactly that angle a
-/// unit cube projects to a regular hexagon and its three visible faces have
-/// equal area — hence *iso*-metric, equal measure. Any other elevation is some
-/// other axonometric projection.
+/// Orthographic camera at 45° yaw and atan(1/√2) elevation.
 pub struct OrthoCamera {
-    /// The point being looked at — *not* the player's position, but a value
-    /// chasing it. [`OrthoCamera::follow`] is the only writer, so the smoothing
-    /// cannot be bypassed by something that just wants to set the target.
+    /// Smoothed ground focus.
     target: Vec3,
-    /// The current look-ahead offset, itself smoothed. Held as state rather
-    /// than recomputed because easing it is the whole point — see `follow`.
+    /// Smoothed look-ahead offset.
     lead: Vec3,
     /// Half-height of the view volume, in world units. Smaller = zoomed in.
     zoom: f32,
     aspect: f32,
 }
 
-/// Zoom bounds, kept beside the field they constrain rather than in the input
-/// handler that happens to drive it today. `zoom` reaching zero collapses the
-/// view volume and produces a degenerate projection matrix — a black screen
-/// with no error anywhere.
+/// View half-height bounds; zero would make the projection degenerate.
 const MIN_ZOOM: f32 = 2.0;
 const MAX_ZOOM: f32 = 400.0;
 const _: () = assert!(MIN_ZOOM > 0.0, "a zoom of zero collapses the view volume");
@@ -45,48 +33,21 @@ fn aspect_of(width: u32, height: u32) -> f32 {
 const DISTANCE: f32 = 250.0;
 const _: () = assert!(DISTANCE > 0.0);
 
-/// Seconds for the camera to close half the remaining distance to the player.
-///
-/// The single biggest feel knob in this file. Zero would pin the camera to the
-/// character, which reads as *the world sliding around a stationary sprite*
-/// rather than as movement — the character never budges within the frame, and
-/// every jitter in its position becomes whole-screen motion. Too large and the
-/// player outruns the view. Around an eighth of a second leaves the character
-/// visibly leading inside the frame while never threatening to escape it.
+/// Follow half-life in seconds; balances visible player movement against camera lag.
 const FOLLOW_HALF_LIFE: f32 = 0.12;
 
-// A non-positive half-life is the silent catastrophe: the exponent inverts, so
-// the error *grows* by a constant factor every frame — measured at 1.101x per
-// frame at 60Hz — diverging to infinity and then to NaN, and a NaN
-// view-projection matrix renders a black screen with no error anywhere.
 const _: () = assert!(FOLLOW_HALF_LIFE > 0.0, "a non-positive half-life diverges to NaN");
 
-/// The same, for the look-ahead offset, and deliberately three times slower.
-///
-/// Look-ahead's failure mode is reversal: flick from right to left and a
-/// rigid offset teleports the camera two lead-lengths across the screen while
-/// the character has barely moved. Smoothing the offset on its own, slower
-/// clock turns that whip into an ease.
+/// Slower look-ahead easing prevents a camera jump when direction reverses.
 const LEAD_HALF_LIFE: f32 = 0.35;
 
-// Not merely positive: *slower* than the follow. That ordering is the whole
-// reason reversing direction eases instead of whipping, so swapping the two
-// numbers would quietly reintroduce the bug they were chosen to prevent.
 const _: () = assert!(LEAD_HALF_LIFE > 0.0);
 const _: () = assert!(
     LEAD_HALF_LIFE > FOLLOW_HALF_LIFE,
     "the lead must ease slower than the follow, or reversing whips the camera"
 );
 
-/// How far in front of the character the camera looks, in world units.
-///
-/// This is what separates an ARPG camera from a generic follow cam: you get
-/// more of the screen in the direction you are heading, so what you are walking
-/// into is visible before it reaches you. The offset is in *world* units, not
-/// screen ones, so it reveals the same amount of world in every direction —
-/// which is the axis threats live on. On screen the vertical lead therefore
-/// looks shorter than the horizontal one, foreshortened by sin(35.26°), and
-/// that is correct rather than a bug to compensate for.
+/// Look-ahead distance in world metres; projection foreshortens vertical screen lead.
 const LOOK_AHEAD: f32 = 4.0;
 const _: () = assert!(LOOK_AHEAD >= 0.0);
 
@@ -101,21 +62,13 @@ impl OrthoCamera {
         }
     }
 
-    /// Cuts straight to `focus`, with no smoothing and no lead.
-    ///
-    /// For spawning and teleporting — anywhere the character *discontinuously*
-    /// changes position. Without it the camera eases in from wherever it was,
-    /// so a player spawning away from the origin gets an unrequested swoop
-    /// across the world, and a teleport gets a long slide through everything in
-    /// between rather than a cut.
+    /// Cuts to `focus` without smoothing or lead, for spawning and teleporting.
     pub fn snap_to(&mut self, focus: Vec3) {
         self.target = Vec3::new(focus.x, 0.0, focus.z);
         self.lead = Vec3::ZERO;
     }
 
-    /// The point currently being looked at — the *smoothed* focus, which lags
-    /// the character on purpose. Read-only; `follow` and `snap_to` remain the
-    /// only writers.
+    /// Current smoothed focus.
     pub fn target(&self) -> Vec3 {
         self.target
     }
@@ -123,23 +76,9 @@ impl OrthoCamera {
     /// Vertical extent of the orthographic view in world units, for observations.
     pub fn view_height(&self) -> f32 { 2.0 * self.zoom }
 
-    /// Chases `focus`, leading it in the direction of `heading`. Call once per
-    /// rendered frame.
-    ///
-    /// Per *frame*, not per simulation tick, and that is deliberate: where the
-    /// camera points is a presentation decision, not simulation state. Nothing
-    /// in simulation reads the camera; app uses it to resolve device intent.
-    /// Smoothing at display rate keeps motion smooth at any refresh rate. When
-    /// the fixed timestep lands, this call stays exactly where it is.
-    ///
-    /// Call it *after* stepping the world. Following last tick's position adds
-    /// a frame of lag on top of the smoothing that is already there on purpose.
+    /// Follows focus with look-ahead. Call once per rendered frame after stepping Game.
     pub fn follow(&mut self, focus: Vec3, heading: MoveDir, dt: f32) {
-        // Track the ground position only. The character's height is not the
-        // camera's business: once anything can jump, step up a stair or be
-        // knocked into the air, tracking Y makes the whole view bob with it —
-        // and a camera that moves when the player did not is nauseating in a
-        // way a lagging one never is.
+        // Ignore height so vertical character motion does not bob the camera.
         let focus = Vec3::new(focus.x, 0.0, focus.z);
 
         self.lead = damp_vec3(self.lead, heading.as_vec3() * LOOK_AHEAD, LEAD_HALF_LIFE, dt);
@@ -164,20 +103,7 @@ impl OrthoCamera {
         self.target + dir * DISTANCE
     }
 
-    /// The screen's right and up directions, in world space, flattened onto the
-    /// ground plane. Both unit length and perpendicular.
-    ///
-    /// Movement input arrives in *screen* space, because that is where the
-    /// player experiences it: "up" means up on the monitor. Under a 45° yaw
-    /// that is not any world axis — it is the diagonal `(-X, -Z)` — so treating
-    /// "up" as world `+Z` sends the character off at 45° to where the player
-    /// aimed. Every isometric game has to answer this, and answering it wrong
-    /// is why some of them feel like driving on ice.
-    ///
-    /// Deriving the basis from the camera's own orientation rather than writing
-    /// the diagonal down as a constant is what makes it stay correct the day
-    /// the camera learns to rotate: the mapping moves with the view, for free,
-    /// and nothing downstream has to be told.
+    /// Screen right/up projected onto the ground as perpendicular unit directions.
     pub fn ground_basis(&self) -> (Vec3, Vec3) {
         let forward = (self.target - self.eye()).normalize();
 
@@ -216,14 +142,7 @@ impl OrthoCamera {
         let half_h = self.zoom;
         let half_w = self.zoom * self.aspect;
 
-        // glam names projections by the NDC convention they target, not just by
-        // handedness. `directx` is the wgpu one: Y-up with Z in [0, 1]. The
-        // `opengl` variant maps Z to [-1, 1] and would silently squash the whole
-        // scene into the near half of the depth buffer; `vulkan` flips Y and
-        // would render the world upside down.
-        //
-        // Orthographic depth is *linear*, unlike perspective, so a generous
-        // near/far range costs nothing in precision.
+        // wgpu uses Y-up, Z in [0, 1], matching glam’s DirectX projection convention.
         let proj = directx::orthographic(-half_w, half_w, -half_h, half_h, 0.1, DISTANCE * 2.0);
 
         proj * view
@@ -388,14 +307,6 @@ mod tests {
         assert!(camera.view_proj().is_finite());
     }
 
-    /// **The property the whole design exists for.** One coarse step and many
-    /// fine steps covering the same wall-clock time must land in the same
-    /// place, or the camera is tighter on a faster machine and the game feels
-    /// different depending on the hardware — and, here, on whether `V` has been
-    /// pressed.
-    ///
-    /// With `2^(-dt/h)` the two agree to floating-point noise. The naive
-    /// per-frame lerp this replaces would be off by a factor of thousands.
     #[test]
     fn following_is_frame_rate_independent() {
         let focus = Vec3::new(30.0, 0.0, -12.0);

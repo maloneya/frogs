@@ -1,17 +1,5 @@
-//! What a device is asking for, in **screen** terms.
-//!
-//! Nothing here names a key, a mouse button or a gamepad axis, for the same
-//! reason nothing in `arpg-gfx` names an enemy. The binding from a physical
-//! input to an [`Action`] lives in `arpg` (app), the only crate that talks to
-//! winit. The simulation never sees this module's types at all — it sees
-//! [`crate::Intent`], which is what these become once the camera has turned
-//! "toward the top of the screen" into a world direction.
-//!
-//! That indirection is the entire point of an action layer, and it pays for
-//! itself three times over: rebindable keys, a gamepad that pushes the same
-//! actions from a different device, and a replay or an AI that synthesises
-//! actions with no device behind them at all. None of those need the simulation
-//! to change.
+//! Device-independent screen-space actions. The camera maps these to
+//! world-space [`crate::Intent`] before simulation.
 
 use glam::Vec2;
 
@@ -80,19 +68,8 @@ impl ActionMask {
     }
 }
 
-/// Accumulates device input between samples.
-///
-/// The held set is *replaced* on every device event, while the two edge sets
-/// **latch** until [`InputState::sample`] takes them. That asymmetry is
-/// deliberate and it is the whole reason this type exists rather than a bare
-/// `ActionMask`.
-///
-/// Recomputing edges at sample time instead — comparing this frame's held set
-/// against last frame's — loses any press that begins *and ends* between two
-/// samples. At 60Hz that is a 16ms window, which is comfortably inside a human
-/// tap, so the input the player is most sure they gave is exactly the one
-/// dropped. Latching is also the shape input buffering wants later: a buffer is
-/// this, with a timestamp and a longer expiry.
+/// Accumulates input between samples. Held actions are replaced on each event;
+/// press/release edges latch until sampling so a short tap is not lost.
 #[derive(Default)]
 pub struct InputState {
     held: ActionMask,
@@ -124,18 +101,8 @@ impl InputState {
         self.held
     }
 
-    /// Takes one sample of intent and clears the latched edges.
-    ///
-    /// Clearing happens *here*, in the only reader, for the reason the instance
-    /// buffer resets inside `sink()`: "remember to clear the edges afterwards"
-    /// is a rule that gets forgotten, and the symptom — one keypress firing an
-    /// attack every frame until the next one — points nowhere near the cause.
-    ///
-    /// **Call this once per simulation tick, not once per frame.** Under a
-    /// fixed timestep a frame runs zero, one or several ticks; sampling per
-    /// frame means a frame that runs no ticks consumes an edge and throws it
-    /// away, and uncapped that is most frames. Sampling per tick makes a press
-    /// wait for a tick to consume it, and gives it to exactly one.
+    /// Samples and clears latched edges once per simulation tick, not per frame.
+    /// Otherwise a frame with no tick could consume and discard a press.
     pub fn sample(&mut self) -> Actions {
         let actions =
             Actions { held: self.held, pressed: self.pressed, released: self.released };
@@ -234,16 +201,7 @@ mod tests {
         assert!(!actions.held(Action::MoveUp), "the key is no longer down");
     }
 
-    /// **A frame that runs no ticks must not eat a keypress.**
-    ///
-    /// Under a fixed timestep a frame buys zero, one or several ticks, and
-    /// uncapped it is usually zero. `sample` clears the latched edges, so
-    /// calling it once per *frame* would consume a press on a frame that
-    /// simulated nothing and throw it away. Presentation therefore reads
-    /// `held`, which consumes nothing, and only a tick calls `sample`.
-    ///
-    /// The symptom this prevents is "the attack sometimes does not come out",
-    /// which points nowhere near the frame loop.
+    /// Presentation reads held state without consuming the next tick’s latched press.
     #[test]
     fn reading_held_state_never_consumes_an_edge() {
         let mut input = InputState::default();

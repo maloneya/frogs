@@ -1,28 +1,4 @@
-//! Whether two bodies are touching, and along what line.
-//!
-//! **A query, not a pass.** It changes nothing and decides nothing; it reports
-//! a geometric fact and hands it to whoever asked. That separation is the whole
-//! point of the module existing, because the *response* to a touch is not one
-//! thing:
-//!
-//! - separation pushes the pair apart along the normal,
-//! - an attack's hitbox records a hit and requests a gameplay impulse,
-//! - a trigger volume emits an event and does not even look at the depth,
-//! - solid collision response exchanges momentum along the normal.
-//!
-//! Those are four different passes over the same question. Fuse the question
-//! into any one of its answers and the others cannot *reuse* touching, only
-//! re-implement it — and the second implementation is where the two quietly
-//! stop agreeing about what "overlapping" means.
-//!
-//! ## Discs
-//!
-//! Every body is a disc, and the argument for that is in `crate::ENEMY_RADIUS`:
-//! rotation-invariance, one unambiguous normal, and a test that is a squared
-//! distance compare with no `sqrt` until an overlap is confirmed. What matters
-//! here is that a disc's contact is *complete* — a normal and a depth say
-//! everything there is to know about the overlap, so nothing downstream needs
-//! to re-derive geometry from the positions.
+//! Disc-contact geometry shared by collision response and attack queries.
 
 use glam::Vec2;
 
@@ -32,47 +8,17 @@ use glam::Vec2;
 const COINCIDENT_SQ: f32 = 1e-12;
 const _: () = assert!(COINCIDENT_SQ > 0.0);
 
-/// How deeply two bodies must overlap before it counts as touching.
-///
-/// **Not a fudge factor — the fix for a real defect, found by a scenario.**
-/// Separation leaves a pair at *exactly* the contact distance, and "exactly" is
-/// not a thing `f32` has: the result lands within an ulp either side. Half the
-/// time it lands a hair under, the pair reports contact again on the next tick,
-/// a correction of about 1e-7 is applied, and this repeats forever.
-///
-/// The symptom is not a wrong position — the bodies are visually settled and
-/// stable to four decimal places. It is that the *contact* never goes away: a
-/// trace event every tick for a crowd that is standing still, `crowd_contacts`
-/// that never reaches zero, and a per-tick cost that never subsides. A settled
-/// pack of a thousand bodies would churn permanently and say so in the trace,
-/// drowning the rare events the ring buffer exists to keep.
-///
-/// So contact needs a definition that is stable under the arithmetic that
-/// produces it, and that belongs to the *question* rather than to any one
-/// answer: it is a fact about asking, not about pushing. Box2D calls its
-/// version `linearSlop` and reaches for it for the same reason.
-///
-/// The value has to clear the noise and stay invisible: it is roughly a hundred
-/// times the `f32` error it must absorb at the arena's far corner, and a
-/// five-hundredth of a body's diameter, which no pixel can show.
+/// Minimum overlap counted as contact, above rounding noise to let settled crowds rest.
 const SLOP: f32 = 1e-3;
 
-/// The floor is **derived from the arena**, not written down. An `f32` ulp
-/// grows with magnitude, so the noise this has to clear is a property of how far
-/// from the origin a body can get — and a hand-copied `1e-5` would keep passing
-/// after someone enlarged the world, quietly returning the per-tick churn.
+/// Scale the noise floor with arena size; f32 precision decreases away from the origin.
 const _: () = assert!(
     SLOP > crate::ARENA_HALF * f32::EPSILON * 16.0,
     "below the f32 noise floor at the arena's far corner, so settled contacts churn"
 );
 const _: () = assert!(SLOP < 0.01, "deep enough to see bodies resting inside one another");
 
-/// Two bodies overlapping, described completely.
-///
-/// Carries no identity — not which bodies, not what kind. It is a fact about a
-/// geometric relationship, which is what lets the same type serve a crowd
-/// solver, a sword swing and a pressure plate. The caller already knows who it
-/// asked about; putting that back in the answer would be a second copy of it.
+/// Contact normal and penetration depth, independent of entity identity.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Contact {
     /// Unit vector pointing from the first body toward the second.
@@ -82,14 +28,7 @@ pub(crate) struct Contact {
 }
 
 impl Contact {
-    /// Unit vector pointing from the first body toward the second.
-    ///
-    /// **Always unit length**, including when the two are exactly coincident —
-    /// see [`escape_direction`]. A consumer may scale by it without checking,
-    /// which is the whole reason the field is private: a `Contact` assembled by
-    /// hand from an un-normalised difference would make every response that
-    /// multiplies by it silently wrong by a factor nobody can see. Same
-    /// argument, and the same shape, as `MoveDir`.
+    /// Unit vector from the first body toward the second, including coincident bodies.
     pub(crate) fn normal(self) -> Vec2 {
         self.normal
     }
@@ -100,24 +39,8 @@ impl Contact {
     }
 }
 
-/// Reports whether two bodies overlap, and along what line.
-///
-/// `contact_distance` is the **sum** of the two radii — how far apart their
-/// centres are when they are exactly touching. Summed by the caller rather than
-/// taking two radii, because it is a loop invariant everywhere this is used and
-/// recomputing it per body is arithmetic in the hot path for no reason.
-///
-/// `tiebreak` picks the escape direction when the two are exactly coincident.
-/// It only has to be *stable* — see [`escape_direction`] for why it must not be
-/// random, and why neighbouring values must not agree.
-///
-/// The `sqrt` happens only once an overlap is confirmed, which is what keeps
-/// the negative case — overwhelmingly the common one — down to a multiply and a
-/// compare.
-///
-/// Bodies overlapping by less than [`SLOP`] are reported as **not** touching.
-/// That is what makes a settled crowd actually settle rather than churning on
-/// the float boundary forever; the constant carries the full argument.
+/// Tests overlap beyond [`SLOP`]. `contact_distance` is the sum of radii.
+/// `tiebreak` selects a stable escape direction for coincident centres.
 pub(crate) fn between(a: Vec2, b: Vec2, contact_distance: f32, tiebreak: usize) -> Option<Contact> {
     let delta = b - a;
     let gap_sq = delta.length_squared();
@@ -142,17 +65,7 @@ pub(crate) fn between(a: Vec2, b: Vec2, contact_distance: f32, tiebreak: usize) 
     Some(Contact { normal, depth: contact_distance - gap })
 }
 
-/// A separation direction for two bodies occupying exactly the same point.
-///
-/// It has to come from somewhere, and it has to be the *same* somewhere every
-/// run: a random direction would make two identical simulations diverge, which
-/// is precisely what the determinism the fixed timestep is for would be
-/// claiming. Deriving it from the pair's index costs nothing and is exactly
-/// reproducible.
-///
-/// Golden-angle steps rather than a fixed direction, so a clump of coincident
-/// bodies fans out instead of every one of them being pushed the same way and
-/// re-stacking on the next tick.
+/// Stable golden-angle escape direction so coincident pairs spread instead of restacking.
 fn escape_direction(tiebreak: usize) -> Vec2 {
     let angle = tiebreak as f32 * crate::angle::GOLDEN_ANGLE;
     Vec2::new(angle.cos(), angle.sin())
@@ -199,14 +112,7 @@ mod tests {
         assert!(between(Vec2::ZERO, Vec2::new(1.0, 0.0), 1.0, 0).is_none());
     }
 
-    /// **The regression the slop exists for.** A pair the solver has just
-    /// separated sits at the contact distance plus or minus an ulp, and the
-    /// under side must not report contact — or the pair churns forever, one
-    /// negligible correction and one trace event per tick, for a crowd that is
-    /// standing still.
-    ///
-    /// Checked at arena-scale coordinates rather than at the origin, because
-    /// that is where an `f32` ulp is largest and the problem is worst.
+    /// Check rounding noise at arena-scale coordinates, where f32 precision is poorest.
     #[test]
     fn a_pair_resting_a_whisker_inside_touching_is_not_a_contact() {
         let a = Vec2::new(90.0, -90.0);

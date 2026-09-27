@@ -304,13 +304,8 @@ impl crate::World {
         Ok(world)
     }
 
-    /// Installs an entire disposable scene between ticks. A successful return
-    /// means ready now; no hidden ticks run and there are no partial loads.
-    /// Existing accepted spawns retain their capacity reservation.
-    ///
-    /// Like `place`, this needs `&mut World`, which no simulation pass receives.
-    /// Future streaming decisions must request a structural boundary operation,
-    /// rather than obtaining this authority inside the schedule.
+    /// Installs a complete scene between ticks without advancing time.
+    /// Refusal preserves state and accepted spawn-capacity reservations.
     pub fn load_scene(&mut self, scene: &Scene) -> Result<SceneId, SceneError> {
         let count = scene.validate()?;
         let available =

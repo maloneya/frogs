@@ -1,27 +1,6 @@
-//! A control socket for driving the game from outside, for testing.
-//!
-//! Automating a game through the OS input stack — synthetic keystrokes plus a
-//! desktop screenshot tool — turns out to be unusable for evidence. It needs the
-//! window frontmost, the display awake, and accessibility permission, and when
-//! any of those is not true it does not fail: the keys go to whatever *is*
-//! focused and the screenshot comes back black. Both look exactly like the game
-//! being broken — and a stray keypress landing in another window can change
-//! the game's state while apparently testing something else.
-//!
-//! A socket has none of those dependencies. It works on an unfocused window
-//! behind other windows on a sleeping display, it reports its own failures, and
-//! every command replies so the caller knows when the effect has actually
-//! landed rather than guessing with a sleep.
-//!
-//! Off unless `ARPG_HARNESS` names a socket path, so an ordinary run has no
-//! listener, no thread, and no way in.
-//!
-//! ```text
-//! ARPG_HARNESS=/tmp/arpg.sock cargo run --release
-//! echo 'hold d 400' | nc -U /tmp/arpg.sock
-//! echo 'shot /tmp/f.png' | nc -U /tmp/arpg.sock
-//! echo state | nc -U /tmp/arpg.sock
-//! ```
+//! Test control socket, enabled only by `ARPG_HARNESS=<socket path>`.
+//! Commands use the game's input bindings and reply after application.
+//! Capture still depends on surface presentation; see the playtest guide.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;

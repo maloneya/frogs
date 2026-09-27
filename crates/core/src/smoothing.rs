@@ -1,50 +1,16 @@
-//! Frame-rate independent smoothing.
-//!
-//! This lives in `core` — reachable from both halves — for a reason that is
-//! about people rather than architecture. The wrong way to smooth a value is
-//! one of the most familiar lines in games programming:
-//!
-//! ```text
-//! pos = lerp(pos, target, 0.1);   // once a frame
-//! ```
-//!
-//! Anyone reaching for smoothing will write that from memory unless something
-//! better is already in scope. So the correct primitive is put where it will be
-//! found: the next thing that needs easing — hitstop decay, knockback falloff,
-//! a health bar, a camera — should import [`damp`] rather than reinvent the
-//! bug. Making the right thing the easy thing beats forbidding the wrong one.
+//! Elapsed-time half-life smoothing.
 
 use glam::Vec3;
 
-/// Moves `from` half of the remaining distance to `to` every `half_life`
-/// seconds, **no matter how often it is called**.
-///
-/// Why the familiar version is wrong: `lerp(from, to, 0.1)` once a frame keeps
-/// 90% of the error *per frame* rather than per second. After one second that
-/// leaves `0.9^60 ≈ 0.002` at 60Hz but `0.9^144 ≈ 3e-7` at 144Hz — the same code
-/// converging thousands of times faster purely because the machine is faster.
-/// The game then feels different on different hardware, and in this project it
-/// would feel different depending on whether `V` had been pressed, corrupting
-/// the measurement that key exists to take.
-///
-/// `2^(-dt/half_life)` composes exactly under subdivision, because
-/// `2^(-a/h) · 2^(-b/h) = 2^(-(a+b)/h)`. Fifty steps of 10ms therefore land
-/// exactly where one step of 500ms does.
-///
-/// Half-life is also a number a person can hold: "closes half the gap every
-/// 0.12s" means something on its own, where a per-frame coefficient does not.
-///
-/// `half_life` must be positive. Zero divides, and a negative value inverts the
-/// exponent so the error *grows* by a constant factor every frame — diverging to
-/// infinity and then to NaN, silently. Callers hold this with a const assert on
-/// the constant they pass; see `FOLLOW_HALF_LIFE` in `arpg-gfx`.
+/// Closes half the distance from `from` to `to` every `half_life` seconds.
+/// The exponential composes under time subdivision, unlike a per-frame lerp.
+/// `half_life` must be positive; only debug builds assert this at runtime.
 pub fn damp(from: f32, to: f32, half_life: f32, dt: f32) -> f32 {
     debug_assert!(half_life > 0.0, "a non-positive half-life diverges");
     to + (from - to) * (-dt / half_life).exp2()
 }
 
-/// [`damp`] applied componentwise. The exponential factor is a scalar, so this
-/// is the same curve applied to a vector, not a different one.
+/// [`damp`] applied componentwise.
 pub fn damp_vec3(from: Vec3, to: Vec3, half_life: f32, dt: f32) -> Vec3 {
     debug_assert!(half_life > 0.0, "a non-positive half-life diverges");
     to + (from - to) * (-dt / half_life).exp2()
@@ -54,9 +20,6 @@ pub fn damp_vec3(from: Vec3, to: Vec3, half_life: f32, dt: f32) -> Vec3 {
 mod tests {
     use super::*;
 
-    /// **The property the whole thing exists for.** One coarse step and many
-    /// fine steps covering the same wall-clock time must agree, or the value is
-    /// smoothed differently on a faster machine.
     #[test]
     fn damping_is_frame_rate_independent() {
         let coarse = damp(0.0, 10.0, 0.25, 0.5);
@@ -68,15 +31,12 @@ mod tests {
         assert!((coarse - fine).abs() < 1e-4, "{coarse} vs {fine}");
     }
 
-    /// A half-life is a claim with a number in it, so check the number.
     #[test]
     fn one_half_life_closes_half_the_distance() {
         assert!((damp(0.0, 10.0, 0.3, 0.3) - 5.0).abs() < 1e-4);
         assert!((damp(0.0, 10.0, 0.3, 0.6) - 7.5).abs() < 1e-4);
     }
 
-    /// Exponential decay approaches and never passes. A spring would overshoot,
-    /// which on a camera reads as seasickness.
     #[test]
     fn damping_never_overshoots() {
         let mut v = 0.0;
@@ -93,7 +53,6 @@ mod tests {
         assert_eq!(damp_vec3(Vec3::X, Vec3::Y, 0.2, 0.0), Vec3::X);
     }
 
-    /// The vector form must be the scalar one applied per component.
     #[test]
     fn the_vector_form_matches_the_scalar_one() {
         let v = damp_vec3(Vec3::new(1.0, 2.0, 3.0), Vec3::new(4.0, 5.0, 6.0), 0.2, 0.05);

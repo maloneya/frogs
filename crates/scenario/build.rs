@@ -1,14 +1,4 @@
-//! Guards the scenario runner's dependency graph, as an **allowlist**.
-//!
-//! The absence of `arpg-gfx` and `winit` here is the whole point of the crate.
-//! A scenario runs with no GPU, no window and no display server, which is what
-//! makes it fast enough — microseconds, not the 500ms a `hold d 500` costs
-//! through the harness — to be the gate on every change rather than something
-//! run occasionally. One graphics dependency and that stops being true, quietly
-//! and all at once.
-//!
-//! An allowlist fails closed: anything not named below stops the build,
-//! including the dependency nobody predicted.
+//! Dependency allowlist keeping scenarios independent of graphics and devices.
 
 const CRATE: &str = "scenario";
 const FILE: &str = "crates/scenario/build.rs";

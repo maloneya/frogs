@@ -109,7 +109,3 @@ validation and saving outside the game process. **Save & play** first saves,
 then asks the game to load that path. A play failure reports that the file was
 saved and preserves the running scene. Saving alone never contacts the game.
 The game still validates admission itself and preserves tuning on replacement.
-
-Use [scenarios](../.claude/skills/scenario/SKILL.md) with test-owned setups for
-predicted system behaviour. Playtest authored encounters for feasibility and feel;
-a valid document alone does not establish that its encounter is winnable or fun.

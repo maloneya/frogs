@@ -279,15 +279,7 @@ impl App {
         let (right, up) = camera.ground_basis();
         let to_world = |axis: Vec2| MoveDir::new(right * axis.x + up * axis.y);
 
-        // Zero, one or several — a frame buys whole ticks and the remainder
-        // waits.
-        //
-        // **Intent is sampled per tick, not per frame.** `sample` clears the
-        // latched edges, so sampling once per frame means a frame that runs no
-        // ticks consumes a keypress and discards it — and uncapped, most frames
-        // run no ticks. Sampling here makes a press wait for a tick and gives it
-        // to exactly one. The symptom otherwise is "the attack sometimes does
-        // not come out", which points nowhere near the frame loop.
+        // Sample input per tick so a frame with no simulation does not consume a press.
         for dt in self.accumulator.pending(frame) {
             let viewport = self.window.as_ref().expect("rendering requires a window").inner_size();
             let aim = self.input.aim(camera, (viewport.width, viewport.height), self.game.player_presentation(Alpha::ONE).ground_position());

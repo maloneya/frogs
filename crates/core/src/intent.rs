@@ -9,17 +9,7 @@
 
 use glam::Vec3;
 
-/// A horizontal world-space direction of travel: unit length, or exactly zero.
-///
-/// A newtype rather than a bare `Vec3` because "normalise the input vector" is
-/// a rule everyone forgets exactly once, and the symptom is subtle enough to
-/// ship: holding two keys moves you √2 ≈ 1.41 times faster than holding one, so
-/// the fastest way across the arena is permanently diagonal. Doing it at the
-/// only constructor means no caller can be the one who forgets — including the
-/// analog stick that arrives later and does not clamp itself.
-///
-/// Horizontal because the ground plane is where movement happens; letting a Y
-/// component through would have the character walk into the floor.
+/// Horizontal world-space movement, normalized to unit length or zero.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct MoveDir(Vec3);
 
@@ -67,18 +57,7 @@ impl AimDir {
     pub fn as_vec3(self) -> Vec3 { self.0 }
 }
 
-/// One tick's worth of intent, in the **simulation's** vocabulary.
-///
-/// The seam between `app` and `sim`, and it exists because [`crate::Actions`] cannot
-/// be that seam: the movement actions are named in *screen* directions, and
-/// which world direction "up" means is the camera's business. Handing `Actions`
-/// to the simulation would put a presentation decision inside it.
-///
-/// So `app` resolves screen to world, and this is what comes out the other
-/// side: independent world-space movement and aim, and the discrete actions
-/// requested this tick. Aim is required even while stationary. Adding an intent later — dodge, block — adds a field here rather
-/// than a parameter to `World::step`, which is what stops that signature
-/// growing a tail of booleans nobody can read at the call site.
+/// One tick of world-space movement, required aim and discrete action requests.
 #[derive(Clone, Copy, Debug)]
 pub struct Intent {
     move_dir: MoveDir,

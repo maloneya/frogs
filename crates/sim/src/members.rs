@@ -1,44 +1,12 @@
-//! Which entities have a behaviour, and where each one's data sits.
+//! Sparse behaviour membership keyed by existing entity identities.
 //!
-//! **The other half of the storage decision, and a different job from
-//! [`crate::slots`].** `Slots` is the entity allocator: it *mints* names and
-//! owns the bodies every entity has. This attaches to a name that already
-//! exists. A body is spawned once; the behaviours it carries come and go, and
-//! most entities do not carry most behaviours.
-//!
-//! ## Why a behaviour owns its own membership
-//!
-//! The alternative is one wide table with a flag per behaviour, and it fails in
-//! the two ways that matter here. Every body pays for every behaviour whether it
-//! has it or not, so the table grows into exactly the god struct this project
-//! is trying not to write. And a pass over it costs the size of the *horde*
-//! rather than the size of its own membership: three chasers among a thousand
-//! bodies would still be a thousand iterations and a thousand branches.
-//!
-//! Here, a behaviour is its own storage plus a pass that reads it. Adding one
-//! touches no existing type, and it costs what it uses.
-//!
-//! ## The layout
-//!
-//! A sparse set. `sparse` is indexed by an entity's *slot* and points into
-//! `dense`; `dense` is packed, so a pass streams it with no holes and no
-//! branches. Membership is O(1) to test, add and remove, and iteration is
-//! sequential — which are the two things a behaviour actually does.
-//!
-//! Removal swaps the last row down, exactly as the body storage does, so a
-//! member's row moves without anything touching that member. That is the same
-//! hazard `EntityId` exists for, and the reason a lookup validates the whole id
-//! rather than just finding a row.
+//! Unlike [`crate::slots`], this does not allocate identities. Each behaviour
+//! iterates only its own members; payload arrays remain with the behaviour owner.
 
 use crate::hash::Fnv;
 use crate::slots::{EntityId, VACANT};
 
-/// The entities that have one behaviour.
-///
-/// Holds no payload, for the same reason [`crate::slots::Slots`] holds none:
-/// the owner keeps its own dense arrays alongside and pushes to them in step.
-/// One membership set can then serve a behaviour with no data at all, one with
-/// a single `f32`, or one with five parallel arrays.
+/// Membership only; the behaviour owner keeps its payload arrays aligned.
 #[derive(Default)]
 pub(crate) struct Members {
     /// Entity slot to dense row, or [`VACANT`]. Indexed by
@@ -65,12 +33,8 @@ impl Members {
         &self.dense
     }
 
-    /// Grants the behaviour, and says which dense row to push payload at.
-    ///
-    /// Returns `None` if the entity already had it — in which case the caller
-    /// must **not** push, or its arrays would drift a row longer than this.
-    /// Granting twice is not an error worth refusing loudly: it is what a
-    /// spawner does when it applies a template to a body that already matches.
+    /// Adds membership and returns the payload row to append.
+    /// `None` means already present: do not append a payload row.
     pub(crate) fn add(&mut self, id: EntityId) -> Option<usize> {
         if self.index(id).is_some() {
             return None;
@@ -88,12 +52,7 @@ impl Members {
         Some(row)
     }
 
-    /// Revokes the behaviour, and says which dense row to `swap_remove`.
-    ///
-    /// `None` if the entity did not have it. As in `Slots::remove`, the row that
-    /// was last is moved into the hole and its owner's sparse entry is repointed
-    /// here, so the caller only has to `swap_remove` its own arrays at the
-    /// returned index.
+    /// Removes membership and returns the payload row to swap-remove, if present.
     pub(crate) fn remove(&mut self, id: EntityId) -> Option<usize> {
         let row = self.index(id)?;
 
@@ -106,15 +65,7 @@ impl Members {
         Some(row)
     }
 
-    /// Which dense row belongs to this entity, or `None` if it is not a member.
-    ///
-    /// **The whole id is compared, not just the slot.** Finding a row for a slot
-    /// says only that *somebody* with that slot is a member; the row naming the
-    /// asker back says it is this one. Without that, an id whose slot was
-    /// recycled reads as a member, with somebody else's data.
-    ///
-    /// A vacant entry needs no separate test: it holds [`VACANT`], and
-    /// `dense.get(u32::MAX as usize)` is `None` for any reachable horde.
+    /// Resolves the complete ID, including generation, to its dense row.
     pub(crate) fn index(&self, id: EntityId) -> Option<usize> {
         let row = *self.sparse.get(id.slot())? as usize;
         (self.dense.get(row) == Some(&id)).then_some(row)
@@ -125,19 +76,8 @@ impl Members {
         self.index(id).is_some()
     }
 
-    /// Feeds membership into the world hash.
-    ///
-    /// Exhaustively destructured, as every hash in this crate is — but `sparse`
-    /// is **deliberately not hashed**, and the destructure is what forced that
-    /// to be a written decision rather than an omission. It is a reverse index:
-    /// `dense` determines it entirely, so feeding it adds no information.
-    ///
-    /// Skipping it is not just thrift. Hashing `sparse` costs the *entity
-    /// count* rather than the membership, so a world of sixteen thousand bodies
-    /// and no seekers paid sixteen thousand rounds a tick — which is precisely
-    /// the wide-table cost this module exists to avoid, reintroduced in the one
-    /// method that is supposed to be describing it. Same reasoning as
-    /// `World::hash` discarding `trace`.
+    /// Hashes dense identities only. `sparse` is a derived reverse index; hashing it
+    /// would make cost proportional to all entity slots rather than this membership.
     pub(crate) fn hash(&self, h: &mut Fnv) {
         let Self { sparse, dense } = self;
         let _ = sparse;
@@ -232,26 +172,8 @@ mod tests {
         assert_eq!(behaviour.get(b), None);
     }
 
-    /// **Why a lookup compares the whole id and not just the slot.** A dead
-    /// entity's slot is recycled; the newcomer never had the behaviour, and the
-    /// dead member's row must not answer for it.
-    ///
-    /// Finding a row for the slot proves only that *somebody* with that slot
-    /// belongs. Without the generation check this hands the dead member's data
-    /// to a body that never had the behaviour at all — a body nobody asked to
-    /// chase would start chasing.
-    ///
-    /// **What this deliberately does not assert** is that the dead id stops
-    /// resolving. It does not, and that is correct: this type is a set keyed by
-    /// id, it holds no reference to the allocator, and nobody has told it the
-    /// entity died. An earlier version of this test asserted otherwise and
-    /// failed — the expectation was wrong, not the code.
-    ///
-    /// Two things cover that gap, and both are tested where they live rather
-    /// than wished for here: `World::despawn_body` revokes eagerly, and
-    /// `pass::seek` resolves every member against the body storage and skips
-    /// what is gone. The second is what makes the first an optimisation rather
-    /// than a correctness requirement.
+    /// An unreclaimed dead membership must not resolve for a new generation.
+    /// The old ID remains in this set until revoked; World owns that cleanup.
     #[test]
     fn a_recycled_slot_does_not_inherit_the_behaviour() {
         let mut slots = Slots::default();

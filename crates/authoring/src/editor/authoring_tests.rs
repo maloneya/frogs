@@ -262,7 +262,7 @@ fn test_composition_can_be_built_through_editor_operations_without_editing_ron()
         let light = torch.light();
         let target = target(Kind::Campfire, index);
         apply(&mut scene, Edit::Add { kind: Kind::Campfire, pos: (light.position().x, light.position().z) });
-        apply(&mut scene, Edit::Colour { target, colour: light.colour().into() });
+        apply(&mut scene, Edit::Colour { target, colour: light.colour().to_vec3().into() });
         for (field, value) in [("height", light.position().y), ("intensity", light.intensity()), ("range", light.range())] {
             set_field(&mut scene, target, field, value);
         }

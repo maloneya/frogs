@@ -1,6 +1,6 @@
 //! Asset selection and character presentation; no write access to simulation.
 
-use arpg_core::{Instance, InstanceBuffer, Report};
+use arpg_core::{Instance, InstanceBuffer, LinearRgb, Report};
 use arpg_gfx::{
     CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
     MeshAsset, MeshBatch,
@@ -86,7 +86,7 @@ impl<T> WorldAssets<T> {
             ground_instance: [Instance::new(
                 Vec3::ZERO,
                 Vec3::new(arpg_sim::ARENA_HALF * 2.0, 1.0, arpg_sim::ARENA_HALF * 2.0),
-                Vec3::ONE,
+                LinearRgb::WHITE,
             )],
             props: InstanceBuffer::default(),
             torches: crate::torch::Torches::default(),
@@ -101,13 +101,13 @@ impl<T> WorldAssets<T> {
             if let Some(state) = chest_state(prop.id()) {
                 let instances = if state == arpg_game::ChestState::Open { &mut self.open_chests } else { &mut self.closed_chests };
                 assert!(instances.len() < arpg_game::MAX_CHESTS, "game chest admission bound");
-                instances.push(Instance::new(prop.ground_position(), Vec3::ONE, Vec3::ONE));
+                instances.push(Instance::new(prop.ground_position(), Vec3::ONE, LinearRgb::WHITE));
                 continue;
             }
             let tint = if prop.interaction() == Some(arpg_sim::InteractionState::Activated) {
-                Vec3::new(0.06, 0.55, 0.12)
+                LinearRgb::new(0.06, 0.55, 0.12)
             } else {
-                Vec3::new(0.04, 0.18, 0.32)
+                LinearRgb::new(0.04, 0.18, 0.32)
             };
             sink.push(Instance::new(prop.ground_position(), Vec3::ONE, tint));
         }
@@ -120,7 +120,7 @@ impl<T> WorldAssets<T> {
             let centre = wall.centre();
             let size = wall.size();
             self.walls.push(Instance::new(Vec3::new(centre.x, 0.0, centre.y),
-                Vec3::new(size.x, 1.0, size.y), Vec3::ONE).with_yaw(wall.yaw()));
+                Vec3::new(size.x, 1.0, size.y), LinearRgb::WHITE).with_yaw(wall.yaw()));
         }
     }
 
@@ -130,7 +130,7 @@ impl<T> WorldAssets<T> {
             assert!(count < arpg_game::MAX_TREES, "game tree admission bound");
             let (_, _, instances) = self.trees.iter_mut().find(|(kind, _, _)| *kind == tree.kind()).expect("complete tree catalog");
             let pos = tree.position();
-            instances.push(Instance::new(Vec3::new(pos.x, 0.0, pos.y), Vec3::splat(tree.scale()), Vec3::ONE).with_yaw(tree.yaw()));
+            instances.push(Instance::new(Vec3::new(pos.x, 0.0, pos.y), Vec3::splat(tree.scale()), LinearRgb::WHITE).with_yaw(tree.yaw()));
         }
     }
 
@@ -425,7 +425,7 @@ impl<T> LoadedCharacter<T> {
 impl LoadedCharacter<CharacterMesh> {
     pub(super) fn draw(&self, player: PlayerPresentation) -> CharacterPreview<'_> {
         let instance =
-            Instance::new(player.ground_position(), Vec3::ONE, Vec3::ONE).with_yaw(player.facing());
+            Instance::new(player.ground_position(), Vec3::ONE, LinearRgb::WHITE).with_yaw(player.facing());
         CharacterPreview::new(&self.gpu, &self.pose, instance)
     }
 }
@@ -650,7 +650,7 @@ impl<T> LoadedHorde<T> {
                 Instance::new(
                     enemy.ground_position(),
                     Vec3::splat(HORDE_SCALE),
-                    Vec3::splat(shade),
+                    LinearRgb::splat(shade),
                 )
                 .with_yaw(yaw)
                 .with_white_mix(flash(enemy.id())),
@@ -685,7 +685,7 @@ impl<T> LoadedHorde<T> {
             let position = corpse.position();
             bucket.instances.push(Instance::new(
                 Vec3::new(position.x, 0.24, position.y),
-                Vec3::splat(HORDE_SCALE), Vec3::splat(0.6),
+                Vec3::splat(HORDE_SCALE), LinearRgb::splat(0.6),
             ).with_yaw(yaw).with_pitch(std::f32::consts::FRAC_PI_2));
         }
     }

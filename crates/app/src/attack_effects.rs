@@ -2,11 +2,11 @@
 
 use std::collections::VecDeque;
 
-use arpg_core::Report;
+use arpg_core::{LinearRgb, LinearRgba, Report};
 use arpg_game::Game;
 use arpg_gfx::{EffectVertex, MAX_EFFECT_VERTICES};
 use arpg_sim::{Alpha, AttackPhase, AttackProfile};
-use glam::{Vec3,  Vec3Swizzles, Vec4};
+use glam::{Vec3, Vec3Swizzles};
 
 // Eight ticks of history plus an interpolation endpoint, bounded independently
 // of the configured attack duration. Old samples remain at their observed pose.
@@ -156,7 +156,7 @@ impl AttackEffects {
             let age = tick.saturating_sub(marker.tick) as f32 + alpha.get();
             let opacity = (1.0 - age / MARKER_LIFE).clamp(0.0, 1.0);
             if opacity == 0.0 { continue; }
-            let colour = Vec4::new(1.0, 0.95, 0.7, opacity);
+            let colour = LinearRgba::new(1.0, 0.95, 0.7, opacity);
             // Four bright diamond rays sit above each actual contact, including
             // lethal hits whose body has already left the simulation.
             for (axis, width) in [(marker.side, Vec3::Y), (-marker.side, Vec3::Y),
@@ -222,7 +222,7 @@ impl AttackEffects {
                             &mut self.vertices,
                             a,
                             b,
-                            Vec3::new(0.35, 0.75, 1.0),
+                            LinearRgb::new(0.35, 0.75, 1.0),
                             [opacity_a, opacity_b],
                         );
                     }
@@ -240,7 +240,7 @@ impl AttackEffects {
                 if opacity == 0.0 {
                     return;
                 }
-                let colour = Vec3::new(1.0, 0.4, 0.08);
+                let colour = LinearRgb::new(1.0, 0.4, 0.08);
                 let centre = ring.centre + Vec3::Y * 0.035;
                 for i in 0..RING_SEGMENTS {
                     let section = |index: usize| {
@@ -259,7 +259,7 @@ impl AttackEffects {
                     triangle(
                         &mut self.vertices,
                         [centre, a[0], b[0]],
-                        [colour.extend(opacity * 0.055); 3],
+                        [colour.with_alpha(opacity * 0.055); 3],
                     );
                 }
             }
@@ -364,9 +364,9 @@ fn beam_geometry(
     let blade_clear = cast(blade_start, origin).is_none();
     let glow = 1.0 + 0.12 * (now as f32 * 0.7).sin();
     for (width, colour, opacity) in [
-        (sample.radius * 1.7, Vec3::new(1.0, 0.12, 0.025), 0.4),
-        (sample.radius, Vec3::new(1.0, 0.45, 0.06), 0.85),
-        (sample.radius * 0.22, Vec3::new(1.0, 0.9, 0.55), 1.0),
+        (sample.radius * 1.7, LinearRgb::new(1.0, 0.12, 0.025), 0.4),
+        (sample.radius, LinearRgb::new(1.0, 0.45, 0.06), 0.85),
+        (sample.radius * 0.22, LinearRgb::new(1.0, 0.9, 0.55), 1.0),
     ] {
         let section = |point: Vec3, axis: Vec3, radius: f32| {
             [point - axis * radius, point, point + axis * radius].map(trim)
@@ -412,10 +412,10 @@ fn cross_section(start: Sample, end: Sample, t: f32) -> [Vec3; 3] {
     ]
 }
 
-fn band(out: &mut Vec<EffectVertex>, a: [Vec3; 3], b: [Vec3; 3], colour: Vec3, opacity: [f32; 2]) {
-    let transparent = colour.extend(0.0);
-    let bright_a = colour.extend(opacity[0]);
-    let bright_b = colour.extend(opacity[1]);
+fn band(out: &mut Vec<EffectVertex>, a: [Vec3; 3], b: [Vec3; 3], colour: LinearRgb, opacity: [f32; 2]) {
+    let transparent = colour.with_alpha(0.0);
+    let bright_a = colour.with_alpha(opacity[0]);
+    let bright_b = colour.with_alpha(opacity[1]);
     for (i, (ca, cb)) in [
         ([transparent, bright_a], [transparent, bright_b]),
         ([bright_a, transparent], [bright_b, transparent]),
@@ -428,7 +428,7 @@ fn band(out: &mut Vec<EffectVertex>, a: [Vec3; 3], b: [Vec3; 3], colour: Vec3, o
     }
 }
 
-fn triangle(out: &mut Vec<EffectVertex>, points: [Vec3; 3], colours: [Vec4; 3]) {
+fn triangle(out: &mut Vec<EffectVertex>, points: [Vec3; 3], colours: [LinearRgba; 3]) {
     assert!(
         out.len() + 3 <= MAX_EFFECT_VERTICES,
         "effect geometry exceeds its bounded stream"

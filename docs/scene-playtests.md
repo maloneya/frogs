@@ -117,7 +117,4 @@ loads/emissions in execution order. Stable spawn tickets and completed-tick
 outcomes preserve bindings independently of diagnostic trace retention.
 
 Use the [scenario guide](../.claude/skills/scenario/SKILL.md) for assertions and
-timing. Public Game tests cover restart, refused replacement, stale IDs and
-pending work; app tests cover input/presentation cleanup. The scenario timeline
-has no restart operation. [Verification](verification.md) runs these alongside
-scene round-trip and native editor checks.
+timing. The scenario timeline has no restart operation.

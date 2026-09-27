@@ -1,25 +1,6 @@
-//! The overlay pipeline: screen-space quads over the finished world.
-//!
-//! The screen-space counterpart of world rendering. Asset pipelines are
-//! perspective-free but still
-//! camera-driven, opaque, depth-tested and back-face culled. This one has no
-//! camera, blends, and is drawn strictly in submission order.
-//!
-//! ## Why it shares the world's render pass
-//!
-//! It could have been a second pass with its own colour attachment, and on a
-//! tiled GPU that would cost a full store and load of the frame between the two
-//! — real bandwidth, for nothing. Instead the pipeline declares a depth state
-//! matching the pass it joins, and then opts out of it: never writes depth,
-//! always passes the test. So the overlay is over everything, the depth buffer
-//! is untouched, and the frame stays in tile memory from clear to present.
-//!
-//! ## Why there is no vertex buffer
-//!
-//! Six vertices per quad are generated from `@builtin(vertex_index)` in the
-//! shader. A unit square is four numbers that never change, so uploading it
-//! once per quad — or even once, as a shared mesh — would be paying a buffer
-//! binding for arithmetic the vertex shader can do for free.
+//! Screen-space quads drawn in submission order without depth writes.
+//! Sharing the world render pass avoids an attachment store/load on tiled GPUs.
+//! The shader generates six vertices per quad from `vertex_index`.
 
 use crate::quad::{MAX_QUADS, Quad};
 use crate::text::Font;
@@ -198,14 +179,7 @@ impl QuadPipeline {
         }
     }
 
-    /// Uploads this frame's quads and the size they are measured against,
-    /// returning how many will actually be drawn.
-    ///
-    /// The screen size goes up every frame rather than on resize, because a
-    /// uniform that is only refreshed on an event is a uniform that is stale
-    /// for exactly one frame after every resize — and one stretched frame while
-    /// dragging a window edge is the kind of artefact nobody can reproduce on
-    /// demand. It is sixteen bytes.
+    /// Uploads quads and current viewport size; returns the draw count.
     pub(crate) fn upload(
         &self,
         queue: &wgpu::Queue,

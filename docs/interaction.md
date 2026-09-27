@@ -1,35 +1,25 @@
 # Static props and interaction
 
-Open the companion Scenes tab, select `soul_trial.ron`, click **Open selected**, then **Save & play**. Press E beside the blue
-block: it turns green once and starts the timed encounter. Restart scene
-restores Ready. See [encounters](encounters.md).
-The block uses the [plinth asset](../assets/world/README.md) and a circular
-collision footprint; visible geometry does not define its physical shape.
+In Scenes, open `soul_trial.ron` and **Save & play**. Press E beside the blue
+block: it turns green once and starts the [encounter](encounters.md).
+Restart restores Ready. The [plinth](../assets/world/README.md) has circular
+collision independent of its visible mesh.
 
-The pieces are deliberately separate:
-
-- Body storage supplies identity and position. `fixed: true` grants zero inverse
-  mass and omits health. It cannot chase. Static placements must be inside the
-  arena so containment never moves them after spawn.
-- Health is sparse membership keyed by identity. Attack damage cannot reach a
-  prop's nonexistent health, and enemy counts and source gates exclude props.
-- `interactable: true` grants `InteractionState::Ready` independently of physics.
-  This can also be attached to an ordinary movable enemy.
-- E becomes an Interact action, then one tick's interaction intent. The named
-  interaction pass checks final positions after movement and collisions. It
-  chooses one nearest Ready object within 1.5 m centre-to-centre, inclusively;
-  equal distances prefer the lower stable entity slot. Facing is not required.
-- Activation changes state and emits `activated id=...`. Extraction derives
-  green from that state. Future chest/door/beacon systems can consume the state;
-  trace output remains observation. There is no event-dispatch framework.
-
-Templates are defined once in sim. A scene placement is:
+A scene body can grant interaction independently of fixed physics:
 
 ```ron
 (pos: (0.0, 2.0), what: (fixed: true, interactable: true))
 ```
 
-The same template can be used in scenario spawns, sources, or harness commands:
+Fixed props have zero inverse mass, no health, and cannot seek. A movable enemy
+can also be interactable. Props share body capacity but are excluded from enemy
+counts and source population gates.
+
+E activates the nearest Ready object in range after movement and collisions.
+Ties prefer the lower stable entity slot; facing is irrelevant. See
+[the interaction owner](../crates/sim/src/pass/interact.rs) for reach and selection.
+
+The harness uses the same templates:
 
 ```text
 spawn (pos: (0.0, 2.0), what: (fixed: true, interactable: true))
@@ -37,17 +27,7 @@ source (pos: (4.0, 0.0), every: 120, what: (fixed: true, interactable: true))
 tap e
 ```
 
-The command payload uses the same placement or source RON schema as scene content. `state.sim.interactions` is keyed by stable body id and reports
-`activated`; `interaction_reach` reports the shared reach. Body position,
-velocity and inverse mass remain under `state.sim.bodies`.
-
-Scene eviction removes
-all owned bodies and revokes their interaction memberships; a fresh scene or a
-recycled slot starts Ready. Props consume the same instance capacity as enemies.
-Invalid static placement or contradictory fixed/seek grants are refused at the
-body storage boundary; authored scenes validate all placements before mutating
-the world.
-
-Scenarios cover static collision and immunity, reach and activation timing,
-nearest-target selection and ties, source gates, queued grants and eviction.
-The colour change is presentation and is checked through the live harness.
+`state.sim.interactions` reports activation by stable body ID;
+`interaction_reach` reports the shared reach. Position, velocity and inverse mass
+remain under `state.sim.bodies`. Scene eviction removes interaction memberships;
+a fresh body starts Ready.

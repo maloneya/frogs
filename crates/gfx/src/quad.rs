@@ -1,45 +1,8 @@
-//! A rectangle in screen space, and the buffer it travels in.
+//! Screen-space quads in physical pixels: origin top-left, Y downward.
 //!
-//! The mirror of [`arpg_core::Instance`], one layer up. `Instance` is what the
-//! *simulation* says outward — a thing in the world, at a position, in world
-//! units. This is what an **overlay** says outward: a rectangle in pixels, over
-//! the finished frame, answerable to the window rather than to the camera.
-//!
-//! What it shares with `Instance` is the shape of the seam: `gfx` draws quads
-//! and must never learn that one of them is a health bar. A quad has a
-//! rectangle, a patch of atlas and a colour, and there is deliberately nowhere
-//! to write what it *means*.
-//!
-//! ## Why this is not in `arpg-core`
-//!
-//! Because it fails that crate's own bar, which is *needed by both, beholden to
-//! neither*. `Instance` is there because `sim` must mint one without linking
-//! the graphics stack; nothing that has to stay ignorant of wgpu ever mints a
-//! quad. The two things that make them are [`crate::Glyphs::layout`] and the
-//! app's own HUD, and the app already depends on this crate.
-//!
-//! Keeping it here is what makes two invariants free rather than aspirational:
-//! [`Quad::textured`] can be `pub(crate)`, because the only caller that could
-//! use it correctly is in this crate; and the white texel below can be *derived
-//! from the atlas that guarantees it* rather than agreed with it across a crate
-//! boundary no compiler spans.
-//!
-//! ## Why one type covers both text and solid colour
-//!
-//! A glyph and a health bar are the same draw: a rectangle sampling a texture.
-//! The only difference is which texels. So [`Quad::solid`] points at a texel the
-//! atlas guarantees is opaque white, and multiplying by it changes nothing —
-//! one pipeline, one buffer, one draw call, for every overlay this engine will
-//! ever have. Splitting them into a textured pipeline and an untextured one
-//! would double the state changes to save a multiply.
-//!
-//! ## The coordinate system, stated once
-//!
-//! **Physical pixels, origin top-left, y increasing downward.** Not points, not
-//! NDC, not y-up. That is winit's convention for a cursor position, which is
-//! what makes hit-testing a click against a quad a comparison rather than a
-//! conversion — and a conversion is where an off-by-a-scale-factor bug lives
-//! that is invisible on a non-retina display.
+//! Solid quads sample the glyph atlas's white texel, sharing its pipeline and draw.
+
+use arpg_core::LinearRgba;
 
 use glam::Vec4;
 
@@ -53,25 +16,23 @@ use crate::text::WHITE_UV;
 /// enough (384KB) that reserving it costs nothing worth measuring.
 pub const MAX_QUADS: usize = 8192;
 
-/// One screen-space rectangle on its way to the GPU.
+/// One screen-space rectangle with atlas UVs and linear RGBA.
 ///
-/// 48 bytes, three `vec4`s, exactly like [`arpg_core::Instance`] — which is not a
-/// coincidence but the same reasoning applied twice: a four-float alignment
-/// keeps the vertex attribute arithmetic trivial, and the stride is a contract
-/// with a `@location` list in WGSL that Rust cannot see across.
+/// ```compile_fail,E0308
+/// arpg_gfx::Quad::solid(glam::Vec4::ZERO, glam::Vec4::ONE);
+/// ```
 ///
-/// Fields are private because two of them are not free-form. `uv` must name a
-/// real patch of the atlas, and `color` must be linear rather than sRGB; both
-/// are things a struct literal could get wrong in a way that draws something
-/// plausible. The constructors are the only doors.
+/// ```compile_fail,E0277
+/// let _: arpg_gfx::Quad = bytemuck::cast([0.0_f32; 12]);
+/// ```
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::NoUninit)]
 pub struct Quad {
     /// `x, y, width, height`, in physical pixels from the top-left.
     rect: [f32; 4],
     /// `u0, v0, u1, v1` in `0..1` atlas space.
     uv: [f32; 4],
-    /// Linear RGB plus alpha. See [`Quad::solid`] on why it is not sRGB.
+    /// Linear RGB plus unencoded alpha.
     color: [f32; 4],
 }
 
@@ -79,30 +40,16 @@ const _: () = assert!(size_of::<Quad>() == 48);
 const _: () = assert!(size_of::<Quad>() == 3 * 4 * size_of::<f32>());
 
 impl Quad {
-    /// A rectangle of flat colour: a bar, a panel, a divider.
-    ///
-    /// **The colour is linear, not sRGB**, on the same terms as every colour in
-    /// this engine: the surface is `Bgra8UnormSrgb` and the hardware encodes on
-    /// write, so a value that looks correct written down comes out roughly five
-    /// times too bright. There is no newtype guarding that yet, here or
-    /// anywhere else, which is why it is said again.
+    /// A solid rectangle tinted in linear light.
     #[must_use]
-    pub fn solid(rect: Vec4, color: Vec4) -> Self {
-        Self { rect: rect.into(), uv: WHITE_UV, color: color.into() }
+    pub fn solid(rect: Vec4, color: LinearRgba) -> Self {
+        Self { rect: rect.into(), uv: WHITE_UV, color: color.to_array() }
     }
 
-    /// A rectangle sampling a patch of the atlas, for a glyph or an icon.
-    ///
-    /// The colour multiplies what is sampled, so a single white glyph in the
-    /// atlas renders in any colour asked for — which is what keeps the atlas
-    /// one entry per character rather than one per character per colour.
-    ///
-    /// The UV names a patch of the glyph atlas, so the only caller that can use
-    /// it correctly is the one that packed it — [`crate::Glyphs::layout`].
-    /// `pub(crate)` says exactly that, and says it to the compiler.
+    /// An atlas patch tinted with linear RGBA. The atlas owner supplies its UVs.
     #[must_use]
-    pub(crate) fn textured(rect: Vec4, uv: [f32; 4], color: Vec4) -> Self {
-        Self { rect: rect.into(), uv, color: color.into() }
+    pub(crate) fn textured(rect: Vec4, uv: [f32; 4], color: LinearRgba) -> Self {
+        Self { rect: rect.into(), uv, color: color.to_array() }
     }
 
     /// Where this quad sits, as `x, y, width, height` in physical pixels.
@@ -187,7 +134,7 @@ mod tests {
         let mut buf = QuadBuffer::default();
         let mut sink = buf.sink();
         for _ in 0..MAX_QUADS + 100 {
-            sink.push(Quad::solid(Vec4::new(0.0, 0.0, 1.0, 1.0), Vec4::ONE));
+            sink.push(Quad::solid(Vec4::new(0.0, 0.0, 1.0, 1.0), LinearRgba::WHITE));
         }
         assert_eq!(buf.as_slice().len(), MAX_QUADS);
     }
@@ -198,7 +145,7 @@ mod tests {
         let mut buf = QuadBuffer::default();
         for _ in 0..3 {
             let mut sink = buf.sink();
-            sink.push(Quad::solid(Vec4::new(0.0, 0.0, 1.0, 1.0), Vec4::ONE));
+            sink.push(Quad::solid(Vec4::new(0.0, 0.0, 1.0, 1.0), LinearRgba::WHITE));
         }
         assert_eq!(buf.as_slice().len(), 1);
     }
@@ -209,8 +156,8 @@ mod tests {
     /// sample whichever glyph had been packed at the origin.
     #[test]
     fn a_solid_quad_names_the_white_texel() {
-        assert!(Quad::solid(Vec4::new(0.0, 0.0, 4.0, 4.0), Vec4::ONE).is_solid());
-        assert!(!Quad::textured(Vec4::ZERO, [0.1, 0.1, 0.2, 0.2], Vec4::ONE).is_solid());
+        assert!(Quad::solid(Vec4::new(0.0, 0.0, 4.0, 4.0), LinearRgba::WHITE).is_solid());
+        assert!(!Quad::textured(Vec4::ZERO, [0.1, 0.1, 0.2, 0.2], LinearRgba::WHITE).is_solid());
     }
 
 }

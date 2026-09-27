@@ -6,32 +6,13 @@ use super::motion::Physics;
 use crate::trace::{Event, TraceSink};
 use crate::{ARENA_HALF, ENEMY_RADIUS, EntityId, PLAYER_RADIUS};
 
-/// What a clamp does to a NaN, and why this pass has to refuse one.
-///
-/// `f32::max` returns the operand that is *not* NaN, so clamping a poisoned
-/// position does not propagate the poison — it silently replaces it with the
-/// arena limit. Every NaN body teleports to the same corner, and by the end of
-/// the tick every position is finite again and looks legal.
-///
-/// That laundering is worse than the NaN. The real fault is upstream, in the
-/// solver, where two coincident bodies were normalised without a guard; the
-/// symptom is "the entire horde jumped to the corner", which points at this
-/// pass and at the arena bounds instead. So this is asserted where the poison
-/// arrives rather than left to be discovered where it lands.
+/// Diagnoses non-finite positions before clamping can hide the upstream error.
 const POISONED: &str = "a position was NaN or infinite before it was clamped. \
                         The clamp would have hidden it by returning the arena limit. \
                         Look upstream in the solver for a normalise of a zero-length \
                         difference — two bodies at exactly the same point";
 
-/// Clamps positions to the floor, and reports how many bodies it had to stop.
-///
-/// The limit is inset by each body's radius, so it is the *body* that stops at
-/// the wall rather than its centre. A version that clamped to `ARENA_HALF`
-/// would leave every cornered body standing halfway inside the floor's edge.
-///
-/// Runs after separation rather than before: clamping first would let a contact
-/// shove a body straight through the wall and leave it outside until something
-/// else happened to touch it.
+/// Clamps whole bodies inside the arena after separation, cancelling outward velocity.
 pub(crate) fn contain(
     pos: &mut [Vec2],
     ids: &[EntityId],

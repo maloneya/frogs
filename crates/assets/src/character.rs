@@ -1,5 +1,7 @@
 //! Hierarchical, skinned character assets kept separate from baked static meshes.
 
+use arpg_core::LinearRgba;
+
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 use std::sync::Arc;
 
@@ -294,13 +296,13 @@ impl CharacterPart {
 /// One material referring to a decoded image shared by any number of parts.
 #[derive(Debug)]
 pub struct CharacterMaterial {
-    base_color_factor: [f32; 4],
+    base_color_factor: LinearRgba,
     image: usize,
 }
 
 impl CharacterMaterial {
     /// Linear colour multiplier applied after sampling the sRGB texture.
-    pub fn base_color_factor(&self) -> [f32; 4] { self.base_color_factor }
+    pub fn base_color_factor(&self) -> LinearRgba { self.base_color_factor }
     /// Valid index into the owning character's image catalog.
     pub fn image_index(&self) -> usize { self.image }
 }
@@ -1700,7 +1702,7 @@ mod tests {
         assert_eq!(shared.materials().len(), 4);
         assert_eq!(shared.images().len(), 3);
         assert_eq!(shared.materials()[0].image_index(), shared.materials()[3].image_index());
-        assert_eq!(shared.materials()[3].base_color_factor(), [0.5, 0.25, 0.75, 1.0]);
+        assert_eq!(shared.materials()[3].base_color_factor().to_array(), [0.5, 0.25, 0.75, 1.0]);
         assert_eq!(shared.texture_bytes(), asset.texture_bytes());
         let gltf = gltf::Gltf::from_slice(MULTIPART).unwrap();
         let blob = gltf.blob.as_ref().unwrap();

@@ -7,6 +7,7 @@ build = "build.rs"
 # The interchange boundary. It owns validated CPU data, never GPU resources,
 # simulation state, scene schemas, or window/file-selection policy.
 [dependencies]
+arpg-core.workspace = true
 bytemuck.workspace = true
 glam.workspace = true
 gltf.workspace = true

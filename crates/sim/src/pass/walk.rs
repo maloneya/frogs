@@ -5,16 +5,7 @@ use glam::{Vec2, Vec3Swizzles};
 
 use crate::Dt;
 
-/// Integrates one tick of movement.
-///
-/// **Instantaneous, deliberately.** Full speed on the first tick and a dead
-/// stop on release. ARPG movement is essentially instant because
-/// responsiveness beats momentum; acceleration is a feel knob, and one better
-/// tuned against a fixed timestep than a variable one. *Turning* is
-/// rate-limited — see [`crate::pass::face`] — translation is not.
-///
-/// `dir` is world-space and already unit-or-zero, because [`MoveDir`] is the
-/// only door and it normalises. So this does not have to check.
+/// Immediate powered movement without acceleration; facing is handled separately.
 pub(crate) fn walk(pos: &mut Vec2, dir: MoveDir, dt: Dt, speed: f32) {
     *pos += dir.as_vec3().xz() * speed * dt.secs();
 }

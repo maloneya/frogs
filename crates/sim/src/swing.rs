@@ -1,47 +1,14 @@
-//! Where a swing goes, and the hitbox generated from it.
+//! Committed per-tick attack discs generated from authored endpoints.
 //!
-//! An attack is configured as two positions — where the hitbox starts and where
-//! it finishes, in the player's own frame — and the hitbox is *generated* from
-//! them: one disc per tick of the active window. A stab, an arc and a slam are
-//! then three settings of the same two points rather than three kinds of thing,
-//! which is the same argument [`crate::pass::source`] makes about cadence and
-//! placement: independent axes beat an enum of every useful combination,
-//! because the combination nobody enumerated is the one someone wants.
-//!
-//! ## Why the hitbox is a value
-//!
-//! The generated hitbox is stored, not recomputed. The attack pass tests the
-//! disc for the current active tick from that committed shape. Changing tuning
-//! mid-swing cannot change where the in-flight attack hits. Future diagnostics
-//! should observe this shape rather than recreate it from animation or art.
-//!
-//! ## Why the interpolation is polar
-//!
-//! Interpolating the two configured points *cartesianly* cannot make an arc.
-//! It cuts the chord: the disc travels in a straight line between the ends and
-//! passes closer to the player in the middle than at either end. That is the
-//! swing shape you would most want and the one that would come out wrong —
-//! wrong by a fraction of a unit, in the middle of a short active window, which is
-//! not something any screenshot shows.
-//!
-//! So a disc holds an angle off the facing and a distance from the player, and
-//! the two interpolate separately. Ends on the same ray degenerate to the
-//! straight line a stab wants; ends at the same distance sweep a real arc. The
-//! configuration stays cartesian because "the sword starts here and ends there"
-//! is something you can picture, and a pair of radians is not.
+//! Polar interpolation preserves arcs instead of cutting a straight chord.
+//! Stored samples keep an in-flight swing independent of later tuning edits.
 
 use glam::{FloatExt, Vec2};
 
 use crate::angle;
 use crate::hash::Fnv;
 
-/// One disc of a hitbox, in the player's frame.
-///
-/// **Polar rather than cartesian, and that is not a storage detail.** Placing
-/// it in the world is then `facing + angle` handed to the single `(sin, cos)`
-/// convention this codebase has, instead of a right-hand basis vector — and a
-/// mirrored basis is precisely the class of mistake that compiles, validates,
-/// draws, and swings out of the character's back in silence.
+/// One polar hitbox disc relative to the player.
 #[derive(Clone, Copy)]
 pub(crate) struct Disc {
     /// Off the facing direction, in radians. Zero is straight ahead.
@@ -53,30 +20,14 @@ pub(crate) struct Disc {
 }
 
 impl Disc {
-    /// Where this disc sits in the world, and how big it is.
-    ///
-    /// Yaw 0 faces `+Z` and positive turns toward `+X` — the convention
-    /// `Instance::with_yaw` and the asset shaders share. Because the disc is stored
-    /// as an angle, honouring that convention here is one addition rather than
-    /// a basis someone has to get the signs right on.
+    /// World centre and radius. Yaw zero faces +Z; positive yaw turns toward +X.
     pub(crate) fn place(self, origin: Vec2, facing: f32) -> (Vec2, f32) {
         let (sin, cos) = (facing + self.angle).sin_cos();
         (origin + Vec2::new(sin, cos) * self.distance, self.radius)
     }
 }
 
-/// A swing's shape: where its hitbox starts, where it ends, and how big it is
-/// at each end.
-///
-/// The two ends are offsets in the player's frame, `x` to the right of the
-/// facing and `y` straight along it — the local twin of the ground-plane
-/// convention [`crate::on_ground`] spells out.
-///
-/// The radius is a pair for the same reason the position is: without it a slam
-/// is a hitbox that does not move, which is a slam with no impact to it. Three
-/// dials, and the named swings fall out of them — an arc varies the angle, a
-/// stab the distance, a slam the radius, and nothing stops one swing varying
-/// all three.
+/// Hitbox endpoints and radii in the player's frame: X is right, Y is forward.
 pub(crate) struct Swing {
     start: Vec2,
     end: Vec2,
@@ -96,17 +47,8 @@ impl Swing {
         Self { start, end, radius }
     }
 
-    /// Generates the hitbox: one disc per tick of the active window.
-    ///
-    /// `N` is that window's length in ticks, so the samples land exactly on the
-    /// ticks that will test them — the first on `start`, the last on `end`.
-    ///
-    /// **The hitbox's spatial resolution is therefore the tick rate.** That is
-    /// fine while the two ends are close together and stops being fine once a
-    /// swing travels far in a few ticks: consecutive discs stop overlapping,
-    /// and a body standing in the gap between two of them is passed straight
-    /// through. It is a real limit, it cannot bite until a swing actually
-    /// moves, and it belongs to the change that makes one move.
+    /// Generates one disc per active tick, including both endpoints when N > 1.
+    /// Admission must reject paths with gaps that let a target pass between samples.
     pub(crate) fn generate<const N: usize>(&self, samples: usize) -> Hitbox<N> {
         assert!(samples > 0 && samples <= N, "active window must fit the hitbox storage");
         let (from_angle, from_distance) = polar(self.start);
@@ -213,13 +155,7 @@ mod tests {
         assert!((last_radius - 0.5).abs() < 1e-6);
     }
 
-    /// **The reason the interpolation is polar, stated as a test.**
-    ///
-    /// Both ends sit at the same distance from the player, so an arc keeps that
-    /// distance the whole way round. A cartesian lerp between the same two
-    /// points cuts the chord and brings the middle discs ~0.24 units closer,
-    /// which is a quarter of the reach — a hit that lands early against a body
-    /// in front and no visible defect anywhere.
+    /// An arc retains radius at its midpoint; a Cartesian chord would cut inward.
     #[test]
     fn an_arc_sweeps_rather_than_cutting_the_chord() {
         let end = Vec2::new(0.9, 0.7);

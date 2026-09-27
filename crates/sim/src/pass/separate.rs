@@ -1,20 +1,5 @@
-//! Pushes overlapping bodies apart.
-//!
-//! **The response half of a contact.** Whether two bodies touch, and along what
-//! line, is [`crate::contact`]'s question; this module only decides what to do
-//! about the answer. An attack asks the same question and does something else
-//! entirely with it.
-//!
-//! ## Two passes, one module
-//!
-//! [`crowd`] resolves the horde against itself; [`player`] resolves the horde
-//! against the player. They are separate entries in the schedule because the
-//! **order between them is load-bearing** and belongs somewhere readable, and
-//! they share this module because they are the same behaviour over different
-//! pair sets — same response, same constants, and only the pairing differs.
-//!
-//! Crowd separation uses a uniform grid to discard distant pairs. Player
-//! separation remains a linear scan. Both preserve immediate response order.
+//! Immediate contact response: grid-based crowd pairs, then a linear player pass.
+//! Pair order affects the result of the single sweep.
 
 use glam::Vec2;
 
@@ -25,20 +10,8 @@ use crate::contact::{self, Contact};
 use crate::trace::{Event, TraceSink};
 use crate::{ENEMY_RADIUS, EntityId, PLAYER_ENEMY_CONTACT_DISTANCE};
 
-/// Separates every body overlapping the player, and reports how many.
-///
-/// Brute force, deliberately. It is O(N), so for a crowd of 1,024 it is a
-/// thousand distance checks a tick and costs nothing worth measuring.
-///
-/// **Runs after [`crowd`]**, and that order is a decision rather than an
-/// accident. One Gauss-Seidel sweep leaves residual overlap wherever a body was
-/// pushed by two things at once, and whichever of these two runs *last* is the
-/// one whose result survives the tick. Last here means the player's personal
-/// space is inviolate: no enemy ends a tick standing inside it. The residual
-/// lands instead on enemy-against-enemy, where it is a fraction of a body's
-/// width inside a mass of identical cubes and nobody can see it. Reverse the
-/// order and the visible artefact is a body clipping into the character the
-/// camera is centred on.
+/// Resolves player contacts after crowd contacts, prioritizing player space
+/// when a single sweep leaves residual overlaps.
 pub(crate) fn player(
     pos: &mut [Vec2],
     ids: &[EntityId],
@@ -79,34 +52,10 @@ pub(crate) fn player(
     contacts
 }
 
-/// Separates the horde against itself, and reports how many pairs it resolved.
-///
-/// **This is what makes the horde a crowd** rather than a grid of positions
-/// drawn near one another. Without it, shoving into the pack compresses it to a
-/// point instead of displacing it outward.
-///
-/// Every unordered pair once — `j` starts past `i` — so a pair is never
-/// resolved twice, which would double the correction and make the crowd
-/// springy.
-///
-/// The grid visits nearby pairs in the same ascending dense-row order as the
-/// original brute-force loop. Membership updates after every positional change;
-/// crossing a cell re-queries later rows, preserving same-tick shove chains.
-/// The index is rebuilt after motion and discarded logically at the pass boundary.
-/// Degenerate piles can still require quadratic work: real contacts are not culled.
-///
-/// Gauss-Seidel, as [`player`] is: each correction is written immediately, so
-/// the next pair sees it. That converges faster per sweep than accumulating and
-/// applying at the end, and its one real cost — the result depends on the order
-/// pairs are visited — is fine because the order is a fixed walk over storage
-/// rather than anything that varies run to run. It is also why
-/// [`crate::pass::remember`] copies rather than swapping two buffers.
-///
-/// **One sweep, not iterated to convergence.** A body squeezed between two
-/// others ends the tick still slightly overlapped, and the next tick takes
-/// another bite. That reads as a crowd settling, which is what it should look
-/// like; iterating here to a hard constraint would instead make a dense pack
-/// rigid and jolt everything the moment the player entered it.
+/// Resolves nearby pairs once in ascending dense-row order with immediate response.
+/// Grid updates preserve contacts created by earlier corrections. Dense piles can
+/// still require quadratic work. One sweep leaves residual overlap to settle on
+/// later ticks rather than making the crowd a rigid constraint.
 pub(crate) fn crowd(
     horde: &mut [Vec2],
     ids: &[EntityId],

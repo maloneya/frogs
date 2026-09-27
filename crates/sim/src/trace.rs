@@ -1,23 +1,5 @@
-//! Tick-stamped events: what the simulation did, as opposed to what it now
-//! holds.
-//!
-//! `World::hash` and the `state` line are both *point samples* — they say where
-//! everything is at the moment you looked. That is enough for movement and
-//! useless for anything with a window. An attack that activates its hitbox one
-//! tick early produces no crash, no compiler error, and a final state
-//! indistinguishable from the correct one; the mistake exists only in the
-//! interval between two samples, and a sample cannot see an interval.
-//!
-//! So anything with a *window* — an attack, hitstop, a buffered input — can
-//! only be checked here. `state` says where the swing is; this says when it
-//! opened and shut.
-//!
-//! The shape deliberately mirrors `InstanceSink`, the other seam out of `sim`.
-//! There, a pass can only `push` an `Instance` and cannot resize or reset the
-//! buffer. Here, a pass gets a [`TraceSink`] that already knows the tick, so it
-//! can only `emit` — **a pass physically cannot stamp an event with the wrong
-//! tick**, which removes by construction the one error that would make every
-//! timing assertion built on this worthless.
+//! Tick-stamped diagnostic events. [`TraceSink`] supplies the tick and permits
+//! emission without exposing the trace buffer to passes.
 
 use core::fmt;
 
@@ -35,13 +17,7 @@ const CAPACITY: usize = 65_536;
 pub const MAX_TRACE_EVENTS: usize = 262_144;
 const _: () = assert!(CAPACITY > 0, "a zero-length trace silently records nothing");
 
-/// Something worth knowing that happened during a tick.
-///
-/// **One event per pass per tick at most, summarising.** The temptation is to
-/// emit per body — a `contact` for each of a thousand overlapping pairs — and
-/// that floods the buffer so thoroughly that the rare events this exists for
-/// scroll away before anyone reads them. Per-occurrence events belong to things
-/// that occur rarely: a hitbox opening, a hit landing, hitstop starting.
+/// Diagnostic transitions. Aggregate repetitive contacts; retain identities for hits.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
     /// Accepted type-wide edit before the named tick.
@@ -144,13 +120,7 @@ pub enum Event {
         /// Which source asked.
         source: SourceId,
     },
-    /// Requests the world could not grant this tick.
-    ///
-    /// **The event that exists so a dropped spawn cannot be silent.** Nothing
-    /// appears, nothing errors, and the only other evidence would be a body a
-    /// designer expected and did not get. Summarised per tick, because the
-    /// interesting fact is that asking outran granting, not which particular
-    /// request lost.
+    /// Number of spawn requests refused this tick.
     Refused {
         /// Requests dropped: the queue was full, or the horde was already at
         /// the instance budget.

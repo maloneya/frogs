@@ -1,24 +1,6 @@
-//! The swing: a shape, a window of ticks, and what it does to what it touches.
+//! Melee timing and hit resolution from committed swing samples.
 //!
-//! **An attack is two bodies touching, with a different answer.** The question
-//! is the same one the crowd solver asks — [`crate::contact::between`], disc
-//! against disc — and everything that makes this an attack rather than a shove
-//! is in the response and in *when* the question is allowed to be asked.
-//!
-//! The signature is where that shows up, and it is worth reading twice.
-//! `pass::separate` takes `&mut [Vec2]` because pushing is what it does; this
-//! takes `&[Vec2]` plus an `ImpulseSink`. It can request momentum, but cannot
-//! move a position or reach the rest of the physics store. The motion pass
-//! integrates that momentum on the next tick.
-//!
-//! ## Why the window is the hard part
-//!
-//! Startup, active and recovery are the whole texture of a melee attack. An
-//! attack that connects one tick early is not a bug you can see: the swing
-//! plays, the enemy is hit, nothing crashes and the final state is the state a
-//! correct swing would have left. It exists only in the interval between two
-//! samples. Every timing claim below is therefore asserted against a golden
-//! trace, which is the only artefact that can see an interval.
+//! Hits submit impulses; displacement begins at the next motion pass.
 
 use super::health::DamageSink;
 use super::motion::{Impulse, ImpulseSink};
@@ -49,16 +31,7 @@ struct InFlight {
     profile: AttackProfile,
     /// Captured at the press; later resolution cannot reshape this swing.
     resolved: ResolvedAttack,
-    /// Where this swing's hitbox goes, in the player's own frame.
-    ///
-    /// **Generated when the swing starts, not recomputed per tick.** That is
-    /// what makes it a value two readers can share — see [`crate::swing`] — and
-    /// it is also the right moment for the choice: a weapon swapped mid-swing
-    /// must not reshape the swing already in the air. This is the generated
-    /// value chosen from the configuration captured beside it.
-    ///
-    /// Local rather than world, because baking world positions at the press
-    /// would prevent the hitbox from following the moving player.
+    /// Committed local hitbox samples; local coordinates let the swing follow player motion.
     hitbox: Hitbox<HITBOX_SAMPLES>,
 }
 
@@ -102,15 +75,7 @@ pub(crate) struct Attack {
     resolved: Option<ResolvedAttack>,
     /// Tick within the beam damage cadence; no body identities are retained.
     channel: Option<u32>,
-    /// Bodies this swing has already struck.
-    ///
-    /// **Once per swing, not once per tick.** Without this, a body standing in
-    /// the hitbox takes one hit for every configured active tick — which is not
-    /// a tuning problem, it is a different game.
-    ///
-    /// A linear scan, deliberately: it holds what one swing hit, which is a
-    /// handful, and a set would cost more to build each swing than the scan
-    /// saves. If a swing ever hits hundreds, this is the line to revisit.
+    /// Targets already hit, preventing repeated damage across active ticks.
     struck: Vec<EntityId>,
     /// Damage positions from this completed tick, including defeated targets.
     beam_hits: Vec<Vec2>,
@@ -286,23 +251,8 @@ pub(crate) struct Pose {
     pub(crate) facing: f32,
 }
 
-/// Advances the swing, and strikes whatever the hitbox is touching.
-///
-/// **Takes positions immutably**, which is the whole difference between this
-/// pass and `pass::separate` given that both ask the same question of the same
-/// geometry.
-///
-/// Runs last in the schedule, after `pass::face`, so the hitbox is oriented by
-/// the facing this tick ended with rather than the one it started with. Facing
-/// is held through recovery by the facing pass; translation remains free.
-///
-/// The hitbox itself is generated at the press and stored — see
-/// [`crate::swing`]. Hit resolution uses that committed shape throughout the swing.
-///
-/// A press arriving while a swing is in progress is **dropped**, not queued.
-/// Buffering it is a real feature and a separate one — it needs an expiry and a
-/// rule about which phase accepts it, and guessing those now would bake in a
-/// feel nobody has tried.
+/// Advances the committed swing and tests its current active disc against final
+/// body positions after facing. Presses during a swing are dropped.
 #[expect(
     clippy::too_many_arguments,
     reason = "positions and ids are one immutable body view, while impulse and damage sinks deliberately give the attack two independent effects without exposing either store"
@@ -320,21 +270,8 @@ pub(crate) fn attack(
 ) {
     state.beam_hits.clear();
     let channel_requested = state.channels(input.attack_held());
-    // **Advance first, then accept a press, then act.** The order is the whole
-    // state machine, and the obvious alternative — advancing at the end — is
-    // wrong in a way that only shows up when something *observes* the swing.
-    //
-    // Advancing last leaves `elapsed` pointing at the tick that has not run
-    // yet, so `hitbox_is_live` read after `World::step` answers about the
-    // future: it says the hitbox is live on a tick where nothing has been
-    // struck, and dead on the tick where something was. The harness and the
-    // report both read exactly there. Retiring the swing up here instead means
-    // `elapsed` names the tick just processed, which is what every observer
-    // assumes and what `tick` itself means.
-    //
-    // Retiring *before* the press check is also what makes the tick after
-    // recovery the first that can start a new swing, rather than the one after
-    // that.
+    // Advance before accepting input so post-step observations describe the tick
+    // just processed, and the first tick after recovery can accept a new swing.
     if let Some(swing) = &mut state.swing {
         swing.elapsed += 1;
     }
@@ -418,24 +355,8 @@ pub(crate) fn attack(
     }
 }
 
-/// Tests one disc of the hitbox against every body and records what it touches.
-///
-/// **Handed the disc rather than working out which one is live**, which is what
-/// makes "this cannot run outside the active window" a fact about the signature
-/// instead of an assert: there is no index here to get wrong and no fallback to
-/// silently pick the wrong disc. The caller has already matched on the phase
-/// that produced it.
-///
-/// The disc it is handed is *this tick's*, not every disc the swing will
-/// occupy. The hitbox sweeps: a body on the far side of an arc is struck later
-/// than one on the near side, and that ordering is the whole texture of a
-/// swing. A hitbox that accumulated its past positions would have the entire
-/// arc live by the last active tick, which is the "a generous window reads as
-/// mush" failure a short active window avoids, arriving through a
-/// different door.
-///
-/// Takes `struck` rather than the whole `Attack` for the usual reason: it may
-/// record what it hit and may not touch the timer or the shape.
+/// Tests only the current active disc, not the union of past hitbox positions.
+/// `struck` records targets already hit during this swing.
 #[expect(
     clippy::too_many_arguments,
     reason = "`bodies` and `pos` are one parallel pair and knockback direction, strength and damage are the only tuning values this may see; bundling them would hand `strike` more authority than taking positions immutably is meant to allow"
@@ -609,17 +530,7 @@ mod tests {
         }
     }
 
-    /// **The tunnelling limit, as a check rather than a paragraph.**
-    ///
-    /// One disc per tick ties the hitbox's spatial resolution to the tick rate,
-    /// so a swing that travels far enough between two ticks leaves a gap and
-    /// passes bodies straight through it. `crate::swing` explains why that is
-    /// deferred; this is what stops the deferral being silent. A const assert
-    /// would be higher up the ladder and is not available — the bound needs
-    /// `atan2` and `sqrt`, neither of which is const on stable.
-    ///
-    /// Runtime configurations enforce this at their edit door; this local test
-    /// keeps the default configuration honest as well.
+    /// Default hitbox samples must overlap; runtime edits validate this at admission.
     #[test]
     fn consecutive_discs_of_the_swing_leave_no_gap() {
         let t = resolved();

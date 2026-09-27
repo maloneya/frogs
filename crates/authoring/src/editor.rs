@@ -1,6 +1,6 @@
 //! Stateless authoring operations. The companion retains drafts/undo; each
 //! request carries a complete authoring document, never a live-world snapshot.
-use arpg_core::{EnvironmentLight, PointLight};
+use arpg_core::{EnvironmentLight, LinearRgb, PointLight};
 use arpg_game::{EnvironmentSpec, TorchSpec, TreeKind, TreeSpec, EnemyAttackSpec};
 use arpg_content::{SceneObjectKind as Kind, SceneObjectRef as Target};
 use arpg_content::SceneDocument;
@@ -256,7 +256,12 @@ pub fn edit(mut scene: SceneDocument, edit: Edit) -> Result<(SceneDocument, Opti
         Edit::LightingColour { field, colour } => {
             let light = scene.scene.environment.light();
             let (mut ambient, mut directional) = (light.ambient_colour(), light.directional_colour());
-            match field.as_str() { "ambient_colour" => ambient = colour.into(), "directional_colour" => directional = colour.into(), _ => return Err("Unknown lighting colour.".into()) }
+            let target = match field.as_str() {
+                "ambient_colour" => &mut ambient,
+                "directional_colour" => &mut directional,
+                _ => return Err("Unknown lighting colour.".into()),
+            };
+            *target = LinearRgb::try_new(colour.0, colour.1, colour.2)?;
             scene.scene.environment = EnvironmentSpec::new(EnvironmentLight::try_new(ambient, light.ambient_intensity(), directional, light.directional_intensity(), light.direction())?);
         }
         Edit::Rename { name } => {
@@ -270,7 +275,7 @@ pub fn edit(mut scene: SceneDocument, edit: Edit) -> Result<(SceneDocument, Opti
                 Kind::Source => { scene.scene.engine.sources.push(SourceSpec { pos, radius: 2.0, every: 60, enabled: true, when: Condition::FewerThan(12), what: Template::BODY.seeking() }); scene.scene.engine.sources.len() - 1 }
                 Kind::Grid => { scene.scene.engine.grids.push(BodyGrid { origin: pos, columns: 3, rows: 3, spacing: 1.5, what: Template::BODY.seeking() }); scene.scene.engine.grids.len() - 1 }
                 Kind::Tree => { scene.scene.trees.push(TreeSpec::new(TreeKind::Pine, pos.into(), 0.0, 1.0)?); scene.scene.trees.len() - 1 }
-                Kind::Campfire => { scene.scene.torches.push(TorchSpec::new(PointLight::try_new(Vec3::new(pos.0, 1.5, pos.1), Vec3::new(1.0, 0.45, 0.12), 24.0, 14.0)?)?); scene.scene.torches.len() - 1 }
+                Kind::Campfire => { scene.scene.torches.push(TorchSpec::new(PointLight::try_new(Vec3::new(pos.0, 1.5, pos.1), LinearRgb::new(1.0, 0.45, 0.12), 24.0, 14.0)?)?); scene.scene.torches.len() - 1 }
             };
             selected = Some(Target { kind, index });
         }
@@ -287,7 +292,7 @@ pub fn edit(mut scene: SceneDocument, edit: Edit) -> Result<(SceneDocument, Opti
             if !matches!(target.kind, Kind::Campfire) { return Err("This object has no light colour.".into()); }
             let torch = scene.scene.torches.get_mut(target.index).ok_or_else(missing)?;
             let light = torch.light();
-            *torch = TorchSpec::new(PointLight::try_new(light.position(), colour.into(), light.intensity(), light.range())?)?;
+            *torch = TorchSpec::new(PointLight::try_new(light.position(), LinearRgb::try_new(colour.0, colour.1, colour.2)?, light.intensity(), light.range())?)?;
             selected = Some(target);
         }
         Edit::Duplicate { target, offset } => {
@@ -346,7 +351,7 @@ fn template_fields(template: Template) -> Vec<Value> {
         field("interactable", "Can interact", "bool", f32::from(template.interactable()), 1.0)]
 }
 
-fn colour_field(key: &str, label: &str, colour: Vec3) -> Value {
+fn colour_field(key: &str, label: &str, colour: LinearRgb) -> Value {
     json!({"key":key,"label":label,"unit":"colour","value":0.0,"step":0.0,"colour":colour.to_array()})
 }
 
@@ -501,7 +506,10 @@ mod tests {
         let (scene, _) = edit(scene, Edit::Move { target: fire, pos: (5.0, 2.0) }).unwrap();
         let (scene, _) = edit(scene, Edit::Set { target: fire, field: "height".into(), value: Number::from_f64(2.5).unwrap() }).unwrap();
         assert!(edit(scene.clone(), Edit::Set { target: fire, field: "height".into(), value: Number::from_f64(0.0).unwrap() }).is_err());
-        assert!(edit(scene.clone(), Edit::Colour { target: fire, colour: (-0.1, 1.0, 1.0) }).is_err());
+        assert_eq!(scene.scene.torches[0].light().colour().to_array(), [0.1, 0.3, 1.0]);
+        for invalid in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
+            assert!(edit(scene.clone(), Edit::Colour { target: fire, colour: (invalid, 1.0, 1.0) }).is_err());
+        }
         // Predict complete admission, then restart: both trunks and the moved
         // light must return with exactly the authored settings.
         let mut game = Game::from_scene(&scene.scene).unwrap();
@@ -527,6 +535,12 @@ mod tests {
         let (scene, _) = edit(scene, Edit::Lighting { field: "azimuth".into(), value: 90.0 }).unwrap();
         let (scene, _) = edit(scene, Edit::Lighting { field: "elevation".into(), value: 45.0 }).unwrap();
         let expected = scene.scene.environment.light();
+        assert_eq!(expected.ambient_colour().to_array(), [0.1, 0.2, 0.8]);
+        for field in ["ambient_colour", "directional_colour"] {
+            for invalid in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
+                assert!(edit(scene.clone(), Edit::LightingColour { field: field.into(), colour: (1.0, invalid, 1.0) }).is_err());
+            }
+        }
         assert!((expected.direction() - Vec3::new(0.5_f32.sqrt(), 0.5_f32.sqrt(), 0.0)).length() < 0.0001);
         assert!(edit(scene.clone(), Edit::Lighting { field: "ambient_intensity".into(), value: -1.0 }).is_err());
         assert!(edit(scene.clone(), Edit::Lighting { field: "elevation".into(), value: 100.0 }).is_err());

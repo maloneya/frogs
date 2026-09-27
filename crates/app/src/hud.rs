@@ -1,24 +1,10 @@
-//! What the overlay says, and where.
-//!
-//! The screen-space counterpart of asset presentation: app describes the world
-//! in mesh placements and a screen in quads. Both hand over geometry and colour,
-//! so gfx draws the readout without learning what it reads out.
-//!
-//! It lives in `app` for the reason everything else here does: this is the only
-//! crate that sees both sides. A health bar has to know what health is and
-//! where the top-left of the window is, and those two facts live on opposite
-//! sides of a boundary neither `sim` nor `gfx` may cross.
-//!
-//! **It is a pure function of what it is handed.** No state, no allocation, no
-//! reading the clock. That is not stylistic: it makes the whole overlay
-//! checkable without a GPU, because "what should be on screen" becomes a list
-//! of quads a test can inspect — see the tests at the bottom, which never
-//! create a device.
+//! HUD layout as inspectable screen-space quads, independent of GPU submission.
 
 use crate::input::ATTACK_BINDINGS;
 use arpg_gfx::{Glyphs, Quad, QuadSink};
 use arpg_sim::{AttackProfile, AttackStatus};
 use core::fmt::Write as _;
+use arpg_core::LinearRgba;
 use glam::{Vec2, Vec4};
 
 /// Distance from the window edge to the panel, in physical pixels.
@@ -30,17 +16,17 @@ const PADDING: f32 = 10.0;
 /// The readout's colour, linear. Bright enough to read over the pale floor and
 /// the dark clear colour alike, which is the whole job of a debug readout and
 /// the reason it is not simply white — white is what the floor already is.
-const INK: Vec4 = Vec4::new(0.95, 0.95, 0.90, 1.0);
+const INK: LinearRgba = LinearRgba::new(0.95, 0.95, 0.90, 1.0);
 
 /// The panel behind the text, linear, with the alpha that makes it a scrim
 /// rather than a box. Without it the readout is unreadable over the pale ground
 /// tiles exactly when the player walks somewhere bright, which is a legibility
 /// bug that only appears in half the world.
-const PANEL: Vec4 = Vec4::new(0.004, 0.005, 0.008, 0.62);
+const PANEL: LinearRgba = LinearRgba::new(0.004, 0.005, 0.008, 0.62);
 
-const HEALTH_FILL: Vec4 = Vec4::new(0.55, 0.035, 0.045, 1.0);
-const ACTIVE_SLOT: Vec4 = Vec4::new(0.025, 0.18, 0.25, 1.0);
-const SLOT: Vec4 = Vec4::new(0.025, 0.03, 0.04, 1.0);
+const HEALTH_FILL: LinearRgba = LinearRgba::new(0.55, 0.035, 0.045, 1.0);
+const ACTIVE_SLOT: LinearRgba = LinearRgba::new(0.025, 0.18, 0.25, 1.0);
+const SLOT: LinearRgba = LinearRgba::new(0.025, 0.03, 0.04, 1.0);
 const GAP: f32 = 4.0;
 const BAR_HEIGHT: f32 = 8.0;
 const PLAYER_PADDING: f32 = 6.0;

@@ -98,7 +98,7 @@ In **Research World-Class Game Design**, a handwritten tuning UI and GPU surface
 
 Some of this was legitimate design evolution. It would be unfair to count all of it as agent error. The avoidable risk was extending the UI before demonstrating the full boundary: offline edit → validate → save → play, with the game consuming playable data and the launcher owning processes.
 
-The current architecture and [dependency ownership rules](invariants.md) already encode that decision. Future editor work should prove one complete authoring operation through both clients before expanding the palette. A short concrete boundary example is more useful than a speculative architecture document.
+The [dependency guard](../build_support/dependencies.rs) already enforces crate boundaries. Future editor work should prove one complete authoring operation through both clients before expanding the palette.
 
 **7. Reduce review and context overhead selectively**
 

@@ -1,14 +1,4 @@
-//! Turning imported meshes and [`arpg_core::Instance`] placements into pixels.
-//!
-//! Its simulation-facing vocabulary is position, scale and colour, and it has
-//! no dependency on `arpg-sim`. The separate asset boundary supplies anonymous
-//! validated geometry. Naming a simulation type here is a compile error (E0432,
-//! unresolved import) because the crate is not in this one's dependency closure;
-//! adding it to `Cargo.toml` to fix that is caught by `build.rs`.
-//!
-//! Note it is *not* a Cargo cycle — `arpg-gfx` and `arpg-sim` are siblings, both
-//! depending only on `arpg-core`, so Cargo would accept that edge without
-//! complaint. The guard in `build.rs` is what closes it.
+//! Rendering validated assets and [`arpg_core::Instance`] placements.
 
 mod camera;
 mod capture;
@@ -54,21 +44,7 @@ use overlay::QuadPipeline;
 /// perspective projections want 24-bit-plus formats.
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-/// Everything required to get pixels onto the screen.
-///
-/// The four wgpu handles are worth keeping straight, because the names are not
-/// self-explanatory:
-///
-/// - `instance` is the library entry point. It enumerates what hardware exists.
-/// - `adapter` is one physical GPU. We only need it during setup, to ask what
-///   it's capable of, so it isn't stored.
-/// - `device` is a logical handle to that GPU. Every resource (buffer, texture,
-///   pipeline) is created from it.
-/// - `queue` is the channel we submit finished command buffers on. This is the
-///   actual boundary between our process and the GPU.
-///
-/// `surface` is the swapchain: a small ring of textures the OS compositor can
-/// display. We render into one and hand it back to be presented.
+/// GPU device, surface and rendering resources.
 pub struct Renderer {
     window: Arc<Window>,
     instance: wgpu::Instance,
@@ -494,19 +470,10 @@ impl Renderer {
     }
 }
 
-/// Headless GPU tests.
-///
-/// These exist to close the gap Rust cannot see across: the vertex layout in
-/// `instance.rs` and the `@location` declarations in `mesh.wgsl` and `character.wgsl` are one
-/// contract maintained in two files and two languages. `cargo check` is blind
-/// to it. wgpu's validator is not — it compares them at pipeline creation and
-/// again at draw time, so the job here is simply to reach those points without
-/// a window and to turn any complaint into a test failure.
-///
-/// A device needs no surface: `compatible_surface: None`, and on Metal the
-/// display handle goes unused.
+/// Surface-free GPU validation and pixel tests; a real adapter is required.
 #[cfg(test)]
 mod tests {
+    use arpg_core::{LinearRgb, LinearRgba};
     use super::*;
     use arpg_core::Instance;
     use glam::Vec3;
@@ -541,8 +508,8 @@ mod tests {
     fn lit_camera_binding(device: &wgpu::Device, queue: &wgpu::Queue) -> CameraBinding {
         let binding = CameraBinding::new(device);
         binding.upload_lights(queue, &[PointLight::new(
-            Vec3::new(40.0, 100.0, 30.0), Vec3::ONE, 12_000.0, 1_000.0,
-        )], arpg_core::EnvironmentLight::try_new(Vec3::ONE, 0.0, Vec3::ONE, 0.0, Vec3::Y).unwrap());
+            Vec3::new(40.0, 100.0, 30.0), LinearRgb::WHITE, 12_000.0, 1_000.0,
+        )], arpg_core::EnvironmentLight::try_new(LinearRgb::WHITE, 0.0, LinearRgb::WHITE, 0.0, Vec3::Y).unwrap());
         binding
     }
 
@@ -551,13 +518,7 @@ mod tests {
     struct Silhouette {
         width: u32,
         height: u32,
-        /// Sign-bearing covariance of the lit pixels' x and y.
-        ///
-        /// The bounding box alone is **reflection-invariant**, and that is not a
-        /// nitpick: swapping `sin` and `cos` in the shader reflects every
-        /// direction across the screen vertical, which leaves every bounding box
-        /// identical. This is the measurement that notices, because a bar
-        /// leaning one way and its mirror image have opposite covariance.
+        /// Signed pixel covariance distinguishes mirrored orientations with identical bounding boxes.
         lean: f32,
     }
 
@@ -597,7 +558,7 @@ mod tests {
 
         // Stretch the half-metre prop into an eight-metre bar. The convention
         // test now exercises the production asset shader rather than a fallback.
-        let instances = [Instance::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 16.0), Vec3::ONE).with_yaw(yaw)];
+        let instances = [Instance::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 16.0), LinearRgb::WHITE).with_yaw(yaw)];
         let batches = [MeshBatch::new(&mesh, &instances)];
         pipeline.upload(&queue, &batches);
 
@@ -664,19 +625,8 @@ mod tests {
         }
     }
 
-    /// **The Rust/WGSL seam that nothing else covers.**
-    ///
-    /// `Instance::with_yaw`, `World::turn_toward` and `rotate_y` in the shader
-    /// all rest on one convention — yaw 0 faces +Z, positive turns toward +X —
-    /// and wgpu cannot check it. It validates the *types* crossing into WGSL,
-    /// never the meaning of the numbers, so a sign flip compiles, validates,
-    /// draws, and points every character 90 degrees off, forever, in silence.
-    ///
-    /// Under the isometric camera, screen-right is world `(+X, -Z)/√2`, which
-    /// `atan2(dir.x, dir.z)` inverts to yaw `3π/4`; screen-up is `(-X, -Z)/√2`,
-    /// or `-3π/4`. So a long bar at `+3π/4` must lie across the screen and the
-    /// same bar at `-3π/4` must point away from the camera. A sign error swaps
-    /// exactly those two, which is what makes this assertion worth making.
+    /// Checks yaw across Rust/WGSL: screen-right is yaw +3π/4, screen-up -3π/4.
+    /// A sign error swaps the projected orientations without failing GPU validation.
     #[test]
     fn yaw_points_the_body_where_the_convention_says() {
         use std::f32::consts::PI;
@@ -779,7 +729,7 @@ mod tests {
         let mut camera = OrthoCamera::new(N, N);
         camera.zoom_by(0.125); // Clamp to a two-metre half-height.
         camera_binding.upload(&queue, &camera);
-        pipeline.upload(&queue, &[MeshBatch::new(&gpu, &[Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)])]);
+        pipeline.upload(&queue, &[MeshBatch::new(&gpu, &[Instance::new(Vec3::ZERO, Vec3::ONE, LinearRgb::WHITE)])]);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("asset preview silhouette"),
@@ -958,10 +908,10 @@ mod tests {
         let mut camera = OrthoCamera::new(N, N);
         camera.zoom_by(0.125);
         camera_binding.upload(&queue, &camera);
-        let floor = [Instance::new(Vec3::new(-1.0, 0.0, 1.0), Vec3::splat(0.8), Vec3::X * 10.0)];
+        let floor = [Instance::new(Vec3::new(-1.0, 0.0, 1.0), Vec3::splat(0.8), LinearRgb::new(10.0, 0.0, 0.0))];
         let props = [
-            Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::Y),
-            Instance::new(Vec3::new(1.0, 0.0, -1.0), Vec3::ONE, Vec3::Z),
+            Instance::new(Vec3::ZERO, Vec3::ONE, LinearRgb::new(0.0, 1.0, 0.0)),
+            Instance::new(Vec3::new(1.0, 0.0, -1.0), Vec3::ONE, LinearRgb::new(0.0, 0.0, 1.0)),
         ];
         let batches = [
             MeshBatch::new(&prop_gpu, &[]),
@@ -1069,7 +1019,7 @@ mod tests {
             .clip_named("Idle")
             .expect("fixture carries its Idle clip");
         assert!(cpu.sample(idle, seconds, &mut pose));
-        let instances = [Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE).with_white_mix(white_mix)];
+        let instances = [Instance::new(Vec3::ZERO, Vec3::ONE, LinearRgb::WHITE).with_white_mix(white_mix)];
         let empty = CharacterBucket::new(&pose, &[]);
         let mut buckets = [empty; MAX_HORDE_POSE_BUCKETS];
         buckets[3] = CharacterBucket::new(&pose, &instances);
@@ -1196,13 +1146,7 @@ mod tests {
         assert!(checked > 1000, "exercise the fade across the rendered surface");
     }
 
-    /// Renders one overlay frame offscreen and hands back its pixels.
-    ///
-    /// The two tests below differ only in what they push and what they assert;
-    /// everything between — the target, the depth attachment, the render pass
-    /// and the readback — is the part wgpu validation is most sensitive to, and
-    /// having it once means a change to it is one edit rather than several.
-    /// The validation scope lives here too, so neither test can forget it.
+    /// Renders an overlay offscreen with GPU validation and pixel readback.
     fn overlay_frame(
         width: u32,
         height: u32,
@@ -1279,18 +1223,25 @@ mod tests {
         rgba
     }
 
-    /// **Where a screen-space quad actually lands.**
-    ///
-    /// The overlay's whole transform is four lines of WGSL turning pixels into
-    /// clip space, and exactly one of them is easy to get backwards: the y
-    /// term, which must be subtracted because the overlay's origin is top-left
-    /// while clip space is y-up. Flipping it compiles, validates, draws, and
-    /// puts every readout the same distance from the wrong edge — a mirror
-    /// image, which looks entirely deliberate in a screenshot.
-    ///
-    /// So the rectangle is placed **off-centre vertically** and the mirrored
-    /// band is asserted empty. That is the assertion a sign flip fails and a
-    /// bounding box could not make.
+    #[test]
+    fn encoded_colour_is_decoded_before_linear_blending_and_srgb_output() {
+        let rgba = overlay_frame(64, 32, |_, sink| {
+            let grey = arpg_core::Srgb::from_rgb8([128; 3]).to_linear();
+            sink.push(Quad::solid(glam::Vec4::new(0.0, 0.0, 32.0, 32.0), grey.with_alpha(1.0)));
+            sink.push(Quad::solid(glam::Vec4::new(32.0, 0.0, 32.0, 32.0), grey.with_alpha(0.5)));
+        });
+        // Half coverage over black yields linear 0.10793, encoded as 92.
+        for (x, expected) in [(16, 128_u8), (48, 92_u8)] {
+            let offset = (16 * 64 + x) * 4;
+            for channel in &rgba[offset..offset + 3] {
+                assert!(channel.abs_diff(expected) <= 1, "expected {expected}, got {channel}");
+            }
+            assert_eq!(rgba[offset + 3], 255);
+        }
+    }
+
+    /// An off-centre quad must occupy the expected screen band, leaving its mirror
+    /// empty; this catches a pixel-to-clip Y sign error.
     #[test]
     fn an_overlay_quad_lands_where_it_was_placed() {
         const W: u32 = 256;
@@ -1299,7 +1250,7 @@ mod tests {
         const RECT: (f32, f32, f32, f32) = (10.0, 8.0, 40.0, 16.0);
 
         let rgba = overlay_frame(W, H, |_, sink| {
-            sink.push(Quad::solid(glam::Vec4::from(RECT), glam::Vec4::ONE));
+            sink.push(Quad::solid(glam::Vec4::from(RECT), LinearRgba::WHITE));
         });
         let at = |x: u32, y: u32| rgba[((y * W + x) * 4) as usize];
 
@@ -1351,7 +1302,7 @@ mod tests {
         const H: u32 = 64;
 
         let rgba = overlay_frame(W, H, |glyphs, sink| {
-            glyphs.layout("HELLO", 8.0, 8.0, glam::Vec4::ONE, sink);
+            glyphs.layout("HELLO", 8.0, 8.0, LinearRgba::WHITE, sink);
         });
 
         let ink = (0..W * H).filter(|i| rgba[(i * 4) as usize] > 40).count();

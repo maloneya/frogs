@@ -130,15 +130,10 @@ a changed file. **Save & play** saves the validated file, then sends a load requ
 Validation, revision or write failure prevents that request. A failed load
 preserves the running game and reports that the file was saved.
 
-Playable scenes are not automated test inputs. Edit them freely; **Save as…**
-keeps a variant when you want one. Automated tests own their setups and verify
-systems and selected interactions. Use playtesting to judge encounter
-feasibility and feel; see [scene handoff](../.claude/skills/create-scene/SKILL.md#verify-and-hand-off).
+Playable scenes are freely editable. Use **Save as…** to keep variants;
+see [scene handoff](../.claude/skills/create-scene/SKILL.md#verify-and-hand-off).
 
 ## Shared headless interface
 
-The companion and agents use [the same authoring API](scene-authoring.md).
-Rust derives map/inspector data from the complete document and validates through
-Game without stepping it. Swift owns presentation and undo history; it carries
-the opaque document intact. The backend runs outside the game executable.
-See [capture and checks](companion.md#checks-and-capture) for native view inspection.
+See the [authoring API](scene-authoring.md) for offline agent edits and
+[capture and checks](companion.md#checks-and-capture) for native view inspection.

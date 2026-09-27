@@ -1,6 +1,6 @@
 //! Scene-owned environment illumination. Most recently installed live scene wins;
 //! eviction reveals the preceding scene, and an empty game uses neutral daylight.
-use arpg_core::{EnvironmentLight, Report};
+use arpg_core::{EnvironmentLight, LinearRgb, Report};
 use arpg_sim::{Fnv, SceneId};
 use serde::{Deserialize, Serialize};
 
@@ -22,16 +22,16 @@ struct RawEnvironment {
 impl TryFrom<RawEnvironment> for EnvironmentSpec {
     type Error = &'static str;
     fn try_from(raw: RawEnvironment) -> Result<Self, Self::Error> {
-        Ok(Self(EnvironmentLight::try_new(raw.ambient_colour.into(), raw.ambient_intensity,
-            raw.directional_colour.into(), raw.directional_intensity, raw.direction.into())?))
+        Ok(Self(EnvironmentLight::try_new(LinearRgb::try_new(raw.ambient_colour.0, raw.ambient_colour.1, raw.ambient_colour.2)?, raw.ambient_intensity,
+            LinearRgb::try_new(raw.directional_colour.0, raw.directional_colour.1, raw.directional_colour.2)?, raw.directional_intensity, raw.direction.into())?))
     }
 }
 
 impl From<EnvironmentSpec> for RawEnvironment {
     fn from(spec: EnvironmentSpec) -> Self {
         let light = spec.light();
-        Self { ambient_colour: light.ambient_colour().into(), ambient_intensity: light.ambient_intensity(),
-            directional_colour: light.directional_colour().into(), directional_intensity: light.directional_intensity(),
+        Self { ambient_colour: light.ambient_colour().to_vec3().into(), ambient_intensity: light.ambient_intensity(),
+            directional_colour: light.directional_colour().to_vec3().into(), directional_intensity: light.directional_intensity(),
             direction: light.direction().into() }
     }
 }
@@ -80,9 +80,9 @@ impl Environments {
 }
 
 fn report_light(light: EnvironmentLight, out: &mut Report) {
-    out.vec3("ambient_colour", light.ambient_colour());
+    out.vec3("ambient_colour", light.ambient_colour().to_vec3());
     out.num("ambient_intensity", light.ambient_intensity());
-    out.vec3("directional_colour", light.directional_colour());
+    out.vec3("directional_colour", light.directional_colour().to_vec3());
     out.num("directional_intensity", light.directional_intensity());
     out.vec3("direction", light.direction());
 }

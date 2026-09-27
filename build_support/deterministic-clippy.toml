@@ -1,11 +1,9 @@
 # Shared by crates/sim/clippy.toml and crates/game/clippy.toml via symlinks.
-# Clippy resolves these symbols, including renamed imports. This is a list of
-# prohibited entry points, not a proof that arbitrary code is deterministic.
-# Runtime inputs come from the caller; see docs/invariants.md and CLAUDE.md.
+# This API list is not a complete side-effect sandbox.
 
 disallowed-types = [
-    { path = "std::collections::HashMap", reason = "Simulation/gameplay iteration must have a defined order; use ordered storage. See docs/invariants.md." },
-    { path = "std::collections::HashSet", reason = "Simulation/gameplay iteration must have a defined order; use ordered storage. See docs/invariants.md." },
+    { path = "std::collections::HashMap", reason = "Simulation/gameplay iteration must have a defined order; use ordered storage." },
+    { path = "std::collections::HashSet", reason = "Simulation/gameplay iteration must have a defined order; use ordered storage." },
     { path = "std::time::Instant", reason = "Use supplied fixed ticks; wall-clock measurement belongs in app/scenario. See crates/sim/src/time.rs." },
     { path = "std::time::SystemTime", reason = "Use supplied fixed ticks; system time must not enter gameplay. See crates/sim/src/time.rs." },
     { path = "std::fs::File", reason = "File I/O belongs in content or an adapter; pass complete typed data to sim/game." },

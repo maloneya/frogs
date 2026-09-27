@@ -1,25 +1,8 @@
-//! Reading a rendered frame back off the GPU and writing it to a PNG.
-//!
-//! This exists so the app can screenshot *itself*. Capturing from outside — a
-//! desktop screenshot utility — needs the display awake, the window focused and
-//! frontmost, screen-recording permission, and the right crop rectangle guessed
-//! from the outside. All four fail silently and produce a black or wrong image
-//! rather than an error. Reading the swapchain texture back is none of those
-//! things: it is exactly the pixels the GPU produced, available headless.
-//!
-//! It is also the machinery a pixel-level correctness test needs, which the
-//! project does not yet have — right now wgpu tells us a frame was *accepted*,
-//! never that it was *right*.
+//! GPU texture readback and PNG capture.
 
 use std::path::Path;
 
-/// Copying a texture to a buffer requires each row to start on a 256-byte
-/// boundary, so a 1280px-wide BGRA row (5120 bytes) happens to fit exactly
-/// while a 1281px one (5124) is padded to 5376.
-///
-/// Getting this wrong does not fail — it produces an image that shears
-/// progressively further sideways with each row, which looks like a rendering
-/// bug rather than a readback one.
+/// Texture-to-buffer rows require 256-byte alignment.
 fn padded_bytes_per_row(width: u32) -> u32 {
     let unpadded = width * 4;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -74,16 +57,8 @@ impl Readback {
         );
     }
 
-    /// Maps the buffer and returns tightly-packed RGBA, padding removed.
-    ///
-    /// Blocks until the GPU is done, which is exactly what a screenshot — or a
-    /// test that wants to look at the pixels — needs, and would be unacceptable
-    /// inside a frame.
-    ///
-    /// `bgra` on the wire because that is the swapchain format. The surface is
-    /// `Bgra8UnormSrgb`, so the bytes coming back are *already* sRGB-encoded and
-    /// need no conversion; applying one here would double-encode and wash the
-    /// image out.
+    /// Blocks for GPU completion and returns tightly packed RGBA.
+    /// Surface bytes are already sRGB-encoded; do not encode them again.
     pub(crate) fn to_rgba(
         &self,
         device: &wgpu::Device,

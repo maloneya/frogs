@@ -238,17 +238,7 @@ impl App {
         self.perf.report(out, samples);
     }
 
-    /// Everything worth knowing about the running program, as JSON.
-    ///
-    /// **Derived, not hand-written.** The simulation's half comes from
-    /// `Game::report`, which destructures `Game` exhaustively — so a field
-    /// added to the game requires an explicit reporting decision. What is left
-    /// here is the part `sim` genuinely cannot know: how the frame went, what
-    /// the camera is doing, whether the renderer is presenting.
-    ///
-    /// JSON rather than a positional line, because the consumer is usually a
-    /// program: `jq -r .sim.tick` does not care what order the fields are in or
-    /// how many were added since it was written.
+    /// Game state and app presentation diagnostics as JSON.
     pub(super) fn report_state(&self) -> String {
         let mut out = Report::default();
 

@@ -1,14 +1,18 @@
 //! Unlit, always-visible diagnostic disc outlines, independent of asset geometry.
 
-use arpg_core::MAX_INSTANCES;
+use arpg_core::{LinearRgb, MAX_INSTANCES};
 use glam::Vec3;
 use wgpu::util::DeviceExt as _;
 
 use crate::camera::CameraBinding;
 
 /// A ground-plane disc outline. Colours are linear RGB; positions and radii use metres.
+///
+/// ```compile_fail,E0277
+/// let _: arpg_gfx::DebugDisc = bytemuck::cast([0.0_f32; 8]);
+/// ```
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::NoUninit)]
 pub struct DebugDisc {
     centre_radius: [f32; 4],
     colour: [f32; 4],
@@ -17,12 +21,11 @@ pub struct DebugDisc {
 impl DebugDisc {
     /// Validates geometry at the only construction boundary.
     #[must_use]
-    pub fn new(centre: Vec3, radius: f32, colour: Vec3) -> Self {
+    pub fn new(centre: Vec3, radius: f32, colour: LinearRgb) -> Self {
         assert!(centre.is_finite() && radius.is_finite() && radius > 0.0);
-        assert!(colour.is_finite());
         Self {
             centre_radius: [centre.x, centre.y, centre.z, radius],
-            colour: [colour.x, colour.y, colour.z, 1.0],
+            colour: colour.with_alpha(1.0).to_array(),
         }
     }
 
@@ -186,7 +189,7 @@ mod tests {
         });
         let view = target.create_view(&Default::default());
         let depth = crate::create_depth(&device, N, N);
-        let disc = [DebugDisc::new(Vec3::ZERO, 1.0, Vec3::ONE)];
+        let disc = [DebugDisc::new(Vec3::ZERO, 1.0, LinearRgb::WHITE)];
         for enabled in [true, false] {
             let count = pipeline.upload(&queue, if enabled { &disc } else { &[] });
             let mut encoder = device.create_command_encoder(&Default::default());

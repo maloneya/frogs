@@ -42,7 +42,4 @@ tuning restart
 `state.companion` reports command status/errors. See [native checks and capture](companion.md#checks-and-capture)
 for testing the UI.
 
-A scenario's `tuning` timeline supplies complete settings before its named
-zero-based tick. [Runtime player tuning](../scenarios/runtime_player_tuning.ron)
-and adjacent monster/Cleave/Slam cases assert timing and physical consequences.
-Combat feel remains a playtest judgement.
+Use the [scenario guide](../.claude/skills/scenario/SKILL.md) for timed tuning edits.

@@ -1,12 +1,18 @@
 //! Depth-tested translucent world triangles; no simulation vocabulary.
 
+use arpg_core::LinearRgba;
+
 use glam::Vec3;
 
 use crate::camera::CameraBinding;
 
 /// One vertex of an unlit translucent triangle, in world metres and linear RGBA.
+///
+/// ```compile_fail,E0277
+/// let _: arpg_gfx::EffectVertex = bytemuck::cast([0.0_f32; 7]);
+/// ```
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::NoUninit)]
 pub struct EffectVertex {
     position: [f32; 3],
     colour: [f32; 4],
@@ -18,9 +24,8 @@ impl EffectVertex {
 
     /// Validates a presentation vertex before it enters the GPU stream.
     #[must_use]
-    pub fn new(position: Vec3, colour: glam::Vec4) -> Self {
-        assert!(position.is_finite() && colour.is_finite());
-        assert!((0.0..=1.0).contains(&colour.w));
+    pub fn new(position: Vec3, colour: LinearRgba) -> Self {
+        assert!(position.is_finite());
         Self {
             position: position.to_array(),
             colour: colour.to_array(),
@@ -161,15 +166,15 @@ mod tests {
         let triangle = [
             EffectVertex::new(
                 Vec3::new(-1.0, 0.0, -1.0),
-                glam::Vec4::new(1.0, 1.0, 1.0, 0.25),
+                LinearRgba::new(1.0, 1.0, 1.0, 0.25),
             ),
             EffectVertex::new(
                 Vec3::new(1.0, 0.0, -1.0),
-                glam::Vec4::new(1.0, 1.0, 1.0, 0.25),
+                LinearRgba::new(1.0, 1.0, 1.0, 0.25),
             ),
             EffectVertex::new(
                 Vec3::new(0.0, 0.0, 1.0),
-                glam::Vec4::new(1.0, 1.0, 1.0, 0.25),
+                LinearRgba::new(1.0, 1.0, 1.0, 0.25),
             ),
         ];
         for (enabled, depth_clear) in [(true, 1.0), (true, 0.0), (false, 1.0)] {

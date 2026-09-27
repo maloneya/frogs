@@ -9,8 +9,8 @@ const FILE: &str = "crates/assets/build.rs";
 const REASON: &str = "assets validates interchange data into an engine-owned CPU representation; \
                       it must not know simulation, gameplay, windows, or GPU resources.";
 
-/// Binary layout, maths, and the interchange parser are the complete authority.
-const ALLOWED: &[&str] = &["bytemuck", "glam", "gltf", "png"];
+/// Shared colour vocabulary, binary layout, maths and interchange parsing.
+const ALLOWED: &[&str] = &["arpg-core", "bytemuck", "glam", "gltf", "png"];
 
 #[path = "../../build_support/dependencies.rs"]
 mod dependencies;

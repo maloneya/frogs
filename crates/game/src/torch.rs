@@ -1,6 +1,6 @@
 //! Scene-owned stationary torches; no collision or tick-time behaviour.
 
-use arpg_core::{MAX_POINT_LIGHTS, PointLight, Report};
+use arpg_core::{LinearRgb, MAX_POINT_LIGHTS, PointLight, Report};
 use arpg_sim::{Fnv, SceneId};
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ impl TryFrom<RawTorch> for TorchSpec {
     fn try_from(raw: RawTorch) -> Result<Self, Self::Error> {
         Self::new(PointLight::try_new(
             raw.position.into(),
-            raw.colour.into(),
+            LinearRgb::try_new(raw.colour.0, raw.colour.1, raw.colour.2)?,
             raw.intensity,
             raw.range,
         )?)
@@ -121,7 +121,7 @@ impl Torches {
                         let light = spec.light();
                         out.text("scene", &owner.to_string());
                         out.vec3("position", light.position());
-                        out.vec3("colour", light.colour());
+                        out.vec3("colour", light.colour().to_vec3());
                         out.num("intensity", light.intensity());
                         out.num("range", light.range());
                     });
@@ -134,6 +134,6 @@ impl Torches {
 impl From<TorchSpec> for RawTorch {
     fn from(torch: TorchSpec) -> Self {
         let light = torch.light();
-        Self { position: light.position().into(), colour: light.colour().into(), intensity: light.intensity(), range: light.range() }
+        Self { position: light.position().into(), colour: light.colour().to_vec3().into(), intensity: light.intensity(), range: light.range() }
     }
 }

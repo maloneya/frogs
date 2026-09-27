@@ -1,93 +1,42 @@
 # Working on arpg
 
-A from-scratch action-RPG engine and learning project for a novice developer,
-focused on combat against crowds. Understanding the systems matters alongside
-getting them running. [README](README.md) is the human entry point.
+A handwritten action-RPG engine for learning, focused on combat against crowds.
+Target: native macOS / Apple M4 / Metal. Cross-platform and wasm are out of scope.
+Start with [README](README.md) for build, play and controls.
 
 ## Design priorities
 
-- **Build through scenes.** Compose playable content in the [scene editor](docs/scene-editor.md),
-  play it, adjust layout/tuning, and repeat. Prefer existing rules and authored
-  data; extend code when a concrete playtest needs a missing capability. Scenes
-  are freely editable game content; tests own their setups and test the rules. When extending
-  authorable content, update persistence and editor support or state the remaining
-  authoring gap.
-- **Simulation first.** Build consistent rules that compose. An attack submits
-  an impulse; shared physics carries it through contacts. Put mechanisms below
-  their producers and test combinations players can discover.
-- **Teach through the work.** Explain the concept, observable effect and tradeoff
-  in plain language. Separate verified behaviour from human feel judgement.
-- **Small running changes.** Build one system at a time; no speculative mechanics
-  or abstractions. Hand-write the engine layers being studied: loop, entity
-  storage, spatial partitioning and renderer. Math/plumbing crates are fine;
-  an off-the-shelf engine or ECS is not.
-
-[Design rationale](docs/agent-principles.md) connects these priorities.
+- Compose and play scenes before extending the engine. Add capabilities for a
+  concrete playtest need; update persistence and both authoring clients together.
+- Sim owns shared physics; game owns mechanic relationships. Keep mechanisms
+  below their producers so attacks, movement and contacts compose.
+- Hand-write the loop, entity storage, spatial partitioning and renderer.
+  Math/plumbing crates are fine; an off-the-shelf engine or ECS is not.
+- Explain the observable effect and tradeoff in plain language. Distinguish
+  verified behaviour from human judgement of feel.
 
 ## Rules while editing
 
-1. **Enforce at the owner.** Prefer private fields, narrow capabilities and
-   validated constructors, then compile-time checks, runtime validation and
-   tests. Prose is the last defence. Protect the shared entry point, including
-   file and harness input; explain weaker safeguards. See [enforcement](docs/invariants.md).
-2. **Keep one definition.** Owners define types, validation and tuning; content,
-   UI, reports and harness consume them. Derive facts from authoritative state.
-   The companion and agents use the same headless authoring API and complete documents;
-   neither owns a second gameplay schema. Every authorable concept must work in both.
-3. **Keep execution deterministic.** Simulation/gameplay use state and ordered
-   inputs, never wall clock, unseeded randomness or hash-order iteration.
-   Presentation cannot write back. Replay is scoped to one binary on one machine.
-4. **Declare access and order.** Named passes receive only needed slices or
-   capabilities, never unrestricted mutable World/Game. Step methods wire passes,
-   not mechanics. State read timing, effect timing and structural-edit ownership.
-5. **Make systems independently testable.** Provide typed driving operations,
-   read-only observations and transition traces. Gameplay never reads diagnostics.
-6. **Close the lifecycle.** Cover spawn, removal, scene eviction, restart, hash
-   and report handling. Keep stable identities across dense-row moves. Validate
-   complete loads before mutation; refusal preserves live state and accepted work.
-7. **Verify outcomes.** Simulation/gameplay behaviour changes need a passing
-   scenario through Game, with predictions made before observing results. Check
-   intermediate ticks, interactions, refused inputs and stale IDs where relevant.
-   Never weaken a gate or bless a trace just to pass. Tests must not load playable
-   `scenes/` files. Test systems independently, with a small set of complex
-   test-only compositions for interactions; benchmarks own their workloads too.
-8. **Diagnose from evidence.** Search [traps](docs/traps.md) first. Record symptom,
-   cause and check after a misleading failure costs ten minutes; replace recurring
-   advice with executable safeguards.
-9. **Replace obsolete paths.** There are no deployed consumers requiring backward
-   compatibility. Update callers, data, tools, tests and docs together, then delete
-   the old path. No shims, aliases, legacy readers, version branches or migration
-   fallbacks unless the user explicitly needs them for a concrete consumer.
-
-## Ownership
-
-Sim owns shared physical mechanisms; game owns mechanic relationships. Both are
-deterministic. This engine serves one game: hypothetical reuse is no reason to
-abstract. Existing combat tuning still lives beside sim validation; read its
-owner before moving it. New gameplay relationships belong in game.
-
-| Crate / tool | Responsibility |
-|---|---|
-| core | Shared vocabulary, independent of graphics/gameplay relationships |
-| sim | Physical world, identity, capabilities, validated operations, pass schedule |
-| game | Playable state, mechanic relationships and complete scene lifetime |
-| content | Decode/save authoring documents; pass game-owned playable data to runtime |
-| authoring | Headless edits, validation, inspection and CLI shared by agents/editor |
-| assets | Validate bounded GLB into CPU assets, independent of gameplay/GPU resources |
-| gfx | Rendering, camera and GPU resources; receives anonymous geometry |
-| app | Devices, presentation, tooling/harness boundary; maps input to world intent |
-| scenario | Headless driving and assertions through the same Game used by app |
-| tools/companion | Native drafts/undo via authoring; play, tuning and diagnostics via app |
-
-Game privately owns World; app/scenario use Game for construction, stepping and
-lifecycle. Engine tests may drive World directly. Crate build scripts enforce
-dependency allowlists. The standalone launcher owns process startup; game code
-must not launch or locate the companion. See [connection ownership](docs/companion.md).
-
-Native macOS / Apple M4 / Metal is the target; cross-platform/wasm are out of
-scope. Preserve [metres](docs/world-units.md), linear colours with sRGB output,
-elapsed-time half-life smoothing, bounded shared crowd poses, continuous redraw
-and discarded depth after the pass. Read the relevant owner/tests before changing them.
+- Enforce invariants at the shared owner, including file/harness admission.
+  Prefer private state and validated types over caller instructions. Keep types,
+  validation and tuning in one place; adapters consume them.
+- Simulation/gameplay use ordered inputs, never ambient time or randomness.
+  Presentation and diagnostics cannot drive gameplay. Replay covers one binary
+  on one machine.
+- Step methods wire named passes with narrow slices/capabilities, not mutable
+  World/Game access. Keep timing rationale beside the relevant calls.
+- New state needs spawn/removal, scene eviction, restart, hash and report handling.
+  Validate complete loads before mutation; refusal preserves accepted state/work.
+- Behaviour changes need predicted outcomes through Game, including relevant
+  intermediate ticks, interactions, refusals and stale IDs. Tests and benchmarks
+  own their setups; never load playable `scenes/` files as test fixtures.
+- Search [traps](docs/traps.md) when diagnosing. Record symptom, cause and check
+  after a misleading failure costs ten minutes; replace recurring advice with checks.
+- No compatibility shims, aliases, legacy readers or migration fallbacks without
+  a concrete user need. Update consumers and delete the obsolete path.
+- Preserve [world units](docs/world-units.md), linear colours with sRGB output,
+  elapsed-time smoothing, bounded shared crowd poses, continuous redraw and
+  discarded depth. Read the relevant owner/tests before changing these contracts.
 
 ## Checks and commands
 
@@ -96,13 +45,10 @@ python3 scripts/dev.py          # game + companion, independently running
 python3 scripts/verify.py full --snapshot  # verify captured inputs while edits continue
 ```
 
-Rust may need `. "$HOME/.cargo/env"`. `cargo run` launches only the game; use
-release for performance. [Verification policy](docs/verification.md) owns check
-selection, benchmark cadence and evidence. Report failures, inconclusive results
-and omitted coverage. Workspace GPU tests require a real adapter; scenarios need
-no GPU/window. Use justified `#[expect(lint, reason = "…")]`, never `#[allow]`.
-Do not relax lint/dependency policies. Hooks use the same runner but are not proof
-that checks ran; inspect saved coverage/source identity. Rustdoc has its own check.
+Rust may need `. "$HOME/.cargo/env"`. Use release builds for performance.
+Follow [verification policy](docs/verification.md) for check selection and evidence;
+report failures, uncertainty and omitted coverage. Never relax a lint, dependency
+rule, test or performance gate just to pass. Use justified `#[expect]` exceptions.
 
 Drive live checks through `ARPG_HARNESS`, not OS key injection or desktop capture;
 see [playtesting](.claude/skills/playtest/SKILL.md).
@@ -118,6 +64,5 @@ Read only what the task needs:
 - [Encounters](docs/encounters.md), [interaction](docs/interaction.md), [source enablement](docs/source-enablement.md)
 - [Collision debug](docs/collision-debug.md), [attack effects](docs/attack-effects.md)
 
-Keep constraints beside their owner and workflows in task guides. Link instead
-of copying schemas, tuning catalogs or test inventories. Remove obsolete prose;
-version control holds implementation history.
+Keep only non-obvious rationale beside code. Link to owners instead of copying
+schemas, schedules, tuning catalogs or test inventories.

@@ -1,57 +1,15 @@
-//! The tick — the unit simulation time is measured in, and the only door it
-//! can be minted through.
-//!
-//! Everything the project wants to build next is indexed by ticks rather than
-//! by seconds: trace events are tick-stamped, scenario inputs are scheduled at
-//! a tick, attack windows are counted in ticks, and a replay compares two runs
-//! tick by tick. None of that has a unit to count in while `step` integrates
-//! whatever wall-clock delta the frame happened to take.
-//!
-//! So the frame rate stops reaching the simulation here. A frame hands its
-//! elapsed seconds to an [`Accumulator`], which hands back whole [`Dt`]s and
-//! keeps the remainder for next time.
+//! Fixed ticks from elapsed frame time, with a bounded catch-up budget.
 
-/// Simulation ticks per second.
-///
-/// 60 rather than something higher for two reasons. It matches the display, so
-/// the interpolation factor stays near-constant and pacing artefacts stay
-/// visible instead of being averaged away. And combat here will be specified in
-/// frames — "startup 8, active 4, recovery 12", "hitstop 4" — which is the
-/// vocabulary of 60Hz games; at 120 every one of those numbers doubles and
-/// stops matching the reference material it was chosen against.
+/// Simulation ticks per second; combat timing uses the 60 Hz frame convention.
 pub const TICK_HZ: u32 = 60;
 const _: () = assert!(TICK_HZ > 0, "a zero tick rate makes Dt::SECS a division by zero");
 
-/// The longest a single frame may push the simulation, in ticks.
-///
-/// Inherited from the `MAX_FRAME_TIME` clamp this replaces, and it is the same
-/// 0.1s expressed in the unit that now matters. Dragging the window, compiling
-/// a shader or sitting at a breakpoint produces a frame worth hundreds of
-/// milliseconds; run honestly that is a teleport, through a wall and past a
-/// hitbox.
-///
-/// The cap and the discard in [`Accumulator::pending`] have to be read
-/// together. Capping the steps while *keeping* the time owed is the spiral of
-/// death: a machine that falls behind owes more every frame and never catches
-/// up. Discarding it means the game runs in slow motion for a moment rather
-/// than skipping space — which is the right trade when the alternative is
-/// losing collisions.
+/// Maximum catch-up ticks per frame. Excess time is discarded to prevent an
+/// accumulating backlog; overload slows game time rather than skipping motion.
 const MAX_TICKS_PER_FRAME: u32 = 6;
 const _: () = assert!(MAX_TICKS_PER_FRAME >= 1, "a frame that can run no ticks freezes the game");
 
-/// One tick of simulation time.
-///
-/// **It deliberately carries no number.** The obvious design is a newtype
-/// around `f32` with a private constructor, which stops a caller *building* a
-/// variable timestep but still lets one be carried around once minted. A unit
-/// struct makes the wrong value unrepresentable instead: there is exactly one
-/// duration a `Dt` can mean, so passing the wrong one is not a mistake that can
-/// be written down.
-///
-/// What it is, then, is a *token* proving its holder is inside a fixed step.
-/// Only [`Accumulator::pending`] mints one — the field is private to this
-/// module, so even the rest of `sim` has to go through the accumulator, tests
-/// included.
+/// A fixed-duration token minted only by [`Accumulator::pending`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Dt(());
 
@@ -67,12 +25,7 @@ impl Dt {
     }
 }
 
-/// Turns elapsed wall clock into whole ticks.
-///
-/// Lives in `sim` rather than beside the frame `Clock` in `app` because it is
-/// the thing that mints `Dt`, and a `Dt` minted anywhere else would be a type
-/// asserting something untrue. `app` measures seconds; only this decides how
-/// much simulation they are worth.
+/// Converts elapsed seconds into fixed ticks and retains the fractional remainder.
 #[derive(Default)]
 pub struct Accumulator {
     /// Time owed but not yet worth a whole tick. Always in `[0, Dt::SECS)`
@@ -81,11 +34,7 @@ pub struct Accumulator {
 }
 
 impl Accumulator {
-    /// Absorbs one frame's elapsed seconds and yields the ticks it bought.
-    ///
-    /// The iterator is the only source of [`Dt`] in the program, which is what
-    /// makes "the simulation only ever advances in fixed steps" a fact about
-    /// the type system rather than a convention about this loop.
+    /// Absorbs elapsed seconds and yields fixed ticks, discarding excess catch-up time.
     pub fn pending(&mut self, frame_secs: f32) -> Ticks {
         // A monotonic clock cannot go backwards, but a harness, a test or a
         // deserialised replay can hand this anything. `max` also swallows NaN,
@@ -104,13 +53,7 @@ impl Accumulator {
         Ticks { remaining: (owed as u32).min(MAX_TICKS_PER_FRAME) }
     }
 
-    /// How far the frame sits between the last tick and the next.
-    ///
-    /// Presentation only. Nothing inside a pass may read this, or the frame
-    /// rate is back in the simulation by the side door — and unlike `Dt`, that
-    /// cannot be enforced by the type, because an `Alpha` is a perfectly
-    /// ordinary number once you have one. What enforces it is that simulation
-    /// presentation methods taking an `Alpha` borrow the world through `&self`.
+    /// Presentation interpolation fraction; simulation passes must not consume it.
     #[must_use]
     pub fn alpha(&self) -> Alpha {
         // Always in range already — `pending` removes every whole tick — so the
@@ -119,26 +62,9 @@ impl Accumulator {
     }
 }
 
-/// How far the frame being drawn sits between the last simulation tick and the
-/// next, from 0 to 1.
-///
-/// **This is the one number in the program that is allowed to be smooth.** The
-/// simulation moves in whole ticks; without a blend, a display running at any
-/// rate that is not exactly the tick rate shows some ticks twice and others
-/// never, which reads as judder even at a high frame rate.
-///
-/// The cost is worth writing down rather than discovering later. Interpolating
-/// between the last two ticks means the image is one tick behind the
-/// simulation — a *constant* 16.7ms, where drawing the latest tick directly is
-/// between 0 and 16.7ms behind. Constant latency is the better trade for this
-/// game: a fixed offset is something hands adapt to within minutes, and
-/// variable pacing is exactly what makes two identical hits feel different,
-/// which is the thing the whole project is trying to measure.
-///
-/// Unlike [`Dt`], the private constructor here is not what keeps this out of
-/// the simulation — an `Alpha` is an ordinary number once minted. What keeps it
-/// out is that simulation presentation methods accepting one take `&self`
-/// and so cannot write simulation state.
+/// Presentation fraction in 0..=1 for interpolating between the last two ticks.
+/// Interpolation adds one tick of latency. Read-only World presentation methods
+/// prevent writeback; the type alone cannot prevent use in simulation math.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct Alpha(f32);
 

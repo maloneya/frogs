@@ -67,21 +67,8 @@ pub(crate) struct Scenario {
     #[serde(default)]
     pub(crate) impulses: Vec<ImpulseAt>,
 
-    /// Things asked for *while the scenario runs*, each at a stated tick.
-    ///
-    /// **Distinct from [`Setup::actions`], and the distinction is the whole
-    /// point of the spawn queue.** A setup placement happens before tick zero,
-    /// with the schedule stopped; this goes through the same door a trigger
-    /// inside the simulation will use, so what a scenario exercises is the real
-    /// path rather than a test-only shortcut.
-    ///
-    /// A request made between ticks is granted by the first pass of the next
-    /// tick, so a spawn `at: 10` is a body from the start of tick 10 and does
-    /// not exist at the end of tick 9.
-    ///
-    /// Bodies that appear this way continue the placement numbering that
-    /// [`Setup::actions`] starts, in the order they were granted, so
-    /// [`BodyExpect::nth`] can name one.
+    /// Queued spawns before their named tick: `at: 10` exists during tick 10,
+    /// not at the end of tick 9. Granted bodies continue [`BodyExpect::nth`] numbering.
     #[serde(default)]
     pub(crate) spawns: Vec<Spawn>,
 
@@ -183,21 +170,8 @@ pub(crate) struct Setup {
     /// Test-owned scene setups, admitted through the same boundary as the game.
     #[serde(default)]
     pub(crate) scenes: Vec<arpg_game::GameScene>,
-    /// Bodies placed and removed, in order, after authored scenes load.
-    ///
-    /// **This is what makes a scenario able to say anything precise.** A horde
-    /// count puts N bodies in a grid whose positions nobody wrote down, so the
-    /// only predictions available were about the player. One body at a stated
-    /// place is a prediction anyone can make by hand and check by reading.
-    ///
-    /// **An ordered list rather than a set of placements plus a set of
-    /// removals**, and the order is load-bearing rather than tidy. A slot is
-    /// recycled only when something is spawned *after* a despawn, so unordered
-    /// setup cannot express the case where a retired name might come back to
-    /// life — which is the one failure generational ids exist to prevent, and
-    /// the only one that is silent. A first version of this file had exactly
-    /// that shape, and a scenario written in it passed with the generation bump
-    /// deleted.
+    /// Ordered placements/removals after authored scenes load. Interleaving them
+    /// allows stale-identity tests to reuse a retired slot.
     #[serde(default)]
     pub(crate) actions: Vec<Action>,
 
@@ -244,25 +218,11 @@ pub(crate) enum Action {
     /// case worth writing a scenario about.
     Despawn(usize),
 
-    /// Makes a previously placed body chase the player, by its placement
-    /// number.
-    ///
-    /// **Granted separately from placing it, on purpose.** A body is a body;
-    /// what makes it an enemy is the list of behaviours attached to it. Writing
-    /// that as `Place` then `Seek` keeps the scenario language honest about the
-    /// storage underneath, where seeking is a membership set and not a field —
-    /// and it means the next behaviour is a new action rather than a new kind
-    /// of placement.
+    /// Grants seeking to a body identified by placement number.
     Seek(usize),
 }
 
-/// One thing asked for at a stated tick.
-///
-/// What the body is granted once it exists is a *template*, and it is the
-/// simulation's own [`arpg_sim::Template`] rather than a copy of its fields.
-/// That is what keeps "two kinds of enemy" a difference in a description rather
-/// than a difference in code, and keeps this file from growing a field every
-/// time a behaviour is added.
+/// A queued spawn at a specified tick using the sim-owned template.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Spawn {
@@ -276,14 +236,7 @@ pub(crate) struct Spawn {
     pub(crate) what: Template,
 }
 
-/// Hold a direction for a span of ticks.
-///
-/// **World space, not screen space**, and the difference matters. The game maps
-/// screen-right onto the world diagonal `(+X, -Z)/√2`, but that mapping belongs
-/// to the camera — it depends on the camera's angle, which is a presentation
-/// decision that may yet change. A scenario asserts what the *simulation* does,
-/// so it speaks the simulation's own axes and no scenario has to be rewritten
-/// if the view ever rotates.
+/// Holds a world-space direction for a span of ticks, independent of the camera.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Span {
@@ -393,15 +346,8 @@ pub(crate) struct Expect {
     /// Predictions about individual bodies placed by [`Setup::actions`].
     #[serde(default)]
     pub(crate) bodies: Vec<BodyExpect>,
-    /// A checked-in trace file, relative to the scenario, that the run's own
-    /// trace must match exactly.
-    ///
-    /// Reserved for diagnostic serialization/order and gameplay event streams.
-    /// Mechanics prefer scoped typed `events`, independent of log formatting.
-    ///
-    /// Regenerate with `--bless`, and **read the diff before committing it**. A
-    /// blessed golden file nobody looked at is a test that has been deleted
-    /// without anyone noticing.
+    /// Exact trace fixture, relative to the scenario. Prefer typed `events` for
+    /// mechanics; reserve fixtures for serialization/order. Review `--bless` diffs.
     #[serde(default)]
     pub(crate) trace: Option<String>,
     /// Exact sequence among explicitly selected event kinds; other diagnostics do not matter.
@@ -489,15 +435,7 @@ impl Approx2 {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BodyExpect {
-    /// Which placement this is about, by spawn order in [`Setup::actions`].
-    ///
-    /// **Deliberately not a dense-array index.** The horde is stored densely
-    /// and a despawn swaps the last row into the hole, so a body's index
-    /// changes without anything touching that body. The runner holds the real
-    /// [`arpg_sim::EntityId`] it got back from each placement and looks it up
-    /// by this, which is exactly the indirection the ids exist to provide — a
-    /// scenario asserting on index 2 would silently start asserting about a
-    /// different body the first time something before it died.
+    /// Stable placement number, resolved through the recorded entity ID rather than a dense row.
     pub(crate) nth: usize,
 
     /// Where the body should be. Omit to say nothing about position.

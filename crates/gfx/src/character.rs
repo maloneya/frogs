@@ -12,6 +12,7 @@ use crate::mesh::MeshUploadError;
 
 #[cfg(test)]
 mod tests {
+    use arpg_core::LinearRgb;
     use super::*;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -28,7 +29,7 @@ mod tests {
             .unwrap();
         // The mesh and pose retain their association after the CPU asset is gone.
         drop(asset);
-        let instance = Instance::new(glam::Vec3::ZERO, glam::Vec3::ONE, glam::Vec3::ONE);
+        let instance = Instance::new(glam::Vec3::ZERO, glam::Vec3::ONE, LinearRgb::WHITE);
         let _valid = CharacterPreview::new(&mesh, &pose, instance);
         assert!(catch_unwind(AssertUnwindSafe(|| {
             CharacterPreview::new(&mesh, &foreign, instance)

@@ -6,15 +6,8 @@
 use super::*;
 use arpg_core::{AimDir, Intent, MoveDir};
 
-/// Counts allocations made on the calling thread.
-///
-/// Per-thread rather than a single global counter, and that is the whole trick:
-/// `cargo test` runs tests in parallel, so a global count would be measuring
-/// every other test's allocations too. The assertion would then fail at random,
-/// which is the surest way to get a test deleted.
-///
-/// The thread-local is `const`-initialised so that first touch does not
-/// allocate — an allocating allocator recurses into itself.
+/// Counts only this thread's allocations to isolate parallel tests.
+/// Const initialization avoids allocator recursion on first access.
 pub(crate) mod alloc_counter {
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
@@ -131,15 +124,6 @@ fn in_open_ground() -> World {
     world
 }
 
-/// **What the fixed timestep exists for.** Feed one input stream at
-/// different frame rates; the simulation must not be able to tell.
-///
-/// It compares a hash of *all* state after *every* tick, so a divergence is
-/// reported at the tick it happened rather than as two final positions that
-/// happen to differ. And it runs in a crowd: contacts are resolved once per
-/// tick, so under a variable timestep a faster machine resolves more of them
-/// and the horde behaves differently. That is the bill the fixed timestep
-/// pays, and this is the receipt.
 #[test]
 fn frame_rate_cannot_change_the_simulation() {
     // Powers of two, so every delta is exact in binary floating point: the
@@ -339,12 +323,6 @@ fn the_blend_crosses_the_gap_once_and_in_order() {
     assert!((furthest - span).abs() < 1e-4, "the blend reached {furthest}, the tick moved {span}");
 }
 
-/// **Found by mutation.** Every other blend test here reads the player,
-/// which used to be the last cube instance and therefore the easy one. So
-/// three separate breakages of the *horde's* interpolation — not blending
-/// it at all, blending it backwards, and never recording where it was —
-/// passed the entire suite. The horde is a thousand of the bodies on screen
-/// and one of them was being checked.
 #[test]
 fn the_horde_is_interpolated_too() {
     let mut world = shoving_through_the_crowd(256);
@@ -513,15 +491,8 @@ fn the_previous_tick_is_the_previous_tick() {
     }
 }
 
-/// **Found by mutation, not by design.** Deleting the horde from `hash()`
-/// entirely — `let _ = enemy_pos;` — passed every other test in this file,
-/// including both replay gates. They only ever vary the *player's* input,
-/// so the player's state carries the whole signal and a hash that sees
-/// nothing else agrees with itself perfectly.
-///
-/// The destructuring in `hash()` catches a field nobody *binds*. This
-/// catches a field bound and then dropped on the floor, which is what an
-/// incomplete hash actually looks like when someone is refactoring.
+/// Replay alone misses consistently omitted state. Changing enemy positions
+/// must affect the hash even when player input is unchanged.
 #[test]
 fn every_field_of_the_world_reaches_the_hash() {
     /// A field of `World` and the smallest change that touches it.
@@ -612,16 +583,7 @@ fn the_horde_is_part_of_what_a_replay_compares() {
     assert_ne!(world.hash(), settled, "displacing a body left the hash unchanged");
 }
 
-/// A steady-state frame must not touch the allocator.
-///
-/// Not a micro-optimisation: an allocation in the tick path is a latency
-/// spike with no fixed size, and frame pacing is the foundation every feel
-/// mechanic here gets measured against. It is also the cheapest possible
-/// guard against someone adding a `Vec` inside a pass, which is the natural
-/// way to write a broadphase and the wrong way to run one.
-///
-/// Warmed up first, because the first tick of a fresh world is not a steady
-/// state and asserting on it would measure spawning.
+/// Warm up before counting so initial storage preparation is excluded.
 #[test]
 fn a_steady_state_frame_allocates_nothing() {
     let east = MoveDir::new(Vec3::X);
@@ -747,13 +709,7 @@ fn the_horde_spawns_with_a_gap_between_every_body() {
     );
 }
 
-/// The grid is centred on the origin, which is what puts the player inside
-/// the horde rather than beside it.
-///
-/// Exactly centred only when N is a perfect square. Otherwise the last row
-/// is partial and drags the centroid by up to one spacing — which is the
-/// real behaviour and worth pinning at that bound rather than pretending
-/// the grid is always square.
+/// Non-square populations have a partial last row; allow one spacing of centroid offset.
 #[test]
 fn the_horde_is_centred_on_the_origin() {
     let centroid_at = |world: &World| {
@@ -907,13 +863,6 @@ fn a_full_queue_refuses_out_loud() {
     assert_eq!(refusals, vec![1], "the dropped request left no trace of itself");
 }
 
-/// **Ready-and-waiting.** A source whose cadence has come round but whose
-/// condition is shut does not lose its turn: it fires on the first tick the
-/// condition opens, not on the next multiple of the cadence after it.
-///
-/// That is the behaviour a room full of enemies wants — they appear when the
-/// player walks in, rather than up to `every` ticks later — and it is invisible
-/// to any test that only counts bodies at the end of a run.
 #[test]
 fn a_held_back_source_fires_the_instant_its_condition_opens() {
     let mut world = World::empty();

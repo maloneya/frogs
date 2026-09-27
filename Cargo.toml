@@ -20,12 +20,7 @@ arpg-authoring = { path = "crates/authoring" }
 
 bytemuck = { version = "1.25", features = ["derive"] }
 env_logger = "0.11"
-# Glyph rasterisation only: it turns a character into a coverage bitmap and does
-# nothing else. Its own dependency list is one crate (`ttf-parser`), which is
-# what makes it the right size of thing to take — the atlas, the pipeline and
-# the layout are the parts worth owning here, and it has opinions about none of
-# them. A full text stack (glyphon, cosmic-text) would have brought its own
-# renderer and its own atlas, leaving the overlay pipeline still to write.
+# Glyph rasterization only; atlas and layout remain handwritten.
 fontdue = "0.9"
 glam = "0.33"
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
@@ -38,31 +33,15 @@ winit = "0.30.13"
 # Manifest parsing for build-time architecture guards; never a runtime dependency.
 toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
-# The lint wall. These are compile errors, not style preferences: each one
-# corresponds to a mistake that is easy to make locally and expensive to find
-# later.
-#
-# The escape hatch is `#[expect(lint, reason = "...")]`, never `#[allow]`.
-# `expect` fails to compile once the violation it covers disappears, so stale
-# suppressions can't accumulate and every exception carries a written reason.
+# Exceptions require #[expect(lint, reason = "...")].
 [workspace.lints.rust]
 unsafe_code = "deny"      # deny rather than forbid: the allocation counter will need one opt-out
 missing_docs = "warn"
 
-# Now load-bearing, which it could not be before the split.
-#
-# In a single binary crate this fired on all 32 `pub` items, because nothing is
-# reachable from outside a binary by definition — it could not tell a deliberate
-# API from a careless one. Across library crates `pub` finally means "part of
-# this crate's contract", so what it reports is real: an item widened to reach
-# something rather than because it belongs in the interface.
 unreachable_pub = "deny"
 unfulfilled_lint_expectations = "deny"
 
-# Resolve Rust API links with cargo doc; clippy and cargo test do not check them.
-# Run --workspace --lib --bins --no-deps --document-private-items to include
-# library and binary internals. Claude Code's Stop hook runs this command;
-# other agents and shells must run it explicitly.
+# Checked by the verification runner’s rustdoc step.
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 
@@ -84,18 +63,10 @@ redundant_clone = "deny"
 disallowed_methods = "deny"
 disallowed_types = "deny"
 
-# Graphics crates are murderously slow when compiled unoptimized, and none of
-# this is our code to debug. Optimising dependencies while leaving our own crates
-# in debug keeps builds fast to iterate on and fast to run.
+# Optimize dependencies while preserving debug builds of workspace crates.
 [profile.dev.package."*"]
 opt-level = 3
 
-# The simulation is optimised in debug builds too, and that is about the *gate*
-# rather than about the game. `sim` is pure arithmetic over flat arrays with no
-# frame path to step through, and the scenario runner — which must be fast
-# enough to run on every turn end — is nothing but that arithmetic. Unoptimised,
-# the O(N^2) crowd solver at 1024 bodies took 4.4s for one scenario; optimised
-# it is a fraction of that, and `debug_assertions` and overflow checks are set
-# by the profile rather than by `opt-level`, so every assertion still fires.
+# Keep headless scenarios fast; debug assertions and overflow checks remain enabled.
 [profile.dev.package.arpg-sim]
 opt-level = 3

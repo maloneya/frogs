@@ -1,5 +1,5 @@
 //! Presentation geometry rebuilt from the game's scene-owned torches.
-use arpg_core::{Instance, MAX_POINT_LIGHTS, PointLight};
+use arpg_core::{Instance, LinearRgb, MAX_POINT_LIGHTS, PointLight};
 use arpg_game::TorchSpec;
 use arpg_gfx::EffectVertex;
 use glam::Vec3;
@@ -50,17 +50,17 @@ impl Torches {
             let light = torch.light();
             self.lights.push(light);
             let ground = Vec3::new(light.position().x, 0.0, light.position().z);
-            self.stands.push(Instance::new(ground, Vec3::ONE, Vec3::ONE));
+            self.stands.push(Instance::new(ground, Vec3::ONE, LinearRgb::WHITE));
             // A small faceted flame, visible from all sides. Emission is visual;
             // only the PointLight illuminates other surfaces.
             let centre = ground + Vec3::Y * 0.55;
             for (radius, bottom, top, colour) in [
-                (0.34, -0.20, 0.62, light.colour().extend(1.0)),
+                (0.34, -0.20, 0.62, light.colour().with_alpha(1.0)),
                 (
                     0.19,
                     -0.20,
                     0.30,
-                    light.colour().lerp(Vec3::ONE, 0.55).extend(1.0),
+                    light.colour().lerp(LinearRgb::WHITE, 0.55).with_alpha(1.0),
                 ),
             ] {
                 let ring = [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z];
@@ -94,14 +94,14 @@ mod tests {
     fn rebuilding_tracks_scene_eviction_and_does_not_accumulate_geometry() {
         let a = TorchSpec::new(PointLight::new(
             Vec3::new(-3.0, 2.0, 0.0),
-            Vec3::X,
+            LinearRgb::new(1.0, 0.0, 0.0),
             20.0,
             12.0,
         ))
         .unwrap();
         let b = TorchSpec::new(PointLight::new(
             Vec3::new(3.0, 4.0, 0.0),
-            Vec3::Z,
+            LinearRgb::new(0.0, 0.0, 1.0),
             20.0,
             12.0,
         ))

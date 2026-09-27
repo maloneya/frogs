@@ -1,18 +1,5 @@
-//! The scenario runner: the gate a change to simulation behaviour has to pass.
-//!
-//! ```sh
-//! cargo run --quiet -p scenario -- scenarios/
-//! echo $?          # 0 or 1 — this is the whole point
-//! ```
-//!
-//! A scenario is setup, an input stream measured in ticks, a tick budget, and
-//! assertions at checkpoints and over the state it ends in. It runs against
-//! `game` with no GPU, no window and no wall-clock pacing — which lets it be the
-//! gate on *every* change rather than something run occasionally.
-//!
-//! Assertions make predictions repeatable and produce a nonzero exit on failure.
-//! Run this gate explicitly unless the current tool environment has already run
-//! it; Claude Code's Stop hook is one such environment.
+//! Headless Game scenarios with tick timelines, predictions and replay checks.
+//! Run with `cargo run --quiet -p scenario -- scenarios/`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -121,14 +108,7 @@ fn run_one(path: &Path, bless: bool, sample: &mut timing::Sample) -> bool {
         Err(e) => return fail_to_load(&name, "read", &e.to_string()),
     };
 
-    // `implicit_some` so an optional assertion is written `contacts: 0` rather
-    // than `contacts: Some(0)`. Every field of `expect` is optional, so without
-    // it the noise would be on every line of every scenario, and a format
-    // people find noisy is a format that gets fewer assertions written in it.
-    //
-    // A parse error is reported as an ordinary failure rather than a panic: one
-    // malformed file must not hide the results of every other scenario in the
-    // directory. RON's error names the line and column.
+    // Implicit Some keeps assertions concise; parse failures must not stop remaining cases.
     let options =
         ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
 

@@ -1,58 +1,16 @@
-//! Characters, as a texture and a table of where each one is in it.
-//!
-//! Rasterising a glyph — filling the bezier outline of a letter with coverage
-//! values — is a solved problem with no engine insight left in it, so `fontdue`
-//! does that part. What is *not* delegated is the atlas, the metrics table and
-//! the layout, because those are the parts every other overlay feature reuses:
-//! an icon sheet is this atlas with different contents, and a text run is this
-//! layout with a different string.
-//!
-//! ## Why one texture rather than one per glyph
-//!
-//! A texture bind is a state change, and a state change between draws is the
-//! thing that makes overlays expensive. Packed into one atlas, "hello world"
-//! is eleven quads in one buffer drawn by one call with one bind — the same
-//! argument the horde's instancing rests on, applied to text.
-//!
-//! ## The white texel
-//!
-//! [`WHITE`] is opaque white and no glyph is allowed to occupy it. That is
-//! what lets [`crate::Quad::solid`] be part of this same draw: a health bar
-//! is a quad whose UVs collapse onto that one texel, so it samples white
-//! everywhere and comes out the colour it asked for. One pipeline draws text
-//! and flat colour forever, and the cost of that is this one reserved pixel.
-//!
-//! The agreement is asserted at construction rather than trusted, because the
-//! failure is silent: a glyph packed over that texel would make every solid bar
-//! a smear of that letter, and nothing downstream could tell. And the UV that
-//! names it is *derived* from it — [`WHITE_UV`] — so there is one definition
-//! rather than two constants that can drift apart.
+//! Glyph rasterization, atlas packing and quad layout.
+//! `fontdue` supplies coverage; [`WHITE`] reserves the texel used by solid quads.
+
+use arpg_core::LinearRgba;
 
 use glam::Vec4;
 
 use crate::quad::{Quad, QuadSink};
 
-/// Where the font comes from.
-///
-/// A system path rather than a vendored file, and that is defensible here for
-/// exactly one reason: this engine is native macOS only, deliberately and
-/// permanently, so "the font is present" is as safe an assumption as "Metal is
-/// present". Monaco specifically because it is a plain single-face `.ttf` — no
-/// `.ttc` collection to index into and no variable-font axes to instantiate —
-/// and because it is monospaced, which makes a debug readout's columns line up
-/// without a layout engine existing yet.
+/// macOS system Monaco: a single-face monospaced TTF.
 const SYSTEM_FONT: &str = "/System/Library/Fonts/Monaco.ttf";
 
-/// The size glyphs are rasterised at, in **physical** pixels.
-///
-/// Physical rather than logical, because the overlay projects in physical
-/// pixels — see [`crate::Quad`]. Rasterising at logical size and scaling up
-/// is how text ends up soft on a retina display, and the softness is easy to
-/// mistake for a sampling bug in the pipeline.
-///
-/// One size only. Multiple sizes means multiple atlases or one atlas with a
-/// size axis, and neither buys anything until something wants text that is not
-/// a readout.
+/// Rasterization size in physical pixels, matching overlay coordinates.
 const PX: f32 = 28.0;
 
 /// The atlas is square and a power of two, which is nothing but habit — but
@@ -110,15 +68,7 @@ struct Glyph {
     advance: f32,
 }
 
-/// Where every character is in the atlas, and how to place it — **with no GPU
-/// resource attached.**
-///
-/// The split from [`Font`] is the point of this type existing. Laying text out
-/// needs metrics and nothing else; only *drawing* it needs a texture. Keeping
-/// them apart means the question "what would be on screen" can be answered, and
-/// asserted, with no device, no window and no adapter — so an overlay's layout
-/// is testable on the same terms as the simulation rather than only by looking
-/// at a screenshot.
+/// CPU glyph metrics and atlas locations for layout without a GPU.
 pub struct Glyphs {
     glyphs: [Glyph; GLYPHS],
     /// Baseline to baseline, in pixels.
@@ -327,13 +277,7 @@ impl Glyphs {
         self.line_height
     }
 
-    /// How wide a string will be, in physical pixels.
-    ///
-    /// The width of its **widest line**, because [`Glyphs::layout`] returns the
-    /// pen to the left margin on a `'\n'` and a measurement that did not would
-    /// report a two-line readout as one line twice as wide — sizing every panel
-    /// behind one far too large. The two walks have to agree about newlines or
-    /// they are not measuring the same text.
+    /// Width of the widest line in physical pixels, matching [`Glyphs::layout`].
     #[must_use]
     pub fn measure(&self, text: &str) -> f32 {
         text.split('\n')
@@ -341,18 +285,9 @@ impl Glyphs {
             .fold(0.0, f32::max)
     }
 
-    /// Pushes one quad per visible character, laid out from a top-left corner.
-    ///
-    /// **`(x, y)` is the top-left of the text**, not the baseline. A caller
-    /// placing a readout in a corner is thinking in terms of the box it
-    /// occupies, and asking it to know where a baseline sits would be exporting
-    /// a typographic detail for no reason; the ascent is right here.
-    ///
-    /// A `'\n'` returns to `x` and drops a line. Nothing else is interpreted —
-    /// no wrapping, no tabs, no bidi. Those are layout, this is placement, and
-    /// the moment something needs a paragraph it needs a layout pass rather
-    /// than more branches in here.
-    pub fn layout(&self, text: &str, x: f32, y: f32, color: Vec4, sink: &mut QuadSink<'_>) {
+    /// Lays out visible glyphs from a physical-pixel top-left corner, not a baseline.
+    /// Newline returns to X and advances a line; tabs, wrapping and bidi are unsupported.
+    pub fn layout(&self, text: &str, x: f32, y: f32, color: LinearRgba, sink: &mut QuadSink<'_>) {
         let mut pen = x;
         let mut baseline = y + self.ascent;
 
@@ -408,7 +343,7 @@ mod tests {
         let mut buf = QuadBuffer::default();
         {
             let mut sink = buf.sink();
-            glyphs().layout(text, x, y, Vec4::ONE, &mut sink);
+            glyphs().layout(text, x, y, LinearRgba::WHITE, &mut sink);
         }
         buf
     }

@@ -16,22 +16,7 @@ pub(crate) const ATTACK_BINDINGS: [(Action, AttackProfile, &str); 3] = [
     (Action::AttackTertiary, AttackProfile::Disintegrate, "3/Space"),
 ];
 
-/// Which physical keys mean which action, and what each key is called.
-///
-/// A table rather than a `match` because bindings are *data*: a match compiles
-/// the mapping into control flow, where nothing can enumerate it, print it to a
-/// settings screen, or replace it at runtime. As a slice, "load bindings from a
-/// file" is a change of where this array comes from and nothing else.
-///
-/// The name column is what the test harness types. It lives *here*, rather than
-/// in a lookup table beside the harness, so the two cannot drift: a second table
-/// would have to be remembered every time a key is bound, and forgetting it
-/// would leave the new key undrivable — the tooling silently falling behind the
-/// game it is meant to test. One table means a binding is testable the moment it
-/// exists.
-///
-/// Note the same action appearing twice. That is the case the naive
-/// implementation gets wrong — see `down` below.
+/// Key-to-action bindings and harness names share this table.
 type Binding = (&'static str, KeyCode, Action);
 const BINDINGS: &[Binding] = &[
     ("w", KeyCode::KeyW, Action::MoveUp),

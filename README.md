@@ -47,8 +47,5 @@ to the companion releases gameplay input while simulation continues.
 - `tools/companion/`: native authoring, tuning and diagnostic UI.
 - `crates/`: simulation, gameplay, content, headless authoring, assets and presentation;
   see [ownership and working rules](CLAUDE.md).
-- [Verification](docs/verification.md): `python3 scripts/verify.py full`.
+- [Verification](docs/verification.md): checks, benchmark cadence and evidence.
 - [Experiments](experimental/README.md): independent research, outside the game.
-
-Use scenes to explore combat feel; use scenarios to preserve measurable rules.
-An automated pass does not decide whether a scene is fun.

@@ -1,6 +1,7 @@
 //! Per-entity data on its way to the GPU, and the buffer it travels in.
 
 use glam::Vec3;
+use crate::LinearRgb;
 
 /// Capacity of the instance buffer. Allocated once, up front.
 ///
@@ -10,17 +11,27 @@ use glam::Vec3;
 /// referencing the old one — not something to do mid-frame while tuning a dial.
 pub const MAX_INSTANCES: usize = 200_000;
 
-/// Per-entity data handed to the GPU. **This is presentation's per-placement
-/// rendering vocabulary** — `gfx` knows about positions, scales and colours,
-/// and nothing whatsoever about enemies, health, or attacks. Imported mesh
-/// geometry reaches `gfx` through the separate asset boundary.
+/// Per-placement GPU data, three vec4s. Yaw uses pos.w, white blend scale.w,
+/// and local-X pitch the final float.
 ///
-/// 48 bytes, laid out as three `vec4`s. Yaw occupies `pos.w`; the blend
-/// toward unlit linear white occupies `scale.w`. The final float stores pitch
-/// about the local X axis. Private fields and validated builders protect this
-/// GPU contract.
+/// ```compile_fail,E0308
+/// use arpg_core::{Instance, Srgb};
+/// use glam::Vec3;
+/// Instance::new(Vec3::ZERO, Vec3::ONE, Srgb::from_rgb8([128; 3]));
+/// ```
+///
+/// ```compile_fail,E0308
+/// use arpg_core::Instance;
+/// use glam::Vec3;
+/// Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE);
+/// ```
+///
+/// GPU upload is one-way: byte reconstruction cannot bypass the constructor.
+/// ```compile_fail,E0277
+/// let _: arpg_core::Instance = bytemuck::cast([0.0_f32; 12]);
+/// ```
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::NoUninit)]
 pub struct Instance {
     pos: [f32; 3],
     /// Rotation about the vertical axis, in radians. Shares a `vec4` with
@@ -49,24 +60,18 @@ impl Instance {
     /// Unrotated; most things in the world have no meaningful facing.
     /// `pos` is in metres; `scale` is a dimensionless mesh multiplier. For the
     /// authored mesh, its components multiply the imported dimensions.
-    pub fn new(pos: Vec3, scale: Vec3, color: Vec3) -> Self {
+    pub fn new(pos: Vec3, scale: Vec3, color: LinearRgb) -> Self {
         Self {
             pos: pos.into(),
             yaw: 0.0,
             scale: scale.into(),
             white_mix: 0.0,
-            color: color.into(),
+            color: color.to_array(),
             pitch: 0.0,
         }
     }
 
-    /// Turns the instance about the vertical axis.
-    ///
-    /// **The convention, which the asset shaders must match:** yaw `0` faces world
-    /// `+Z`, and a positive yaw turns toward `+X` — so a direction maps to a
-    /// yaw by `atan2(dir.x, dir.z)`. Rust cannot check that the WGSL agrees any
-    /// more than it can check the vertex layout, so the two are written to be
-    /// read together.
+    /// Yaw about Y: zero faces +Z, positive turns toward +X, matching the asset shaders.
     pub fn with_yaw(mut self, yaw: f32) -> Self {
         self.yaw = yaw;
         self
@@ -100,15 +105,7 @@ impl Instance {
     #[must_use]
     pub fn white_mix(&self) -> f32 { self.white_mix }
 
-    /// Where this instance will be drawn.
-    ///
-    /// Read-only, and that keeps the invariant above intact rather than
-    /// weakening it: the fields are private so nothing can *write* garbage into
-    /// the private transform, which a getter cannot do. What it buys is the
-    /// ability to check what actually crossed the presentation seam — render
-    /// interpolation happens on the way into an `Instance`, so a test that
-    /// cannot read one back can only assert that presentation ran, not that
-    /// it produced the right picture.
+    /// World-space draw position.
     #[must_use]
     pub fn pos(&self) -> Vec3 {
         Vec3::from(self.pos)
@@ -189,7 +186,7 @@ mod tests {
 
     #[test]
     fn white_blend_rejects_invalid_values_at_the_instance_boundary() {
-        let instance = Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE);
+        let instance = Instance::new(Vec3::ZERO, Vec3::ONE, LinearRgb::WHITE);
         assert_eq!(instance.white_mix(), 0.0);
         assert_eq!(instance.with_white_mix(1.0).white_mix(), 1.0);
         for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
@@ -205,7 +202,7 @@ mod tests {
         let mut buf = InstanceBuffer::default();
         let mut sink = buf.sink();
         for _ in 0..MAX_INSTANCES + 1000 {
-            sink.push(Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ZERO));
+            sink.push(Instance::new(Vec3::ZERO, Vec3::ONE, LinearRgb::BLACK));
         }
         assert_eq!(buf.as_slice().len(), MAX_INSTANCES);
     }
@@ -217,7 +214,7 @@ mod tests {
         let mut buf = InstanceBuffer::default();
         for _ in 0..3 {
             let mut sink = buf.sink();
-            sink.push(Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ZERO));
+            sink.push(Instance::new(Vec3::ZERO, Vec3::ONE, LinearRgb::BLACK));
         }
         assert_eq!(buf.as_slice().len(), 1);
     }

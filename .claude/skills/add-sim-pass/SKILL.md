@@ -6,7 +6,7 @@ description: Add or change simulation passes, including movement, contact, attac
 # Add or change a simulation pass
 
 Read [repository rules](../../../CLAUDE.md), the owning pass and its neighbours
-in [the schedule](../../../crates/sim/src/pass/mod.rs). Explain what rule changes,
+in [`World::step`](../../../crates/sim/src/lib.rs). Explain what rule changes,
 why it runs at that point, and an observable consequence for play.
 
 ## Access and composition
@@ -17,10 +17,9 @@ For example, attack reads positions and submits momentum through `ImpulseSink`;
 physics integrates it later. This allows other producers to use the same motion
 rules and lets contacts propagate an attack's consequences.
 
-Keep mechanic logic in its module. Add only wiring to `World::step`, and update
-the schedule explanation with the reason for the ordering. State which tick's
-facts the pass reads and when its effects become visible. The schedule prose
-is not mechanically synchronized with the call order; verify both.
+Keep mechanic logic in its module. Add only wiring to `World::step`; explain
+non-obvious ordering beside the call. State which tick's facts the pass reads
+and when its effects become visible.
 
 Use `Dt` when a pass needs time, never an arbitrary frame duration. Keep tuning
 beside its owner, with range validation at the shared entry point. Use const

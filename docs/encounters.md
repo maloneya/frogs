@@ -7,14 +7,10 @@ trial uses eight sources around a central light and rewards a chest opening. Mul
 entries run independently in the same scene, and loading the scene twice makes
 independent copies of every relationship.
 
-Build the layout and complete relationships in the
-[scene editor's encounter form](scene-editor.md#compose-an-encounter) or the
-[headless API](scene-authoring.md). The RON fragment below belongs inside `scene`.
-Ordinary encounters compose existing rules without runtime
-changes. [EncounterSpec](../crates/game/src/encounter.rs),
-[DoorSpec](../crates/game/src/door.rs) and [ChestSpec](../crates/game/src/chest.rs)
-own the schema; unknown fields are rejected. Preserve intended outcomes with
-a scenario loading that file.
+Build complete relationships in the [editor](scene-editor.md#compose-an-encounter)
+or [headless API](scene-authoring.md). The RON below belongs inside `scene`.
+[EncounterSpec](../crates/game/src/encounter.rs), [DoorSpec](../crates/game/src/door.rs)
+and [ChestSpec](../crates/game/src/chest.rs) own the schema.
 
 ```ron
 encounters: [(
@@ -112,23 +108,3 @@ doors: [(scene: 0, door: 0, state: Some(Locked))],
 `None` asserts eviction of an existing authored entry. Invalid indices are
 rejected, even when asserting absence or blessing traces. See
 [the scenario guide](../.claude/skills/scenario/SKILL.md).
-
-[The independent-trials scenario](../scenarios/two_encounters_resolve_independently.ron)
-pins activation, the final allowed kill, independent timeout and physical passage
-through the opened door using its own setup. Game tests independently cover
-chest rewards, source ownership, eviction and restart. Playable encounter layouts
-are evaluated through playtesting, not automated feasibility checks.
-
-## Extending a rule
-
-A new objective needs a typed variant,
-its narrowly scoped evaluation, shared observation vocabulary and a focused
-scenario. Keep physical facts in sim and gameplay relationships in game. There
-is deliberately no arbitrary expression evaluator, callback registry or script
-language. Add those only if concrete compositions require them.
-
-Runtime storage participates in scene eviction, fresh-run replacement, cached
-restart hashes, deterministic hashes, reports and transition traces. Keep those
-boundaries exhaustive when adding state. Simulation provenance belongs to the
-health membership and pending spawn request; completed-tick outcomes are bounded
-by the maximum body population and replaced every engine tick.

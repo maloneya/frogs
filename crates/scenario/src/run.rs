@@ -28,16 +28,8 @@ pub(crate) struct Run {
     /// The game's hash after every tick, in order. This is what makes a
     /// divergence report a tick number instead of a shrug.
     pub(crate) hashes: Vec<u64>,
-    /// The name each `Place` action got back, in the order they appear.
-    ///
-    /// The scenario file names bodies by placement number because it cannot
-    /// hold an `EntityId`; this is the translation. Holding the real ids rather
-    /// than dense indices is what makes an assertion survive a despawn moving
-    /// rows around underneath it.
-    ///
-    /// `None` where a spawn was refused — the horde was already at the instance
-    /// budget. Kept as a slot rather than dropped so that placement numbers do
-    /// not shift under the assertions that refer to them.
+    /// Stable IDs in placement order. Refused spawns retain `None` slots so later
+    /// placement numbers do not shift.
     pub(crate) placed: Vec<Option<EntityId>>,
 }
 
@@ -827,23 +819,8 @@ fn check_body(
     }
 }
 
-/// Refuses a checkpoint or final state with a position that is not a number.
-///
-/// **Unconditional, like the replay check**, and for the same reason: it is a
-/// property every scenario should have and none would think to ask for.
-/// Individual predictions reject non-finite observations too; this also checks
-/// bodies whose positions the scenario did not explicitly predict.
-///
-/// **A backstop rather than the primary detector, and it is worth knowing
-/// which.** `pass::contain` clamps every position at the end of every tick, and
-/// clamping a NaN does not propagate it: `f32::max` returns the operand that is
-/// not NaN, so the body is quietly moved to the arena limit and is finite again
-/// before this ever looks. The assertion inside `contain` is what actually
-/// names that failure, at the point the poison arrives.
-///
-/// This still earns its place: it costs one pass over the bodies, and it holds
-/// for the cases `contain` cannot launder — a position written after it, or a
-/// pass order that changes.
+/// Rejects non-finite positions, including bodies without explicit predictions.
+/// This cannot detect NaNs already hidden by clamping; containment checks earlier.
 fn check_finite(game: &Game) -> Option<Failure> {
     if game.all_positions_finite() {
         return None;

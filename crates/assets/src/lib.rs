@@ -5,6 +5,8 @@
 //! retained character hierarchy, skin and clip. It owns neither file selection
 //! nor GPU state.
 
+use arpg_core::{LinearRgb, LinearRgba, Srgb};
+
 use glam::{Mat3, Mat4, Vec2, Vec3};
 
 mod character;
@@ -123,7 +125,7 @@ impl BaseColorTexture {
 pub struct StaticMesh {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
-    base_color_factor: [f32; 4],
+    base_color_factor: LinearRgba,
     base_color_texture: BaseColorTexture,
 }
 
@@ -154,7 +156,7 @@ impl StaticMesh {
 
     /// Linear multiplier authored on the glTF base-colour material.
     #[must_use]
-    pub fn base_color_factor(&self) -> [f32; 4] {
+    pub fn base_color_factor(&self) -> LinearRgba {
         self.base_color_factor
     }
 
@@ -229,24 +231,6 @@ pub(crate) fn node_transform(node: gltf::Node<'_>) -> Result<Mat4, ImportError> 
     Ok(transform)
 }
 
-fn srgb_to_linear(byte: u8) -> f32 {
-    let encoded = f32::from(byte) / 255.0;
-    if encoded <= 0.040_45 {
-        encoded / 12.92
-    } else {
-        ((encoded + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn linear_to_srgb(linear: f32) -> u8 {
-    let encoded = if linear <= 0.003_130_8 {
-        linear * 12.92
-    } else {
-        1.055 * linear.powf(1.0 / 2.4) - 0.055
-    };
-    (encoded * 255.0).round().clamp(0.0, 255.0) as u8
-}
-
 fn mip_chain_len(mut width: u32, mut height: u32) -> Result<usize, ImportError> {
     let mut total = 0_usize;
     loop {
@@ -291,15 +275,16 @@ fn append_mip_levels(
                 for source_y in source_y_start..source_y_end {
                     for source_x in source_x_start..source_x_end {
                         let pixel = source_offset + ((source_y * width + source_x) * 4) as usize;
-                        for channel in 0..3 {
-                            linear_rgb[channel] += srgb_to_linear(rgba8[pixel + channel]);
-                        }
+                        let decoded = Srgb::from_rgb8([rgba8[pixel], rgba8[pixel + 1], rgba8[pixel + 2]])
+                            .to_linear().to_array();
+                        for channel in 0..3 { linear_rgb[channel] += decoded[channel]; }
                         alpha += f32::from(rgba8[pixel + 3]);
                         samples += 1;
                     }
                 }
                 let divisor = samples as f32;
-                rgba8.extend(linear_rgb.map(|channel| linear_to_srgb(channel / divisor)));
+                let [r, g, b] = linear_rgb.map(|channel| channel / divisor);
+                rgba8.extend(LinearRgb::new(r, g, b).to_srgb().to_rgb8());
                 rgba8.push((alpha / divisor).round() as u8);
             }
         }
@@ -365,7 +350,7 @@ fn decode_base_color_png(encoded: &[u8], remaining_bytes: usize) -> Result<BaseC
 /// Validated material references; images are decoded separately so sharing a
 /// texture across character parts does not multiply CPU or GPU allocations.
 pub(crate) struct MaterialSource<'a> {
-    pub(crate) base_color_factor: [f32; 4],
+    pub(crate) base_color_factor: LinearRgba,
     pub(crate) texture: gltf::Texture<'a>,
 }
 
@@ -400,14 +385,10 @@ pub(crate) fn import_material(material: gltf::Material<'_>) -> Result<MaterialSo
             "metallic-roughness textures are deferred",
         ));
     }
-    let base_color_factor = pbr.base_color_factor();
-    if base_color_factor
-        .iter()
-        .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
-    {
-        return Err(ImportError::Invalid(
-            "baseColorFactor components must be finite and within zero to one",
-        ));
+    let [r, g, b, alpha] = pbr.base_color_factor();
+    let base_color_factor = LinearRgba::try_new(r, g, b, alpha).map_err(ImportError::Invalid)?;
+    if base_color_factor.to_array().iter().any(|value| *value > 1.0) {
+        return Err(ImportError::Invalid("baseColorFactor components must not exceed one"));
     }
     let base_color = pbr
         .base_color_texture()
@@ -816,7 +797,7 @@ mod tests {
     fn imports_the_asymmetric_fixture() {
         let mesh = import_glb(FIXTURE).unwrap();
         assert_eq!((mesh.vertex_count(), mesh.index_count()), (12, 12));
-        assert_eq!(mesh.base_color_factor(), [0.25, 1.0, 1.0, 1.0]);
+        assert_eq!(mesh.base_color_factor().to_array(), [0.25, 1.0, 1.0, 1.0]);
         assert_eq!(
             (
                 mesh.base_color_texture().width(),
@@ -847,7 +828,7 @@ mod tests {
     fn imports_the_blender_authored_fixture() {
         let mesh = import_glb(BLENDER_FIXTURE).unwrap();
         assert_eq!((mesh.vertex_count(), mesh.index_count()), (144, 216));
-        assert_eq!(mesh.base_color_factor(), [1.0; 4]);
+        assert_eq!(mesh.base_color_factor().to_array(), [1.0; 4]);
         let texture = mesh.base_color_texture();
         assert_eq!((texture.width(), texture.height()), (16, 16));
         assert_eq!(texture.mip_level_count(), 5);

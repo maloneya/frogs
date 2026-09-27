@@ -70,28 +70,12 @@ pub use access::{GameplayAccess, MeleeView};
 mod tuning;
 pub use tuning::{Tuning, TuningField, TuningAttribute};
 
-/// Blends between two facings the short way round.
-///
-/// A plain lerp is wrong here and wrong *invisibly*: `facing` is wrapped to
-/// `-PI..=PI`, so a character turning through south goes from `3.13` to `-3.13`
-/// in one tick — a real turn of 0.02 radians. Lerping those endpoints sends the
-/// body spinning 6.26 radians the other way, across a single frame, for one
-/// frame. It reads as a flicker rather than as a spin, which is exactly the
-/// kind of artefact that gets blamed on the renderer.
-///
-/// `angle::shortest_arc` already solves this for the simulation's own turning;
-/// this is the same fix applied to the drawing of it.
+/// Interpolates the shortest arc, avoiding a full turn at the ±π wrap.
 fn blend_angle(from: f32, to: f32, alpha: Alpha) -> f32 {
     angle::wrap(from + angle::shortest_arc(from, to) * alpha.get())
 }
 
-/// Lifts a ground-plane position into world space at a given height.
-///
-/// The one place `Vec2::y` is allowed to mean world **Z**. Spelling the swap
-/// out once, rather than writing `Vec3::new(p.x, h, p.y)` at each call site,
-/// is what keeps it from being a silent trap: the two axes are both horizontal
-/// and both plausible, so a transposition compiles, draws, and puts everything
-/// in the wrong place along one diagonal.
+/// Converts ground X/Z to world XYZ at the supplied height.
 fn on_ground(p: Vec2, height: f32) -> Vec3 {
     Vec3::new(p.x, height, p.y)
 }
@@ -107,22 +91,7 @@ const _: () = assert!(MAX_BODIES > 0);
 /// Legacy report height retained independently of the rendered asset dimensions.
 const ENEMY_HALF_HEIGHT: f32 = 0.25;
 
-/// Collision radii, in world units. **Bodies are discs, not boxes**, and that
-/// is a decision the camera pays for rather than a shortcut.
-///
-/// A disc is rotation-invariant, which matters because the player turns
-/// continuously: a box would need its collider rebuilt every frame, and its
-/// minimum-translation axis *flips* as two boxes slide past each other, which
-/// is a documented source of crowd jitter. A disc has one contact normal and
-/// one penetration depth, both unambiguous, and the test is a squared-distance
-/// compare with no `sqrt` until an overlap is confirmed.
-///
-/// What makes it *free* rather than merely cheap is the projection. A sorted-2D
-/// isometric game has to prevent overlap or the sort order pops, so the
-/// renderer dictates the radius. Here the depth buffer resolves occlusion
-/// exactly in hardware, so bodies may interpenetrate and the image stays
-/// correct — which leaves the radius as a pure feel knob, answerable to how
-/// dense the crowd should be and to nothing else.
+/// Disc collision radii in metres, independent of visible mesh dimensions.
 pub const ENEMY_RADIUS: f32 = 0.25;
 
 /// Player collision footprint, independent of the authored mesh.
@@ -139,46 +108,18 @@ const _: () = assert!(ARENA_HALF.is_finite() && ARENA_HALF > PLAYER_RADIUS);
 /// Legacy player report height, preserved independently of asset dimensions.
 const PLAYER_HALF_HEIGHT: f32 = 0.6;
 
-/// Shared body storage. Row zero is the persistent player; the remaining
-/// rows are enemies and props. `despawn` preserves the player; `clear` removes
-/// only enemies, leaving scene props in place.
-///
-/// Structure-of-arrays rather than `Vec<Enemy>`. The solvers walk positions and
-/// nothing else, and a contiguous stream is what they want; fields an enemy
-/// gains later — health, AI state, cooldowns — belong in their own arrays
-/// beside this one, so the hot loop never drags them through cache on its way
-/// to a position it does want.
+/// Shared body storage. Row zero is the persistent player.
+/// Separate position arrays keep unrelated state out of solver iteration.
 struct Bodies {
     physics: Physics,
     interactions: Interactions,
     /// Damageable membership; the player and static props have no health.
     health: Health,
-    /// Stable names for these bodies, and the map onto the dense rows below.
-    ///
-    /// The horde stays dense — the passes want a contiguous stream — so a
-    /// body's row moves whenever anything before it dies. This is what lets
-    /// something hold a reference across that: see [`crate::slots`].
+    /// Stable identities mapped to dense rows.
     slots: Slots,
-    /// Ground-plane position: `x` is world X and `y` is world **Z** — see
-    /// [`on_ground`], which is the only place that swap is spelled out.
-    ///
-    /// `Vec2` rather than `Vec3` because the horde never leaves the floor: the
-    /// height a body is drawn at is a constant of its size, not state worth
-    /// storing N times. That is what makes collision here genuinely 2D, which
-    /// is the largest saving the isometric camera hands over — a grid
-    /// neighbourhood is 9 cells rather than 27, and with no vertical axis there
-    /// is no stacking, which is the case that forces general solvers into four
-    /// to eight iterations.
+    /// Ground positions: X is world X, Y is world Z; [`on_ground`] converts to 3D.
     pos: Vec<Vec2>,
-    /// Where each body was at the end of the *previous* tick.
-    ///
-    /// Read only by presentation snapshots, written only by [`crate::pass::remember`]. It is
-    /// simulation-owned data that exists purely for presentation, which sounds
-    /// like a contradiction and is not: the alternative is `app` snapshotting a
-    /// thousand positions every tick to hand back later — the same copy, done
-    /// further from the data and with a chance of being skipped.
-    ///
-    /// Always exactly as long as `pos`; see [`Bodies::debug_check_paired`].
+    /// Previous-tick positions for interpolation, aligned with `pos`.
     prev_pos: Vec<Vec2>,
 }
 
@@ -202,15 +143,8 @@ impl Bodies {
         self.pos.len()
     }
 
-    /// Puts one body at a chosen place and returns its name.
-    ///
-    /// **`prev_pos` is seeded to `at` here, and that is the point of routing
-    /// every spawn through one function.** A body whose previous position is
-    /// wherever the array happened to hold gets drawn streaking across the
-    /// arena for exactly one frame — invisible under vsync, where nearly every
-    /// frame runs a tick, and obvious uncapped, where most frames run none.
-    /// `docs/traps.md` carries that symptom; maintaining the invariant in the
-    /// storage is what retires it, rather than testing each caller for it.
+    /// Spawns a body with both interpolation endpoints at `at`, preventing a
+    /// one-frame streak when rendering occurs before the next simulation tick.
     fn spawn(&mut self, at: Vec2, what: Template) -> Option<EntityId> {
         if self.len() > MAX_BODIES || !what.valid_at(at) {
             return None;
@@ -247,10 +181,7 @@ impl Bodies {
         Some(id)
     }
 
-    /// The pairing `Slots` documents but cannot check: it holds no payload, so
-    /// keeping every array the same length is this type's job. Debug only —
-    /// it is a claim about this code rather than about the world, and an array
-    /// added later and forgotten in `despawn` is the bug it catches.
+    /// Debug-only alignment checks for storage owned here.
     fn debug_check_paired(&self) {
         debug_assert_eq!(self.slots.len(), self.physics.len(), "physics and bodies disagree");
         debug_assert_eq!(self.slots.len(), self.pos.len(), "slots and pos disagree");
@@ -340,16 +271,7 @@ pub struct World {
     /// a grid that resolves different contacts than brute force is wrong,
     /// and this is what catches it.
     contacts: usize,
-    /// Which bodies chase the player.
-    ///
-    /// **A behaviour, stored as its own membership set rather than as a field
-    /// on every body.** A body is not "an enemy with `chases: bool`"; it is a
-    /// body, and it is in this set or it is not. Adding the next behaviour adds
-    /// another field here and another line to the schedule, and touches nothing
-    /// that already exists — which is the property the storage was chosen for.
-    ///
-    /// See [`crate::members`] for why the set is sparse, and
-    /// [`crate::pass::seek`] for the pass that walks it.
+    /// Sparse seeker membership; see [`crate::pass::seek`].
     seekers: Members,
     /// What has been asked for and not yet made.
     ///
@@ -447,31 +369,9 @@ impl World {
         self.bodies.len() - 1
     }
 
-    /// Places one body at a chosen spot and returns its name.
-    ///
-    /// `at` is a **ground-plane** position: `x` is world X and `y` is world Z,
-    /// the same convention the storage uses. See [`on_ground`], the one place
-    /// that swap is spelled out.
-    ///
-    /// Returns `None` for an invalid position/template or when all non-player
-    /// bodies together fill [`MAX_BODIES`]. That is a
-    /// refusal rather than a clamp because the budget exists to stop the
-    /// instance buffer overrunning, and an overrun is silent — the upload just
-    /// truncates, so bodies stop being drawn with no error anywhere. A caller
-    /// that ignores this gets a compiler warning; a caller that never saw it
-    /// would get an invisible bug.
-    ///
-    /// **The door scenarios place bodies through.** A horde count lays N bodies
-    /// out in a grid nobody wrote down; this is what lets an assertion be about
-    /// a body at a *particular* spot.
-    ///
-    /// **Immediate, which is what makes it a setup door rather than a gameplay
-    /// one.** Nothing inside the simulation can call this, and that is a fact
-    /// rather than a rule: a spawn during a tick moves rows out from under
-    /// indices the passes have already taken, and no pass is ever handed a
-    /// `&mut World` to reach it with. Setup and the harness may, because
-    /// neither runs while the schedule does. Everything else asks — see
-    /// [`World::request_spawn`].
+    /// Immediately places a body at world X/Z coordinates between ticks.
+    /// Returns `None` for invalid input or exhausted [`MAX_BODIES`] capacity.
+    /// Use [`World::request_spawn`] for queued placement.
     pub fn place(&mut self, at: Vec2, what: Template) -> Option<EntityId> {
         let mut trace = self.trace.sink(self.tick);
         pass::spawn::place(&mut self.bodies, &mut self.seekers, at, what, &mut trace)
@@ -525,18 +425,8 @@ impl World {
         self.sources.set_enabled(id, enabled, self.trace.sink(self.tick))
     }
 
-    /// Asks for something to be made. It exists at the end of the next tick to
-    /// run.
-    ///
-    /// **The door for anything that runs while the simulation does**, and the
-    /// only one that is safe there: this touches no storage, so it cannot move
-    /// a row under a pass that is mid-iteration. The request is granted by
-    /// `pass::spawn::drain`, before anything else in the next schedule holds a row.
-    ///
-    /// Returns a stable ticket, or `None` when the queue is full. A refused request is
-    /// dropped and counted — a `Refused` trace event follows on the next tick.
-    /// A caller that ignores this gets a warning; a caller that never saw it
-    /// would get a body that silently never appears.
+    /// Queues a body for the next tick and returns its stable ticket.
+    /// A full queue returns `None` and emits a refusal on the next tick.
     #[must_use]
     pub fn request_spawn(&mut self, at: Vec2, what: Template) -> Option<SpawnTicket> {
         self.queue.push(at, what)
@@ -836,22 +726,7 @@ impl World {
         &self.trace
     }
 
-    /// Advances the world by `dt` seconds.
-    ///
-    /// `dt` is the raw frame time and movement is integrated against it, so
-    /// speed is frame-rate independent today.
-    ///
-    /// `dt` is a [`Dt`], which carries no number and can only have come from an
-    /// [`Accumulator`]. That is what makes "the simulation advances in fixed
-    /// steps" checkable by the compiler rather than by review: there is no
-    /// value a caller could pass to make this integrate a frame's worth of wall
-    /// clock, because the type has no room to hold one.
-    ///
-    /// `intent` is the simulation's own vocabulary: a world-space direction and
-    /// the discrete things asked for this tick. It is deliberately not
-    /// `Actions`, which names its directions in *screen* space — resolving
-    /// those is the camera's job, and letting it into `sim` would put a
-    /// presentation decision inside the simulation.
+    /// Advances one fixed tick using world-space intent.
     pub fn step(&mut self, dt: Dt, intent: Intent) {
         self.step_observed(dt, intent, &mut ());
     }
@@ -863,17 +738,7 @@ impl World {
         // wrong one. See `trace::TraceSink`.
         let mut trace = self.trace.sink(self.tick);
 
-        // **The schedule.** This function is a list of passes and nothing else:
-        // no logic, no inline stages. Anything that reads like a step of the
-        // simulation belongs in `pass/`, so that the order stays something you
-        // can read in one screen and each pass's inputs stay visible in its
-        // signature. `pass/mod.rs` carries why each adjacency is what it is.
-        // **Decide, then perform.** `trigger` reads two facts about the world
-        // and may only push onto the queue — it is handed no storage, so the
-        // code that decides new bodies exist cannot make one. `drain` is the
-        // only pass that adds bodies, and running it here means their rows stay
-        // fixed until the final defeat boundary. See `pass::source`,
-        // `pass::spawn`, and `pass::health`.
+        // Drain before row readers; keep rows stable until final defeat removal.
         pass::source::trigger(
             &mut self.sources,
             &mut self.queue,
@@ -1000,22 +865,10 @@ impl World {
         self.tick
     }
 
-    /// A stable hash of **all** simulation state.
-    ///
-    /// Sampled every tick, two runs' hash sequences say which tick they
-    /// diverged on rather than merely that they did. That is the whole
-    /// instrument: `sim` is claimed to be a pure function of (state, inputs),
-    /// and this is the thing that can exit nonzero when it stops being one.
-    ///
-    /// Exhaustive destructuring forces an explicit decision when a field is
-    /// added. It cannot prove that the bound value reaches the hash; tests must
-    /// check that changing each relevant field changes the fingerprint. Omitting
-    /// state could make replay report agreement despite different worlds.
-    ///
-    /// `contacts` goes in even though it is derived from the positions, and for
-    /// a specific reason: a broadphase that finds a different number of pairs
-    /// while leaving every body in the same place is exactly the bug the
-    /// uniform grid could introduce, and positions alone would call it agreement.
+    /// Replay fingerprint of authoritative state and contact counts.
+    /// Contact counts detect broadphase changes that leave positions unchanged.
+    /// Exhaustive destructuring requires field decisions, but tests must check that
+    /// relevant changes actually affect the fingerprint.
     #[must_use]
     pub fn hash(&self) -> u64 {
         // Exhaustive on purpose — see above. Do not replace with `..`.
@@ -1035,12 +888,7 @@ impl World {
             trace,
         } = self;
 
-        // **Deliberately not hashed**, and the exhaustive destructuring above is
-        // what forced this line to be written rather than forgotten. The trace
-        // is derived output — a record of what the passes did — so feeding it
-        // back in would be hashing the hash's own inputs twice. It is also
-        // bounded and wraps, which would make two runs of different lengths
-        // disagree for a reason that has nothing to do with the simulation.
+        // Diagnostic retention must not affect the simulation fingerprint.
         let _ = trace;
         let Player {
             facing,
@@ -1201,13 +1049,7 @@ impl World {
         })
     }
 
-    /// Where the player *appears* this frame, and which way it appears to
-    /// point: both interpolated between the last two ticks.
-    ///
-    /// Shared by camera and character presentation so their interpolation agrees.
-    ///
-    /// Through `blend_angle` rather than a plain lerp, or a facing that crosses
-    /// the `±PI` seam spins the long way round for one frame.
+    /// Interpolated position and shortest-arc facing shared by camera and character presentation.
     fn drawn_player(&self, alpha: Alpha) -> (Vec2, f32) {
         (
             self.bodies.prev_pos[0].lerp(self.bodies.pos[0], alpha.get()),
@@ -1261,21 +1103,7 @@ impl World {
         self.crowd_contacts
     }
 
-    /// Whether every position in the world is a real number.
-    ///
-    /// **A poisoned position is the one failure that reads as success.** NaN
-    /// propagates through arithmetic silently, survives `clamp` — which is what
-    /// `pass::contain` would otherwise be expected to catch it with — and, worst
-    /// of all, compares `false` to everything. A test written as
-    /// `if (got - want).length() > tolerance` therefore *passes* when `got` is
-    /// NaN, because `NaN > tolerance` is false. Every positional assertion in
-    /// the scenario runner had that shape.
-    ///
-    /// So the check has to be an explicit "is this finite", asked separately,
-    /// and it cannot be folded into a comparison. The solver is the thing that
-    /// produces one: normalising the difference between two coincident bodies
-    /// is a division by zero, which is why `contact::between` has a coincident
-    /// case at all.
+    /// Whether all current positions are finite; tolerance comparisons alone miss NaN.
     #[must_use]
     pub fn all_positions_finite(&self) -> bool {
         self.bodies.physics.finite()

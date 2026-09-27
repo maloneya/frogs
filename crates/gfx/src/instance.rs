@@ -2,13 +2,7 @@
 
 use arpg_core::Instance;
 
-/// How `arpg_core::Instance` is fed to the GPU.
-///
-/// This lives here rather than beside the type it describes because it names
-/// wgpu, and `arpg-core` must not — otherwise `arpg-sim` would link the whole
-/// graphics stack just to say where an enemy is standing.
-///
-/// Locations 0 and 1 belong to the mesh; instance data starts at 2.
+/// GPU instance layout. Mesh attributes occupy locations 0 and 1; instances start at 2.
 const ATTRS: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4];
 

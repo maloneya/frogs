@@ -1,50 +1,7 @@
-//! Who asks for a spawn, and when.
+//! Spawn producers with independent cadence, condition, placement and template.
 //!
-//! ## A source is not a kind of body
-//!
-//! It is the thing that *makes* bodies, and hanging it off one of its own
-//! products inverts the layering: it would break the moment the thing being
-//! made is not a body, and it would make "can this be killed" and "what is
-//! this" the same question. So a source lives in its own list, is named by its
-//! own id, and holds a position only because it needs somewhere to put things.
-//!
-//! What binds it to the rest of the simulation is a *request*, not a type: this
-//! module pushes onto [`crate::pass::spawn::SpawnQueue`] and can do nothing
-//! else. The pass signature says so — it is handed no storage, so it physically
-//! cannot spawn, only ask. Every other asker (the harness, a scenario, a body
-//! that splits when it dies) is equal to it at that seam.
-//!
-//! ## Flexibility is in the axes, not in an open set of conditions
-//!
-//! A source is four independent choices, each small:
-//!
-//! - **cadence** — [`SourceSpec::every`], in ticks;
-//! - **condition** — [`Condition`], the gate checked when the cadence is ready;
-//! - **placement** — [`Placement`], where the body goes;
-//! - **template** — [`crate::Template`], what it is when it gets there.
-//!
-//! Four axes multiply; a single `Trigger` enum covering every useful
-//! combination would have to add a variant per pairing. The condition set stays
-//! deliberately short because *that* is the axis a new game requirement most
-//! often wants, and each variant is a different kind of question — time,
-//! population, proximity — rather than a different phrasing of one.
-//!
-//! Data rather than a closure, for the reasons a [`crate::Template`] is: the
-//! determinism hash destructures exhaustively, scenarios deserialise from RON,
-//! and a replay has to reproduce the decision.
-//!
-//! ## Ready-and-waiting
-//!
-//! The cadence and the condition are checked in that order, and a source whose
-//! cadence is ready but whose condition is shut **stays** ready. It fires on the
-//! first tick the condition opens rather than on the next multiple of the
-//! cadence after it. That is the behaviour a room full of enemies wants: they
-//! appear when the player walks in, not up to `every` ticks later.
-//!
-//! Enablement is independent of those four choices. A disabled source freezes
-//! its countdown and emission sequence. Enabling resumes them: a ready source
-//! can fire on that tick if its condition is met. Accepted spawn requests are
-//! unaffected; enablement governs future decisions, not queued work.
+//! A ready source waits for its condition without restarting the countdown.
+//! Disabling freezes countdown and emission sequence; it does not cancel queued work.
 
 use core::fmt;
 
@@ -58,21 +15,8 @@ use crate::pass::spawn::SpawnQueue;
 use crate::trace::{Event, TraceSink};
 use crate::{SceneId, Template};
 
-/// The name of one source.
-///
-/// A bare index, with **no generation**, and that is safe here for a reason
-/// that does not hold for bodies: the list is never compacted and a row is
-/// never reused, so an index names the same source for the life of the world.
-/// A removed source's id resolves to nothing, forever.
-///
-/// The cost is a row per source ever created. That is the right trade at the
-/// scale sources exist at — tens, over a whole session, against a horde of
-/// thousands — and it is what `EntityId`'s generation is paying for on the
-/// horde's behalf instead.
-///
-/// A separate type from [`crate::EntityId`] rather than a reuse of it, because
-/// the two index different lists: an id that resolved in both would be a
-/// confusion the compiler could otherwise not see.
+/// Source identity, distinct from body IDs. Rows are never reused within a run;
+/// retired IDs remain absent, at the cost of storage proportional to historical sources.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceId(u32);
 
@@ -82,18 +26,7 @@ impl SourceId {
         hash.u64(u64::from(self.0));
     }
 
-    /// Reads a name back from the text [`fmt::Display`] wrote.
-    ///
-    /// **A door that `EntityId` deliberately does not have**, and the reason
-    /// the two differ is the generation. Forging an `EntityId` would let a
-    /// caller name a body that died and get the one that took its row; a
-    /// `SourceId` is a bare index into a list that is never compacted, so a
-    /// forged one either names the source it says or names nothing at all.
-    ///
-    /// It exists because the harness is a text protocol: an agent reads
-    /// `fired source=s3` out of a trace and hands `s3` straight back. Accepting
-    /// only the form `Display` produces is what keeps that a round trip rather
-    /// than two conventions that can drift.
+    /// Parses the source identity syntax emitted by [`fmt::Display`].
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
         text.strip_prefix('s')?.parse().ok().map(Self)
@@ -166,15 +99,7 @@ impl Condition {
 enum Placement {
     /// Always the same ground-plane point.
     At(Vec2),
-    /// Spread around a circle, one step of the golden angle per emission.
-    ///
-    /// **The reason this exists rather than being a nicety.** Bodies stacked on
-    /// one point are coincident, and the separation solver's whole job is then
-    /// to blow them apart — a source on a fixed point with a short cadence
-    /// builds a pile and then explodes it. Stepping the angle means successive
-    /// bodies never land on each other and never fall into a repeating pattern;
-    /// see [`GOLDEN_ANGLE`], which the coincident-body tiebreak uses for the
-    /// same reason.
+    /// Golden-angle ring placement, spreading successive emissions instead of stacking them.
     Ring {
         /// Ground-plane centre.
         centre: Vec2,
@@ -281,33 +206,9 @@ impl Source {
     }
 }
 
-/// The written form of a source: its four axes and initial enablement, flat,
-/// as a scenario or a level file spells them.
-///
-/// **This is the one definition of what a source looks like from outside.** It
-/// replaced a copy in the scenario crate's spec and a third in the harness
-/// parser, each of which had to grow a field per axis, and neither of which
-/// could express an axis it had not been taught about.
-///
-/// The argument for those copies was that deriving `Deserialize` on the
-/// simulation's own types makes a `.ron` file a consumer of its internals, so a
-/// rename in `sim` changes the scenario language underneath the gate. Half of
-/// that is right, and it is the harmless half: a rename here breaks every
-/// scenario naming the old field **loudly**, at parse time, on the next run of
-/// the runner. What the copies hid was the opposite failure — an axis added to
-/// [`Source`] and reachable from no `.ron` file at all, which nothing anywhere
-/// reports. So the field names below *are* the language, and renaming one is a
-/// change to it; that obligation belongs here, where somebody about to rename
-/// one is already looking, rather than in a duplicate in another crate.
-///
-/// Conversion to [`Source`] validates every field before a source can enter a
-/// world. Deserialization uses that same conversion; scene admission and direct
-/// callers cannot apply different rules. Zero radius denotes a point placement,
-/// and a zero cadence is normalized to one tick.
-///
-/// Public fields allow authored scene descriptions and direct callers to build
-/// a specification. The harness decodes this same schema. A specification is
-/// not a live source until the conversion validates it.
+/// Authored source specification, shared by files and direct callers.
+/// Conversion to [`Source`] validates admission; decoding uses that conversion.
+/// Zero radius is a point placement; zero cadence normalizes to one tick.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceSpec {
@@ -475,19 +376,7 @@ impl Sources {
     }
 }
 
-/// Decides which sources fire this tick, and asks.
-///
-/// **Handed no storage, and that is the pass contract doing the load-bearing
-/// work here.** This is the code that decides new bodies exist, and it cannot
-/// create one: it reads two facts about the world and writes to the queue. A
-/// version of this taking `&mut World` would compile just as well and would put
-/// a structural change back in the middle of the schedule, which is exactly
-/// what `pass::spawn` exists to prevent.
-///
-/// Runs immediately before [`crate::pass::spawn::drain`], so a source that
-/// fires on tick N produces a body that lives the whole of tick N. The two
-/// could be one pass; they are not, because "decide" and "perform" have
-/// different privileges and the split is what lets the type system say so.
+/// Queues ready sources before the spawn drain, so accepted bodies can act this tick.
 pub(crate) fn trigger(
     sources: &mut Sources,
     queue: &mut SpawnQueue,

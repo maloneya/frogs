@@ -30,10 +30,8 @@ shared between voices. The app bounds one-shots at 16; Kira bounds the full
 track at 32, leaving room for two loops and short fades during replacement.
 Excess playback is refused and counted. Mixing stays on Kira's audio thread.
 
-The cue bank and volume tuning live in `crates/app/src/audio.rs`; device and
-voice lifetime live in `audio/playback.rs`. The adapter accepts typed cues and
-desired loop state, so repeated observations cannot restart a loop. There is
-no parallel custom mixer or alternate audio backend in production.
+The cue bank and tuning live in `crates/app/src/audio.rs`; device and voice
+lifetime live in `audio/playback.rs`.
 
 `state.audio` reports device availability, startup failure, per-run one-shot
 cue counts, accepted/refused playback requests, active one-shots and loop
@@ -47,11 +45,6 @@ is logged and reported, and gameplay continues silently.
 The WAVs in `assets/audio` are original synthesized prototype sounds generated
 by `python3 scripts/generate_audio.py`, using no external recordings. Replace
 them in place to change the sound design. These are not final combat Foley.
-
-Tests drive ordinary Game ticks to check cue timing, committed attacks, misses,
-multi-target hits, walking, knockback, channel suppression and restart. Kira's
-mock device checks real WAV decoding, one-shot completion, persistent loops,
-stop fades and voice limits without requiring speakers.
 
 For live checks, use the [playtest guide](../.claude/skills/playtest/SKILL.md).
 Inspect `state.audio`, `hold d 600`, `tap 1`, `hold space 500`, then

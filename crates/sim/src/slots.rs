@@ -1,50 +1,11 @@
-//! Stable names for bodies, and the map from a name to where its data lives.
+//! Generational body identities mapped to dense rows.
 //!
-//! The horde's data is dense on purpose: `pos` and `prev_pos` are contiguous
-//! `Vec`s because every pass walks all of them in order, and a contiguous
-//! stream is what the broadphase wants. Dense storage moves rows around —
-//! removing a body swaps the last one into the hole — so **an index is not a
-//! name**. It is where a body happens to live this tick, and it changes without
-//! anything touching that body.
-//!
-//! That matters as soon as anything wants to *refer* to a body across ticks: an
-//! enemy chasing a target, a projectile that must not hit the same body twice,
-//! an attack recording who it already struck. Each of those holds a reference
-//! while other bodies die, and a bare index silently becomes a reference to
-//! whoever was swapped into that slot.
-//!
-//! ## Generational indices, and the bug they exist to kill
-//!
-//! An [`EntityId`] is a slot number plus a **generation**. The slot is recycled
-//! when a body dies; the generation is bumped, so the dead body's id no longer
-//! matches the slot it used to own. A stale id therefore resolves to `None`
-//! rather than to a stranger — the ABA problem, solved by making the second A
-//! observably different from the first.
-//!
-//! Without this, "entity 93" means one thing on tick 100 and something else on
-//! tick 101, and the failure is silent: the code runs, the types check, and the
-//! wrong body takes the damage.
-//!
-//! ## Why this is a separate thing from the data it indexes
-//!
-//! `Slots` holds no payload. It maps ids onto dense indices and nothing more,
-//! which is what lets it be the shared machinery under *every* per-entity
-//! array rather than just under the horde's positions — a behaviour that only
-//! some bodies have gets its own `Slots` and its own dense payload, and pays
-//! only for its members.
+//! Swap-removal moves rows, so retained references use [`EntityId`], not indices.
+//! [`Slots`] owns identity only; body storage owns the parallel payload arrays.
 
 use crate::hash::Fnv;
 
-/// A stable name for a body, valid until that body is despawned.
-///
-/// Fields are private and there is no public constructor. [`Slots::insert`]
-/// supplies IDs, preventing callers from forging a pair of integers that could
-/// accidentally identify a live body.
-///
-/// Deliberately **not** `Default`. A zeroed id would carry generation 0, which
-/// [`FIRST_GENERATION`] guarantees is never live — but a `Default` impl invites
-/// `EntityId::default()` as a placeholder for "no target", and an `Option` says
-/// that both more clearly and more checkably.
+/// Stable body identity until despawn. Use `Option<EntityId>` for an absent target.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct EntityId {
     /// Which slot. Recycled after a despawn.
@@ -58,15 +19,7 @@ impl EntityId {
     #[must_use]
     pub fn diagnostic_identity(self) -> (u32, u32) { (self.index, self.generation) }
 
-    /// Which slot this name occupies.
-    ///
-    /// For indexing a table keyed by entity — see [`crate::members`], where it
-    /// is the sparse half of a sparse set. It is *not* a name: two ids from
-    /// different generations share a slot, which is exactly why the generation
-    /// has to be compared as well before a lookup is believed.
-    ///
-    /// Exposing it does not weaken the no-forging argument above: there is
-    /// still no constructor, so a slot number cannot be turned back into an id.
+    /// Sparse-table index only; generation must also match when resolving an identity.
     pub(crate) fn slot(self) -> usize {
         self.index as usize
     }
@@ -112,13 +65,8 @@ struct Slot {
     dense: u32,
 }
 
-/// Maps stable ids onto dense array indices.
-///
-/// **Holds no payload.** The caller owns the parallel arrays and keeps them the
-/// same length as this, which is the one invariant here that the compiler does
-/// not check — see [`Slots::insert`] and [`Slots::remove`], whose contracts are
-/// written to make the pairing hard to get wrong and impossible to get wrong
-/// silently.
+/// Maps stable IDs to dense rows. Payload owners must keep parallel arrays aligned;
+/// this type cannot enforce their lengths.
 #[derive(Default)]
 pub(crate) struct Slots {
     /// Indexed by slot number. Grows and is never shrunk: a slot must keep its
@@ -143,17 +91,8 @@ impl Slots {
         self.dense.len()
     }
 
-    /// Mints a name for a new body.
-    ///
-    /// **The caller must then push exactly one row onto each parallel array**,
-    /// which lands at index `len() - 1`. That contract is the honest weak point
-    /// of hand-rolled structure-of-arrays: nothing here can check it, because
-    /// this type deliberately cannot see the payload.
-    ///
-    /// It is contained rather than enforced — `Bodies::spawn` is the only
-    /// caller, it is a handful of lines, and a debug assertion there compares
-    /// the lengths. If a second kind of body storage appears, the right move is
-    /// a wrapper owning both halves rather than a second copy of this comment.
+    /// Allocates an identity. The owner must append one row to every payload array.
+    /// `Bodies::spawn` owns this pairing and checks lengths in debug builds.
     pub(crate) fn insert(&mut self) -> EntityId {
         let dense = self.dense.len() as u32;
 
@@ -181,17 +120,8 @@ impl Slots {
         id
     }
 
-    /// Retires a name, and says which dense row the caller must remove.
-    ///
-    /// Returns the index to `swap_remove` from **every** parallel array, or
-    /// `None` if the id was already dead — in which case the caller must remove
-    /// nothing. Swap-remove rather than a shift because the arrays are dense
-    /// and unordered by design; the row that was last is moved into the hole,
-    /// and this fixes up its owner's slot before returning.
-    ///
-    /// The order matters and is easy to get subtly wrong: the moved row's slot
-    /// is repointed *after* the swap, and the removed slot's generation is
-    /// bumped so every copy of the old id in flight goes stale at once.
+    /// Retires an identity and returns the row to swap-remove from every payload array.
+    /// Returns `None` for an already-dead ID; no payload row may be removed then.
     pub(crate) fn remove(&mut self, id: EntityId) -> Option<usize> {
         let dense = self.index(id)?;
 
@@ -255,18 +185,8 @@ impl Slots {
         &self.dense
     }
 
-    /// Feeds every field into the world hash.
-    ///
-    /// Exhaustively destructured, for the reason `World::hash` is: a field
-    /// added here must be accounted for rather than silently left out of the
-    /// determinism gate.
-    ///
-    /// The generations and the free list go in even though neither is visible
-    /// on screen. Two worlds whose bodies stand in identical places but whose
-    /// spawn histories differ will hand out *different ids* to the next thing
-    /// spawned, and the tick after that they diverge for real. A hash that
-    /// called those two worlds equal would report the divergence a tick late
-    /// and blame the wrong pass.
+    /// Hashes allocator state, including generations and free-list order: these
+    /// influence the identities of future spawns even when current positions agree.
     pub(crate) fn hash(&self, h: &mut Fnv) {
         let Self { slots, dense, free } = self;
 

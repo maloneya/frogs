@@ -183,6 +183,7 @@ dependencies = [
 name = "arpg-assets"
 version = "0.2.0"
 dependencies = [
+ "arpg-core",
  "bytemuck",
  "glam",
  "gltf",

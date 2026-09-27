@@ -1,9 +1,9 @@
+use arpg_core::{Instance, LinearRgb};
 use super::*;
 use crate::{
     MeshBatch, OrthoCamera, camera::CameraBinding, capture::Readback, material::MaterialLayout,
     mesh::MeshPipeline,
 };
-use arpg_core::Instance;
 use glam::Vec3;
 
 /// Exercise the actual fragment shader on a four-vertex floor: interpolating
@@ -27,7 +27,7 @@ fn environment_and_torches_contribute_independently_in_linear_colour() {
     let instances = [Instance::new(
         Vec3::ZERO,
         Vec3::new(24.0, 1.0, 24.0),
-        Vec3::ONE,
+        LinearRgb::WHITE,
     )];
     let batches = [MeshBatch::new(&gpu, &instances)];
     pipeline.upload(&queue, &batches);
@@ -91,11 +91,11 @@ fn environment_and_torches_contribute_independently_in_linear_colour() {
         [rgba[offset], rgba[offset + 1], rgba[offset + 2]]
     };
     let daylight = EnvironmentLight::default();
-    let darkness = EnvironmentLight::try_new(Vec3::ONE, 0.0, Vec3::ONE, 0.0, Vec3::Y).unwrap();
+    let darkness = EnvironmentLight::try_new(LinearRgb::WHITE, 0.0, LinearRgb::WHITE, 0.0, Vec3::Y).unwrap();
     let neutral_frame = render(&[], daylight);
     // Predict: warm bright centre, much dimmer at four metres, black beyond
     // eight. A light below the upward-facing floor illuminates none of it.
-    let warm = Vec3::new(1.0, 0.5, 0.1);
+    let warm = LinearRgb::new(1.0, 0.5, 0.1);
     let frame = render(&[PointLight::new(Vec3::Y * 2.0, warm, 12.0, 8.0)], darkness);
     let near = sample(&frame, Vec3::ZERO);
     let far = sample(&frame, Vec3::X * 4.0);
@@ -123,8 +123,8 @@ fn environment_and_torches_contribute_independently_in_linear_colour() {
     }
 
     // Contributions add in linear colour, and each channel retains its source.
-    let red = PointLight::new(Vec3::Y * 2.0, Vec3::X, 6.0, 8.0);
-    let blue = PointLight::new(Vec3::Y * 2.0, Vec3::Z, 6.0, 8.0);
+    let red = PointLight::new(Vec3::Y * 2.0, LinearRgb::new(1.0, 0.0, 0.0), 6.0, 8.0);
+    let blue = PointLight::new(Vec3::Y * 2.0, LinearRgb::new(0.0, 0.0, 1.0), 6.0, 8.0);
     let red_pixel = sample(&render(&[red], darkness), Vec3::ZERO);
     let blue_pixel = sample(&render(&[blue], darkness), Vec3::ZERO);
     let mixed = sample(&render(&[red, blue], darkness), Vec3::ZERO);
@@ -162,8 +162,8 @@ fn environment_and_torches_contribute_independently_in_linear_colour() {
 
     // Ambient fill is independent of surface facing. Directional colour lands
     // only on surfaces facing the light, and adds before sRGB output encoding.
-    let ambient = EnvironmentLight::try_new(Vec3::X, 0.12, Vec3::Z, 0.25, Vec3::Y).unwrap();
-    let opposite = EnvironmentLight::try_new(Vec3::X, 0.12, Vec3::Z, 0.25, -Vec3::Y).unwrap();
+    let ambient = EnvironmentLight::try_new(LinearRgb::new(1.0, 0.0, 0.0), 0.12, LinearRgb::new(0.0, 0.0, 1.0), 0.25, Vec3::Y).unwrap();
+    let opposite = EnvironmentLight::try_new(LinearRgb::new(1.0, 0.0, 0.0), 0.12, LinearRgb::new(0.0, 0.0, 1.0), 0.25, -Vec3::Y).unwrap();
     let both = sample(&render(&[], ambient), Vec3::ZERO);
     let fill = sample(&render(&[], opposite), Vec3::ZERO);
     assert!(both[0] > 0 && both[1] == 0 && both[2] > 0, "coloured fill and directional: {both:?}");
@@ -176,7 +176,7 @@ fn environment_and_torches_contribute_independently_in_linear_colour() {
 
 #[test]
 fn gpu_admission_rejects_a_ninth_light() {
-    let light = PointLight::new(Vec3::Y, Vec3::ONE, 1.0, 2.0);
+    let light = PointLight::new(Vec3::Y, LinearRgb::WHITE, 1.0, 2.0);
     assert!(
         std::panic::catch_unwind(|| LightUniform::new(&[light; MAX_POINT_LIGHTS + 1], EnvironmentLight::default())).is_err()
     );

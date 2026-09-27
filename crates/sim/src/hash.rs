@@ -1,31 +1,12 @@
-//! A stable hash over simulation state.
-//!
-//! Comparing two runs by their final positions tells you *that* they diverged.
-//! Comparing a hash every tick tells you *which tick* — which is the difference
-//! between "the replay is broken" and a bisect down to the one pass that
-//! stopped being a pure function of its inputs.
-//!
-//! Hand-rolled FNV-1a rather than `DefaultHasher` for one reason: std's default
-//! hasher is explicitly documented as unspecified and free to change between
-//! releases. That is fine for a `HashMap` and disqualifying here, because a
-//! golden trace checked into the repository has to still mean the same thing
-//! after a toolchain bump. FNV-1a is a published constant-defined algorithm, so
-//! the number is a property of the state rather than of the compiler.
-//!
-//! It is not cryptographic and does not need to be. The threat model is a
-//! typo, not an adversary.
+//! FNV-1a over simulation state for replay comparison.
+//! The algorithm is explicit rather than std's unspecified `DefaultHasher`.
+//! This is not a cryptographic hash or a cross-toolchain replay guarantee.
 
 /// Offset basis and prime for 64-bit FNV-1a.
 const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const PRIME: u64 = 0x0000_0100_0000_01b3;
 
-/// Accumulates simulation state into a single comparable number.
-///
-/// Floats go in as their **bit patterns**, deliberately. Comparing `f32`s by
-/// value would treat `0.0` and `-0.0` as equal and every `NaN` as unequal to
-/// itself; a determinism check wants neither. It wants to know whether two runs
-/// produced the same bits, and any answer softer than that hides exactly the
-/// class of drift it exists to find.
+/// Hashes float bit patterns, distinguishing signed zero and preserving NaN bits.
 #[derive(Clone, Copy, Debug)]
 pub struct Fnv(u64);
 

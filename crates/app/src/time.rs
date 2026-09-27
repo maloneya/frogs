@@ -26,16 +26,8 @@ impl Default for Clock {
 }
 
 impl Clock {
-    /// Call once per frame. Returns how long the frame took, in seconds.
-    ///
-    /// **Unclamped.** The guard against a stalled frame teleporting the player
-    /// lives in `sim`'s accumulator, which caps the number of *ticks* a frame
-    /// may run — the same rule expressed in the unit that decides it, and
-    /// enforced by the only code that can mint a step.
-    ///
-    /// So what leaves here is the honest measurement, which is what the companion and
-    /// the harness want anyway: a clamp reaching into the frame-time readout
-    /// would hide the very hitches it exists to report.
+    /// Unclamped elapsed seconds. The simulation accumulator caps catch-up;
+    /// telemetry must retain the actual hitch duration.
     pub(crate) fn tick(&mut self) -> f32 {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f32();

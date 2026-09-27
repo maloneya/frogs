@@ -1,20 +1,5 @@
-//! The write end of a state report.
-//!
-//! The third sink in this crate, and deliberately the same shape as the other
-//! two. `InstanceSink` is how the simulation describes itself to a renderer;
-//! `TraceSink` is how a pass describes what it just did; this is how anything
-//! describes itself to an agent. In each case the producer can only *push*, and
-//! the consumer owns the buffer, the format and the ordering.
-//!
-//! The reason it exists rather than a `format!` at each call site: a
-//! hand-maintained format string is a second list of the world's fields, and a
-//! second list is one that can silently disagree with the first — the same
-//! failure `BINDINGS` was restructured to avoid.
-//!
-//! What it does **not** do by itself is guarantee completeness. Writing every
-//! field is the producer's job, and the way to make that checkable is to
-//! destructure exhaustively on the way in — see `World::report`, where adding a
-//! field to the struct fails to compile until it is reported.
+//! Structured state reporting. Producers write fields; the consumer owns formatting.
+//! Exhaustive destructuring prompts field decisions but does not prove completeness.
 
 use core::fmt::Write as _;
 
@@ -108,14 +93,7 @@ impl Report {
         self.out
     }
 
-    /// **A non-finite value is written as `null`, not as `NaN`.**
-    ///
-    /// JSON has no NaN or infinity, and `write!` would emit the bare word,
-    /// which no parser accepts. That would break this report at exactly the
-    /// moment it is most needed: a poisoned position is the failure the
-    /// `finite` field exists to announce, and announcing it by making the whole
-    /// object unparseable is announcing nothing. `null` is legal, survives
-    /// `jq`, and is visibly not a number.
+    /// Writes non-finite values as JSON null so failure reports remain parseable.
     fn number(&mut self, value: f32) {
         if value.is_finite() {
             let _ = write!(self.out, "{value:.4}");

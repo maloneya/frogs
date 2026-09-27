@@ -33,13 +33,3 @@ can inspect it without interpreting a screenshot. Disabled views report an
 empty disc set; switching scenes replaces the snapshot rather than retaining
 old entity identities. `state.render.debug_disc_instances` and `debug_draws`
 expose the workload separately.
-
-The engine supplies immutable `CollisionDisc` values through `collision_discs()`;
-app chooses visibility and colour; gfx receives anonymous geometry. No debug
-setting enters `Game`, simulation inputs, hashes, or trace. The population limit plus the longest permitted attack path
-is checked against debug GPU capacity at compile time. CPU buffers are reserved
-on first enable and reused afterwards, including across off/on toggles.
-
-Validation includes snapshot/no-mutation tests, strict harness parsing, a GPU
-pixel test for the XZ outline and through-art visibility, and disabling after a
-populated GPU upload. Existing scenarios remain the combat and physics gate.

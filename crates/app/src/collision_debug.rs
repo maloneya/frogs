@@ -1,10 +1,9 @@
 //! Read-only collision visualization. Debug settings never enter gameplay state.
 
-use arpg_core::Report;
+use arpg_core::{LinearRgb, Report};
 use arpg_game::Game;
 use arpg_gfx::DebugDisc;
 use arpg_sim::{AttackDisc, AttackPhase, CollisionDisc};
-use glam::Vec3;
 
 const MAX_DISCS: usize = arpg_sim::MAX_BODIES + 1 + AttackDisc::MAX_SAMPLES;
 const _: () = assert!(MAX_DISCS <= arpg_core::MAX_INSTANCES);
@@ -45,9 +44,9 @@ impl CollisionDebug {
         }
         for disc in game.collision_discs() {
             let colour = if disc.id() == game.player_id() {
-                Vec3::new(1.0, 0.7, 0.05)
+                LinearRgb::new(1.0, 0.7, 0.05)
             } else {
-                Vec3::new(0.05, 0.8, 1.0)
+                LinearRgb::new(0.05, 0.8, 1.0)
             };
             self.drawings
                 .push(DebugDisc::new(disc.centre(), disc.radius(), colour));
@@ -56,9 +55,9 @@ impl CollisionDebug {
         let phase = game.attack_status().phase;
         self.attack_phase = Some(phase);
         let colour = if phase == AttackPhase::Active {
-            Vec3::new(1.0, 0.08, 0.02)
+            LinearRgb::new(1.0, 0.08, 0.02)
         } else {
-            Vec3::new(0.3, 0.12, 0.06)
+            LinearRgb::new(0.3, 0.12, 0.06)
         };
         for disc in game.attack_discs() {
             self.drawings.push(DebugDisc::new(disc.centre(), disc.radius(), colour));
@@ -103,6 +102,7 @@ impl CollisionDebug {
 
 #[cfg(test)]
 mod tests {
+    use glam::Vec3;
     use super::*;
     use arpg_core::{Intent, MoveDir};
     use arpg_sim::{Accumulator, Dt, Template};

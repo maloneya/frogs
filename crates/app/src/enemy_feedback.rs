@@ -1,6 +1,7 @@
 //! Shared damage observations drive contact flashes and temporary health bars.
 //! This state never enters simulation.
 
+use arpg_core::LinearRgba;
 use std::collections::HashMap;
 
 use arpg_game::Game;
@@ -91,10 +92,10 @@ impl EnemyFeedback {
                 continue;
             }
             sink.push(Quad::solid(Vec4::new(x, y, WIDTH, HEIGHT),
-                Vec4::new(0.008, 0.006, 0.006, opacity * 0.9)));
+                LinearRgba::new(0.008, 0.006, 0.006, opacity * 0.9)));
             sink.push(Quad::solid(Vec4::new(x + 1.0, y + 1.0,
                 (WIDTH - 2.0) * f32::from(hp) / f32::from(ENEMY_HIT_POINTS), HEIGHT - 2.0),
-                Vec4::new(0.65, 0.055, 0.025, opacity)));
+                LinearRgba::new(0.65, 0.055, 0.025, opacity)));
             visible += 1;
         }
     }

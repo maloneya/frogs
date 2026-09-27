@@ -1,15 +1,4 @@
-//! Everything this program prints, in one place.
-//!
-//! The module exists so that the workspace's `print_stdout` / `print_stderr`
-//! denial can be lifted exactly once, with a reason, rather than at a dozen
-//! call sites. That lint is there to keep the *game's* frame path off stdout;
-//! this crate has no frame path, and its report is the entire product.
-//!
-//! Keeping the output here has a second benefit worth more than the first: the
-//! failure message *is* the interface for anyone using this, agent or human. A
-//! run that says "FAIL" and nothing else costs a round trip to find out what
-//! happened, and round trips are the thing the whole scenario idea exists to
-//! reduce.
+//! Scenario output and diagnostics; stdout/stderr exceptions are confined here.
 
 use crate::run::Failure;
 

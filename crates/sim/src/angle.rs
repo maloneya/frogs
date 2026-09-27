@@ -1,25 +1,9 @@
-//! Angles on the ground plane, wrapped to `-PI..=PI`.
-//!
-//! Shared rather than owned by the `face` pass, because the *drawing* of a
-//! facing needs the same seam handling the turning of one does — presentation
-//! blends between two facings and would spin the body the long way round
-//! without it. Two copies of this logic would be two chances to fix the seam in
-//! one of them.
+//! Ground-plane angle wrapping shared by simulation and presentation.
 
 use core::f32::consts::{PI, TAU};
 
-/// The angle successive indices should be spread by, in radians.
-///
-/// `PI * (3 - sqrt(5))`, written out because `sqrt` is not const.
-///
-/// **A stable substitute for randomness, and the reason it is shared.** Two
-/// callers need a direction that has to come from *somewhere*, must be the same
-/// somewhere every run, and must not agree with its neighbours: separating
-/// bodies that sit on exactly the same point, and placing successive bodies
-/// around a spawn ring. A random angle would make two identical simulations
-/// diverge, and a fixed one would stack every body in the same direction and
-/// re-stack them on the next tick. Golden-angle steps never repeat and never
-/// clump, which is the property both want.
+/// Golden angle, `PI * (3 - sqrt(5))`, written out because sqrt is not const.
+/// Spreads coincident contacts and ring spawns deterministically.
 pub(crate) const GOLDEN_ANGLE: f32 = 2.399_963_2;
 
 /// Folds an angle into `-PI..=PI`.

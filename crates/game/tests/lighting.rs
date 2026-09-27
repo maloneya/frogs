@@ -1,5 +1,5 @@
 //! Scene lighting admission, lifetime and deterministic observations through Game.
-use arpg_core::{AimDir, Intent, MAX_POINT_LIGHTS, MoveDir, PointLight, Report};
+use arpg_core::{AimDir, Intent, LinearRgb, MAX_POINT_LIGHTS, MoveDir, PointLight, Report};
 use arpg_game::{Game, GameScene, TorchSpec};
 use arpg_sim::{Accumulator, Dt, Placed, Template};
 use glam::{Vec2, Vec3};
@@ -7,7 +7,7 @@ use glam::{Vec2, Vec3};
 fn torch(x: f32) -> TorchSpec {
     TorchSpec::new(PointLight::new(
         Vec3::new(x, 2.2, 1.5),
-        Vec3::new(1.0, 0.52, 0.18),
+        LinearRgb::new(1.0, 0.52, 0.18),
         24.0,
         14.0,
     ))
@@ -136,8 +136,8 @@ fn authored_light_changes_affect_complete_hash_but_not_physics() {
 fn environment_belongs_to_scenes_and_survives_torch_changes_and_restart() {
     use arpg_core::EnvironmentLight;
     use arpg_game::EnvironmentSpec;
-    let dark = EnvironmentLight::try_new(Vec3::ONE, 0.0, Vec3::ONE, 0.0, Vec3::Y).unwrap();
-    let blue = EnvironmentLight::try_new(Vec3::Z, 0.15, Vec3::ONE, 0.1, Vec3::new(-1.0, 2.0, 0.0)).unwrap();
+    let dark = EnvironmentLight::try_new(LinearRgb::WHITE, 0.0, LinearRgb::WHITE, 0.0, Vec3::Y).unwrap();
+    let blue = EnvironmentLight::try_new(LinearRgb::new(0.0, 0.0, 1.0), 0.15, LinearRgb::WHITE, 0.1, Vec3::new(-1.0, 2.0, 0.0)).unwrap();
     let mut authored = scene(1, 0.0);
     authored.environment = EnvironmentSpec::new(dark);
     let mut game = Game::from_scene(&authored).unwrap();
@@ -179,11 +179,11 @@ fn every_environment_component_affects_game_hash_without_changing_physics() {
     use arpg_game::EnvironmentSpec;
     let original = Game::from_scene(&GameScene::default()).unwrap();
     for light in [
-        EnvironmentLight::try_new(Vec3::X, 0.22, Vec3::ONE, 0.35, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
-        EnvironmentLight::try_new(Vec3::ONE, 0.4, Vec3::ONE, 0.35, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
-        EnvironmentLight::try_new(Vec3::ONE, 0.22, Vec3::Z, 0.35, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
-        EnvironmentLight::try_new(Vec3::ONE, 0.22, Vec3::ONE, 0.5, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
-        EnvironmentLight::try_new(Vec3::ONE, 0.22, Vec3::ONE, 0.35, Vec3::Y).unwrap(),
+        EnvironmentLight::try_new(LinearRgb::new(1.0, 0.0, 0.0), 0.22, LinearRgb::WHITE, 0.35, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
+        EnvironmentLight::try_new(LinearRgb::WHITE, 0.4, LinearRgb::WHITE, 0.35, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
+        EnvironmentLight::try_new(LinearRgb::WHITE, 0.22, LinearRgb::new(0.0, 0.0, 1.0), 0.35, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
+        EnvironmentLight::try_new(LinearRgb::WHITE, 0.22, LinearRgb::WHITE, 0.5, Vec3::new(0.4, 1.0, 0.3)).unwrap(),
+        EnvironmentLight::try_new(LinearRgb::WHITE, 0.22, LinearRgb::WHITE, 0.35, Vec3::Y).unwrap(),
     ] {
         let authored = GameScene { environment: EnvironmentSpec::new(light), ..GameScene::default() };
         let mut changed = Game::from_scene(&authored).unwrap();
