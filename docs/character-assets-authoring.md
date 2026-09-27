@@ -123,7 +123,7 @@ character GLB is not required to contain a joint called `Weapon`.
 The ordinary-horde contract is a smaller view of the same interchange format:
 it requires only `Idle` and `Run`. `horde show <path.glb>` selects one shared
 character, including all its parts and materials, then groups live enemies into
-bounded [gait/phase buckets](crowd-collision.md#gaits-and-pushing). Phase comes
+bounded [gait/phase buckets](crowd-collision.md#movement-and-pushing). Phase comes
 from stable entity identity, not authored or stored randomness. Startup loads `assets/characters/basic-player/basic-player.glb`
 for the player and `assets/characters/basic-enemy/basic-enemy.glb` for the horde,
 using the existing role scales and tints. Asset paths

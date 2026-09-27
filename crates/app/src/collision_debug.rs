@@ -105,7 +105,7 @@ mod tests {
     use glam::Vec3;
     use super::*;
     use arpg_core::{Intent, MoveDir};
-    use arpg_sim::{Accumulator, Dt, Template};
+    use arpg_sim::{Accumulator, Dt};
 
     #[test]
     fn attack_outlines_follow_committed_samples_and_completed_tick_pose() {
@@ -163,9 +163,9 @@ mod tests {
     #[test]
     fn toggle_observes_exact_geometry_without_changing_gameplay() {
         let mut game = Game::empty();
-        game.place(glam::Vec2::new(2.0, 0.0), Template::BODY)
+        game.place(glam::Vec2::new(2.0, 0.0), arpg_game::ActorDefinition::passive_hostile())
             .unwrap();
-        game.place(glam::Vec2::new(-2.0, 0.0), Template::BLOCK)
+        game.place(glam::Vec2::new(-2.0, 0.0), arpg_game::ActorDefinition::prop())
             .unwrap();
         let mut debug = CollisionDebug::default();
         let before = game.hash();

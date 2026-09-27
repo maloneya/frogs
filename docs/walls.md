@@ -18,7 +18,7 @@ The owning module defines the shared live wall limit. Admission includes walls
 from all resident scenes and rejects the complete load before changing state.
 
 Walls are static rectangles, separate from circular player/enemy/prop storage.
-They have no health, mass, seeking, interaction or height. Their stable identity
+They have no health, mass, autonomous movement, interaction or height. Their stable identity
 is `(SceneId, authored index)`. Installing a scene creates its walls; eviction
 removes them together, and restart rebuilds the cached scene. Clearing enemies
 preserves walls. The hash includes authoritative geometry and ownership;
@@ -69,7 +69,7 @@ The shared [wall asset](../assets/world/wall/README.md) supplies height and
 appearance. App scales its unit footprint to the authoritative rectangle and
 uses its exact yaw. The simulation never reads the mesh. Companion-enabled body and
 attack outlines remain circular; wall footprints are available in the report.
-Walls do not occlude lighting, and seekers have no route planning. They can pile up
+Walls do not occlude lighting, and pursuit actions have no route planning. They can pile up
 against a wall until the player goes around it.
 
 Open `walls.ron` in Scenes and **Save & play**. Walk toward the long wall,

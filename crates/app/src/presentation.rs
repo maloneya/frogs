@@ -5,9 +5,7 @@ use arpg_gfx::{
     CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
     MeshAsset, MeshBatch,
 };
-use arpg_sim::{
-    Alpha, AttackPhase, AttackProfile, EnemyPresentation, Fnv, PlayerPresentation, TICK_HZ,
-};
+use arpg_sim::{Alpha, AttackPhase, AttackProfile, CharacterPresentation, Fnv, PlayerPresentation, TICK_HZ, };
 use glam::Vec3;
 
 // Static placements include an all-prop world, the ground and one campfire per light and bounded trees.
@@ -476,27 +474,27 @@ enum HordeRole {
     Sprint,
 }
 
+const REFERENCE_GROUND_SPEEDS: [f32; 3] = [1.5, 2.5, 4.0];
+
 impl HordeRole {
     // Animation buckets use built-in reference speeds. Runtime tuning changes
     // actual displacement, which selects a bucket; it must not redefine what
     // the authored Run clip represents or divide by a user-selected zero speed.
     fn from_displacement(displacement: glam::Vec2) -> Self {
-        use arpg_sim::Gait;
         let speed = displacement.length() / arpg_sim::Dt::SECS;
         if displacement.length_squared() <= 1.0e-8 { Self::Idle }
-        else if speed < (arpg_sim::Tuning::default().gait_speed(Gait::Walk) + arpg_sim::Tuning::default().gait_speed(Gait::Run)) * 0.5 { Self::Walk }
-        else if speed < (arpg_sim::Tuning::default().gait_speed(Gait::Run) + arpg_sim::Tuning::default().gait_speed(Gait::Sprint)) * 0.5 { Self::Run }
+        else if speed < (REFERENCE_GROUND_SPEEDS[0] + REFERENCE_GROUND_SPEEDS[1]) * 0.5 { Self::Walk }
+        else if speed < (REFERENCE_GROUND_SPEEDS[1] + REFERENCE_GROUND_SPEEDS[2]) * 0.5 { Self::Run }
         else { Self::Sprint }
     }
 
     // Reuse the authored Run clip with bounded cadences. Selection follows real
     // displacement, so a blocked sprinter does not run in place at full cadence.
     fn playback_rate(self) -> f64 {
-        use arpg_sim::Gait;
         match self {
             Self::Idle | Self::Run => 1.0,
-            Self::Walk => f64::from(arpg_sim::Tuning::default().gait_speed(Gait::Walk) / arpg_sim::Tuning::default().gait_speed(Gait::Run)),
-            Self::Sprint => f64::from(arpg_sim::Tuning::default().gait_speed(Gait::Sprint) / arpg_sim::Tuning::default().gait_speed(Gait::Run)),
+            Self::Walk => f64::from(REFERENCE_GROUND_SPEEDS[0] / REFERENCE_GROUND_SPEEDS[1]),
+            Self::Sprint => f64::from(REFERENCE_GROUND_SPEEDS[2] / REFERENCE_GROUND_SPEEDS[1]),
         }
     }
 }
@@ -610,7 +608,7 @@ impl<T> LoadedHorde<T> {
         hash.finish()
     }
 
-    fn bucket(enemy: EnemyPresentation) -> (usize, u64) {
+    fn bucket(enemy: CharacterPresentation) -> (usize, u64) {
         let role = HordeRole::from_displacement(enemy.displacement());
         let key = Self::phase_key(enemy.id());
         let phase = (key % HORDE_PHASES_PER_ROLE as u64) as usize;
@@ -621,14 +619,18 @@ impl<T> LoadedHorde<T> {
 
     pub(super) fn rebuild(
         &mut self,
-        enemies: impl Iterator<Item = EnemyPresentation>,
+        enemies: impl Iterator<Item = CharacterPresentation>,
         presentation_seconds: f64,
         flash: impl Fn(arpg_sim::EntityId) -> f32,
+        attacks: impl Iterator<Item = arpg_game::ActionStatus>,
+        alpha: Alpha,
     ) {
         for bucket in &mut self.buckets {
             bucket.instances.clear();
         }
 
+        let mut committed = crate::attack_effects::visible_actions(attacks);
+        let attacks: [Option<arpg_game::ActionStatus>; crate::attack_effects::MAX_VISIBLE_ACTIONS] = std::array::from_fn(|_| committed.next());
         self.rebuild_id = self.rebuild_id.wrapping_add(1);
         for enemy in enemies {
             let (bucket, key) = Self::bucket(enemy);
@@ -644,16 +646,41 @@ impl<T> LoadedHorde<T> {
                 heading.yaw = displacement.x.atan2(displacement.y);
             }
             heading.seen_in_rebuild = self.rebuild_id;
+            let mut pitch = 0.0;
+            let mut height = 0.0;
+            if let Some(attack) = attacks.iter().flatten().find(|a| a.body == enemy.id()) {
+                heading.yaw = attack.direction.x.atan2(attack.direction.y);
+                let progress = ((attack.elapsed as f32 + alpha.get()) / attack.duration as f32).clamp(0.0, 1.0);
+                if attack.kind == arpg_game::ActionKind::Leap {
+                    match attack.phase {
+                        AttackPhase::Startup => pitch = -0.4 * progress,
+                        AttackPhase::Active => {
+                            height = 4.0 * 1.8 * progress * (1.0 - progress);
+                            pitch = -0.4 + 0.9 * progress;
+                        }
+                        AttackPhase::Recovery => pitch = 0.5 * (1.0 - progress),
+                        AttackPhase::Idle => {}
+                    }
+                } else {
+                    pitch = match attack.phase {
+                        AttackPhase::Startup => -0.25 * progress,
+                        AttackPhase::Active => -0.25 + 0.8 * (progress * 3.0).min(1.0),
+                        AttackPhase::Recovery => 0.55 * (1.0 - progress),
+                        AttackPhase::Idle => 0.0,
+                    };
+                }
+            }
             let yaw = heading.yaw;
             let shade = 0.72 + ((key >> 8) & 0xff) as f32 / 255.0 * 0.28;
             self.buckets[bucket].instances.push(
                 Instance::new(
-                    enemy.ground_position(),
+                    enemy.ground_position() + Vec3::Y * height,
                     Vec3::splat(HORDE_SCALE),
                     LinearRgb::splat(shade),
                 )
                 .with_yaw(yaw)
-                .with_white_mix(flash(enemy.id())),
+                .with_white_mix(flash(enemy.id()))
+                .with_pitch(pitch),
             );
         }
         self.headings

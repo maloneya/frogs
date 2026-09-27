@@ -1,12 +1,52 @@
 (
     scene: (
         engine: (
+            walls: [
+                (
+                    centre: (0.25, 2.0),
+                    size: (5.5, 0.1),
+                    yaw: 0.0,
+                ),
+            ],
             name: "Three stationary enemies",
             bodies: [
-                (pos: (-7.0, 0.0)),
-                (pos: (0.0, -3.0)),
-                (pos: (7.0, 0.0)),
+                (
+                    pos: (-7.0, 0.0),
+                    what: (physical: (health: Some(3), character: true), role: Hostile),
+                ),
+                (
+                    pos: (0.0, -3.0),
+                    what: (physical: (health: Some(3), character: true), role: Hostile),
+                ),
+                (
+                    pos: (7.0, 0.0),
+                    what: (physical: (health: Some(3), character: true), role: Hostile),
+                ),
+            ],
+            grids: [],
+            sources: [
+                (
+                    enabled: true,
+                    pos: (3.5, 5.5),
+                    radius: 2.0,
+                    every: 60,
+                    when: FewerThan(12),
+                    what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)),
+                ),
+                (
+                    enabled: true,
+                    pos: (-3.5, 5.5),
+                    radius: 2.0,
+                    every: 60,
+                    when: FewerThan(12),
+                    what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)),
+                ),
             ],
         ),
+        torches: [],
+        trees: [],
+        doors: [],
+        chests: [],
+        encounters: [],
     ),
 )

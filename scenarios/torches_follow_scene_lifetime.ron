@@ -4,9 +4,9 @@
     engine: (
         name: "Two torches: warm and cool",
         bodies: [
-            (pos: (-7.0, 0.0)),
-            (pos: (0.0, -3.0)),
-            (pos: (7.0, 0.0)),
+            (pos: (-7.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile)),
+            (pos: (0.0, -3.0), what: (physical: (health: Some(3), character: true), role: Hostile)),
+            (pos: (7.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile)),
         ],
     ),
     torches: [

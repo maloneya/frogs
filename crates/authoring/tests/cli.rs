@@ -80,7 +80,7 @@ fn agent_and_visual_edits_round_trip_into_the_same_playable_encounter() {
     let moved = call(json!({"action":"edit","document":opened["editor"]["document"],
         "edit":{"action":"move","target":{"kind":"body","index":1},"pos":[5.0,0.0]}}), true);
     let mut invalid = moved["editor"]["document"].clone();
-    invalid["scene"]["engine"]["bodies"][0]["what"]["interactable"] = json!(false);
+    invalid["scene"]["engine"]["bodies"][0]["what"]["physical"]["interactable"] = json!(false);
     call(json!({"action":"validate","document":invalid}), false);
     let before = std::fs::read(&path).unwrap();
     call(json!({"action":"save","document":invalid,"path":path,"revision":saved["editor"]["revision"]}), false);

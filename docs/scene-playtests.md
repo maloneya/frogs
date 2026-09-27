@@ -66,11 +66,11 @@ attack relationships. The content crate decodes these owning types directly.
     scene: (
         engine: (
             name: "Small encounter",
-            bodies: [(pos: (0.0, 4.0), what: (seeks: true))],
+            bodies: [(pos: (0.0, 4.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))],
             grids: [(origin: (-6.0, 8.0), columns: 8, rows: 4, spacing: 0.7,
-                     what: (seeks: true))],
+                     what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))],
             sources: [(pos: (12.0, 0.0), radius: 3.0, every: 60,
-                       when: FewerThan(12), what: (seeks: true))],
+                       when: FewerThan(12), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))],
         ),
     ),
 )
@@ -103,7 +103,7 @@ physical state. All owned resources participate in eviction, restart and reports
 Scenarios own their scene setups and can add/evict test instances on a timeline:
 
 ```ron
-setup: (scenes: [(engine: (name: "Test seeker", bodies: [(pos: (0.0, 4.0), what: (seeks: true))]))]),
+setup: (scenes: [(engine: (name: "Test pursuit", bodies: [(pos: (0.0, 4.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))]))]),
 scenes: [
     (at: 2, action: Load((engine: (name: "another", bodies: [])))),
     (at: 4, action: Evict(1)),

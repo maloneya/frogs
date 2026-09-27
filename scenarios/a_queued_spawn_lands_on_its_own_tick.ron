@@ -5,19 +5,18 @@
 (
     description: "Mixed templates requested at tick 10 appear on that tick with their own capabilities.",
     spawns: [
-        (at: 10, pos: (10.0, 0.0), what: (seeks: true)),
-        (at: 10, pos: (-10.0, 0.0)),
+        (at: 10, pos: (10.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
+        (at: 10, pos: (-10.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile)),
     ],
-    checkpoints: [(at: 9, expect: (enemy_count: 0, seekers: 0))],
+    checkpoints: [(at: 9, expect: (enemy_count: 0, ))],
     budget: (ticks: 11),
     expect: (
         enemy_count: 2,
-        seekers: 1,
         contacts: 0,
         crowd_contacts: 0,
         bodies: [
-            (nth: 0, alive: true, seeking: true),
-            (nth: 1, alive: true, seeking: false, pos: (x: -10.0, z: 0.0, tol: 0.0)),
+            (nth: 0, alive: true, action: Move,),
+            (nth: 1, alive: true, action: Idle, pos: (x: -10.0, z: 0.0, tol: 0.0)),
         ],
         events: (
             kinds: [Placed, Refused, Fired],

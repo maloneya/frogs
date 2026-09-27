@@ -1,10 +1,10 @@
 (
     description: "A press selects one nearest Ready member; exact-reach ties use stable identity, and activation makes the next member eligible.",
     setup: (scenes: [(engine: (name: "Selection", bodies: [
-        (pos: (0.0, -1.5), what: (fixed: true, interactable: true)),
-        (pos: (0.0, 1.5), what: (fixed: true, interactable: true)),
-        (pos: (1.0, 0.0), what: (fixed: true, interactable: true)),
-        (pos: (-1.5001, 0.0), what: (fixed: true, interactable: true)),
+        (pos: (0.0, -1.5), what: (physical: (fixed: true, interactable: true), role: Prop)),
+        (pos: (0.0, 1.5), what: (physical: (fixed: true, interactable: true), role: Prop)),
+        (pos: (1.0, 0.0), what: (physical: (fixed: true, interactable: true), role: Prop)),
+        (pos: (-1.5001, 0.0), what: (physical: (fixed: true, interactable: true), role: Prop)),
     ]))]),
     interactions: [0, 1, 2, 3],
     checkpoints: [

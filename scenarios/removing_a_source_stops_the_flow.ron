@@ -13,7 +13,7 @@
     description: "A source removed at tick 15 makes nothing after it, and the ticks it would have fired on pass empty.",
     setup: (
         sources: [
-            (pos: (30.0, 0.0), radius: 3.0, every: 10, what: (seeks: true)),
+            (pos: (30.0, 0.0), radius: 3.0, every: 10, what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
         ],
     ),
     inputs: [],
@@ -24,7 +24,6 @@
     expect: (
         player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
         enemy_count: 2,
-        seekers: 2,
         sources: 0,
         contacts: 0,
         crowd_contacts: 0,

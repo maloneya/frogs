@@ -1,7 +1,8 @@
 //! Scene lighting admission, lifetime and deterministic observations through Game.
+use arpg_game::{Placed, ActorDefinition};
 use arpg_core::{AimDir, Intent, LinearRgb, MAX_POINT_LIGHTS, MoveDir, PointLight, Report};
 use arpg_game::{Game, GameScene, TorchSpec};
-use arpg_sim::{Accumulator, Dt, Placed, Template};
+use arpg_sim::{Accumulator, Dt, };
 use glam::{Vec2, Vec3};
 
 fn torch(x: f32) -> TorchSpec {
@@ -80,7 +81,7 @@ fn refused_lighting_loads_preserve_live_state_snapshot_and_pending_work() {
     let mut game = Game::from_scene(&authored).unwrap();
     let mut control = Game::from_scene(&authored).unwrap();
     for game in [&mut game, &mut control] {
-        assert!(game.request_spawn(Vec2::new(40.0, 0.0), Template::BODY).is_some());
+        assert!(game.request_spawn(Vec2::new(40.0, 0.0), ActorDefinition::passive_hostile()).is_some());
     }
     let before = observed(&game);
     assert!(game.load_scene(&scene(1, 50.0)).is_err());
@@ -109,7 +110,7 @@ fn refused_lighting_loads_preserve_live_state_snapshot_and_pending_work() {
     let mut invalid = scene(1, 0.0);
     invalid.engine.bodies.push(Placed {
         pos: (f32::NAN, 0.0),
-        what: Template::BODY,
+        what: ActorDefinition::passive_hostile(),
     });
     assert!(empty.load_scene(&invalid).is_err());
     assert_eq!(observed(&empty), before);

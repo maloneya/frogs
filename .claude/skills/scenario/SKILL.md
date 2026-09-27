@@ -100,8 +100,8 @@ checkpoints. Requesting a dead body's position fails even alongside `alive: fals
 - [Physical motion](../../../scenarios/an_impulse_moves_and_damps.ron):
   `impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))]` submits momentum;
   `Player` targets the player. Assert physical velocity and later displacement.
-  Player control movement is separate; seeking uses a bounded motor on the same
-  velocity as impulses. See [crowd motion](../../../docs/crowd-collision.md#gaits-and-pushing).
+  Player control movement is separate; autonomous movement uses a bounded motor on the same
+  velocity as impulses. See [crowd motion](../../../docs/crowd-collision.md#movement-and-pushing).
 - [Source enablement](../../../docs/source-enablement.md): switches run before
   source evaluation; assertions consume the engine-owned `SourceState`.
 - [Encounters](../../../docs/encounters.md): `setup.scenes` and timeline `Load(...)`

@@ -1,13 +1,14 @@
 //! Source admission shares one rule across direct creation and scene loading.
 
+use arpg_game::{Scene, SourceSpec, Source, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::Game;
-use arpg_sim::{Accumulator, Condition, Dt, Scene, Source, SourceSpec, SourceState, Template};
+use arpg_sim::{Accumulator, Condition, Dt, SourceState, };
 use glam::Vec2;
 
 fn spec() -> SourceSpec {
     SourceSpec { enabled: true, pos: (30.0, 0.0), radius: 0.0, every: 2,
-        when: Condition::Always, what: Template::BODY }
+        when: Condition::Always, what: ActorDefinition::passive_hostile() }
 }
 
 fn step(game: &mut Game) {
@@ -23,7 +24,7 @@ fn rejected_sources_preserve_live_state_and_accepted_pending_work() {
     for run in [&mut game, &mut control] {
         let _ = run.add_source(Source::try_from(spec()).unwrap());
         step(run);
-        assert!(run.request_spawn(Vec2::new(-20.0, 0.0), Template::BODY).is_some());
+        assert!(run.request_spawn(Vec2::new(-20.0, 0.0), ActorDefinition::passive_hostile()).is_some());
     }
     let before = (game.hash(), game.trace().render());
     for invalid in [
@@ -36,9 +37,9 @@ fn rejected_sources_preserve_live_state_and_accepted_pending_work() {
         SourceSpec { when: Condition::PlayerWithin(-1.0), ..spec() },
         SourceSpec { when: Condition::PlayerWithin(f32::NAN), ..spec() },
         SourceSpec { when: Condition::PlayerWithin(f32::INFINITY), ..spec() },
-        SourceSpec { pos: (96.0, 0.0), what: Template::BLOCK, ..spec() },
+        SourceSpec { pos: (96.0, 0.0), what: ActorDefinition::prop(), ..spec() },
     ] {
-        assert!(Source::try_from(invalid).is_err());
+        assert!(Source::try_from(invalid.clone()).is_err());
         let scene = Scene { name: "refused".into(), sources: vec![invalid], ..Scene::default() };
         assert!(game.load_scene(&scene.into()).is_err());
         assert_eq!((game.hash(), game.trace().render()), before);

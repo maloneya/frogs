@@ -1,0 +1,13 @@
+(
+    description: "Moving out of the marked landing disc during windup avoids the leap; it does not follow the player.",
+    setup: (scenes: [(engine: (name: "Leap dodge", bodies: [
+        (pos: (0.0, 4.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
+    ]),)]),
+    inputs: [(at: 1, ticks: 12, dir: (1.0, 0.0))],
+    checkpoints: [
+        (at: 77, expect: (player_health: 5)),
+        (at: 78, expect: (player_health: 5)),
+    ],
+    budget: (ticks: 132),
+    expect: (player_health: 5, enemy_count: 1, player_pos: (x: 1.8, z: 0.0, tol: 0.001)),
+)

@@ -4,8 +4,9 @@
 //! written against today; a field that only *describes* an intention is a field
 //! that will drift away from what the runner actually checks.
 
-use arpg_sim::{AttackPhase, AttackProfile, Impulse, RecoveryTicks, Source, Template};
+use arpg_sim::{AttackPhase, AttackProfile, Impulse, RecoveryTicks};
 use serde::Deserialize;
+use arpg_game::{ActorDefinition, Source};
 
 /// One scenario: a world, an input stream, a tick budget, and what is expected
 /// at checkpoints and at the end of it.
@@ -58,6 +59,10 @@ pub(crate) struct Scenario {
     /// Authored attack selections, applied before the named tick.
     #[serde(default)]
     pub(crate) attack_profiles: Vec<AttackProfileAt>,
+
+    /// Complete actor definition replacements before their named tick.
+    #[serde(default)]
+    pub(crate) behaviors: Vec<BehaviorAt>,
 
     /// Complete validated tuning edits before the named tick.
     #[serde(default)]
@@ -126,6 +131,15 @@ pub(crate) struct SourceExpect {
     pub(crate) source: usize,
     /// None asserts that a previously installed source has been removed.
     pub(crate) state: Option<arpg_sim::SourceState>,
+}
+
+/// An atomic actor definition replacement at an ordered tick boundary.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BehaviorAt {
+    pub(crate) at: u64,
+    pub(crate) body: usize,
+    pub(crate) actor: ActorDefinition,
 }
 
 /// A tuning command uses sim's value type, including its deserialization guard.
@@ -218,11 +232,11 @@ pub(crate) enum Action {
     /// case worth writing a scenario about.
     Despawn(usize),
 
-    /// Grants seeking to a body identified by placement number.
-    Seek(usize),
+    /// Replace a live actor definition through the shared game admission.
+    Assign { body: usize, actor: ActorDefinition },
 }
 
-/// A queued spawn at a specified tick using the sim-owned template.
+/// A queued spawn at a specified tick using the game-owned actor definition.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Spawn {
@@ -231,9 +245,9 @@ pub(crate) struct Spawn {
     pub(crate) at: u64,
     /// World-space `(x, z)`, on the same terms as [`Action::Place`].
     pub(crate) pos: (f32, f32),
-    /// What the new body is granted. Spelled `what: (seeks: true)`.
+    /// Physical capabilities, actions and behavior granted atomically.
     #[serde(default)]
-    pub(crate) what: Template,
+    pub(crate) what: ActorDefinition,
 }
 
 /// Holds a world-space direction for a span of ticks, independent of the camera.
@@ -321,9 +335,6 @@ pub(crate) struct Expect {
     #[serde(default)]
     pub(crate) corpse_count: Option<usize>,
     /// How many bodies chase the player. The cheapest way to assert that two
-    /// bodies made from different templates were granted different behaviours.
-    #[serde(default)]
-    pub(crate) seekers: Option<usize>,
     /// How many sources are still live at the end.
     #[serde(default)]
     pub(crate) sources: Option<usize>,
@@ -456,17 +467,12 @@ pub(crate) struct BodyExpect {
     #[serde(default)]
     pub(crate) interaction: Option<arpg_sim::InteractionState>,
 
-    /// Whether the body should be chasing the player.
-    ///
-    /// `seeking: false` on a body that was never granted it is the control in
-    /// the pair: a pass that moved everything would satisfy every assertion
-    /// about the chaser and only fail here.
+    /// Currently running action, observed after this tick.
     #[serde(default)]
-    pub(crate) seeking: Option<bool>,
-
-    /// Simulation-owned locomotion choice for the latest tick.
+    pub(crate) action: Option<arpg_game::ActionKind>,
+    /// Game-owned actor role, independent of physical capabilities.
     #[serde(default)]
-    pub(crate) gait: Option<arpg_sim::Gait>,
+    pub(crate) role: Option<arpg_game::ActorRole>,
 
     /// Whether the body should still exist.
     ///

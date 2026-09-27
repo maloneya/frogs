@@ -1,22 +1,22 @@
 //! Complete game lifecycle through the public boundary used by the app.
 
+use arpg_game::{Placed, Scene, BodyGrid, SourceSpec, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene, RestartError, SceneError};
 use arpg_sim::{
-    Accumulator, AttackProfile, BodyGrid, Condition, Dt, Impulse, InteractionState,
-    Placed, RecoveryTicks, Scene, SourceId, SourceSpec, SourceState, Template,
-};
+    Accumulator, AttackProfile, Condition, Dt, Impulse, InteractionState,
+    RecoveryTicks, SourceId, SourceState, };
 use glam::{Vec2, Vec3};
 
 fn scene() -> GameScene {
     Scene {
         walls: Vec::new(),
         name: "cached trial".into(),
-        bodies: vec![Placed { pos: (1.0, 0.0), what: Template::BLOCK.interactive() }],
+        bodies: vec![Placed { pos: (1.0, 0.0), what: ActorDefinition::prop().interactive() }],
         sources: vec![SourceSpec {
             enabled: true,
             pos: (30.0, 0.0), radius: 2.0, every: 2,
-            when: Condition::Always, what: Template::BODY,
+            when: Condition::Always, what: ActorDefinition::passive_hostile(),
         }],
         grids: vec![],
     }.into()
@@ -41,17 +41,17 @@ fn failed_start_and_additive_load_preserve_the_complete_run() {
     let mut control = Game::from_scene(&selected).unwrap();
     for run in [&mut game, &mut control] {
         step(run, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true));
-        assert!(run.request_spawn(Vec2::new(-20.0, 0.0), Template::BODY).is_some());
+        assert!(run.request_spawn(Vec2::new(-20.0, 0.0), ActorDefinition::passive_hostile()).is_some());
         run.set_attack_profile(AttackProfile::Slam);
     }
     let before = (game.hash(), report(&game), game.trace().render());
     let mut invalid = scene();
     invalid.engine.name = "must not become the restart snapshot".into();
-    invalid.engine.bodies.push(Placed { pos: (f32::NAN, 0.0), what: Template::BODY });
+    invalid.engine.bodies.push(Placed { pos: (f32::NAN, 0.0), what: ActorDefinition::passive_hostile() });
     let mut oversized = scene();
     oversized.engine.grids.push(BodyGrid {
         origin: (0.0, 4.0), columns: usize::MAX, rows: 2,
-        spacing: 1.0, what: Template::BODY,
+        spacing: 1.0, what: ActorDefinition::passive_hostile(),
     });
 
     for rejected in [&invalid, &oversized] {
@@ -80,14 +80,14 @@ fn restart_uses_its_snapshot_and_replaces_all_live_state_and_pending_work() {
     assert_eq!(game.interaction_state(prop), Some(InteractionState::Activated));
     let extra = game.load_scene(&Scene {
         name: "additive".into(),
-        bodies: vec![Placed { pos: (-40.0, 0.0), what: Template::BODY }],
+        bodies: vec![Placed { pos: (-40.0, 0.0), what: ActorDefinition::passive_hostile() }],
         ..Scene::default()
     }.into()).unwrap();
     game.set_attack_profile(AttackProfile::Slam);
     game.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
     assert!(game.apply_impulse(game.player_id(), Impulse::try_from((6.0, 0.0)).unwrap()));
     step(&mut game, Intent::new(MoveDir::new(Vec3::Z), AimDir::new(Vec3::Z).unwrap(), true));
-    assert!(game.request_spawn(Vec2::new(-50.0, 0.0), Template::BODY).is_some());
+    assert!(game.request_spawn(Vec2::new(-50.0, 0.0), ActorDefinition::passive_hostile()).is_some());
     assert!(game.evict_scene(original));
     assert!(game.scene_bodies(extra).is_some());
     // Changing caller-owned content and evicting its live instance must not
@@ -125,7 +125,7 @@ fn eviction_is_local_and_preserves_the_restart_choice() {
     let retired = game.scene_bodies(a).unwrap().to_vec();
     let survivors = game.scene_bodies(b).unwrap().to_vec();
     assert_eq!(retired.len(), 2, "one authored prop and one emitted body");
-    assert!(game.request_spawn(Vec2::new(-40.0, 0.0), Template::BODY).is_some());
+    assert!(game.request_spawn(Vec2::new(-40.0, 0.0), ActorDefinition::passive_hostile()).is_some());
     assert!(game.evict_scene(a));
     assert!(!game.evict_scene(a));
     assert!(retired.iter().all(|id| !game.is_alive(*id)));
@@ -207,28 +207,27 @@ fn source_enablement_is_instance_local_and_restart_restores_authored_state() {
 }
 
 /// Before stepping, tickets name requests, not bodies. At the boundary an
-/// invalid request must leave a refusal between successes, even with no log.
+/// invalid request must refuse without disturbing accepted work, even with no log.
 #[test]
 fn spawn_results_are_lossless_when_diagnostics_are_disabled_or_overflow() {
     let mut reference = None;
     for retention in [0, 1, 16_384] {
         let mut game = Game::empty();
         game.set_trace_retention(retention).unwrap();
-        let first = game.request_spawn(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
-        let invalid = game.request_spawn(Vec2::splat(f32::NAN), Template::BODY).unwrap();
-        let last = game.request_spawn(Vec2::new(20.0, 0.0), Template::BODY).unwrap();
-        assert_ne!(first, invalid);
-        assert_ne!(invalid, last);
+        let first = game.request_spawn(Vec2::new(10.0, 0.0), ActorDefinition::passive_hostile()).unwrap();
+        let accepted = (game.hash(), report(&game));
+        assert!(game.request_spawn(Vec2::splat(f32::NAN), ActorDefinition::passive_hostile()).is_none());
+        assert_eq!((game.hash(), report(&game)), accepted);
+        let last = game.request_spawn(Vec2::new(20.0, 0.0), ActorDefinition::passive_hostile()).unwrap();
+        assert_ne!(first, last);
         assert!(game.spawn_outcomes().is_empty());
         step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
         let outcomes = game.spawn_outcomes().to_vec();
-        assert_eq!(outcomes.iter().map(|result| result.ticket).collect::<Vec<_>>(), [first, invalid, last]);
+        assert_eq!(outcomes.iter().map(|result| result.ticket).collect::<Vec<_>>(), [first, last]);
         assert!(outcomes[0].entity.is_some());
-        assert!(outcomes[1].entity.is_none());
-        assert!(outcomes[2].entity.is_some());
+        assert!(outcomes[1].entity.is_some());
         let state = report(&game);
-        assert!(state.contains(&format!("\"{invalid}\":{{\"spawned\":false}}")));
-        for result in [&outcomes[0], &outcomes[2]] {
+        for result in &outcomes {
             assert!(state.contains(&format!("\"{}\":{{\"spawned\":true,\"entity\":\"{}\"", result.ticket, result.entity.unwrap())));
         }
         let observed = (outcomes.clone(), game.hash());
@@ -250,7 +249,7 @@ fn spawn_results_are_lossless_when_diagnostics_are_disabled_or_overflow() {
 fn switching_to_scoped_capture_cannot_claim_complete_golden_evidence() {
     let mut game = Game::empty();
     game.capture_trace(8).unwrap();
-    game.request_spawn(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
+    game.request_spawn(Vec2::new(10.0, 0.0), ActorDefinition::passive_hostile()).unwrap();
     step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert!(game.render_captured_trace().unwrap().contains("placed"));
     let before = game.hash();
@@ -258,7 +257,7 @@ fn switching_to_scoped_capture_cannot_claim_complete_golden_evidence() {
     assert_eq!(game.hash(), before);
     assert_eq!(game.render_captured_trace(), None, "a filtered engine stream is not a complete trace");
     assert_eq!(game.captured_events(), Some([].as_slice()));
-    game.request_spawn(Vec2::new(20.0, 0.0), Template::BODY).unwrap();
+    game.request_spawn(Vec2::new(20.0, 0.0), ActorDefinition::passive_hostile()).unwrap();
     step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert_eq!(game.captured_events().unwrap().len(), 1);
     assert_eq!(game.render_captured_trace(), None);

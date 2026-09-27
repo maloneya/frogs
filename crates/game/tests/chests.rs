@@ -1,19 +1,20 @@
 //! Chests retain their bodies and own their complete scene lifetime.
+use arpg_game::{Placed, SourceSpec, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{ChestSpec, ChestState, DefeatObjective, DoorSpec, EncounterAction as Action,
     EncounterObjective, EncounterPhase, EncounterSpec, EncounterStart, Game, GameScene};
-use arpg_sim::{Accumulator, AttackProfile, Condition, Dt, Placed, SourceSpec, Template};
+use arpg_sim::{Accumulator, AttackProfile, Condition, Dt, };
 use glam::Vec2;
 
 fn scene() -> GameScene {
     GameScene {
-        engine: arpg_sim::Scene {
+        engine: arpg_game::Scene {
             bodies: vec![
-                Placed { pos: (1.2, 0.0), what: Template::BLOCK.interactive() },
-                Placed { pos: (-1.2, 0.0), what: Template::BLOCK },
+                Placed { pos: (1.2, 0.0), what: ActorDefinition::prop().interactive() },
+                Placed { pos: (-1.2, 0.0), what: ActorDefinition::prop() },
             ],
             sources: vec![SourceSpec { pos: (0.0, 1.0), radius: 0.0, every: 10_000,
-                when: Condition::Always, what: Template::BODY.seeking(), enabled: false }],
+                when: Condition::Always, what: ActorDefinition::hostile(), enabled: false }],
             ..Default::default()
         },
         chests: vec![ChestSpec { body: 1 }],
@@ -64,7 +65,7 @@ fn success_requires_a_fresh_interaction_and_opening_keeps_the_body() {
     game.clear_trace();
     assert_eq!(game.hash(), hash);
     assert!(game.despawn_body(chest));
-    let replacement = game.place(Vec2::new(-1.2, 0.0), Template::BLOCK.interactive()).unwrap();
+    let replacement = game.place(Vec2::new(-1.2, 0.0), ActorDefinition::prop().interactive()).unwrap();
     step(&mut game, false, true);
     assert_eq!(game.chest_state(owner, 0), Some(ChestState::Missing));
     assert_eq!(game.chest_state_for_body(replacement), None);
@@ -81,7 +82,7 @@ fn missing_reward_orphans_encounter_and_eviction_releases_only_its_chests() {
     step(&mut game, false, true);
     let chest = game.scene_bodies(a).unwrap()[1];
     assert!(game.despawn_body(chest));
-    let replacement = game.place(Vec2::new(-1.2, 0.0), Template::BLOCK).unwrap();
+    let replacement = game.place(Vec2::new(-1.2, 0.0), ActorDefinition::prop()).unwrap();
     step(&mut game, false, false);
     assert_eq!(game.encounter_state(a, 0).unwrap().phase, EncounterPhase::Orphaned);
     assert_eq!(game.chest_state(a, 0), Some(ChestState::Missing));
@@ -96,15 +97,16 @@ fn missing_reward_orphans_encounter_and_eviction_releases_only_its_chests() {
 fn refused_chests_preserve_live_state_and_pending_work() {
     let mut game = Game::from_scene(&scene()).unwrap();
     step(&mut game, false, true);
-    assert!(game.request_spawn(Vec2::new(20.0, 20.0), Template::BODY).is_some());
+    assert!(game.request_spawn(Vec2::new(20.0, 20.0), ActorDefinition::passive_hostile()).is_some());
     let before = observed(&game);
     let mut invalid = Vec::new();
     for body in [0, 99] { let mut s = scene(); s.chests[0].body = body; invalid.push(s); }
     let mut s = scene(); s.chests.push(s.chests[0]); invalid.push(s);
+    let mut s = scene(); s.engine.bodies[1].what.physical = arpg_sim::Template::BLOCK.character(); invalid.push(s);
     let mut s = scene(); s.doors.push(DoorSpec { body: 1 }); invalid.push(s);
     let mut s = scene(); s.encounters[0].on_success = vec![Action::UnlockChest(99)]; invalid.push(s);
     let mut s = scene(); s.encounters[0].on_success.push(Action::UnlockChest(0)); invalid.push(s);
-    let mut s = scene(); s.engine.sources.push(s.engine.sources[0]);
+    let mut s = scene(); s.engine.sources.push(s.engine.sources[0].clone());
     let mut other = s.encounters[0].clone(); other.name = "Other".into();
     let EncounterObjective::Defeat(objective) = &mut other.objective; objective.sources = vec![1];
     s.encounters.push(other); invalid.push(s);

@@ -46,13 +46,13 @@ impl std::fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-/// Decodes a complete sim-owned placement for harness commands.
-pub fn parse_placement(source: &str) -> Result<arpg_sim::Placed, ron::error::SpannedError> {
+/// Decodes a complete game-owned placement for harness commands.
+pub fn parse_placement(source: &str) -> Result<arpg_game::Placed, ron::error::SpannedError> {
     ron::from_str(source)
 }
 
-/// Decodes a complete sim-owned source for harness commands.
-pub fn parse_source(source: &str) -> Result<arpg_sim::SourceSpec, ron::error::SpannedError> {
+/// Decodes a complete game-owned source for harness commands.
+pub fn parse_source(source: &str) -> Result<arpg_game::SourceSpec, ron::error::SpannedError> {
     ron::from_str(source)
 }
 
@@ -68,15 +68,15 @@ mod tests {
             "pos: (0.0, 0.0), radius: NaN",
             "pos: (0.0, 0.0), when: PlayerWithin(-1.0)",
             "pos: (0.0, 0.0), when: PlayerWithin(inf)",
-            "pos: (96.0, 0.0), what: (fixed: true)",
-            "pos: (0.0, 0.0), what: (fixed: true, seeks: true)",
+            "pos: (96.0, 0.0), what: (physical: (fixed: true))",
+            "pos: (0.0, 0.0), what: (physical: (fixed: true), actions: [Wait(ticks: 0)], behavior: Action(0))",
         ] {
             let input = format!("({fields})");
             let spec = super::parse_source(&input).unwrap();
-            assert!(arpg_sim::Source::try_from(spec).is_err(), "{input}");
-            assert!(ron::from_str::<arpg_sim::Source>(&input).is_err(), "{input}");
+            assert!(arpg_game::Source::try_from(spec).is_err(), "{input}");
+            assert!(ron::from_str::<arpg_game::Source>(&input).is_err(), "{input}");
         }
-        assert!(ron::from_str::<arpg_sim::Source>("(pos: (30.0, 0.0), every: 0)").is_ok());
+        assert!(ron::from_str::<arpg_game::Source>("(pos: (30.0, 0.0), every: 0)").is_ok());
     }
 
     #[test]
@@ -154,6 +154,8 @@ mod tests {
             r#"(engine: (name: "game"), encoutners: [])"#,
             r#"(engine: (name: "game", bodys: []))"#,
             r#"(engine: (name: "game"), source_controls: [])"#,
+            r#"(engine: (name: "game"), enemy_attacks: [])"#,
+            r#"(engine: (name: "game", bodies: [(pos: (0.0, 0.0), what: (seeks: true))]))"#,
         ] {
             assert!(parse_scene(source).is_err(), "invalid scene passed: {source}");
         }
@@ -291,9 +293,10 @@ mod scene_document_tests {
     fn test_owned_scene_round_trips_through_the_owning_schema() {
         let original = parse_scene(r#"(
             engine: (name: "Round-trip test", bodies: [
-                (pos: (1.0, 0.0), what: (fixed: true, interactable: true)),
-                (pos: (5.0, 0.0), what: (fixed: true)),
-            ], sources: [(pos: (0.0, 8.0), enabled: false)],
+                (pos: (1.0, 0.0), what: (role: Prop, physical: (fixed: true, interactable: true))),
+                (pos: (5.0, 0.0), what: (physical: (fixed: true))),
+            ], sources: [(pos: (0.0, 8.0), enabled: false,
+                what: (role: Hostile, physical: (health: Some(3), character: true)))],
             walls: [(centre: (10.0, 0.0), size: (0.5, 4.0))],
             grids: [(origin: (-10.0, -10.0), columns: 2, rows: 2, spacing: 1.0)]),
             chests: [(body: 1)],
@@ -321,7 +324,7 @@ mod scene_document_tests {
         assert!(save_scene_document(&path, &scene, Some(&revision)).is_err());
         let (_, revision) = read_scene_document(&path).unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
-        scene.scene.engine.grids.push(arpg_sim::BodyGrid { origin: (0.0, 0.0), columns: 0, rows: 2, spacing: 1.0, what: arpg_sim::Template::BODY });
+        scene.scene.engine.grids.push(arpg_game::BodyGrid { origin: (0.0, 0.0), columns: 0, rows: 2, spacing: 1.0, what: arpg_game::ActorDefinition::passive_hostile() });
         assert!(save_scene_document(&path, &scene, Some(&revision)).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
         scene.scene.engine.grids.clear();

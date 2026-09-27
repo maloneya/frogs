@@ -58,12 +58,12 @@ impl Corpses {
 
 /// After physics removal: expire old remains first, then admit this tick's
 /// deaths in engine order. No diagnostic history or mutable physics access.
-pub(crate) fn advance(corpses: &mut Corpses, defeats: &[Defeat]) {
+pub(crate) fn advance<'a>(corpses: &mut Corpses, defeats: impl Iterator<Item = &'a Defeat>) {
     corpses.rows.retain_mut(|row| {
         row.remaining -= 1;
         row.remaining > 0
     });
-    for defeat in defeats.iter().take(MAX_CORPSES - corpses.rows.len()) {
+    for defeat in defeats.take(MAX_CORPSES - corpses.rows.len()) {
         corpses.rows.push(Corpse {
             body: defeat.body, scene: defeat.scene, position: defeat.position,
             remaining: CORPSE_LIFETIME_TICKS,

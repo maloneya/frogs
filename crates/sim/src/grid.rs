@@ -176,9 +176,9 @@ impl Grid {
 
 fn cell(position: Vec2) -> usize {
     // The pass precedes containment, and authored movable bodies may start
-    // anywhere finite. Collapse out-of-arena coordinates into edge cells rather
-    // than clamping their physical positions or refusing previously valid input.
-    // This is conservative (possibly slower), including huge finite coordinates.
+    // outside the arena within the admitted numeric domain. Collapse those
+    // coordinates into edge cells without changing their physical positions.
+    // This is conservative (possibly slower), including very distant births.
     // f64 avoids shifting a near-boundary f32 value into the wrong cell when
     // adding the arena offset; no f64 value writes back to simulation.
     let axis = |value: f32| {

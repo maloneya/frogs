@@ -1,11 +1,11 @@
-// Test-only workload: 10,000 seekers compress around the player.
+// Test-only workload: 10,000 pursuing actors compress around the player.
 (
     scene: (
         engine: (
             name: "Benchmark — compressed crowd",
             grids: [(
                 origin: (-34.65, -34.65), columns: 100, rows: 100, spacing: 0.7,
-                what: (seeks: true),
+                what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)),
             )],
         ),
     ),

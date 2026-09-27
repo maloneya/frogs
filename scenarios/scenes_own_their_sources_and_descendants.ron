@@ -4,10 +4,10 @@
         scenes: [
             (engine: (
     name: "A body and a continuous source",
-    bodies: [(pos: (20.0, 0.0))],
-    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2)],
+    bodies: [(pos: (20.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile))],
+    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2, what: (physical: (health: Some(3), character: true), role: Hostile))],
 )),
-            (engine: (name: "B", bodies: [(pos: (-20.0, 0.0))])),
+            (engine: (name: "B", bodies: [(pos: (-20.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile))])),
         ],
         actions: [Place((-40.0, 0.0))],
     ),
@@ -15,15 +15,15 @@
         (at: 1, action: Evict(0)),
         (at: 2, action: Load((engine: (
     name: "A body and a continuous source",
-    bodies: [(pos: (20.0, 0.0))],
-    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2)],
+    bodies: [(pos: (20.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile))],
+    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2, what: (physical: (health: Some(3), character: true), role: Hostile))],
 )))),
         (at: 3, action: Evict(1)),
         (at: 4, action: Evict(2)),
         (at: 5, action: Load((engine: (
     name: "A body and a continuous source",
-    bodies: [(pos: (20.0, 0.0))],
-    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2)],
+    bodies: [(pos: (20.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile))],
+    sources: [(pos: (30.0, 0.0), radius: 4.0, every: 2, what: (physical: (health: Some(3), character: true), role: Hostile))],
 )))),
         (at: 5, action: Evict(3)),
     ],

@@ -1,0 +1,16 @@
+(
+    description: "A marked horde mixes bounded commitments and remains deterministic after the player runs out of health.",
+    setup: (scenes: [(engine: (name: "Horde attacks", bodies: [
+        (pos: (0.0, 4.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
+        (pos: (4.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
+        (pos: (0.0, -4.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
+        (pos: (-4.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
+        (pos: (3.0, 3.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
+        (pos: (-3.0, -3.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
+        (pos: (3.0, -3.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
+        (pos: (-3.0, 3.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)])))
+    ]),)]),
+    checkpoints: [(at: 41, expect: (player_health: 5))],
+    budget: (ticks: 600, max_mean_step_micros: 1000.0),
+    expect: (player_health: 0, enemy_count: 8),
+)

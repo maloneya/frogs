@@ -7,14 +7,14 @@
         engine: (
             name: "Independent trials",
             bodies: [
-                (pos: (1.0, 0.0), what: (fixed: true, interactable: true)),
-                (pos: (-1.0, 0.0), what: (fixed: true, interactable: true)),
-                (pos: (1.4, 94.5), what: (fixed: true)),
-                (pos: (-20.0, 0.0), what: (fixed: true)),
+                (pos: (1.0, 0.0), what: (physical: (fixed: true, interactable: true), role: Prop)),
+                (pos: (-1.0, 0.0), what: (physical: (fixed: true, interactable: true), role: Prop)),
+                (pos: (1.4, 94.5), what: (physical: (fixed: true), role: Prop)),
+                (pos: (-20.0, 0.0), what: (physical: (fixed: true), role: Prop)),
             ],
             sources: [
-                (pos: (0.0, 95.7), every: 10000, enabled: false),
-                (pos: (-50.0, 0.0), every: 10000, enabled: false),
+                (pos: (0.0, 95.7), every: 10000, enabled: false, what: (physical: (health: Some(3), character: true), role: Hostile)),
+                (pos: (-50.0, 0.0), every: 10000, enabled: false, what: (physical: (health: Some(3), character: true), role: Hostile)),
             ],
         ),
         doors: [(body: 2), (body: 3)],

@@ -18,18 +18,18 @@ pub struct PlayerPresentation {
     attack: AttackStatus,
 }
 
-/// One frame's immutable view of an ordinary enemy.
+/// One frame's immutable view of a nonplayer character.
 ///
 /// The snapshot deliberately stops at simulation-owned facts. Animation phase,
 /// clip selection, visual scale and tint remain presentation decisions.
 #[derive(Clone, Copy, Debug)]
-pub struct EnemyPresentation {
+pub struct CharacterPresentation {
     id: EntityId,
     ground_position: Vec3,
     displacement: Vec2,
 }
 
-impl EnemyPresentation {
+impl CharacterPresentation {
     pub(crate) fn new(id: EntityId, ground_position: Vec3, displacement: Vec2) -> Self {
         Self {
             id,
@@ -106,7 +106,7 @@ impl PlayerPresentation {
 
 }
 
-/// Immutable physical facts for a non-damageable prop.
+/// Immutable physical facts for a body without character presentation.
 #[derive(Clone, Copy, Debug)]
 pub struct PropPresentation {
     id: EntityId,

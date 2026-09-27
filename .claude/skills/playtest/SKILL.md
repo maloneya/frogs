@@ -41,7 +41,7 @@ keeps stepping between commands.
 | Input | `press`, `release`, `tap`, `hold <key> <ms>`, `cursor <x> <y>` |
 | Observe | `state`, `trace since <tick>`, `wait <ms>`, `shot <path>` |
 | Performance | `perf`, `perf samples`, `perf reset` |
-| Place or push | `spawn (pos: (<x>, <z>), what: (seeks: true))`, `impulse <player\|#id> <x> <z>` |
+| Place or push | `spawn (pos: (<x>, <z>), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))`, `impulse <player\|#id> <x> <z>` |
 | Sources | `source (pos: (<x>, <z>), every: <ticks>)`, `source remove\|enable\|disable <id>` |
 | Scenes | `scene start <path>`, `scene restart`, `scene add <path>`, `scene evict <id>`, `scene list` |
 | Assets | `character\|horde show <path.glb>`, `character\|horde clear` |
@@ -49,8 +49,8 @@ keeps stepping between commands.
 | Presentation | `vsync on\|off`, `debug collision on\|off` |
 | Exit | `quit` |
 
-[Harness](../../../crates/app/src/harness.rs) owns command syntax; sim owns RON
-spawn/source payloads. Key names come from [BINDINGS](../../../crates/app/src/input.rs);
+[Harness](../../../crates/app/src/harness.rs) owns command syntax; game owns complete RON
+actor/source payloads. Key names come from [BINDINGS](../../../crates/app/src/input.rs);
 unknown-key replies list them. `cursor` uses physical window pixels and the native
 ground-projection path. See [controls](../../../README.md#controls) and [aiming](../../../docs/aiming.md).
 
@@ -69,7 +69,7 @@ sock state | jq '.render.frames, .render.skipped'
 ```
 
 Bodies are keyed by stable ID, with position, physical velocity and inverse mass;
-`gaits` reports chosen gait and desired speed. Trace records transitions; dropped
+`actors` reports chosen action, committed target, progress and cooldowns. Trace records transitions; dropped
 events mean history was truncated. Verify that new reported fields reflect the
 owner rather than assuming storage automatically makes them visible.
 

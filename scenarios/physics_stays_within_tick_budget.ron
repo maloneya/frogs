@@ -1,5 +1,5 @@
 // Headless cost at the normal horde size. sim is compiled at opt-level 3;
 // 4ms leaves most of the 16.7ms tick for other systems, even with room for noise.
 (description: "The physical horde stays within a headless tick budget and replays.",
- setup: (scenes: [(engine: (name: "physics_stays_within_tick_budget", grids: [(origin: (-10.85, -10.85), columns: 32, rows: 32, spacing: 0.7)]))]), impulses: [(at: 0, target: Player, value: (120.0, 0.0))],
+ setup: (scenes: [(engine: (name: "physics_stays_within_tick_budget", grids: [(origin: (-10.85, -10.85), columns: 32, rows: 32, spacing: 0.7, what: (physical: (health: Some(3), character: true), role: Hostile))]))]), impulses: [(at: 0, target: Player, value: (120.0, 0.0))],
  budget: (ticks: 120, max_mean_step_micros: 4000.0), expect: (enemy_count: 1024))

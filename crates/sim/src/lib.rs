@@ -16,6 +16,8 @@ use arpg_core::{Intent, Report};
 
 mod angle;
 mod attack;
+mod action_execution;
+pub use action_execution::{ActionControls, ActionExecution, ActionOutcome, ActionSchedule, ActionTimeline, Interruption};
 mod beam;
 mod wall;
 pub use wall::{Wall, WallHit, MAX_WALLS};
@@ -41,12 +43,12 @@ pub use attack::{
 pub use hash::Fnv;
 use members::Members;
 use pass::health::Health;
-pub use pass::health::{Defeat, ENEMY_HIT_POINTS};
+pub use pass::health::Defeat;
 use pass::interact::Interactions;
 pub use pass::interact::{INTERACTION_REACH, InteractionState};
 use pass::motion::Physics;
 pub use pass::motion::{Impulse, Motion};
-pub use pass::seek::Gait;
+pub use pass::motion::{MotorCommand, stopping_speed, motor_speed_limit};
 /// Read-only snapshot of a source's enablement, cadence, and emission progress.
 pub use pass::source::SourceState;
 use pass::source::Sources;
@@ -57,7 +59,7 @@ use pass::spawn::SpawnQueue;
 /// What to make, and what behaviours it should be granted. See
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
 pub use pass::spawn::{SpawnOutcome, SpawnTicket, Template};
-pub use presentation::{AttackDisc, CollisionDisc, EnemyPresentation, PlayerPresentation, PropPresentation};
+pub use presentation::{AttackDisc, CollisionDisc, CharacterPresentation, PlayerPresentation, PropPresentation};
 use scene::Scenes;
 pub use scene::{BodyGrid, Placed, Scene, SceneError, SceneId};
 pub use slots::EntityId;
@@ -65,7 +67,12 @@ use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, TICK_HZ, Ticks};
 pub use trace::{Event, EventKind, MAX_TRACE_EVENTS, Trace, TraceSink};
 mod access;
-pub use access::{GameplayAccess, MeleeView};
+pub use access::{ActorView, GameplayAccess};
+mod step;
+pub use step::{PreparedStep, ResolvedStep};
+
+/// Initial health of the persistent player body.
+pub const PLAYER_MAX_HEALTH: u8 = 5;
 
 mod tuning;
 pub use tuning::{Tuning, TuningField, TuningAttribute};
@@ -108,13 +115,22 @@ const _: () = assert!(ARENA_HALF.is_finite() && ARENA_HALF > PLAYER_RADIUS);
 /// Legacy player report height, preserved independently of asset dimensions.
 const PLAYER_HALF_HEIGHT: f32 = 0.6;
 
+/// Numeric position admission shared by body placement and gameplay destinations.
+/// The conservative component bound keeps the squared separation of any two
+/// admitted positions below f32::MAX (8 * (4e18)^2), before arena containment.
+/// This is an arithmetic domain, not a restriction to the playable arena.
+pub fn valid_position(position: Vec2) -> bool {
+    position.is_finite() && position.abs().max_element() <= 4.0e18
+}
+
 /// Shared body storage. Row zero is the persistent player.
 /// Separate position arrays keep unrelated state out of solver iteration.
 struct Bodies {
     physics: Physics,
     interactions: Interactions,
-    /// Damageable membership; the player and static props have no health.
+    /// Health is independent of movement, presentation and gameplay allegiance.
     health: Health,
+    characters: Members,
     /// Stable identities mapped to dense rows.
     slots: Slots,
     /// Ground positions: X is world X, Y is world Z; [`on_ground`] converts to 3D.
@@ -129,6 +145,7 @@ impl Default for Bodies {
             physics: Physics::default(),
             interactions: Interactions::default(),
             health: Health::default(),
+            characters: Members::default(),
             slots: Slots::default(),
             pos: Vec::new(),
             prev_pos: Vec::new(),
@@ -152,6 +169,7 @@ impl Bodies {
         let Self {
             physics,
             health,
+            characters,
             interactions,
             slots,
             pos,
@@ -174,9 +192,12 @@ impl Bodies {
         if !is_player && what.interactable() {
             interactions.grant(id);
         }
-        if !is_player && !what.fixed() {
-            health.grant(id);
+        if is_player {
+            health.grant(id, core::num::NonZeroU8::new(PLAYER_MAX_HEALTH).expect("positive player health"));
+        } else if let Some(initial) = what.hit_points() {
+            health.grant(id, initial);
         }
+        if !is_player && what.is_character() { characters.add(id); }
         self.debug_check_paired();
         Some(id)
     }
@@ -188,7 +209,7 @@ impl Bodies {
         debug_assert_eq!(self.slots.len(), self.prev_pos.len(), "slots and prev_pos disagree");
         // Capability rows belong to their own membership sets. Checking their
         // count is constant time; rescanning all ids on each spawn was quadratic.
-        debug_assert!(self.health.len() < self.slots.len(), "the player has no health");
+        debug_assert!(self.health.len() <= self.slots.len(), "health belongs to live bodies");
     }
 
     /// Removes one body. Returns whether the id named a live one.
@@ -200,6 +221,7 @@ impl Bodies {
         let Self {
             physics,
             health,
+            characters,
             interactions,
             slots,
             pos,
@@ -215,6 +237,7 @@ impl Bodies {
         physics.revoke(id);
         interactions.revoke(id);
         health.revoke(id);
+        characters.remove(id);
         pos.swap_remove(dense);
         prev_pos.swap_remove(dense);
         self.debug_check_paired();
@@ -271,8 +294,8 @@ pub struct World {
     /// a grid that resolves different contacts than brute force is wrong,
     /// and this is what catches it.
     contacts: usize,
-    /// Sparse seeker membership; see [`crate::pass::seek`].
-    seekers: Members,
+    /// Rebuilt target eligibility, excluded from replay state.
+    player_targets: Members,
     /// What has been asked for and not yet made.
     ///
     /// **The seam that lets anything ask for a spawn without being able to
@@ -317,7 +340,7 @@ impl World {
             player: Player::default(),
             tick: 0,
             trace: Trace::default(),
-            seekers: Members::default(),
+            player_targets: Members::with_capacity(MAX_BODIES + 1),
             queue: SpawnQueue::default(),
             sources: Sources::default(),
             scenes: Scenes::default(),
@@ -339,28 +362,26 @@ struct RemovedBody {
 /// the final scheduled defeat pass.
 fn remove_body(
     bodies: &mut Bodies,
-    seekers: &mut Members,
     scenes: &mut Scenes,
     id: EntityId,
     trace: &mut trace::TraceSink<'_>,
 ) -> Option<RemovedBody> {
     let position = bodies.pos_of(id)?;
     if !bodies.despawn(id) { return None; }
-    seekers.remove(id);
     let scene = scenes.forget_body(id);
     trace.emit(Event::Removed { id });
     Some(RemovedBody { position, scene })
 }
 
 impl World {
-    /// How many enemies the horde currently holds. Always within
+    /// Nonplayer bodies with health, independent of gameplay allegiance. Always within
     /// `0..=MAX_BODIES`.
     ///
     /// Derived from the storage rather than tracked beside it: a separate
     /// counter is a second copy of the same fact, and the two drift the first
     /// time something spawns or kills one without going through the same door.
-    pub fn enemy_count(&self) -> usize {
-        self.bodies.health.len()
+    pub fn damageable_count(&self) -> usize {
+        self.bodies.health.len() - 1
     }
 
     /// Non-player bodies, including props; all share the instance capacity.
@@ -374,7 +395,7 @@ impl World {
     /// Use [`World::request_spawn`] for queued placement.
     pub fn place(&mut self, at: Vec2, what: Template) -> Option<EntityId> {
         let mut trace = self.trace.sink(self.tick);
-        pass::spawn::place(&mut self.bodies, &mut self.seekers, at, what, &mut trace)
+        pass::spawn::place(&mut self.bodies, at, what, &mut trace)
     }
 
     /// Adds something that asks for spawns, and returns its name.
@@ -453,7 +474,7 @@ impl World {
         // being retired here.
         let Self {
             bodies,
-            seekers,
+            player_targets: _,
             trace,
             tick,
             queue: _,
@@ -469,47 +490,22 @@ impl World {
 
         let _ = defeats; // Between-tick removals never manufacture combat outcomes.
         let mut trace = trace.sink(*tick);
-        remove_body(bodies, seekers, scenes, id, &mut trace).is_some()
+        remove_body(bodies, scenes, id, &mut trace).is_some()
     }
 
-    /// Remaining hits before defeat, or `None` for props, the player, and
-    /// ids that no longer resolve.
+    /// Remaining health, or `None` for immune bodies and stale identities.
     #[must_use]
     pub fn health(&self, id: EntityId) -> Option<u8> {
         self.bodies.health.get(id)
     }
 
-    /// Makes a body chase the player. Returns whether it took effect.
-    ///
-    /// `false` when the id is dead or the body already chases. Composing rather
-    /// than configuring: a body is placed first and granted behaviours after,
-    /// so what an enemy *is* stays a list of the things it does.
-    pub fn add_seek(&mut self, id: EntityId) -> bool {
-        if id == self.player_id()
-            || !self.motion(id).is_some_and(|motion| motion.inverse_mass() > 0.0)
-        {
-            return false;
-        }
-        self.seekers.add(id).is_some()
-    }
+    /// Initial health capacity of a live body, independent of its current health.
+    pub fn max_health(&self, id: EntityId) -> Option<u8> { self.bodies.health.maximum(id) }
 
     /// The state of a live interaction member, or None for an ordinary body.
     #[must_use]
     pub fn interaction_state(&self, id: EntityId) -> Option<InteractionState> {
         self.bodies.interactions.get(id)
-    }
-
-    /// Whether this body chases the player.
-    #[must_use]
-    pub fn is_seeker(&self, id: EntityId) -> bool {
-        self.seekers.contains(id)
-    }
-
-    /// Gait chosen for the latest completed tick (or the initial choice at spawn).
-    /// Derived from stable identity and tick, so row moves cannot reroll it.
-    #[must_use]
-    pub fn gait(&self, id: EntityId) -> Option<Gait> {
-        self.is_seeker(id).then(|| Gait::at(id, self.tick.saturating_sub(1)))
     }
 
     /// Whether the hitbox exists right now.
@@ -563,11 +559,6 @@ impl World {
         self.player.attack.struck()
     }
 
-    /// How many bodies chase the player.
-    #[must_use]
-    pub fn seeker_count(&self) -> usize {
-        self.seekers.len()
-    }
 
     /// Where a named body stands, lifted to world space, or `None` if it is
     /// dead or names the player. The height is a constant of the body's size rather than state —
@@ -597,7 +588,7 @@ impl World {
             bodies,
             player,
             tick,
-            seekers,
+            player_targets: _,
             queue,
             sources,
             scenes,
@@ -638,19 +629,9 @@ impl World {
         // visible in any of the values above — a NaN position prints as a
         // position and compares equal to nothing.
         out.bool("finite", self.all_positions_finite());
-        out.int("enemies", bodies.health.len() as u64);
-        out.int("props", (bodies.len() - 1 - bodies.health.len()) as u64);
-        out.int("seekers", seekers.len() as u64);
-        out.object("gaits", |out| {
-            for &id in seekers.ids() {
-                let gait = self.gait(id).expect("live seeker");
-                out.object(&id.to_string(), |out| {
-                    out.text("gait", gait.label());
-                    out.num("desired_speed", tuning.gait_speed(gait));
-                });
-            }
-        });
-
+        out.int("damageable", self.damageable_count() as u64);
+        out.int("props", (bodies.len() - 1 - bodies.characters.len()) as u64);
+        out.int("characters", bodies.characters.len() as u64);
         // Asked for and not yet made. Without it, "the spawn has not happened
         // yet" and "the spawn was refused" look identical from out here — and
         // one of those is a bug.
@@ -726,137 +707,22 @@ impl World {
         &self.trace
     }
 
-    /// Advances one fixed tick using world-space intent.
+    /// Runs the physical schedule without gameplay actions. All nonplayer health
+    /// members are eligible player targets; population gates count those members.
     pub fn step(&mut self, dt: Dt, intent: Intent) {
         self.step_observed(dt, intent, &mut ());
     }
 
-    /// Run the same schedule with read-only diagnostic phase notifications.
+    /// The physical test/benchmark entry point with read-only timing observation.
     pub fn step_observed(&mut self, dt: Dt, intent: Intent, observer: &mut impl StepObserver) {
-        let move_dir = pass::beam::movement(&self.player.attack, intent);
-        // Bound to the tick being run, so no pass can stamp an event with the
-        // wrong one. See `trace::TraceSink`.
-        let mut trace = self.trace.sink(self.tick);
-
-        // Drain before row readers; keep rows stable until final defeat removal.
-        pass::source::trigger(
-            &mut self.sources,
-            &mut self.queue,
-            self.bodies.pos[0],
-            self.bodies.health.len(),
-            trace.reborrow(),
-        );
-        pass::spawn::drain(
-            &mut self.queue,
-            &mut self.bodies,
-            &mut self.seekers,
-            &mut self.scenes,
-            trace.reborrow(),
-        );
-        pass::remember::remember(
-            self.player.facing,
-            &mut self.player.prev_facing,
-            &self.bodies.pos,
-            &mut self.bodies.prev_pos,
-        );
-        pass::walk::walk(&mut self.bodies.pos[0], move_dir, dt, self.tuning.get(TuningField::PlayerSpeed));
-        // Chasers read post-walk positions, then request bounded acceleration.
-        // Integration and contacts below carry their running momentum onward.
-        pass::seek::seek(
-            &self.seekers,
-            &self.bodies.slots,
-            &self.bodies.pos,
-            self.bodies.physics.drive(),
-            self.tuning,
-            self.tick,
-            dt,
-            trace.reborrow(),
-        );
-
-        // Physical velocity moves before contacts. Crowd resolution precedes
-        // player resolution, retaining the existing crowd priority.
-        pass::separate::prevent_crossings(
-            &self.bodies.pos, self.bodies.slots.ids(), &mut self.bodies.physics,
-            &self.scenes.walls, dt, trace.reborrow(),
-        );
-        pass::motion::integrate(
-            &self.bodies.physics,
-            &self.bodies.slots,
-            &mut self.bodies.pos,
-            dt,
-        );
-        pass::walls::resolve(&self.scenes.walls, &self.bodies.prev_pos, &mut self.bodies.pos,
-            self.bodies.slots.ids(), &mut self.bodies.physics, trace.reborrow());
-        observer.crowd_started();
-        let crowd_work = pass::separate::crowd(
-            &mut self.bodies.pos[1..],
-            &self.bodies.slots.ids()[1..],
-            &mut self.bodies.physics,
-            &mut self.crowd_grid,
-            trace.reborrow(),
-        );
-        self.crowd_contacts = crowd_work.contacts();
-        observer.crowd_finished(crowd_work);
-        self.contacts = pass::separate::player(
-            &mut self.bodies.pos,
-            self.bodies.slots.ids(),
-            &mut self.bodies.physics,
-            trace.reborrow(),
-        );
-        pass::contain::contain(
-            &mut self.bodies.pos,
-            self.bodies.slots.ids(),
-            &mut self.bodies.physics,
-            trace.reborrow(),
-        );
-        pass::walls::resolve(&self.scenes.walls, &self.bodies.prev_pos, &mut self.bodies.pos,
-            self.bodies.slots.ids(), &mut self.bodies.physics, trace.reborrow());
-        pass::motion::settle(&mut self.bodies.physics, dt, trace.reborrow());
-        pass::face::aim(&mut self.player.facing, &self.player.attack, intent, dt);
-
-        // **After `face`.** The hitbox is oriented by the facing this
-        // tick ended with, and it is tested against where the bodies actually
-        // ended up — after seeking, after both solvers, after the wall. Running
-        // it earlier would swing at positions that no longer exist by the time
-        // the tick is over.
-        pass::attack::attack(
-            &mut self.player.attack,
-            pass::attack::Pose {
-                pos: self.bodies.pos[0],
-                facing: self.player.facing,
-            },
-            intent,
-            &self.bodies.slots.ids()[1..],
-            &self.bodies.pos[1..],
-            self.bodies.physics.sink(self.bodies.slots.ids()[0]),
-            self.bodies.health.sink(),
-            &self.scenes.walls,
-            trace.reborrow(),
-        );
-        pass::interact::interact(
-            &mut self.bodies.interactions,
-            &self.bodies.slots,
-            &self.bodies.pos,
-            self.bodies.pos[0],
-            intent.interact(),
-            trace.reborrow(),
-        );
-        pass::health::remove_defeated(
-            &mut self.bodies,
-            &mut self.seekers,
-            &mut self.scenes,
-            &mut self.defeats,
-            trace.reborrow(),
-        );
-
-        // Last, so that during the passes above `self.tick` names the tick being
-        // run and afterwards it names how many have finished. Trace events are
-        // stamped from inside a pass, so which of the two this is has to be
-        // decided once and written down rather than rediscovered per pass.
-        self.tick += 1;
+        let population = self.damageable_count();
+        // The standalone engine has no allegiance policy. Its damageable members
+        // are the explicit target set for mechanism-level tests.
+        self.player_targets.clear();
+        self.begin_step(dt, intent, population).advance_standalone(observer).finish();
     }
 
-    /// Combat outcomes from the latest step; clearing diagnostics does not affect these.
+    /// Authoritative combat outcomes from the latest completed tick.
     pub fn defeats(&self) -> &[Defeat] { &self.defeats }
 
     /// Ticks completed since this world was created.
@@ -876,7 +742,7 @@ impl World {
             bodies,
             player,
             tick,
-            seekers,
+            player_targets: _,
             queue,
             sources,
             scenes,
@@ -899,6 +765,7 @@ impl World {
             slots,
             physics,
             health,
+            characters,
             interactions,
             pos: enemy_pos,
             prev_pos: enemy_prev,
@@ -917,6 +784,7 @@ impl World {
         }
         physics.hash(&mut h);
         interactions.hash(&mut h);
+        characters.hash(&mut h);
 
         h.u64(*tick);
         h.f32(*facing);
@@ -935,11 +803,6 @@ impl World {
         // all at once.
         sources.hash(&mut h);
         scenes.hash(&mut h);
-
-        // Membership is state. Two worlds whose bodies stand in identical
-        // places are different worlds if one of them chases and the other does
-        // not, and they diverge visibly on the very next tick.
-        seekers.hash(&mut h);
 
         // The swing is simulation state with a *window*, which is exactly the
         // kind a point-sample hash is worst at describing — but leaving it out
@@ -991,25 +854,25 @@ impl World {
         )
     }
 
-    /// Immutable, allocation-free presentation facts for every live enemy.
+    /// Immutable, allocation-free presentation facts for every character member.
     ///
-    /// Static props are excluded by health membership rather than body order.
+    /// Character presentation membership is independent of health and body order.
     /// Dense rows may move after a despawn, so callers receive stable ids and
     /// must not treat iterator position as identity.
-    pub fn enemy_presentations(
+    pub fn character_presentations(
         &self,
         alpha: Alpha,
-    ) -> impl Iterator<Item = EnemyPresentation> + '_ {
+    ) -> impl Iterator<Item = CharacterPresentation> + '_ {
         let a = alpha.get();
         self.bodies.slots.ids()[1..]
             .iter()
             .copied()
             .enumerate()
             .filter_map(move |(offset, id)| {
-                self.bodies.health.get(id)?;
+                if !self.bodies.characters.contains(id) { return None; }
                 let row = offset + 1;
                 let position = self.bodies.prev_pos[row].lerp(self.bodies.pos[row], a);
-                Some(EnemyPresentation::new(
+                Some(CharacterPresentation::new(
                     id,
                     on_ground(position, 0.0),
                     self.bodies.pos[row] - self.bodies.prev_pos[row],
@@ -1039,10 +902,10 @@ impl World {
         })
     }
 
-    /// Immutable prop facts, excluding the player and damageable enemies.
+    /// Immutable prop facts, excluding the player and character presentations.
     pub fn prop_presentations(&self, alpha: Alpha) -> impl Iterator<Item = PropPresentation> + '_ {
         self.bodies.slots.ids()[1..].iter().copied().enumerate().filter_map(move |(offset, id)| {
-            if self.bodies.health.get(id).is_some() { return None; }
+            if self.bodies.characters.contains(id) { return None; }
             let row = offset + 1;
             let position = self.bodies.prev_pos[row].lerp(self.bodies.pos[row], alpha.get());
             Some(PropPresentation::new(id, on_ground(position, 0.0), self.bodies.interactions.get(id)))
@@ -1122,3 +985,6 @@ mod tests;
 #[cfg(test)]
 #[global_allocator]
 static COUNTING: tests::alloc_counter::Counting = tests::alloc_counter::Counting;
+
+#[cfg(test)]
+const TEST_CHARACTER: Template = Template::BODY.with_health(core::num::NonZeroU8::new(3).unwrap()).character();

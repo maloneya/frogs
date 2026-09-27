@@ -35,7 +35,8 @@ fn authored_trial() -> SceneDocument {
     }
     apply(&mut scene, Edit::Add { kind: Kind::Source, pos: (0.0, 4.0) });
     let source = target(Kind::Source, 0);
-    for (field, value) in [("radius", 0.0), ("every", 10_000.0), ("condition", 0.0), ("seeks", 0.0)] {
+    apply(&mut scene, Edit::Actor { target: target(Kind::Source, 0), value: ActorDefinition::passive_hostile() });
+    for (field, value) in [("radius", 0.0), ("every", 10_000.0), ("condition", 0.0)] {
         set_field(&mut scene, source, field, value);
     }
     name(&mut scene, source, "Trial enemies");
@@ -45,9 +46,9 @@ fn authored_trial() -> SceneDocument {
 pub(super) fn composed_scene() -> SceneDocument {
     serde_json::from_value(json!({"scene": {
         "engine": {"name": "Authoring composition test", "bodies": [
-            {"pos": [1.0, 0.0], "what": {"fixed": true, "interactable": true}},
-            {"pos": [0.0, 3.0], "what": {"fixed": true}},
-        ], "sources": [{"pos": [0.0, 8.0], "radius": 0.5, "every": 60, "enabled": false}]},
+            {"pos": [1.0, 0.0], "what": {"role": "Prop", "physical": {"fixed": true, "interactable": true}}},
+            {"pos": [0.0, 3.0], "what": {"role": "Prop", "physical": {"fixed": true}}},
+        ], "sources": [{"pos": [0.0, 8.0], "radius": 0.5, "every": 60, "enabled": false, "what": ActorDefinition::passive_hostile()}]},
         "chests": [{"body": 1}],
         "encounters": [{"name": "Test trial", "start": {"Activated": 0},
             "objective": {"Defeat": {"sources": [0], "count": 1, "within_ticks": 60}},
@@ -149,37 +150,52 @@ fn encounter_edits_refuse_conflicting_ownership_and_remap_surviving_references()
 }
 
 #[test]
-fn every_valid_template_combination_is_editable_on_bodies_sources_and_formations() {
+fn actor_definitions_and_compositions_are_editable_on_every_producer() {
     for kind in [Kind::Body, Kind::Source, Kind::Grid] {
-        for (fixed, seeks, interactive) in [
-            (false, false, false), (false, false, true), (false, true, false),
-            (false, true, true), (true, false, false), (true, false, true),
-        ] {
-            let mut scene = SceneDocument::default();
-            apply(&mut scene, Edit::Add { kind, pos: (8.0, 8.0) });
-            let object = target(kind, 0);
-            for (key, value) in [("fixed", fixed), ("seeks", seeks), ("interactable", interactive)] {
-                set_field(&mut scene, object, key, f32::from(value));
-            }
-            let template = match kind {
-                Kind::Body => scene.scene.engine.bodies[0].what,
-                Kind::Source => scene.scene.engine.sources[0].what,
-                Kind::Grid => scene.scene.engine.grids[0].what,
-                _ => unreachable!(),
-            };
-            assert_eq!((template.fixed(), template.seeks(), template.interactable()), (fixed, seeks, interactive));
-            let projection = document(&scene, Some(object), None, None).unwrap();
-            for key in ["fixed", "seeks", "interactable"] {
-                assert!(projection["objects"][0]["fields"].as_array().unwrap().iter().any(|f| f["key"] == key));
-            }
-            assert!(edit(scene.clone(), Edit::Set { target: object, field: "fixed".into(), value: Number::from_f64(0.5).unwrap() }).is_err());
-            if fixed { assert!(edit(scene, Edit::Set { target: object, field: "seeks".into(), value: Number::from_f64(1.0).unwrap() }).is_err()); }
+        let mut scene = SceneDocument::default();
+        apply(&mut scene, Edit::Add { kind, pos: (8.0, 8.0) });
+        let object = target(kind, 0);
+        apply(&mut scene, Edit::Actor { target: object, value: ActorDefinition::civilian() });
+        set_field(&mut scene, object, "action_count", 2.0);
+        set_field(&mut scene, object, "action.0.kind", 0.0);
+        set_field(&mut scene, object, "action.0.x", 12.0);
+        set_field(&mut scene, object, "action.0.speed", 1.5);
+        set_field(&mut scene, object, "action.1.ticks", 90.0);
+        set_field(&mut scene, object, "behavior.kind", 2.0);
+        set_field(&mut scene, object, "behavior.children", 2.0);
+        set_field(&mut scene, object, "behavior.0.kind", 1.0);
+        set_field(&mut scene, object, "behavior.1.kind", 1.0);
+        set_field(&mut scene, object, "behavior.1.action", 2.0);
+        let actor = match kind {
+            Kind::Body => &scene.scene.engine.bodies[0].what,
+            Kind::Source => &scene.scene.engine.sources[0].what,
+            Kind::Grid => &scene.scene.engine.grids[0].what,
+            _ => unreachable!(),
+        };
+        assert_eq!(actor.role, arpg_game::ActorRole::Civilian);
+        assert_eq!(actor.actions[1], arpg_game::ActionDefinition::Wait { ticks: 90 });
+        assert_eq!(actor.behavior, arpg_game::BehaviorNode::Sequence(vec![arpg_game::BehaviorNode::Action(0), arpg_game::BehaviorNode::Action(1)]));
+        set_field(&mut scene, object, "action.0.order", 2.0);
+        let actor = match kind {
+            Kind::Body => &scene.scene.engine.bodies[0].what,
+            Kind::Source => &scene.scene.engine.sources[0].what,
+            Kind::Grid => &scene.scene.engine.grids[0].what,
+            _ => unreachable!(),
+        };
+        assert_eq!(actor.behavior, arpg_game::BehaviorNode::Sequence(vec![arpg_game::BehaviorNode::Action(1), arpg_game::BehaviorNode::Action(0)]));
+        set_field(&mut scene, object, "action.1.order", 1.0);
+        let projection = document(&scene, Some(object), None, None).unwrap();
+        for key in ["fixed", "character", "interactable", "actor_role", "action.0.speed", "behavior.1.action"] {
+            assert!(projection["objects"][0]["fields"].as_array().unwrap().iter().any(|f| f["key"] == key));
+        }
+        for (field, value) in [("fixed", 1.0), ("action_count", 0.0), ("action_count", 1e9), ("behavior.children", 1e9), ("action.0.speed", -1.0)] {
+            assert!(edit(scene.clone(), Edit::Set { target: object, field: field.into(), value: Number::from_f64(value).unwrap() }).is_err());
         }
     }
 }
 
 #[test]
-fn components_and_the_single_attacker_follow_edit_duplicate_and_delete_lifetimes() {
+fn components_and_actor_definitions_follow_edit_duplicate_and_delete_lifetimes() {
     let mut scene = SceneDocument::default();
     apply(&mut scene, Edit::Place { kind: PropKind::Prop, pos: (5.0, 5.0) });
     let body = target(Kind::Body, 0);
@@ -192,21 +208,15 @@ fn components_and_the_single_attacker_follow_edit_duplicate_and_delete_lifetimes
     apply(&mut scene, Edit::Duplicate { target: body, offset: (0.0, 3.0) });
     assert_eq!(scene.scene.chests.iter().map(|c| c.body).collect::<Vec<_>>(), vec![0, 2]);
     set_field(&mut scene, body, "component", 0.0);
-    set_field(&mut scene, body, "fixed", 0.0);
-    set_field(&mut scene, body, "attacker", 1.0);
-    assert_eq!(scene.scene.enemy_attack.unwrap().body, 0);
-    assert!(scene.scene.engine.bodies[0].what.seeks());
+    apply(&mut scene, Edit::Actor { target: body, value: ActorDefinition::attacker() });
     apply(&mut scene, Edit::Duplicate { target: body, offset: (-2.0, 0.0) });
-    assert_eq!(scene.scene.enemy_attack.unwrap().body, 0, "duplicates cannot create a second attacker");
-    set_field(&mut scene, target(Kind::Body, 3), "attacker", 1.0);
-    assert_eq!(scene.scene.enemy_attack.unwrap().body, 3);
-    assert!(edit(scene.clone(), Edit::Set { target: target(Kind::Body, 3), field: "seeks".into(), value: Number::from_f64(0.0).unwrap() }).is_err());
+    assert_eq!(scene.scene.engine.bodies[0].what, scene.scene.engine.bodies[3].what);
+    assert!(edit(scene.clone(), Edit::Set { target: target(Kind::Body, 3), field: "fixed".into(), value: Number::from_f64(1.0).unwrap() }).is_err());
     apply(&mut scene, Edit::Delete { target: body });
-    assert_eq!(scene.scene.enemy_attack.unwrap().body, 2);
+    assert_eq!(scene.scene.engine.bodies[2].what, ActorDefinition::attacker());
     assert_eq!(scene.scene.doors[0].body, 0);
     assert_eq!(scene.scene.chests[0].body, 1);
     apply(&mut scene, Edit::Delete { target: target(Kind::Body, 2) });
-    assert!(scene.scene.enemy_attack.is_none());
     apply(&mut scene, Edit::Delete { target: target(Kind::Body, 0) });
     assert!(scene.scene.doors.is_empty());
     assert_eq!(scene.scene.chests[0].body, 0);
@@ -241,13 +251,13 @@ fn test_composition_can_be_built_through_editor_operations_without_editing_ron()
     let mut scene = SceneDocument::default();
     apply(&mut scene, Edit::Rename { name: reference.scene.engine.name.clone() });
     for body in &reference.scene.engine.bodies {
-        let kind = if body.what.interactable() { PropKind::Switch } else { PropKind::Chest };
+        let kind = if body.what.physical.interactable() { PropKind::Switch } else { PropKind::Chest };
         apply(&mut scene, Edit::Place { kind, pos: body.pos });
     }
     for (index, source) in reference.scene.engine.sources.iter().enumerate() {
         apply(&mut scene, Edit::Add { kind: Kind::Source, pos: source.pos });
-        for (field, value) in [("radius", source.radius), ("every", source.every as f32), ("condition", 0.0),
-            ("seeks", if source.what.seeks() { 1.0 } else { 0.0 })] {
+        apply(&mut scene, Edit::Actor { target: target(Kind::Source, index), value: source.what.clone() });
+        for (field, value) in [("radius", source.radius), ("every", source.every as f32), ("condition", 0.0)] {
             set_field(&mut scene, target(Kind::Source, index), field, value);
         }
     }
@@ -301,4 +311,34 @@ fn test_composition_can_be_built_through_editor_operations_without_editing_ron()
     assert_eq!(game.encounter_state(owner, 0).unwrap().target, 1);
     assert_eq!(game.enemy_count(), 1);
     assert_eq!(game.chest_state(owner, 0), Some(ChestState::Locked));
+}
+
+#[test]
+fn a_civilian_routine_authored_in_the_inspector_moves_waits_and_restarts() {
+    let mut scene = SceneDocument::default();
+    let body = target(Kind::Body, 0);
+    apply(&mut scene, Edit::Add { kind: Kind::Body, pos: (8.0, 0.0) });
+    apply(&mut scene, Edit::Actor { target: body, value: ActorDefinition::civilian() });
+    for (key, value) in [("action_count", 2.0), ("action.0.kind", 0.0), ("action.0.x", 10.0),
+        ("action.0.stop_distance", 0.1), ("action.1.ticks", 30.0), ("behavior.kind", 2.0),
+        ("behavior.children", 2.0), ("behavior.0.kind", 1.0), ("behavior.1.kind", 1.0), ("behavior.1.action", 2.0)] {
+        set_field(&mut scene, body, key, value);
+    }
+    let mut game = Game::from_scene(&scene.scene).unwrap();
+    let id = game.scene_bodies(game.scene_instances().next().unwrap().0).unwrap()[0];
+    assert_eq!(game.health(id), None);
+    assert_eq!(game.enemy_count(), 0);
+    let initial = game.hash();
+    step(&mut game, false, false);
+    assert_eq!(game.action_status(id).unwrap().kind, arpg_game::ActionKind::Move);
+    let mut reached_wait = false;
+    for _ in 0..300 {
+        step(&mut game, false, false);
+        if game.action_status(id).unwrap().kind == arpg_game::ActionKind::Wait { reached_wait = true; break; }
+    }
+    assert!(reached_wait, "the authored movement completes and advances its sequence");
+    for _ in 0..10 { step(&mut game, false, false); }
+    assert_eq!(game.action_status(id).unwrap().kind, arpg_game::ActionKind::Wait);
+    game.restart().unwrap();
+    assert_eq!(game.hash(), initial);
 }

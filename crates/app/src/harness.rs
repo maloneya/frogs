@@ -9,7 +9,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use winit::keyboard::KeyCode;
 
-use arpg_sim::{SourceId, SourceSpec, Template};
+use arpg_sim::SourceId;
+use arpg_game::ActorDefinition;
+use arpg_game::SourceSpec;
 
 use crate::input::{key_named, key_names};
 
@@ -77,9 +79,9 @@ pub(crate) enum Command {
     Spawn {
         x: f32,
         z: f32,
-        what: Template,
+        what: ActorDefinition,
     },
-    /// Add a source decoded from the simulation-owned content description.
+    /// Add a source decoded from the game-owned content description.
     Source(SourceSpec),
     RemoveSource(SourceId),
     SetSourceEnabled {
@@ -440,13 +442,13 @@ mod tests {
     #[test]
     fn source_commands_use_authored_content_and_strict_identity_operations() {
         let Ok(Command::Source(spec)) = parse(
-            "source (pos: (30.0, -4.0), every: 10, radius: 3.0, when: FewerThan(8), what: (seeks: true), enabled: false)"
+            "source (pos: (30.0, -4.0), every: 10, radius: 3.0, when: FewerThan(8), what: (role: Hostile), enabled: false)"
         ) else { panic!("source description must parse") };
         assert_eq!(spec.pos, (30.0, -4.0));
         assert_eq!(spec.radius, 3.0);
         assert_eq!(spec.every, 10);
         assert_eq!(spec.when, arpg_sim::Condition::FewerThan(8));
-        assert!(spec.what.seeks());
+        assert_eq!(spec.what.role, arpg_game::ActorRole::Hostile);
         assert!(!spec.enabled);
         for (verb, expected) in [("enable", true), ("disable", false)] {
             let Ok(Command::SetSourceEnabled { id, enabled }) = parse(&format!("source {verb} s3")) else {
@@ -473,14 +475,14 @@ mod tests {
     #[test]
     fn spawn_commands_use_the_authored_placement_schema() {
         let Ok(Command::Spawn { x, z, what }) = parse(
-            "spawn (pos: (5.0, -5.0), what: (fixed: true, interactable: true))"
+            "spawn (pos: (5.0, -5.0), what: (role: Prop, physical: (fixed: true, interactable: true)))"
         ) else { panic!("placement must parse") };
         assert_eq!((x, z), (5.0, -5.0));
-        assert_eq!(what, Template::BLOCK.interactive());
+        assert_eq!(what, arpg_game::ActorDefinition::prop().interactive());
         let Ok(Command::Spawn { what, .. }) = parse("spawn (pos: (0.0, 2.0))") else {
             panic!("default template must parse");
         };
-        assert_eq!(what, Template::BODY);
+        assert_eq!(what, arpg_game::ActorDefinition::default());
         for bad in ["spawn 0 2 seek", "spawn (pos: (0.0, 2.0), what: (interactble: true))", "enemies 3", "seekers 3", "asset show mesh.glb"] {
             assert!(parse(bad).is_err(), "{bad}");
         }

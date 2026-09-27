@@ -16,11 +16,14 @@ mod game;
 mod scene;
 mod torch;
 pub use torch::TorchSpec;
-mod enemy_attack;
+mod behavior;
+mod population;
+pub use behavior::{ActorDefinition, ActorRole, ActionDefinition, ActionKind, ActionStatus, ActionOutcome, BehaviorNode, Destination, TargetSelection, MoveAction, SwipeAction, LeapAction, ActionTiming, MAX_ACTIONS, MAX_BEHAVIOR_NODES, MAX_BEHAVIOR_DEPTH, MAX_COMBAT_COMMITMENTS};
+pub use population::{Scene, Placed, BodyGrid, SourceSpec, Source};
+pub use arpg_sim::PLAYER_MAX_HEALTH;
 
 pub use game::Game;
 pub use scene::{GameScene, RestartError, SceneError};
-pub use enemy_attack::{EnemyAttackSpec, PLAYER_MAX_HEALTH};
 
 mod door;
 mod encounter;

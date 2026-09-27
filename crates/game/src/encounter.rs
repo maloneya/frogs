@@ -101,13 +101,6 @@ pub struct EncounterState {
 /// Diagnostic transitions; no gameplay logic reads these events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EncounterEvent {
-    /// An enemy removed one player health.
-    PlayerDamaged {
-        /// Stable identity that dealt the damage.
-        attacker: EntityId,
-        /// Player health after the hit.
-        remaining: u8,
-    },
     /// Phase or progress changed.
     Progress {
         /// Owning scene.
@@ -139,9 +132,6 @@ pub enum EncounterEvent {
 impl std::fmt::Display for EncounterEvent {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PlayerDamaged { attacker, remaining } => {
-                write!(out, "enemy hit attacker={attacker} remaining={remaining}")
-            }
             Self::Progress {
                 scene,
                 index,
@@ -202,7 +192,7 @@ impl Encounters {
                 .engine
                 .bodies
                 .get(body)
-                .is_some_and(|body| body.what.interactable())
+                .is_some_and(|body| body.what.physical.interactable())
             {
                 return invalid("encounter start must bind an explicit interactable body");
             }
@@ -215,7 +205,8 @@ impl Encounters {
                     .engine
                     .sources
                     .get(source)
-                    .is_some_and(|source| !source.enabled && !source.what.fixed())
+                    .is_some_and(|source| !source.enabled && source.what.role == crate::ActorRole::Hostile
+                        && source.what.physical.hit_points().is_some())
                 {
                     return invalid("encounter sources must start disabled and produce enemies");
                 }

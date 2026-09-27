@@ -11,6 +11,7 @@ use crate::contact;
 use crate::swing::{Disc, Hitbox, Swing};
 use crate::trace::{Event, TraceSink};
 use crate::{
+    ActionControls, ActionExecution, ActionSchedule, Interruption,
     AttackPhase, AttackProfile, AttackStatus, ENEMY_RADIUS, EntityId, RecoveryTicks, ResolvedAttack,
 };
 
@@ -26,7 +27,7 @@ const HITBOX_SAMPLES: usize = ResolvedAttack::MAX_ACTIVE_TICKS as usize;
 struct InFlight {
     /// Ticks since the swing began. Names the tick that just ran — see
     /// [`attack`] for why it is advanced before anything reads it.
-    elapsed: u32,
+    execution: ActionExecution,
     /// Authored move identity captured at the same boundary as its resolved values.
     profile: AttackProfile,
     /// Captured at the press; later resolution cannot reshape this swing.
@@ -36,27 +37,15 @@ struct InFlight {
 }
 
 impl InFlight {
-    fn duration(&self) -> u32 {
-        self.resolved.startup() + self.resolved.active() + self.resolved.recovery().get()
-    }
-
-    /// Which part of the swing this tick falls in.
-    ///
-    /// **Each phase carries what that phase has**, rather than a bare tag
-    /// beside three numbers of which two are always dead. It also means the
-    /// live disc's index reaches its readers from the same place that decided
-    /// the window, so hit resolution and reported attack state agree.
+    /// The shared lifecycle supplies the active sample index and phase edges.
     fn phase(&self) -> Phase {
-        let startup = self.resolved.startup();
-        if self.elapsed < startup {
-            Phase::Startup
-        } else if is_active(self.elapsed, self.resolved) {
-            Phase::Active((self.elapsed - startup) as usize)
-        } else {
-            Phase::Recovery
+        match self.execution.phase() {
+            (AttackPhase::Startup, _, _) => Phase::Startup,
+            (AttackPhase::Active, sample, _) => Phase::Active(sample as usize),
+            (AttackPhase::Recovery, _, _) => Phase::Recovery,
+            (AttackPhase::Idle, _, _) => unreachable!("retired swings are removed before observation"),
         }
     }
-
 
 }
 
@@ -74,11 +63,29 @@ pub(crate) struct Attack {
     /// The next swing's complete configuration; the current swing owns a copy.
     resolved: Option<ResolvedAttack>,
     /// Tick within the beam damage cadence; no body identities are retained.
-    channel: Option<u32>,
+    channel: Option<Channel>,
     /// Targets already hit, preventing repeated damage across active ticks.
     struck: Vec<EntityId>,
     /// Damage positions from this completed tick, including defeated targets.
     beam_hits: Vec<Vec2>,
+}
+
+struct Channel {
+    execution: ActionExecution,
+    /// Keep pulse cadence independent of the saturating lifetime clock.
+    cadence: u32,
+}
+impl Channel {
+    fn new() -> Self {
+        Self {
+            execution: ActionExecution::new(ActionSchedule::Open, ActionControls::Movement, Interruption::Interruptible),
+            cadence: 0,
+        }
+    }
+    fn advance(&mut self) {
+        self.execution.advance();
+        self.cadence = (self.cadence + 1) % crate::Beam::HIT_EVERY;
+    }
 }
 
 impl Default for Attack {
@@ -103,7 +110,7 @@ impl Attack {
     }
 
     pub(crate) fn beam(&self, origin: Vec2, facing: f32) -> Option<crate::Beam> {
-        self.channel.map(|_| crate::Beam::new(origin, facing))
+        self.channel.as_ref().map(|_| crate::Beam::new(origin, facing))
     }
 
     pub(crate) fn beam_hits(&self) -> &[Vec2] { &self.beam_hits }
@@ -112,7 +119,7 @@ impl Attack {
     /// Retirement happens before new input, matching the attack pass below.
     pub(crate) fn holds_facing(&self) -> bool {
         self.swing.as_ref().is_some_and(|swing| {
-            swing.elapsed + 1 < swing.duration()
+            swing.execution.holds_next_tick(ActionControls::Facing)
         })
     }
 
@@ -133,10 +140,11 @@ impl Attack {
             Some(Phase::Recovery) => AttackPhase::Recovery,
         };
         AttackStatus {
+            execution: swing.as_ref().map(|s| s.execution).or_else(|| channel.as_ref().map(|c| c.execution)),
             phase,
             channeling: channel.is_some(),
-            channel_tick: *channel,
-            elapsed: swing.as_ref().map_or(0, |s| s.elapsed),
+            channel_tick: channel.as_ref().map(|channel| channel.cadence),
+            elapsed: swing.as_ref().map_or(0, |s| s.execution.elapsed()),
             profile: *profile,
             swing_profile: swing.as_ref().map(|s| s.profile),
             resolved: *resolved,
@@ -201,13 +209,16 @@ impl Attack {
         h.usize(*profile as usize);
         if let Some(resolved) = resolved { resolved.hash(h); }
         h.usize(usize::from(channel.is_some()));
-        if let Some(cadence) = channel { h.u64(u64::from(*cadence)); }
+        if let Some(Channel { execution, cadence }) = channel {
+            execution.hash_into(h);
+            h.u64(u64::from(*cadence));
+        }
 
         // `None` and "tick 0 of a swing" are different states and must hash
         // differently, so the discriminant goes in as well as the value.
         h.usize(usize::from(swing.is_some()));
-        if let Some(InFlight { elapsed, profile, resolved, hitbox }) = swing {
-            h.u64(u64::from(*elapsed));
+        if let Some(InFlight { execution, profile, resolved, hitbox }) = swing {
+            execution.hash_into(h);
             h.usize(*profile as usize);
             resolved.hash(h);
             hitbox.hash(h);
@@ -235,18 +246,10 @@ enum Phase {
     Recovery,
 }
 
-/// Whether the hitbox is live on this tick of the swing.
-///
-/// Half-open: live on `startup`, dead on `startup + active`. Written once, here,
-/// so the open and close edges cannot drift apart — which is the classic way a
-/// window ends up one tick wider than its configuration says.
-fn is_active(elapsed: u32, resolved: ResolvedAttack) -> bool {
-    (resolved.startup()..resolved.startup() + resolved.active()).contains(&elapsed)
-}
-
 /// Ground-plane pose shared by the hit query and the impulse's direction.
 #[derive(Clone, Copy)]
 pub(crate) struct Pose {
+    pub(crate) actor: EntityId,
     pub(crate) pos: Vec2,
     pub(crate) facing: f32,
 }
@@ -273,25 +276,31 @@ pub(crate) fn attack(
     // Advance before accepting input so post-step observations describe the tick
     // just processed, and the first tick after recovery can accept a new swing.
     if let Some(swing) = &mut state.swing {
-        swing.elapsed += 1;
+        swing.execution.advance();
     }
     if state
         .swing
         .as_ref()
-        .is_some_and(|swing| swing.elapsed >= swing.duration())
+        .is_some_and(|swing| !swing.execution.is_running())
     {
         state.swing = None;
     }
 
-    if !channel_requested && state.channel.take().is_some() {
+    if !channel_requested && let Some(mut channel) = state.channel.take() {
+        channel.execution.cancel();
         trace.emit(Event::ChannelStopped);
     }
     if channel_requested {
-        let cadence = state.channel.map_or(0, |tick| (tick + 1) % crate::Beam::HIT_EVERY);
-        if state.channel.is_none() { trace.emit(Event::ChannelStarted); }
-        state.channel = Some(cadence);
+        let cadence = if let Some(channel) = &mut state.channel {
+            channel.advance();
+            channel.cadence
+        } else {
+            state.channel = Some(Channel::new());
+            trace.emit(Event::ChannelStarted);
+            0
+        };
         state.struck.clear();
-        super::beam::strike(crate::Beam::new(pose.pos, pose.facing).clipped(walls),
+        super::beam::strike(pose.actor, crate::Beam::new(pose.pos, pose.facing).clipped(walls),
             cadence == 0, bodies, pos, walls, &mut damage, &mut impulses, &mut state.beam_hits, &mut trace);
         return;
     }
@@ -303,7 +312,12 @@ pub(crate) fn attack(
             (resolved.start_radius(), resolved.end_radius()),
         );
         state.swing = Some(InFlight {
-            elapsed: 0,
+            execution: ActionExecution::new(
+                ActionSchedule::timed(resolved.startup(), resolved.active(), resolved.recovery().get())
+                    .expect("resolved attack has validated timing"),
+                ActionControls::Facing,
+                Interruption::Committed,
+            ),
             profile,
             resolved,
             hitbox: path.generate(resolved.active() as usize),
@@ -313,7 +327,7 @@ pub(crate) fn attack(
     }
 
     let Some(swing) = &state.swing else { return };
-    let elapsed = swing.elapsed;
+    let elapsed = swing.execution.elapsed();
 
     // Taken while the swing is only borrowed, so `strike` can have the `struck`
     // list mutably. `Disc` is `Copy` and twelve bytes, so this is a register
@@ -390,7 +404,7 @@ fn strike(
         }
 
         let id = bodies[row];
-        if struck.contains(&id) {
+        if id == pose.actor || struck.contains(&id) {
             continue;
         }
 
@@ -398,6 +412,7 @@ fn strike(
         let Some(remaining) = damage.hit(id, hit_damage) else { continue };
         struck.push(id);
         trace.emit(Event::Hit { id, remaining });
+        trace.emit(Event::Damaged { actor: pose.actor, target: id, remaining });
         // Normalization preserves equal strength at every angle and distance.
         // Coincident centres use a fixed axis, independent of player facing.
         let direction = if radial {
@@ -428,10 +443,10 @@ mod tests {
             hash.finish()
         };
         let idle = hash(&state);
-        state.channel = Some(0);
+        state.channel = Some(Channel::new());
         let first = hash(&state);
         assert_ne!(idle, first);
-        state.channel = Some(1);
+        state.channel.as_mut().unwrap().advance();
         assert_ne!(first, hash(&state));
         let before_hits = hash(&state);
         state.beam_hits.push(Vec2::new(0.0, 3.0));
@@ -439,11 +454,17 @@ mod tests {
         let status = state.status();
         assert!(status.channeling);
         assert_eq!(status.channel_tick, Some(1));
+        let execution = status.execution.unwrap();
+        assert_eq!(execution.elapsed(), 1);
+        assert!(execution.holds(ActionControls::Movement));
+        assert!(!execution.holds(ActionControls::Facing));
         assert!(status.resolved.is_none());
         assert!(status.recovery.is_none());
         let mut report = arpg_core::Report::default();
         status.report(&mut report);
-        assert!(report.finish().contains("\"channel_tick\":1"));
+        let report = report.finish();
+        assert!(report.contains("\"channel_tick\":1"));
+        assert!(report.contains("\"action_execution\":{\"elapsed\":1"));
     }
 
     /// The default resolved attack, which is what these tests pin: they check the state
@@ -451,6 +472,10 @@ mod tests {
     /// second copy of the numbers.
     fn resolved() -> ResolvedAttack {
         ResolvedAttack::default()
+    }
+
+    fn is_active(elapsed: u32, resolved: ResolvedAttack) -> bool {
+        (resolved.startup()..resolved.startup() + resolved.active()).contains(&elapsed)
     }
 
     fn duration() -> u32 {
@@ -472,7 +497,7 @@ mod tests {
         for tick in 0..ticks {
             attack(
                 &mut state,
-                Pose { pos: Vec2::ZERO, facing: 0.0 },
+                Pose { actor: player, pos: Vec2::ZERO, facing: 0.0 },
                 arpg_core::Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, press_on.contains(&tick)),
                 &[],
                 &[],

@@ -6,10 +6,13 @@ use crate::torch::{Torches, TorchSpec};
 use crate::chest::{self, Chests};
 use crate::door::{self, Doors};
 use crate::encounter::{self, Encounters, EncounterEvent};
-use crate::enemy_attack::{self, EnemyAttacks};
+use crate::behavior::{Actors, ActionEffect};
+use crate::population::Births;
+use crate::{ActorDefinition, Source};
+use std::sync::Arc;
 use arpg_sim::{
     Alpha, AttackProfile, AttackStatus, Dt, EntityId, Fnv, Impulse, InteractionState, Motion,
-    RecoveryTicks, SceneId, Source, SourceId, Template, Trace, World,
+    RecoveryTicks, SceneId, SourceId, Trace, World,
 };
 use glam::{Vec2, Vec3};
 
@@ -34,7 +37,8 @@ pub struct Game {
     chests: Chests,
     encounters: Encounters,
     encounter_trace: Trace<EncounterEvent>,
-    attacks: EnemyAttacks,
+    actors: Actors,
+    births: Births,
     corpses: crate::corpse::Corpses,
 }
 
@@ -57,14 +61,15 @@ impl Game {
             chests: Chests::default(),
             encounters: Encounters::default(),
             encounter_trace: Trace::default(),
-            attacks: EnemyAttacks::default(),
+            actors: Actors::default(),
+            births: Births::default(),
             corpses: crate::corpse::Corpses::default(),
         }
     }
 
     /// Constructs a fresh game from a validated scene without running ticks.
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
-        let crate::scene::PreparedScene { world, trees, torches, environments, doors, chests, encounters, attacks, restart } = RestartScene::prepare(scene)?;
+        let crate::scene::PreparedScene { world, trees, torches, environments, doors, chests, encounters, actors, births, restart } = RestartScene::prepare(scene)?;
         Ok(Self {
             world,
             restart: Some(restart),
@@ -75,7 +80,8 @@ impl Game {
             chests,
             encounters,
             encounter_trace: Trace::default(),
-            attacks,
+            actors,
+            births,
             corpses: crate::corpse::Corpses::default(),
         })
     }
@@ -132,7 +138,8 @@ impl Game {
             chests,
             encounters,
             encounter_trace,
-            attacks,
+            actors,
+            births,
             corpses,
         } = self;
         let tick = world.tick();
@@ -141,11 +148,33 @@ impl Game {
         door::advance(doors, &mut access, &mut trace);
         chest::advance(chests, &access, &mut trace);
         encounter::begin(encounters, doors, chests, &mut access, &mut trace);
-        world.step_observed(dt, intent, observer);
-        crate::corpse::advance(corpses, world.defeats());
-        enemy_attack::advance(attacks, world.melee_view(), trace.reborrow());
+        actors.retire(world.actor_view());
+        // Structural births are complete before decisions, including source emissions.
+        // Decisions see this tick's player walk and all other actors' last positions.
+        let prepared = world.begin_step(dt, intent, actors.population());
+        births.admit(prepared.spawn_outcomes(), actors);
+        actors.prepare(prepared.view(), dt);
+        let mut resolved = prepared.advance(actors.drives(), actors.targets(), observer);
+        // Player abilities resolve first. The shared effect sink refuses commands
+        // from actors killed by them, preserving defeat priority without row mutation.
+        actors.resolve(resolved.view());
+        for index in 0..actors.effects().len() {
+            let effect = actors.effects()[index];
+            let actor = effect.actor();
+            let accepted = match effect {
+                ActionEffect::Damage { actor, target, amount } => resolved.damage(actor, target, amount).is_some(),
+                ActionEffect::Interact { actor, target } => resolved.interact(actor, target),
+            };
+            actors.effect_result(actor, accepted);
+        }
+        resolved.finish();
+        crate::corpse::advance(corpses, world.defeats().iter().filter(|defeat| {
+            actors.definition(defeat.body).is_some_and(|definition| definition.physical.is_character())
+        }));
         let (mut access, defeats) = world.encounter_access();
         encounter::finish(encounters, doors, chests, defeats, &mut access, &mut trace);
+        actors.retire(world.actor_view());
+        births.prune();
     }
 
     /// Hashes engine state, live relationships, and the cached restart effect.
@@ -161,11 +190,12 @@ impl Game {
             chests,
             encounters,
             encounter_trace: _,
-            attacks,
+            actors,
+            births,
             corpses,
         } = self;
         let mut hash = Fnv::default();
-        hash.u64(fingerprint(world, (torches, trees, environments), doors, chests, encounters, attacks));
+        hash.u64(fingerprint(world, (torches, trees, environments), doors, chests, encounters, actors, births));
         corpses.hash(&mut hash);
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
@@ -198,7 +228,8 @@ impl Game {
             chests,
             encounters,
             encounter_trace,
-            attacks,
+            actors,
+            births,
             corpses,
         } = self;
         world.report(out);
@@ -208,7 +239,8 @@ impl Game {
         doors.report(out);
         chests.report(out);
         encounters.report(out);
-        attacks.report(out);
+        actors.report(out);
+        births.report(out);
         corpses.report(out);
         out.int("encounter_events_dropped", encounter_trace.dropped() as u64);
         out.object("restart", |out| {
@@ -231,10 +263,11 @@ impl Game {
             chests,
             encounters,
             encounter_trace: _,
-            attacks,
+            actors,
+            births,
             corpses: _, // Additive loads retain existing corpses.
         } = self;
-        scene.install(world, LiveSceneState { trees, torches, environments, doors, chests, encounters, attacks })
+        scene.install(world, LiveSceneState { trees, torches, environments, doors, chests, encounters, actors, births })
     }
 
     /// Evicts a live instance and its descendants; preserves the restart snapshot.
@@ -251,7 +284,8 @@ impl Game {
             chests,
             encounters,
             encounter_trace: _,
-            attacks,
+            actors,
+            births,
             corpses,
         } = self;
         if !world.evict_scene(id) {
@@ -263,7 +297,8 @@ impl Game {
         doors.evict(id);
         chests.evict(id);
         encounters.evict(id);
-        attacks.evict(id);
+        actors.evict(id);
+        births.evict(id);
         corpses.evict(id);
         true
     }
@@ -307,26 +342,38 @@ impl Game {
 
     /// Places a validated body between ticks; None means placement was refused.
     #[must_use]
-    pub fn place(&mut self, at: Vec2, what: Template) -> Option<EntityId> {
-        self.world.place(at, what)
+    pub fn place(&mut self, at: Vec2, what: ActorDefinition) -> Option<EntityId> {
+        what.validate().ok()?;
+        let id = self.world.place(at, what.physical)?;
+        self.actors.install(id, None, self.births.definition(what));
+        Some(id)
     }
 
-    /// Removes a body through the engine lifetime boundary; false means refused.
+    /// Removes the physical actor and its execution through one lifetime boundary.
     pub fn despawn_body(&mut self, id: EntityId) -> bool {
         if !self.world.despawn_body(id) { return false; }
-        self.attacks.remove_body(id);
+        self.actors.remove(id);
+        self.births.prune();
         true
     }
 
-    /// Grants seeking only if the engine accepts the body capability.
-    pub fn add_seek(&mut self, id: EntityId) -> bool {
-        self.world.add_seek(id)
+    /// Replaces behavior atomically, cancelling the previous action. Physical
+    /// capability changes require a new actor; accepted health is never reset here.
+    pub fn assign_behavior(&mut self, id: EntityId, definition: ActorDefinition) -> Result<(), &'static str> {
+        definition.validate()?;
+        let old = self.actors.definition(id).ok_or("actor is stale or absent")?;
+        if old.physical != definition.physical { return Err("behavior replacement cannot change physical capabilities"); }
+        self.actors.replace(id, self.births.definition(definition));
+        Ok(())
     }
 
-    /// Requests a spawn at the next structural boundary; `None` means queue refusal.
+    /// Queues a complete validated definition; refusal retains earlier requests.
     #[must_use]
-    pub fn request_spawn(&mut self, at: Vec2, what: Template) -> Option<arpg_sim::SpawnTicket> {
-        self.world.request_spawn(at, what)
+    pub fn request_spawn(&mut self, at: Vec2, what: ActorDefinition) -> Option<arpg_sim::SpawnTicket> {
+        what.validate().ok()?;
+        let ticket = self.world.request_spawn(at, what.physical)?;
+        self.births.request(ticket, Arc::new(what));
+        Some(ticket)
     }
 
     /// Authoritative queued spawn results from the latest completed tick.
@@ -336,12 +383,16 @@ impl Game {
     /// Installs a source between ticks and returns its stable identity.
     #[must_use]
     pub fn add_source(&mut self, source: Source) -> SourceId {
-        self.world.add_source(source)
+        let id = self.world.add_source(source.physical);
+        self.births.source(id, None, source.definition);
+        id
     }
 
     /// Removes a source through the engine lifetime boundary; false means absent.
     pub fn remove_source(&mut self, id: SourceId) -> bool {
-        self.world.remove_source(id)
+        if !self.world.remove_source(id) { return false; }
+        self.births.remove_source(id);
+        true
     }
 
     /// Applies a validated impulse; false means the target cannot receive it.
@@ -418,13 +469,7 @@ impl Game {
     /// Number of enemies, excluding static props.
     #[must_use]
     pub fn enemy_count(&self) -> usize {
-        self.world.enemy_count()
-    }
-
-    /// Number of bodies with seeking membership.
-    #[must_use]
-    pub fn seeker_count(&self) -> usize {
-        self.world.seeker_count()
+        self.actors.population()
     }
 
     /// Number of live sources.
@@ -476,11 +521,11 @@ impl Game {
     }
 
     /// Immutable, allocation-free presentation facts for live enemies.
-    pub fn enemy_presentations(
+    pub fn character_presentations(
         &self,
         alpha: Alpha,
-    ) -> impl Iterator<Item = arpg_sim::EnemyPresentation> + '_ {
-        self.world.enemy_presentations(alpha)
+    ) -> impl Iterator<Item = arpg_sim::CharacterPresentation> + '_ {
+        self.world.character_presentations(alpha)
     }
 
     /// Authored ground-plane wall geometry and scene-local identities.
@@ -558,28 +603,32 @@ impl Game {
         self.world.health(id)
     }
 
-    /// Player health remaining. Reaching zero does not yet end or interrupt play.
-    #[must_use]
-    pub fn player_health(&self) -> u8 {
-        self.attacks.player_health()
+    /// Read-only action execution facts in actor admission order.
+    pub fn action_statuses(&self) -> impl Iterator<Item = crate::ActionStatus> + '_ {
+        self.actors.statuses(self.world.actor_view())
     }
+
+    /// Current action for one live actor.
+    pub fn action_status(&self, id: EntityId) -> Option<crate::ActionStatus> {
+        self.actors.status(id, self.world.actor_view())
+    }
+
+    /// Explicit gameplay role, independent of mobility and health.
+    pub fn actor_role(&self, id: EntityId) -> Option<crate::ActorRole> {
+        self.actors.definition(id).map(|definition| definition.role)
+    }
+
+    /// Health capacity admitted with the physical actor.
+    pub fn max_health(&self, id: EntityId) -> Option<u8> { self.world.max_health(id) }
+
+    /// Player health from the shared damage authority. Zero does not end play.
+    #[must_use]
+    pub fn player_health(&self) -> u8 { self.world.health(self.world.player_id()).expect("player health") }
 
     /// Read-only physical payload for a body with motion membership.
     #[must_use]
     pub fn motion(&self, id: EntityId) -> Option<Motion> {
         self.world.motion(id)
-    }
-
-    /// Ground gait currently selected by a live chaser.
-    #[must_use]
-    pub fn gait(&self, id: EntityId) -> Option<arpg_sim::Gait> {
-        self.world.gait(id)
-    }
-
-    /// Whether a live identity has seeking membership.
-    #[must_use]
-    pub fn is_seeker(&self, id: EntityId) -> bool {
-        self.world.is_seeker(id)
     }
 
     /// Interaction state for a body with that capability.

@@ -27,15 +27,14 @@ pub enum Event {
         /// Accepted value.
         value: f32,
     },
-    /// Gait transitions aggregated per tick to keep dense crowds from flooding
-    /// the trace. Individual current choices remain available through World::gait.
-    GaitsChanged {
-        /// Chasers switching to walking.
-        walking: usize,
-        /// Chasers switching to running.
-        running: usize,
-        /// Chasers switching to sprinting.
-        sprinting: usize,
+    /// An explicit action applied damage to a live target.
+    Damaged {
+        /// Actor responsible for the effect.
+        actor: EntityId,
+        /// Identity receiving damage.
+        target: EntityId,
+        /// Health after this effect.
+        remaining: u8,
     },
     /// A nearby object changed from Ready to Activated.
     Activated {
@@ -188,10 +187,10 @@ pub enum Event {
 /// Event categories for diagnostic selection; payloads remain in [`Event`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 pub enum EventKind {
+    /// Explicit action damage.
+    Damaged,
     /// A runtime tuning edit.
     TuningChanged,
-    /// The `GaitsChanged` transition.
-    GaitsChanged,
     /// The `Activated` transition.
     Activated,
     /// The `SceneLoaded` transition.
@@ -249,8 +248,8 @@ impl Event {
     #[must_use]
     pub fn kind(self) -> EventKind {
         match self {
+            Self::Damaged { .. } => EventKind::Damaged,
             Self::TuningChanged { .. } => EventKind::TuningChanged,
-            Self::GaitsChanged { .. } => EventKind::GaitsChanged,
             Self::Activated { .. } => EventKind::Activated,
             Self::SceneLoaded { .. } => EventKind::SceneLoaded,
             Self::SceneEvicted { .. } => EventKind::SceneEvicted,
@@ -286,9 +285,8 @@ impl fmt::Display for Event {
     /// noise that hides the one line that mattered.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Damaged { actor, target, remaining } => write!(f, "damaged actor={actor} target={target} remaining={remaining}"),
             Self::TuningChanged { field, value } => write!(f, "tuning {}={value}", field.attribute().key),
-            Self::GaitsChanged { walking, running, sprinting } =>
-                write!(f, "gaits walk={walking} run={running} sprint={sprinting}"),
             Self::Activated { id } => write!(f, "activated id={id}"),
             Self::SceneLoaded { id } => write!(f, "scene loaded id={id}"),
             Self::SceneEvicted { id } => write!(f, "scene evicted id={id}"),

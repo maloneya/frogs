@@ -1,6 +1,6 @@
 //! Physical velocity: motors and impulses share motion and contact response.
 //!
-//! Chasers use a bounded motor, so collisions can slow them and transmit their
+//! Autonomous actors use a bounded motor, so collisions can slow them and transmit their
 //! running momentum. Player controls remain instantaneous position movement;
 //! the player's physical velocity is additional knockback. Overlap correction
 //! never manufactures velocity. Passive bodies damp after contacts; motors apply the same drag before
@@ -26,6 +26,39 @@ const RETAIN: f32 = 0.9;
 /// Snap the invisible tail to rest, so a settled body really has zero velocity.
 const REST_SPEED: f32 = 0.001;
 const _: () = assert!(RETAIN > 0.0 && RETAIN < 1.0 && REST_SPEED > 0.0);
+
+const MAX_MOTOR_SPEED: f32 = 30.0;
+const MAX_MOTOR_ACCELERATION: f32 = 300.0;
+
+/// Validated tick-local request from the single action controlling a body.
+#[derive(Clone, Copy, Debug)]
+pub struct MotorCommand {
+    pub(crate) actor: EntityId,
+    pub(crate) velocity: Vec2,
+    pub(crate) acceleration: f32,
+}
+impl MotorCommand {
+    /// Shared admission for action definitions and emitted commands.
+    pub fn validate(velocity: Vec2, acceleration: f32) -> Result<(), &'static str> {
+        if !velocity.is_finite() || velocity.length_squared() > MAX_MOTOR_SPEED * MAX_MOTOR_SPEED * (1.0 + 4.0 * f32::EPSILON)
+            || !acceleration.is_finite() || !(0.0..=MAX_MOTOR_ACCELERATION).contains(&acceleration) {
+            return Err("motor needs finite speed <= 30m/s and acceleration in 0..=300m/s²");
+        }
+        Ok(())
+    }
+    /// A bounded finite target velocity and acceleration in world units.
+    pub fn new(actor: EntityId, velocity: Vec2, acceleration: f32) -> Result<Self, &'static str> {
+        Self::validate(velocity, acceleration)?;
+        // A validated scalar speed multiplied by a normalized direction can
+        // round just above the cap. Admit only that numerical fringe, then
+        // keep the actual request strictly inside the physical speed bound.
+        let velocity = if velocity.length_squared() > MAX_MOTOR_SPEED * MAX_MOTOR_SPEED {
+            velocity * ((MAX_MOTOR_SPEED * (1.0 - 2.0 * f32::EPSILON)) / velocity.length())
+        } else { velocity };
+        Ok(Self { actor, velocity, acceleration })
+    }
+
+}
 
 /// A finite world-ground-plane momentum change, shared by gameplay and readers.
 /// Deserializing uses the same validation as an engine caller.
@@ -68,7 +101,7 @@ pub struct Motion {
 }
 
 impl Motion {
-    /// Physical velocity in world X/Z, including enemy locomotion.
+    /// Physical velocity in world X/Z, including actor locomotion.
     /// Player control displacement is separate from this velocity.
     #[must_use]
     pub fn velocity(self) -> Vec2 {
@@ -116,14 +149,16 @@ impl DriveSink<'_> {
 
 /// Conservative discrete braking speed: leave enough distance to stop after
 /// this tick's movement. Rationalized form avoids cancellation near arrival.
-pub(crate) fn stopping_speed(distance: f32, dt: Dt, acceleration: f32) -> f32 {
+pub fn stopping_speed(distance: f32, dt: Dt, acceleration: f32) -> f32 {
+    assert!(distance.is_finite() && distance >= 0.0 && acceleration.is_finite() && acceleration >= 0.0);
+    if distance == 0.0 || acceleration == 0.0 { return 0.0; }
     let step = acceleration * dt.secs();
     let twice_work = 2.0 * acceleration * distance;
     twice_work / ((step * step + twice_work).sqrt() + step)
 }
 
 /// Solves v = RETAIN*v + acceleration*dt for the motor's steady speed.
-pub(crate) fn motor_speed_limit(acceleration: f32) -> f32 {
+pub fn motor_speed_limit(acceleration: f32) -> f32 {
     acceleration * Dt::SECS / (1.0 - RETAIN)
 }
 
@@ -284,6 +319,19 @@ mod tests {
 
     fn contact(normal: Vec2) -> crate::contact::Contact {
         crate::contact::between(Vec2::ZERO, normal * 0.5, 1.0, 0).unwrap()
+    }
+
+    #[test]
+    fn motor_boundary_canonicalizes_only_normalization_roundoff() {
+        let actor = crate::World::empty().player_id();
+        for direction in [Vec2::ONE, Vec2::new(0.1, 0.7), Vec2::new(3.0, 5.0), Vec2::X] {
+            let velocity = direction.normalize() * MAX_MOTOR_SPEED;
+            let command = MotorCommand::new(actor, velocity, MAX_MOTOR_ACCELERATION).unwrap();
+            assert!(command.velocity.length_squared() <= MAX_MOTOR_SPEED * MAX_MOTOR_SPEED);
+            assert!((command.velocity.length() - MAX_MOTOR_SPEED).abs() < 0.00002);
+        }
+        assert!(MotorCommand::new(actor, Vec2::X * 30.001, 30.0).is_err());
+        assert!(MotorCommand::new(actor, Vec2::X, 300.001).is_err());
     }
 
     #[test]

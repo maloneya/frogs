@@ -1,14 +1,18 @@
 //! Stateless authoring operations. The companion retains drafts/undo; each
 //! request carries a complete authoring document, never a live-world snapshot.
 use arpg_core::{EnvironmentLight, LinearRgb, PointLight};
-use arpg_game::{EnvironmentSpec, TorchSpec, TreeKind, TreeSpec, EnemyAttackSpec};
+use arpg_game::{EnvironmentSpec, TorchSpec, TreeKind, TreeSpec, ActorDefinition};
 use arpg_content::{SceneObjectKind as Kind, SceneObjectRef as Target};
 use arpg_content::SceneDocument;
 mod encounters;
+mod behaviors;
 #[cfg(test)]
 mod authoring_tests;
 pub use encounters::{EncounterDraft, PropKind};
-use arpg_sim::{BodyGrid, Condition, Placed, SourceSpec, Template, Wall};
+use arpg_sim::{Condition, Wall};
+use arpg_game::BodyGrid;
+use arpg_game::SourceSpec;
+use arpg_game::Placed;
 use glam::{Vec2, Vec3};
 use serde::Deserialize;
 use serde_json::{Number, Value, json};
@@ -52,6 +56,8 @@ pub enum Edit {
     DrawWall { #[doc = "First world-space corner."] start: (f32, f32), #[doc = "Opposite world-space corner."] end: (f32, f32) },
     /// Move an authored object.
     Move { #[doc = "Scene-local authored object."] target: Target, #[doc = "World X/Z position in metres."] pos: (f32, f32) },
+    /// Replace a complete actor definition atomically.
+    Actor { #[doc = "Body, source or formation."] target: Target, #[doc = "Complete validated actor definition."] value: ActorDefinition },
     /// Set a scalar inspector field.
     Set { #[doc = "Scene-local authored object."] target: Target, #[doc = "Key from the derived inspector fields."] field: String, #[doc = "Numeric value, preserving integer precision."] value: Number },
     /// Set a campfire light colour.
@@ -113,23 +119,6 @@ fn integer<T: TryFrom<u64>>(value: &Number) -> Result<T, String> {
     T::try_from(whole).map_err(|_| "Whole number exceeds this field's range.".into())
 }
 
-fn template_field(template: &mut Template, field: &str, value: f64) -> Result<(), String> {
-    if value != 0.0 && value != 1.0 { return Err("Setting must be on or off.".into()); }
-    let enabled = value == 1.0;
-    let (mut fixed, mut seeks, mut interactive) = (template.fixed(), template.seeks(), template.interactable());
-    match field {
-        "fixed" => { fixed = enabled; if fixed { seeks = false; } }
-        "seeks" => seeks = enabled,
-        "interactable" => interactive = enabled,
-        _ => return Err("Unknown body template field.".into()),
-    }
-    if fixed && seeks { return Err("Static props cannot seek.".into()); }
-    let mut next = if fixed { Template::BLOCK } else { Template::BODY };
-    if seeks { next = next.seeking(); }
-    if interactive { next = next.interactive(); }
-    *template = next;
-    Ok(())
-}
 
 fn set(scene: &mut SceneDocument, target: Target, field: &str, raw: Number) -> Result<(), String> {
     let scalar = raw.as_f64().ok_or("Value must be numeric.")?;
@@ -142,15 +131,7 @@ fn set(scene: &mut SceneDocument, target: Target, field: &str, raw: Number) -> R
     match target.kind {
         Kind::Body => {
             if field == "component" { encounters::component(scene, target.index, integer::<u32>(&raw)?)?; }
-            else if field == "attacker" {
-                let body = scene.scene.engine.bodies.get_mut(target.index).ok_or_else(missing)?;
-                if scalar == 1.0 {
-                    template_field(&mut body.what, "seeks", 1.0)?;
-                    scene.scene.enemy_attack = Some(EnemyAttackSpec { body: target.index });
-                } else if scalar == 0.0 {
-                    if scene.scene.enemy_attack.is_some_and(|a| a.body == target.index) { scene.scene.enemy_attack = None; }
-                } else { return Err("Contact attack must be on or off.".into()); }
-            } else { template_field(&mut scene.scene.engine.bodies.get_mut(target.index).ok_or_else(missing)?.what, field, scalar)?; }
+            else { behaviors::set(&mut scene.scene.engine.bodies.get_mut(target.index).ok_or_else(missing)?.what, field, &raw)?; }
         }
         Kind::Wall => {
             let wall = scene.scene.engine.walls.get_mut(target.index).ok_or_else(missing)?;
@@ -166,7 +147,7 @@ fn set(scene: &mut SceneDocument, target: Target, field: &str, raw: Number) -> R
                 "radius" => source.radius = value,
                 "every" => source.every = integer(&raw)?,
                 "enabled" if scalar == 0.0 || scalar == 1.0 => source.enabled = scalar == 1.0,
-                "seeks" | "fixed" | "interactable" => template_field(&mut source.what, field, scalar)?,
+
                 "condition" => source.when = match integer::<u32>(&raw)? {
                     0 => Condition::Always, 1 => Condition::FewerThan(12), 2 => Condition::PlayerWithin(10.0),
                     _ => return Err("Unknown source condition.".into()),
@@ -176,7 +157,7 @@ fn set(scene: &mut SceneDocument, target: Target, field: &str, raw: Number) -> R
                     Condition::PlayerWithin(r) => *r = value,
                     Condition::Always => return Err("Always has no threshold.".into()),
                 },
-                _ => return Err("Unknown source field.".into()),
+                _ => behaviors::set(&mut source.what, field, &raw)?,
             }
         }
         Kind::Grid => {
@@ -185,8 +166,8 @@ fn set(scene: &mut SceneDocument, target: Target, field: &str, raw: Number) -> R
                 "columns" => grid.columns = integer(&raw)?,
                 "rows" => grid.rows = integer(&raw)?,
                 "spacing" => grid.spacing = value,
-                "seeks" | "fixed" | "interactable" => template_field(&mut grid.what, field, scalar)?,
-                _ => return Err("Unknown formation field.".into()),
+
+                _ => behaviors::set(&mut grid.what, field, &raw)?,
             }
         }
         Kind::Tree => {
@@ -270,10 +251,10 @@ pub fn edit(mut scene: SceneDocument, edit: Edit) -> Result<(SceneDocument, Opti
         }
         Edit::Add { kind, pos } => {
             let index = match kind {
-                Kind::Body => { scene.scene.engine.bodies.push(Placed { pos, what: Template::BODY.seeking() }); scene.scene.engine.bodies.len() - 1 }
+                Kind::Body => { scene.scene.engine.bodies.push(Placed { pos, what: ActorDefinition::attacker() }); scene.scene.engine.bodies.len() - 1 }
                 Kind::Wall => { scene.scene.engine.walls.push(Wall::new(pos.into(), Vec2::new(4.0, 0.4), 0.0)?); scene.scene.engine.walls.len() - 1 }
-                Kind::Source => { scene.scene.engine.sources.push(SourceSpec { pos, radius: 2.0, every: 60, enabled: true, when: Condition::FewerThan(12), what: Template::BODY.seeking() }); scene.scene.engine.sources.len() - 1 }
-                Kind::Grid => { scene.scene.engine.grids.push(BodyGrid { origin: pos, columns: 3, rows: 3, spacing: 1.5, what: Template::BODY.seeking() }); scene.scene.engine.grids.len() - 1 }
+                Kind::Source => { scene.scene.engine.sources.push(SourceSpec { pos, radius: 2.0, every: 60, enabled: true, when: Condition::FewerThan(12), what: ActorDefinition::attacker() }); scene.scene.engine.sources.len() - 1 }
+                Kind::Grid => { scene.scene.engine.grids.push(BodyGrid { origin: pos, columns: 3, rows: 3, spacing: 1.5, what: ActorDefinition::attacker() }); scene.scene.engine.grids.len() - 1 }
                 Kind::Tree => { scene.scene.trees.push(TreeSpec::new(TreeKind::Pine, pos.into(), 0.0, 1.0)?); scene.scene.trees.len() - 1 }
                 Kind::Campfire => { scene.scene.torches.push(TorchSpec::new(PointLight::try_new(Vec3::new(pos.0, 1.5, pos.1), LinearRgb::new(1.0, 0.45, 0.12), 24.0, 14.0)?)?); scene.scene.torches.len() - 1 }
             };
@@ -287,6 +268,15 @@ pub fn edit(mut scene: SceneDocument, edit: Edit) -> Result<(SceneDocument, Opti
             selected = Some(Target { kind: Kind::Wall, index: scene.scene.engine.walls.len() - 1 });
         }
         Edit::Move { target, pos } => { move_to(&mut scene, target, pos)?; selected = Some(target); }
+        Edit::Actor { target, value } => {
+            match target.kind {
+                Kind::Body => scene.scene.engine.bodies.get_mut(target.index).ok_or_else(missing)?.what = value,
+                Kind::Source => scene.scene.engine.sources.get_mut(target.index).ok_or_else(missing)?.what = value,
+                Kind::Grid => scene.scene.engine.grids.get_mut(target.index).ok_or_else(missing)?.what = value,
+                _ => return Err("This object cannot have actor behavior.".into()),
+            }
+            selected = Some(target);
+        }
         Edit::Set { target, field, value } => { set(&mut scene, target, &field, value)?; selected = Some(target); }
         Edit::Colour { target, colour } => {
             if !matches!(target.kind, Kind::Campfire) { return Err("This object has no light colour.".into()); }
@@ -300,14 +290,14 @@ pub fn edit(mut scene: SceneDocument, edit: Edit) -> Result<(SceneDocument, Opti
             let index = match target.kind {
                 Kind::Body => {
                     let index = scene.scene.engine.bodies.len();
-                    scene.scene.engine.bodies.push(scene.scene.engine.bodies[target.index]);
+                    scene.scene.engine.bodies.push(scene.scene.engine.bodies[target.index].clone());
                     if scene.scene.doors.iter().any(|d| d.body == target.index) { scene.scene.doors.push(arpg_game::DoorSpec { body: index }); }
                     if scene.scene.chests.iter().any(|c| c.body == target.index) { scene.scene.chests.push(arpg_game::ChestSpec { body: index }); }
                     index
                 }
                 Kind::Wall => { scene.scene.engine.walls.push(scene.scene.engine.walls[target.index]); scene.scene.engine.walls.len() - 1 }
-                Kind::Source => { scene.scene.engine.sources.push(scene.scene.engine.sources[target.index]); scene.scene.engine.sources.len() - 1 }
-                Kind::Grid => { scene.scene.engine.grids.push(scene.scene.engine.grids[target.index]); scene.scene.engine.grids.len() - 1 }
+                Kind::Source => { scene.scene.engine.sources.push(scene.scene.engine.sources[target.index].clone()); scene.scene.engine.sources.len() - 1 }
+                Kind::Grid => { scene.scene.engine.grids.push(scene.scene.engine.grids[target.index].clone()); scene.scene.engine.grids.len() - 1 }
                 Kind::Tree => { scene.scene.trees.push(scene.scene.trees[target.index]); scene.scene.trees.len() - 1 }
                 Kind::Campfire => { scene.scene.torches.push(scene.scene.torches[target.index]); scene.scene.torches.len() - 1 }
             };
@@ -321,7 +311,6 @@ pub fn edit(mut scene: SceneDocument, edit: Edit) -> Result<(SceneDocument, Opti
                 Kind::Body => {
                     if let Some(index) = scene.scene.doors.iter().position(|d| d.body == target.index) { scene.scene.remove_door(index)?; }
                     if let Some(index) = scene.scene.chests.iter().position(|c| c.body == target.index) { scene.scene.remove_chest(index)?; }
-                    if scene.scene.enemy_attack.is_some_and(|a| a.body == target.index) { scene.scene.enemy_attack = None; }
                     scene.remove_body(target.index)?;
                 }
                 Kind::Source => scene.remove_source(target.index)?,
@@ -345,11 +334,6 @@ fn integer_field(key: &str, label: &str, unit: &str, value: impl Into<Value>) ->
     json!({"key":key,"label":label,"unit":unit,"value":value.into(),"step":1,"integer":true})
 }
 
-fn template_fields(template: Template) -> Vec<Value> {
-    vec![field("fixed", "Fixed prop", "bool", f32::from(template.fixed()), 1.0),
-        field("seeks", "Seeks player", "bool", f32::from(template.seeks()), 1.0),
-        field("interactable", "Can interact", "bool", f32::from(template.interactable()), 1.0)]
-}
 
 fn colour_field(key: &str, label: &str, colour: LinearRgb) -> Value {
     json!({"key":key,"label":label,"unit":"colour","value":0.0,"step":0.0,"colour":colour.to_array()})
@@ -378,13 +362,12 @@ pub(crate) fn document(scene: &SceneDocument, selected: Option<Target>, path: Op
     for (i, body) in scene.scene.engine.bodies.iter().enumerate() {
         let component = if scene.scene.doors.iter().any(|d| d.body == i) { 1.0 } else if scene.scene.chests.iter().any(|c| c.body == i) { 2.0 } else { 0.0 };
         let role = if component == 1.0 { "Door" } else if component == 2.0 { "Chest" }
-            else if body.what.fixed() && body.what.interactable() { "Switch" }
-            else if body.what.fixed() { "Prop" } else { "Enemy" };
-        let mut fields = template_fields(body.what);
+            else if body.what.physical.fixed() && body.what.physical.interactable() { "Switch" }
+            else if body.what.physical.fixed() { "Prop" } else if body.what.role == arpg_game::ActorRole::Hostile { "Hostile" } else { "Civilian" };
+        let mut fields = behaviors::fields(&body.what);
         let mut choice = field("component", "Role", "choice", component, 1.0);
         choice["options"] = json!(["Body", "Door", "Chest"]);
         fields.push(choice);
-        fields.push(field("attacker", "Contact attacker (one per scene)", "bool", f32::from(scene.scene.enemy_attack.is_some_and(|a| a.body == i)), 1.0));
         push(Kind::Body, i, role, body.pos, 0.0, 0.0, 0.0, arpg_sim::ENEMY_RADIUS, fields);
     }
     for (i, wall) in scene.scene.engine.walls.iter().enumerate() {
@@ -393,7 +376,7 @@ pub(crate) fn document(scene: &SceneDocument, selected: Option<Target>, path: Op
     }
     for (i, source) in scene.scene.engine.sources.iter().enumerate() {
         let mut fields = vec![field("radius", "Spawn radius", "m", source.radius, 0.5), integer_field("every", "Interval", "ticks", source.every), field("enabled", "Enabled", "bool", f32::from(source.enabled), 1.0)];
-        fields.extend(template_fields(source.what));
+        fields.extend(behaviors::fields(&source.what));
         let condition = match source.when { Condition::Always => 0.0, Condition::FewerThan(_) => 1.0, Condition::PlayerWithin(_) => 2.0 };
         let mut choice = field("condition", "Condition", "choice", condition, 1.0);
         choice["options"] = json!(["Always", "World enemies below", "Player within"]);
@@ -409,7 +392,7 @@ pub(crate) fn document(scene: &SceneDocument, selected: Option<Target>, path: Op
         let columns = grid.columns.checked_sub(1).ok_or("Formation columns must be positive.")?;
         let rows = grid.rows.checked_sub(1).ok_or("Formation rows must be positive.")?;
         let mut fields = vec![integer_field("columns", "Columns", "", grid.columns), integer_field("rows", "Rows", "", grid.rows), field("spacing", "Spacing", "m", grid.spacing, 0.25)];
-        fields.extend(template_fields(grid.what));
+        fields.extend(behaviors::fields(&grid.what));
         push(Kind::Grid, i, "Formation", grid.origin, columns as f32 * grid.spacing, rows as f32 * grid.spacing, 0.0, arpg_sim::ENEMY_RADIUS, fields);
     }
     for (i, tree) in scene.scene.trees.iter().enumerate() {
@@ -454,12 +437,11 @@ mod tests {
         // Insert an unrelated body/source before every referenced object, then
         // remove them. Every original relationship and state hash must return.
         let original = Game::from_scene(&scene.scene).unwrap().hash();
-        scene.scene.engine.bodies.insert(0, Placed { pos: (70.0, 70.0), what: Template::BODY });
+        scene.scene.engine.bodies.insert(0, Placed { pos: (70.0, 70.0), what: ActorDefinition::passive_hostile() });
         for d in &mut scene.scene.doors { d.body += 1; }
         for c in &mut scene.scene.chests { c.body += 1; }
-        if let Some(a) = &mut scene.scene.enemy_attack { a.body += 1; }
         for e in &mut scene.scene.encounters { let arpg_game::EncounterStart::Activated(i) = &mut e.start; *i += 1; }
-        scene.scene.engine.sources.insert(0, scene.scene.engine.sources[0]);
+        scene.scene.engine.sources.insert(0, scene.scene.engine.sources[0].clone());
         for e in &mut scene.scene.encounters { let arpg_game::EncounterObjective::Defeat(goal) = &mut e.objective; for i in &mut goal.sources { *i += 1; } }
         let (scene, _) = edit(scene, Edit::Delete { target: Target { kind: Kind::Body, index: 0 } }).unwrap();
         let (scene, _) = edit(scene, Edit::Delete { target: Target { kind: Kind::Source, index: 0 } }).unwrap();

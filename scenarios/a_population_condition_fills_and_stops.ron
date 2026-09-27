@@ -13,7 +13,7 @@
     description: "A FewerThan source fills the arena to its number and then stops, staying live.",
     setup: (
         sources: [
-            (pos: (30.0, 0.0), radius: 3.0, when: FewerThan(3)),
+            (pos: (30.0, 0.0), radius: 3.0, when: FewerThan(3), what: (physical: (health: Some(3), character: true), role: Hostile)),
         ],
     ),
     inputs: [],

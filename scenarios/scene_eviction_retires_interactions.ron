@@ -1,13 +1,13 @@
 (
     description: "A source grants interaction through the spawn queue; eviction removes it, and a new occupant starts Ready.",
     setup: (scenes: [(engine: (name: "Source block", sources: [
-        (pos: (0.0, 1.0), every: 60, what: (fixed: true, interactable: true)),
+        (pos: (0.0, 1.0), every: 60, what: (physical: (fixed: true, interactable: true), role: Prop)),
     ]))]),
     interactions: [0, 3],
     scenes: [
         (at: 1, action: Evict(0)),
         (at: 2, action: Load((engine: (name: "Replacement", bodies: [
-            (pos: (0.0, 1.0), what: (fixed: true, interactable: true)),
+            (pos: (0.0, 1.0), what: (physical: (fixed: true, interactable: true), role: Prop)),
         ])))),
     ],
     checkpoints: [

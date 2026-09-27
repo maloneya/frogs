@@ -8,7 +8,7 @@
     description: "A source written with a cadence of zero fires on every tick, rather than underflowing.",
     setup: (
         sources: [
-            (pos: (30.0, 0.0), radius: 3.0, every: 0),
+            (pos: (30.0, 0.0), radius: 3.0, every: 0, what: (physical: (health: Some(3), character: true), role: Hostile)),
         ],
     ),
     inputs: [],
@@ -16,7 +16,6 @@
     expect: (
         player_pos: (x: 0.0, z: 0.0, tol: 0.0001),
         enemy_count: 3,
-        seekers: 0,
         sources: 1,
         contacts: 0,
         crowd_contacts: 0,

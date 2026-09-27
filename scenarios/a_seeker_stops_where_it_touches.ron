@@ -1,16 +1,16 @@
 // A chaser arrives and stops, rather than grinding into the player forever.
-// Without the arrival clamp, seek walks the body in and separation pushes it
+// Without the arrival clamp, pursuit walks the body in and separation pushes it
 // back out every tick, for as long as the chase lasts.
 //
-// The motor brakes using remaining distance before contact. Gait changes
-// remain visible in the trace, but no collision or momentum event is expected.
+// The motor brakes before contact and completes its movement action.
+// No collision or momentum event is expected.
 
 (
     description: "A chaser arrives at exactly touching distance and stops, without ever registering a contact.",
     setup: (
         actions: [
             Place((10.11, 0.0)),
-            Seek(0),
+            Assign(body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
         ],
     ),
     inputs: [],
@@ -20,7 +20,7 @@
         contacts: 0,
         crowd_contacts: 0,
         bodies: [
-            (nth: 0, seeking: true, pos: (x: 0.55, z: 0.0, tol: 0.001)),
+            (nth: 0, action: Idle, pos: (x: 0.55, z: 0.0, tol: 0.001)),
         ],
         events: (kinds: [Contacts, Crowded, Momentum, Clamped, WallContacts], sequence: []),
     ),

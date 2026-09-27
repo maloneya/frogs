@@ -1,13 +1,29 @@
-// Can one enemy create basic contact pressure without interrupting movement?
-// Let it reach the player to watch health fall, then walk away at full speed.
+// Dodge the purple leap target, then bait the amber swipe up close.
 (
     scene: (
+        environment: (
+            ambient_colour: (1.0, 1.0, 1.0),
+            ambient_intensity: 0.22,
+            directional_colour: (1.0, 1.0, 1.0),
+            directional_intensity: 0.35,
+            direction: (0.4, 1.0, 0.3),
+        ),
         engine: (
+            walls: [],
             name: "Single attacking enemy",
             bodies: [
-                (pos: (0.0, 4.0), what: (seeks: true)),
+                (
+                    pos: (0.0, 4.0),
+                    what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)])),
+                ),
             ],
+            grids: [],
+            sources: [],
         ),
-        enemy_attack: (body: 0),
+        torches: [],
+        trees: [],
+        doors: [],
+        chests: [],
+        encounters: [],
     ),
 )

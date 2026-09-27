@@ -21,7 +21,7 @@ use crate::Condition;
 pub struct Placed {
     /// World-space ground position `(x, z)`.
     pub pos: (f32, f32),
-    /// Behaviours granted through the ordinary spawn implementation.
+    /// Physical capabilities granted through ordinary body admission.
     #[serde(default)]
     pub what: Template,
 }
@@ -40,7 +40,7 @@ pub struct BodyGrid {
     /// Positive, finite distance in metres between adjacent centres on both axes.
     /// May be smaller than a body diameter to deliberately author overlaps.
     pub spacing: f32,
-    /// Shared behaviours, using the same template as individual placements.
+    /// Shared physical capabilities, using the same template as individual placements.
     #[serde(default)]
     pub what: Template,
 }
@@ -415,7 +415,7 @@ mod tests {
         Scene {
             walls: Vec::new(),
             name: "pair".into(),
-            bodies: vec![Placed { pos: (20.0, 0.0), what: Template::BODY }],
+            bodies: vec![Placed { pos: (20.0, 0.0), what: crate::TEST_CHARACTER }],
             grids: Vec::new(),
             sources: vec![SourceSpec {
                 enabled: true,
@@ -423,7 +423,7 @@ mod tests {
                 radius: 4.0,
                 every: 2,
                 when: Condition::Always,
-                what: Template::BODY,
+                what: crate::TEST_CHARACTER,
             }],
         }
     }
@@ -443,8 +443,8 @@ mod tests {
         let old = world.scene_bodies(a).unwrap().to_vec();
         let survivors = world.scene_bodies(b).unwrap().to_vec();
         assert_eq!(old.len(), 2, "the source descendant must inherit ownership");
-        let cancelled = world.queue.push_owned(Vec2::new(50.0, 0.0), Template::BODY, Some(a)).unwrap();
-        assert!(world.request_spawn(Vec2::new(-50.0, 0.0), Template::BODY).is_some());
+        let cancelled = world.queue.push_owned(Vec2::new(50.0, 0.0), crate::TEST_CHARACTER, Some(a)).unwrap();
+        assert!(world.request_spawn(Vec2::new(-50.0, 0.0), crate::TEST_CHARACTER).is_some());
         assert!(world.evict_scene(a));
         assert!(!world.evict_scene(a));
         assert_eq!(world.queue.len(), 1, "unowned queued work must survive");
@@ -456,7 +456,7 @@ mod tests {
         assert!(old.iter().all(|id| !world.is_alive(*id)));
         assert!(survivors.iter().all(|id| world.is_alive(*id)));
         assert_eq!(world.source_count(), 1);
-        assert_eq!(world.enemy_count(), 5, "B's four bodies plus one unowned body");
+        assert_eq!(world.damageable_count(), 5, "B's four bodies plus one unowned body");
         let again = world.load_scene(&scene()).unwrap();
         assert_ne!(a, again);
     }
@@ -466,9 +466,9 @@ mod tests {
         let mut world = World::empty();
         let a = world.load_scene(&Scene::default()).unwrap();
         world.evict_scene(a);
-        assert!(world.queue.push_owned(Vec2::ZERO, Template::BODY, Some(a)).is_some());
+        assert!(world.queue.push_owned(Vec2::ZERO, crate::TEST_CHARACTER, Some(a)).is_some());
         step(&mut world);
-        assert_eq!(world.enemy_count(), 0);
+        assert_eq!(world.damageable_count(), 0);
         assert!(world.trace().iter().any(|(_, e)| e == crate::Event::Refused { count: 1 }));
     }
 
@@ -478,7 +478,7 @@ mod tests {
         let a = world.load_scene(&scene()).unwrap();
         let old = world.scene_bodies(a).unwrap()[0];
         world.despawn_body(old);
-        let survivor = world.place(Vec2::new(60.0, 0.0), Template::BODY).unwrap();
+        let survivor = world.place(Vec2::new(60.0, 0.0), crate::TEST_CHARACTER).unwrap();
         assert_eq!(world.scene_bodies(a).unwrap().len(), 0);
         world.evict_scene(a);
         assert!(world.is_alive(survivor));
@@ -489,7 +489,7 @@ mod tests {
     fn invalid_and_over_capacity_scenes_leave_everything_untouched() {
         let mut world = World::empty();
         let mut invalid = scene();
-        invalid.bodies.push(Placed { pos: (f32::NAN, 0.0), what: Template::BODY });
+        invalid.bodies.push(Placed { pos: (f32::NAN, 0.0), what: crate::TEST_CHARACTER });
         let before = world.hash();
         let trace = world.trace().render();
         assert!(matches!(world.load_scene(&invalid), Err(SceneError::Invalid(_))));
@@ -498,11 +498,11 @@ mod tests {
         let full = Scene {
             walls: Vec::new(),
             name: "full".into(),
-            bodies: vec![Placed { pos: (1.0, 0.0), what: Template::BODY }; crate::MAX_BODIES],
+            bodies: vec![Placed { pos: (1.0, 0.0), what: crate::TEST_CHARACTER }; crate::MAX_BODIES],
             sources: vec![],
             grids: Vec::new(),
         };
-        assert!(world.request_spawn(Vec2::ZERO, Template::BODY).is_some());
+        assert!(world.request_spawn(Vec2::ZERO, crate::TEST_CHARACTER).is_some());
         let before = world.hash();
         assert_eq!(world.load_scene(&full), Err(SceneError::Capacity));
         assert_eq!(world.hash(), before, "accepted queue capacity is reserved too");
@@ -522,7 +522,7 @@ mod tests {
             let before = world.hash();
             let trace = world.trace().render();
             let mut invalid = scene();
-            invalid.sources.push(SourceSpec { pos, radius, every: 1, when, what: Template::BODY, enabled: true });
+            invalid.sources.push(SourceSpec { pos, radius, every: 1, when, what: crate::TEST_CHARACTER, enabled: true });
             assert!(matches!(world.load_scene(&invalid), Err(SceneError::Invalid(_))));
             assert_eq!(
                 world.hash(),
@@ -545,7 +545,7 @@ mod tests {
         played = World::from_scene(&content).unwrap();
         assert_eq!(played.hash(), fresh.hash());
         assert_eq!(played.tick(), 0);
-        assert_eq!(played.enemy_count(), 1);
+        assert_eq!(played.damageable_count(), 1);
         assert_eq!(played.motion(played.player_id()).unwrap().velocity(), Vec2::ZERO);
     }
 
@@ -567,8 +567,8 @@ mod tests {
         let mut a = World::from_scene(&scene()).unwrap();
         let mut b = World::from_scene(&scene()).unwrap();
         let owner = a.scene_instances().next().unwrap().0;
-        assert!(a.queue.push_owned(Vec2::ZERO, Template::BODY, Some(owner)).is_some());
-        assert!(b.queue.push_owned(Vec2::ZERO, Template::BODY, None).is_some());
+        assert!(a.queue.push_owned(Vec2::ZERO, crate::TEST_CHARACTER, Some(owner)).is_some());
+        assert!(b.queue.push_owned(Vec2::ZERO, crate::TEST_CHARACTER, None).is_some());
         assert_ne!(a.hash(), b.hash(), "queued ownership changes future eviction");
     }
 
@@ -578,11 +578,11 @@ mod tests {
         let scene = Scene {
             name: "crowd admission".into(),
             grids: vec![BodyGrid { origin: (-10.85, -10.85), columns: 32, rows: 32,
-                spacing: 0.7, what: Template::BODY }],
+                spacing: 0.7, what: crate::TEST_CHARACTER }],
             ..Default::default()
         };
         let world = World::from_scene(&scene).unwrap();
-        assert_eq!(world.enemy_count(), 1024);
+        assert_eq!(world.damageable_count(), 1024);
         assert_eq!(world.tick(), 0);
         assert_eq!(world.queue.len(), 0);
         assert_eq!(world.bodies.pos, world.bodies.prev_pos);
@@ -596,7 +596,7 @@ mod tests {
     /// of that in one comparison, and says it through the door scenes use.
     #[test]
     fn a_grid_stands_for_exactly_the_bodies_it_replaces() {
-        let lead = Placed { pos: (-6.0, 4.0), what: Template::BODY };
+        let lead = Placed { pos: (-6.0, 4.0), what: crate::TEST_CHARACTER };
         // Origin and spacing are exact in binary, so shorthand and longhand
         // agree bit for bit rather than within a tolerance.
         let shorthand = Scene {
@@ -608,7 +608,7 @@ mod tests {
                 columns: 3,
                 rows: 2,
                 spacing: 1.5,
-                what: Template::BODY,
+                what: crate::TEST_CHARACTER,
             }],
             sources: Vec::new(),
         };
@@ -616,13 +616,13 @@ mod tests {
             walls: Vec::new(),
             name: "grid".into(),
             bodies: [lead.pos, (0.0, 4.0), (1.5, 4.0), (3.0, 4.0), (0.0, 5.5), (1.5, 5.5), (3.0, 5.5)]
-                .map(|pos| Placed { pos, what: Template::BODY })
+                .map(|pos| Placed { pos, what: crate::TEST_CHARACTER })
                 .to_vec(),
             grids: Vec::new(),
             sources: Vec::new(),
         };
         let written = World::from_scene(&longhand).unwrap();
-        assert_eq!(written.enemy_count(), 7, "comparing two empty worlds would prove nothing");
+        assert_eq!(written.damageable_count(), 7, "comparing two empty worlds would prove nothing");
         assert_eq!(World::from_scene(&shorthand).unwrap().hash(), written.hash());
     }
 
@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn invalid_and_oversized_grids_leave_everything_untouched() {
         let valid =
-            BodyGrid { origin: (0.0, 4.0), columns: 2, rows: 2, spacing: 1.5, what: Template::BODY };
+            BodyGrid { origin: (0.0, 4.0), columns: 2, rows: 2, spacing: 1.5, what: crate::TEST_CHARACTER };
         let refuse = |grid: BodyGrid, expected: fn(&SceneError) -> bool| {
             let mut world = World::from_scene(&scene()).unwrap();
             let before = world.hash();

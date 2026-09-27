@@ -4,7 +4,7 @@ use std::path::Path;
 
 use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::Game;
-use arpg_sim::{Accumulator, Dt, EntityId, SourceId, Template};
+use arpg_sim::{Accumulator, Dt, EntityId, SourceId};
 use glam::Vec3;
 
 use crate::spec::{Action, Expect, Scenario};
@@ -157,6 +157,11 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
                 format!("source {} at tick {}", command.source, command.at)));
         }
     }
+    for command in &scenario.behaviors {
+        if command.at >= scenario.budget.ticks || command.actor.validate().is_err() {
+            failures.push(Failure::new("behaviors", "a valid actor definition at a reachable tick".into(), command.at.to_string()));
+        }
+    }
     for command in &scenario.despawns {
         if command.at >= scenario.budget.ticks {
             failures.push(Failure::new("despawns", "a reachable tick".into(), command.at.to_string()));
@@ -249,7 +254,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             // renumbering would instead re-point every later assertion at a
             // different body, silently.
             Action::Place((x, z)) => {
-                placed.push(game.place(glam::Vec2::new(*x, *z), Template::BODY));
+                placed.push(game.place(glam::Vec2::new(*x, *z), arpg_game::ActorDefinition::passive_hostile()));
             }
             // `spec::Action` is designed to grow, so resolving a placement
             // number is written once rather than pasted into each new arm.
@@ -258,9 +263,9 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                     command_failures.push(Failure::new("setup Despawn", "a live removable body".into(), format!("placement {nth}")));
                 }
             }
-            Action::Seek(nth) => {
-                if !placed.get(*nth).copied().flatten().is_some_and(|id| game.add_seek(id)) {
-                    command_failures.push(Failure::new("setup Seek", "a live body accepting seek".into(), format!("placement {nth}")));
+            Action::Assign { body: nth, actor } => {
+                if !placed.get(*nth).copied().flatten().is_some_and(|id| game.assign_behavior(id, actor.clone()).is_ok()) {
+                    command_failures.push(Failure::new("setup Assign", "a live body accepting the actor definition".into(), format!("placement {nth}")));
                 }
             }
         }
@@ -273,7 +278,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     // translation from a scenario's source number, exactly as `placed` is for a
     // body's placement number.
     let sources: Vec<SourceId> =
-        scenario.setup.sources.iter().map(|source| game.add_source(*source)).collect();
+        scenario.setup.sources.iter().map(|source| game.add_source(source.clone())).collect();
 
     // Setup is not the run. Golden traces start after authored scene loading
     // and initial placements so they describe the driven tick sequence.
@@ -337,6 +342,11 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                     }
                 }
             }
+            for command in scenario.behaviors.iter().filter(|command| command.at == tick) {
+                if !placed.get(command.body).copied().flatten().is_some_and(|id| game.assign_behavior(id, command.actor.clone()).is_ok()) {
+                    command_failures.push(Failure::new("behaviors", "a live actor accepting the complete definition".into(), format!("body {} at tick {tick}", command.body)));
+                }
+            }
             for command in scenario.tuning.iter().filter(|command| command.at == tick) {
                 game.set_tuning(command.values);
             }
@@ -384,7 +394,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             // row readers, so each body exists for the whole of tick `at`.
             let mut tickets = Vec::new();
             for spawn in scenario.spawns.iter().filter(|s| s.at == tick) {
-                tickets.push(game.request_spawn(glam::Vec2::new(spawn.pos.0, spawn.pos.1), spawn.what));
+                tickets.push(game.request_spawn(glam::Vec2::new(spawn.pos.0, spawn.pos.1), spawn.what.clone()));
             }
 
             for command in scenario.impulses.iter().filter(|command| command.at == tick) {
@@ -556,7 +566,6 @@ fn check_state(
         hitbox,
         enemy_count,
         corpse_count,
-        seekers,
         sources,
         source_states,
         encounters,
@@ -631,7 +640,6 @@ fn check_state(
     check_eq("hitbox", hitbox, game.hitbox_is_live(), &mut failures);
     check_eq("corpse_count", corpse_count, game.corpses().len(), &mut failures);
     check_eq("enemy_count", enemy_count, game.enemy_count(), &mut failures);
-    check_eq("seekers", seekers, game.seeker_count(), &mut failures);
     check_eq("sources", sources, game.source_count(), &mut failures);
     for expected in source_states {
         let actual = resolve_source(source_ids, installed_sources, expected.scene, expected.source).and_then(|id| game.source_state(id));
@@ -743,23 +751,24 @@ fn check_body(
                 want.to_string(), got.map_or("no interaction".into(), |state| state.to_string())));
         }
     }
-    if let Some(want) = body.gait {
-        let got = game.gait(id);
+    if let Some(want) = body.action {
+        let got = game.action_status(id).map(|status| status.kind);
         if got != Some(want) {
-            failures.push(Failure::new(&format!("bodies[{}].gait", body.nth),
-                want.label().into(), got.map_or("no gait", arpg_sim::Gait::label).into()));
+            failures.push(Failure::new(&format!("bodies[{}].action", body.nth),
+                format!("{want:?}"), format!("{got:?}")));
+        }
+    }
+    if let Some(want) = body.role {
+        let got = game.actor_role(id);
+        if got != Some(want) {
+            failures.push(Failure::new(&format!("bodies[{}].role", body.nth),
+                format!("{want:?}"), format!("{got:?}")));
         }
     }
     let alive = game.is_alive(id);
     check_eq(&format!("bodies[{}].damageable", body.nth), &body.damageable,
         game.health(id).is_some(), failures);
 
-    check_eq(
-        &format!("bodies[{}].seeking", body.nth),
-        &body.seeking,
-        game.is_seeker(id),
-        failures,
-    );
 
     if let Some(want) = body.alive
         && alive != want
@@ -1028,11 +1037,11 @@ mod spawn_binding_tests {
             let mut game = Game::empty();
             game.set_trace_retention(retention).unwrap();
             let tickets = [
-                game.request_spawn(glam::Vec2::new(10.0, 0.0), Template::BODY),
-                game.request_spawn(glam::Vec2::splat(f32::NAN), Template::BODY),
+                game.request_spawn(glam::Vec2::new(10.0, 0.0), arpg_game::ActorDefinition::passive_hostile()),
+                game.request_spawn(glam::Vec2::splat(f32::NAN), arpg_game::ActorDefinition::passive_hostile()),
                 // An immediately refused request must also retain its number.
                 None,
-                game.request_spawn(glam::Vec2::new(20.0, 0.0), Template::BODY),
+                game.request_spawn(glam::Vec2::new(20.0, 0.0), arpg_game::ActorDefinition::passive_hostile()),
             ];
             for dt in Accumulator::default().pending(Dt::SECS) {
                 game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));

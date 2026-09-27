@@ -13,8 +13,8 @@
 // is a claim about the expansion arithmetic, not about rounding. Every gap is
 // at least 1.5m against a .5m contact distance, so nothing touches.
 //
-// The second grid carries `seeks: true`, which is how a grid's shared template
-// is checked: `seekers: 2` counts it, and those two bodies are the only ones
+// The second grid carries an authored movement action; its two actors
+// are checked through their first-tick motion. They are the only bodies
 // that move during the single tick. The motor accelerates each to .5m/s,
 // closing .5/60 metres along its unit vector toward the origin.
 
@@ -23,28 +23,27 @@
     setup: (scenes: [(engine: (
         name: "grid ordering",
         bodies: [
-            (pos: (-6.0, 4.0)),
+            (pos: (-6.0, 4.0), what: (physical: (health: Some(3), character: true), role: Hostile)),
         ],
         grids: [
-            (origin: (0.0, 4.0), columns: 3, rows: 2, spacing: 1.5),
-            (origin: (-6.0, 8.0), columns: 2, rows: 1, spacing: 2.0, what: (seeks: true)),
+            (origin: (0.0, 4.0), columns: 3, rows: 2, spacing: 1.5, what: (physical: (health: Some(3), character: true), role: Hostile)),
+            (origin: (-6.0, 8.0), columns: 2, rows: 1, spacing: 2.0, what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
         ],
     ))]),
     budget: (ticks: 1),
     expect: (
-        scene_count: 1, enemy_count: 9, sources: 0, seekers: 2,
-        contacts: 0, crowd_contacts: 0,
+        scene_count: 1, enemy_count: 9, sources: 0, contacts: 0, crowd_contacts: 0,
         player_pos: (x: 0.0, z: 0.0, tol: 0.0),
         bodies: [
-            (nth: 0, seeking: false, pos: (x: -6.0, z: 4.0, tol: 0.0)),
-            (nth: 1, seeking: false, pos: (x:  0.0, z: 4.0, tol: 0.0)),
-            (nth: 2, seeking: false, pos: (x:  1.5, z: 4.0, tol: 0.0)),
-            (nth: 3, seeking: false, pos: (x:  3.0, z: 4.0, tol: 0.0)),
-            (nth: 4, seeking: false, pos: (x:  0.0, z: 5.5, tol: 0.0)),
-            (nth: 5, seeking: false, pos: (x:  1.5, z: 5.5, tol: 0.0)),
-            (nth: 6, seeking: false, pos: (x:  3.0, z: 5.5, tol: 0.0)),
-            (nth: 7, seeking: true,  pos: (x: -5.995,    z: 7.9933333, tol: 0.00001)),
-            (nth: 8, seeking: true,  pos: (x: -3.9962732, z: 7.9925464, tol: 0.00001)),
+            (nth: 0, action: Idle, pos: (x: -6.0, z: 4.0, tol: 0.0)),
+            (nth: 1, action: Idle, pos: (x:  0.0, z: 4.0, tol: 0.0)),
+            (nth: 2, action: Idle, pos: (x:  1.5, z: 4.0, tol: 0.0)),
+            (nth: 3, action: Idle, pos: (x:  3.0, z: 4.0, tol: 0.0)),
+            (nth: 4, action: Idle, pos: (x:  0.0, z: 5.5, tol: 0.0)),
+            (nth: 5, action: Idle, pos: (x:  1.5, z: 5.5, tol: 0.0)),
+            (nth: 6, action: Idle, pos: (x:  3.0, z: 5.5, tol: 0.0)),
+            (nth: 7, action: Move,  pos: (x: -5.995,    z: 7.9933333, tol: 0.00001)),
+            (nth: 8, action: Move,  pos: (x: -3.9962732, z: 7.9925464, tol: 0.00001)),
         ],
     ),
 )

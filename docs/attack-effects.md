@@ -45,3 +45,39 @@ through an obstruction missed by the damage ray. Release removes the beam
 immediately; pose easing and short-lived hit sparks are visual only.
 `state.character_preview.channel_weight` reports the actual overlay during
 entry and release. Visual durations and geometry stay with their app owners.
+
+## Enemy swipe
+
+Each marked melee attacker brakes within striking distance, leans back
+for a 0.6-second windup, then snaps forward for a short directional swipe.
+An amber disc fills toward impact; red marks the active damage window.
+The direction commits at windup, so sidestepping can avoid it. Each swipe can
+remove only one health, followed by 0.65 seconds of recovery before pursuit
+resumes. Physical knockback still moves the attacker and walls block damage.
+The marker uses the strike radius; the player's collision radius also counts
+for overlap. The animation reuses the bounded crowd poses with an instance tilt.
+
+[Action definitions and execution](behaviors.md) own timing and geometry.
+`actors` reports phase, elapsed/duration ticks, committed direction and hit state;
+restart and scene eviction clear commitments.
+
+## Enemy leap
+
+Marked attackers also leap from 3–7 metres away. A purple landing disc and
+backward lean warn for 0.7 seconds; the target point locks immediately. The
+0.6-second jump follows that point, not the moving player, and can deal one
+health only on landing. The disc flashes red on impact, followed by 0.9 seconds
+of recovery. Each enemy waits at least four seconds between leap commitments
+and can still swipe up close.
+
+At most four attacks can be committed together, including recovery, with new
+commitments spaced by 0.2 seconds and admitted in rotating order. Both attacks
+can be granted to explicit bodies, formations or source emissions. `actors`
+reports identity, action, phase, landing target and action cooldowns.
+
+The jump adds real ground travel through the shared motor, plus a visual arc
+1.8 metres high. Ground-plane walls and body contacts still apply throughout
+the jump, and airborne enemies remain damageable; it does not grant collision
+immunity or allow jumping over walls. Landing damage requires actual physical
+reach as well as overlap with the promised disc, so blocked jumps cannot hit
+remotely. `scenes/leaping_horde.ron` is a small playable mixed-attack trial.

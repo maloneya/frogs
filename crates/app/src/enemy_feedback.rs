@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use arpg_game::Game;
 use arpg_gfx::{OrthoCamera, Quad, QuadSink};
-use arpg_sim::{Alpha, EntityId, ENEMY_HIT_POINTS, TICK_HZ};
+use arpg_sim::{Alpha, EntityId, TICK_HZ};
 use glam::{Vec2, Vec3, Vec4};
 
 const FLASH_SECONDS: f32 = 0.1;
@@ -44,10 +44,10 @@ impl EnemyFeedback {
     /// observations of unchanged health never refresh it. Removal/eviction retires
     /// history; App clears it when a run replaces IDs.
     pub(crate) fn observe(&mut self, game: &Game) {
-        self.damaged.retain(|id, _| game.health(*id).is_some_and(|hp| hp < ENEMY_HIT_POINTS));
-        for enemy in game.enemy_presentations(Alpha::ONE) {
-            let hp = game.health(enemy.id()).expect("enemy presentation has health");
-            if hp == ENEMY_HIT_POINTS { continue; }
+        self.damaged.retain(|id, _| game.health(*id).zip(game.max_health(*id)).is_some_and(|(hp, max)| hp < max));
+        for enemy in game.character_presentations(Alpha::ONE) {
+            let Some((hp, max)) = game.health(enemy.id()).zip(game.max_health(enemy.id())) else { continue; };
+            if hp == max { continue; }
             let remembered = self.damaged.entry(enemy.id()).or_insert(Remembered {
                 health: hp, damaged_at: game.tick(),
             });
@@ -76,7 +76,7 @@ impl EnemyFeedback {
     ) {
         let view = camera.view_proj();
         let mut visible = 0;
-        for enemy in game.enemy_presentations(alpha) {
+        for enemy in game.character_presentations(alpha) {
             let Some(remembered) = self.damaged.get(&enemy.id()) else { continue; };
             let hp = remembered.health;
             let age = (game.tick().saturating_sub(remembered.damaged_at) as f32 + alpha.get())
@@ -94,7 +94,7 @@ impl EnemyFeedback {
             sink.push(Quad::solid(Vec4::new(x, y, WIDTH, HEIGHT),
                 LinearRgba::new(0.008, 0.006, 0.006, opacity * 0.9)));
             sink.push(Quad::solid(Vec4::new(x + 1.0, y + 1.0,
-                (WIDTH - 2.0) * f32::from(hp) / f32::from(ENEMY_HIT_POINTS), HEIGHT - 2.0),
+                (WIDTH - 2.0) * f32::from(hp) / f32::from(game.max_health(enemy.id()).expect("remembered live health")), HEIGHT - 2.0),
                 LinearRgba::new(0.65, 0.055, 0.025, opacity)));
             visible += 1;
         }
@@ -110,13 +110,13 @@ mod tests {
     use super::*;
     use arpg_core::{AimDir, Intent, MoveDir};
     use arpg_gfx::QuadBuffer;
-    use arpg_sim::{Accumulator, Dt, Template};
+    use arpg_sim::{Accumulator, Dt};
 
     #[test]
     fn confirmed_hits_flash_then_fade_without_refreshing_on_duplicate_frames() {
         let mut game = Game::empty();
-        let target = game.place(Vec2::new(-1.8, 1.2), Template::BODY).unwrap();
-        let missed = game.place(Vec2::new(10.0, 10.0), Template::BODY).unwrap();
+        let target = game.place(Vec2::new(-1.8, 1.2), arpg_game::ActorDefinition::passive_hostile()).unwrap();
+        let missed = game.place(Vec2::new(10.0, 10.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
         let mut feedback = EnemyFeedback::default();
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         // Cleave has six startup ticks: only step seven may reveal contact.
@@ -135,7 +135,7 @@ mod tests {
             assert_eq!(game.hash(), hash);
         }
         assert!(game.despawn_body(target));
-        let replacement = game.place(Vec2::new(-1.8, 1.2), Template::BODY).unwrap();
+        let replacement = game.place(Vec2::new(-1.8, 1.2), arpg_game::ActorDefinition::passive_hostile()).unwrap();
         feedback.observe(&game);
         assert_eq!(feedback.flash(target, game.tick(), Alpha::ZERO), 0.0);
         assert_eq!(feedback.flash(replacement, game.tick(), Alpha::ZERO), 0.0);
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn beam_pulses_refresh_contact_and_defeat_retires_it() {
         let mut game = Game::empty();
-        let id = game.place(Vec2::new(0.0, 4.0), Template::BODY).unwrap();
+        let id = game.place(Vec2::new(0.0, 4.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
         game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         let mut feedback = EnemyFeedback::default();
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn damage_reveals_proportional_bars_then_expires_and_removal_retires_history() {
         let mut game = Game::empty();
-        let id = game.place(Vec2::new(-1.8, 1.2), Template::BODY).unwrap();
+        let id = game.place(Vec2::new(-1.8, 1.2), arpg_game::ActorDefinition::passive_hostile()).unwrap();
         let mut bars = EnemyFeedback::default();
         let mut buffer = QuadBuffer::default();
         let camera = OrthoCamera::new(1280, 720);
@@ -178,7 +178,7 @@ mod tests {
         for tick in 0..12 {
             game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, tick == 0));
         }
-        assert_eq!(game.health(id), Some(ENEMY_HIT_POINTS - 2));
+        assert_eq!(game.health(id), Some(1));
         let hash = game.hash();
         bars.observe(&game);
         bars.draw(&game, Alpha::ZERO, &camera, viewport, &mut buffer.sink());
@@ -198,12 +198,27 @@ mod tests {
         bars.draw(&game, Alpha::ONE, &camera, viewport, &mut buffer.sink());
         assert!(buffer.as_slice().is_empty());
         assert!(game.despawn_body(id));
-        let replacement = game.place(Vec2::new(-1.8, 1.2), Template::BODY).unwrap();
+        let replacement = game.place(Vec2::new(-1.8, 1.2), arpg_game::ActorDefinition::passive_hostile()).unwrap();
         assert_ne!(id, replacement);
         bars.observe(&game);
         bars.draw(&game, Alpha::ZERO, &camera, viewport, &mut buffer.sink());
         assert!(bars.damaged.is_empty());
         assert!(buffer.as_slice().is_empty());
+    }
+
+    #[test]
+    fn immune_civilians_render_without_health_feedback() {
+        let mut game = Game::empty();
+        let civilian = game.place(Vec2::new(4.0, 4.0), arpg_game::ActorDefinition::civilian()).unwrap();
+        assert!(game.character_presentations(Alpha::ONE).any(|actor| actor.id() == civilian));
+        assert_eq!(game.enemy_count(), 0);
+        assert_eq!(game.max_health(civilian), None);
+        let hash = game.hash();
+        let mut feedback = EnemyFeedback::default();
+        feedback.observe(&game);
+        feedback.observe(&game);
+        assert!(feedback.damaged.is_empty());
+        assert_eq!(game.hash(), hash);
     }
 
     #[test]
@@ -218,7 +233,7 @@ mod tests {
     #[test]
     fn another_hit_reveals_an_expired_bar_and_defeat_removes_it() {
         let mut game = Game::empty();
-        let id = game.place(Vec2::new(0.0, 95.7), Template::BODY).unwrap();
+        let id = game.place(Vec2::new(0.0, 95.7), arpg_game::ActorDefinition::passive_hostile()).unwrap();
         game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         let mut bars = EnemyFeedback::default();

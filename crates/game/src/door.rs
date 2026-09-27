@@ -40,12 +40,12 @@ pub(crate) struct Doors {
 impl Doors {
     pub(crate) fn validate(
         specs: &[DoorSpec],
-        bodies: &[arpg_sim::Placed],
+        bodies: &[crate::Placed],
     ) -> Result<(), crate::SceneError> {
         for (nth, door) in specs.iter().enumerate() {
             if !bodies
                 .get(door.body)
-                .is_some_and(|body| body.what.fixed() && !body.what.interactable())
+                .is_some_and(|body| body.what.physical.fixed() && !body.what.physical.is_character() && !body.what.physical.interactable())
             {
                 return Err(crate::SceneError::Encounter(
                     "door must bind an explicit non-interactable static prop",

@@ -1,6 +1,6 @@
 (
     description: "An enabled ready source still waits for proximity. Walking 0.15 m per tick first puts the player inside range before source evaluation on tick 14.",
-    setup: (sources: [(pos: (3.0, 0.0), when: PlayerWithin(1.0), enabled: false)]),
+    setup: (sources: [(pos: (3.0, 0.0), when: PlayerWithin(1.0), enabled: false, what: (physical: (health: Some(3), character: true), role: Hostile))]),
     source_switches: [(at: 4, source: 0, enabled: true)],
     inputs: [(at: 0, ticks: 15, dir: (1.0, 0.0))],
     checkpoints: [

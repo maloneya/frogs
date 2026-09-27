@@ -6,24 +6,22 @@ sweep. Corrections can create later contacts, so membership updates happen
 inside traversal. See the owner for candidate selection and cell-page storage.
 The player has a separate linear contact pass after crowd separation.
 
-## Gaits and pushing
+## Movement and pushing
 
-Seeking enemies choose Walk, Run or Sprint from stable identity and tick, with
-staggered changes. Restart repeats those choices. [`seek`](../crates/sim/src/pass/seek.rs)
-owns selection and speeds; `Game::gait` and the `gaits` report expose choices.
+Game-owned [behavior actions](behaviors.md) choose target velocity and acceleration.
+The [shared motor](../crates/sim/src/pass/motion.rs) applies those requests once
+per actor per tick. Contacts exchange physical momentum, so faster actors can
+push slower ones without an attack. Knockback survives steering and decays
+gradually. Arrival braking reduces requested speed; other bodies can still push
+an arriving actor. Player controls remain immediate, with knockback added separately.
 
-Gaits request velocity through the [shared motor](../crates/sim/src/pass/motion.rs).
-Contacts exchange that velocity, so faster enemies can push slower ones without
-an attack. Knockback survives steering and decays gradually. Arriving enemies
-reduce requested speed, but other bodies can still push them. Player controls
-remain immediate, with physical knockback added separately.
-
-Horde animation shares bounded poses, reusing the Run clip at gait-dependent
-cadences. It has no separate authored walk/sprint clips.
+Horde animation derives walk/run/sprint cadence from actual displacement and
+shares bounded poses. It has no separate authored walk/sprint clips, and its
+visual choice never drives gameplay.
 
 ## Measuring and limits
 
-Start **Crowd stress — 10,000 seekers** and wait for compression before following
+Start **Crowd stress — 10,000 pursuing actors** and wait for compression before following
 [performance telemetry](performance.md). Compare crowd time per tick,
 candidate/possible-pair counts and frame percentiles. Repeat with movement and
 attacks; retain the actual population because defeats reduce workload.

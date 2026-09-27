@@ -1,0 +1,49 @@
+// Keep moving as the outer enemies leap; counterattack during their recovery.
+(
+    scene: (
+        environment: (
+            ambient_colour: (1.0, 1.0, 1.0),
+            ambient_intensity: 0.22,
+            directional_colour: (1.0, 1.0, 1.0),
+            directional_intensity: 0.35,
+            direction: (0.4, 1.0, 0.3),
+        ),
+        engine: (
+            walls: [],
+            name: "Swipes and leaps",
+            bodies: [
+                (
+                    pos: (0.0, 1.4),
+                    what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)])),
+                ),
+                (
+                    pos: (-4.5, 2.5),
+                    what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)])),
+                ),
+                (
+                    pos: (4.5, 2.5),
+                    what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)])),
+                ),
+                (
+                    pos: (-3.5, -4.0),
+                    what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)])),
+                ),
+                (
+                    pos: (3.5, -4.0),
+                    what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)])),
+                ),
+                (
+                    pos: (0.0, 6.5),
+                    what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)])),
+                ),
+            ],
+            grids: [],
+            sources: [],
+        ),
+        torches: [],
+        trees: [],
+        doors: [],
+        chests: [],
+        encounters: [],
+    ),
+)

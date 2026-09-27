@@ -6,7 +6,7 @@
     setup: (
         actions: [
             Place((0.0, 4.96)),
-            Seek(0),
+            Assign(body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
         ],
     ),
     inputs: [],
@@ -24,7 +24,7 @@
         struck: 0,
         contacts: 0,
         bodies: [
-            (nth: 0, seeking: true, health: 3),
+            (nth: 0, action: Move, health: 3),
         ],
         events: (
         kinds: [AttackProfileChanged, Swung, HitboxOpened, HitboxClosed, Hit],

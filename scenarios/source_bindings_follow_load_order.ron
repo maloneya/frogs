@@ -6,13 +6,13 @@
         (at: 0, action: Load((
     engine: (
         name: "Encounter",
-        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
-        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
+        bodies: [(pos: (1.0, 0.0), what: (physical: (fixed: true, interactable: true), role: Prop))],
+        sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false, what: (physical: (health: Some(3), character: true), role: Hostile))],
     ),
     encounters: [(name: "Trial", start: Activated(0), objective: Defeat((sources: [0], count: 1, within_ticks: 10)))],
 ))),
         (at: 0, action: Load((engine: (name: "external source",
-            sources: [(pos: (-20.0, 0.0), enabled: false)])))),
+            sources: [(pos: (-20.0, 0.0), enabled: false, what: (physical: (health: Some(3), character: true), role: Hostile))])))),
         (at: 3, action: Evict(1)),
     ],
     interactions: [0],

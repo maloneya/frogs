@@ -30,8 +30,8 @@ uses the same document format; validate it with the CLI's `open` action.
 Files wrap playable data under `scene` with optional authoring `labels`.
 Read [GameScene](../../../crates/game/src/scene.rs) and the relevant owners:
 [physical Scene/BodyGrid](../../../crates/sim/src/scene.rs),
-[Template](../../../crates/sim/src/pass/spawn.rs),
-[SourceSpec](../../../crates/sim/src/pass/source.rs), and
+[ActorDefinition](../../../crates/game/src/behavior/definition.rs),
+[SourceSpec](../../../crates/game/src/population.rs), and
 [encounters](../../../docs/encounters.md) for relationships. Read tuning from its
 owner when predicting an outcome. Existing files are examples, not a schema authority.
 

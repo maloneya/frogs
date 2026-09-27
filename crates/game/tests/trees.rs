@@ -1,7 +1,8 @@
 //! Solid woodland content shares atomic admission and lifetime with gameplay.
+use arpg_game::{ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene, MAX_TREES, TreeKind, TreeSpec};
-use arpg_sim::{Accumulator, Dt, Template};
+use arpg_sim::{Accumulator, Dt, };
 use glam::Vec2;
 
 fn tree(kind: TreeKind) -> TreeSpec { TreeSpec::new(kind, Vec2::new(12.0, 3.0), 0.5, 1.0).unwrap() }
@@ -46,7 +47,7 @@ fn excess_trees_preserve_pending_work_live_state_and_restart() {
     let mut game = Game::from_scene(&authored).unwrap();
     let mut control = Game::from_scene(&authored).unwrap();
     for game in [&mut game, &mut control] {
-        assert!(game.request_spawn(Vec2::new(4.0, 0.0), Template::BODY).is_some());
+        assert!(game.request_spawn(Vec2::new(4.0, 0.0), ActorDefinition::passive_hostile()).is_some());
     }
     let before = observed(&game);
     assert!(game.load_scene(&scene(TreeKind::Bare, 1)).is_err());
@@ -78,7 +79,7 @@ fn combined_wall_capacity_rejects_before_installing_trees_or_consuming_pending_w
     let mut game = Game::from_scene(&authored).unwrap();
     let mut control = Game::from_scene(&authored).unwrap();
     for game in [&mut game, &mut control] {
-        assert!(game.request_spawn(Vec2::new(4.0, 0.0), Template::BODY).is_some());
+        assert!(game.request_spawn(Vec2::new(4.0, 0.0), ActorDefinition::passive_hostile()).is_some());
     }
     let before = observed(&game);
     assert!(game.load_scene(&scene(TreeKind::Pine, 1)).is_err());
@@ -114,7 +115,7 @@ fn scaled_rotated_trunks_share_motion_and_attack_obstruction_without_extra_wall_
     game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));
     assert!((game.beam().unwrap().end().y - near_face).abs() < 0.00001);
     // A launched body must stop at the trunk rather than crossing it in one step.
-    let body = game.place(Vec2::new(0.0, 1.0), Template::BODY).unwrap();
+    let body = game.place(Vec2::new(0.0, 1.0), ActorDefinition::passive_hostile()).unwrap();
     assert!(game.apply_impulse(body, arpg_sim::Impulse::try_from((0.0, 80.0)).unwrap()));
     for _ in 0..12 {
         step(&mut game);

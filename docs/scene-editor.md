@@ -52,13 +52,15 @@ placement supports move, duplicate, delete and undo/redo.
 | Tree | Pine, broadleaf or bare; position, scale and rotation; solid trunk footprint |
 | Campfire | Position, light colour, brightness, range and height; ring shows illumination range |
 
-Body templates expose **Fixed prop**, **Seeks player** and **Can interact**;
-sources and formations apply these to their emitted bodies. Fixed props cannot
-seek. A body's **Role** adds/removes its door or chest component. **Contact attacker
-(one per scene)** assigns the current single-attacker mechanic to a seeking enemy;
-assigning another moves that binding.
+Each body, source and formation exposes one [actor definition](behaviors.md).
+Edit physical capabilities and gameplay role independently, then author its action
+list and behavior tree. Actions can be reordered without changing the tree's
+references. Swipe and leap can be composed with pursuit on every birth path;
+civilians can compose movement, waiting and interaction. A separate component
+role adds or removes door/chest relationships. Both clients validate complete
+edits through the same owner.
 
-Source `FewerThan` conditions count enemies across the world. A formation expands
+Source `FewerThan` conditions count hostile actors across the world, independently of health or movement. A formation expands
 into bodies on load; its preview draws at most 2,000 individual markers across
 all formations. The shared authoring API supports 4,096 placement entries,
 counting a formation as one entry, subject to the game's tighter per-kind and
@@ -89,9 +91,8 @@ remap on deletion. Manual file reordering must preserve those references.
 direction and elevation. Colours are stored as linear RGB. Adding a campfire
 does not change the environment; **Save & play** applies the authored lighting.
 
-**Duplicate** copies placement, attributes and any door/chest component with at
-least a one-metre offset. Names, encounter links and the single-attacker binding
-stay with the original. **Delete** refuses encounter endpoints; remove their
+**Duplicate** copies placement, attributes and any door/chest or attack component
+with at least a one-metre offset. Names and encounter links stay with the original. **Delete** refuses encounter endpoints; remove their
 links first. Otherwise it removes attached components and remaps surviving links
 and names. Deletion clears selection so inspector drafts cannot target a shifted
 index. **Undo / Redo** retain 32 accepted edits. Accepted drafts and history

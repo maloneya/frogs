@@ -7,14 +7,6 @@ use serde::{Deserialize, Serialize};
 pub enum TuningField {
     /// Powered player movement.
     PlayerSpeed,
-    /// Monster walking target.
-    MonsterWalk,
-    /// Monster running target.
-    MonsterRun,
-    /// Monster sprinting target.
-    MonsterSprint,
-    /// Maximum powered acceleration and braking.
-    MonsterAcceleration,
     /// Momentum imparted by Cleave.
     CleaveImpulse,
     /// Momentum imparted by Slam.
@@ -43,27 +35,21 @@ pub struct TuningAttribute {
 
 impl TuningField {
     /// Complete catalog shared by all editing surfaces.
-    pub const ALL: [Self; 7] = [Self::PlayerSpeed, Self::MonsterWalk, Self::MonsterRun,
-        Self::MonsterSprint, Self::MonsterAcceleration, Self::CleaveImpulse, Self::SlamImpulse];
+    pub const ALL: [Self; 3] = [Self::PlayerSpeed, Self::CleaveImpulse, Self::SlamImpulse];
 
     /// Presentation and validation metadata from the owning definition.
     pub fn attribute(self) -> TuningAttribute {
         let (key, group, label, default) = match self {
             Self::PlayerSpeed => ("player_speed", "Player", "Movement speed", 9.0),
-            Self::MonsterWalk => ("monster_walk", "Monster", "Walk speed", 1.5),
-            Self::MonsterRun => ("monster_run", "Monster", "Run speed", 2.5),
-            Self::MonsterSprint => ("monster_sprint", "Monster", "Sprint speed", 4.0),
-            Self::MonsterAcceleration => ("monster_acceleration", "Monster", "Acceleration", 30.0),
             Self::CleaveImpulse => ("cleave_impulse", "Cleave", "Attack impulse", 6.0),
             Self::SlamImpulse => ("slam_impulse", "Slam", "Attack impulse", 72.0),
         };
-        let acceleration = self == Self::MonsterAcceleration;
         let impulse = matches!(self, Self::CleaveImpulse | Self::SlamImpulse);
-        TuningAttribute { key, group, label, default, unit: if impulse { "kg m/s" } else if acceleration { "m/s^2" } else { "m/s" },
+        TuningAttribute { key, group, label, default, unit: if impulse { "kg m/s" } else { "m/s" },
             // Limits keep the first tuning surface within modest physical workloads.
             // Zero speed is useful for isolating combat; resolved attacks require positive impulse.
-            min: if impulse || acceleration { 0.1 } else { 0.0 }, max: if impulse || acceleration { 1000.0 } else { 60.0 },
-            step: if impulse || acceleration { 1.0 } else { 0.1 } }
+            min: if impulse { 0.1 } else { 0.0 }, max: if impulse { 1000.0 } else { 60.0 },
+            step: if impulse { 1.0 } else { 0.1 } }
     }
 
     /// Resolves a harness key without a second string catalog.
@@ -75,7 +61,7 @@ impl TuningField {
 /// Complete validated settings. Files must supply every field; unknown fields are rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(try_from = "TuningFile", into = "BTreeMap<TuningField, f32>")]
-pub struct Tuning([f32; 7]);
+pub struct Tuning([f32; 3]);
 
 impl Default for Tuning {
     fn default() -> Self { Self(TuningField::ALL.map(|field| field.attribute().default)) }
@@ -94,18 +80,6 @@ impl Tuning {
         let mut next = self;
         next.0[field as usize] = if value == 0.0 { 0.0 } else { value };
         Ok(next)
-    }
-
-    /// Desired speed of the selected monster gait; contacts and acceleration still apply.
-    pub fn gait_speed(self, gait: crate::Gait) -> f32 {
-        self.get(match gait { crate::Gait::Walk => TuningField::MonsterWalk,
-            crate::Gait::Run => TuningField::MonsterRun, crate::Gait::Sprint => TuningField::MonsterSprint })
-    }
-
-    /// Sustained free-space speed ceiling from motor acceleration and per-tick drag.
-    /// Collisions and braking may reduce actual speed further.
-    pub fn monster_speed_limit(self) -> f32 {
-        crate::pass::motion::motor_speed_limit(self.get(TuningField::MonsterAcceleration))
     }
 
     pub(crate) fn hash(self, hash: &mut crate::Fnv) {

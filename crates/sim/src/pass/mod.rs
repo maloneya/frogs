@@ -10,7 +10,6 @@ pub(crate) mod face;
 pub(crate) mod health;
 pub(crate) mod interact;
 pub(crate) mod remember;
-pub(crate) mod seek;
 pub(crate) mod separate;
 pub(crate) mod source;
 pub(crate) mod spawn;

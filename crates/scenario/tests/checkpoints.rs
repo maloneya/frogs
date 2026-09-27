@@ -237,15 +237,15 @@ fn a_transient_failure_survives_recovery_and_blessing() {
 
 #[test]
 fn checkpoints_observe_new_spawns_at_both_budget_edges_in_any_order() {
-    // First seeker speed is .5, then .5*.9+.5=.95; each checkpoint observes the step just
+    // The movement action starts at .5 m/s, then reaches .95 m/s; each checkpoint observes the step just
     // completed. Also checks that new placement IDs are registered before it.
     let fixture = Fixture::new(
         r#"(
-        spawns: [(at: 0, pos: (10.0, 0.0), what: (seeks: true))],
+        spawns: [(at: 0, pos: (10.0, 0.0), what: (role: Hostile, physical: (character: true, health: Some(3)), actions: [Move(())], behavior: Action(0)))],
         checkpoints: [
             (at: 1, expect: (bodies: [(nth: 0, alive: true,
                 pos: (x: 9.9758333, z: 0.0, tol: 0.00001))])),
-            (at: 0, expect: (enemy_count: 1, seekers: 1, bodies: [(nth: 0, seeking: true,
+            (at: 0, expect: (enemy_count: 1, bodies: [(nth: 0, role: Hostile, action: Move,
                 pos: (x: 9.9916667, z: 0.0, tol: 0.00001),
                 velocity: (x: -0.5, z: 0.0, tol: 0.0))])),
             (at: 0, expect: (player_pos: (x: 0.0, z: 0.0, tol: 0.0))),
@@ -263,7 +263,7 @@ fn every_duplicate_checkpoint_reports_its_own_failure() {
         r#"(
         checkpoints: [
             (at: 0, expect: (enemy_count: 1)),
-            (at: 0, expect: (seekers: 1)),
+            (at: 0, expect: (sources: 1)),
         ],
         budget: (ticks: 1),
     )"#,
@@ -271,7 +271,7 @@ fn every_duplicate_checkpoint_reports_its_own_failure() {
     let (output, text) = fixture.run(&[]);
     assert_eq!(output.status.code(), Some(1), "{text}");
     assert!(text.contains("checkpoint[0] after tick 0: enemy_count"), "{text}");
-    assert!(text.contains("checkpoint[1] after tick 0: seekers"), "{text}");
+    assert!(text.contains("checkpoint[1] after tick 0: sources"), "{text}");
 }
 
 #[test]
@@ -336,7 +336,7 @@ fn checkpoint_fields_are_strict_and_final_expectations_still_run() {
 #[test]
 fn gameplay_content_and_relationship_assertions_fail_closed() {
     let scene = r#"engine: (name: "trial",
-        bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
+        bodies: [(pos: (1.0, 0.0), what: (role: Prop, physical: (fixed: true, interactable: true)))],
         sources: [(pos: (20.0, 0.0), enabled: false)])"#;
     for fields in [
         "source_switches: [(at: 0, scene: 0, source: 1, enabled: true)]",
@@ -367,8 +367,8 @@ fn invalid_aim_cannot_reach_game_even_when_blessing() {
 #[test]
 fn encounter_admission_and_observation_errors_cannot_be_blessed() {
     let scene = r#"engine: (name: "trial", bodies: [
-        (pos: (1.0,0.0), what: (fixed:true, interactable:true)),
-        (pos: (0.0,3.0), what: (fixed:true))
+        (pos: (1.0,0.0), what: (role: Prop, physical: (fixed:true, interactable:true))),
+        (pos: (0.0,3.0), what: (role: Prop, physical: (fixed:true)))
     ], sources: [(pos: (0.0,10.0), enabled:false)]),
     doors: [(body:1)],
     encounters: [(name:"Trial", start:Activated(0),
@@ -509,7 +509,7 @@ fn valid_numeric_and_timeline_boundaries_still_run() {
     assert!(output.status.success(), "{text}");
     for dir in ["(1.0, 0.0)", "(2.0, 0.0)"] {
         // One span ends exactly at the budget; the last input wins the overlap.
-        let fixture = Fixture::new(&format!("(budget: (ticks: 2), inputs: [(at: 0, ticks: 2, dir: {dir}), (at: 1, ticks: 1, dir: (0.0, 0.0))], channels: [(at: 0, ticks: 2)], interactions: [1], spawns: [(at: 1, pos: (20.0, 0.0))], impulses: [(at: 1, target: Player, value: (0.0, 0.0))], attacks: [1], checkpoints: [(at: 0, expect: (player_pos: (x: 0.15, z: 0.0, tol: 0.00001)))], expect: (enemy_count: 1, player_pos: (x: 0.15, z: 0.0, tol: 0.00001)))"));
+        let fixture = Fixture::new(&format!("(budget: (ticks: 2), inputs: [(at: 0, ticks: 2, dir: {dir}), (at: 1, ticks: 1, dir: (0.0, 0.0))], channels: [(at: 0, ticks: 2)], interactions: [1], spawns: [(at: 1, pos: (20.0, 0.0), what: (role: Hostile))], impulses: [(at: 1, target: Player, value: (0.0, 0.0))], attacks: [1], checkpoints: [(at: 0, expect: (player_pos: (x: 0.15, z: 0.0, tol: 0.00001)))], expect: (enemy_count: 1, player_pos: (x: 0.15, z: 0.0, tol: 0.00001)))"));
         let (output, text) = fixture.run(&[]);
         assert!(output.status.success(), "{dir}: {text}");
     }
@@ -517,14 +517,26 @@ fn valid_numeric_and_timeline_boundaries_still_run() {
 
 #[test]
 fn missing_setup_targets_and_dead_position_predictions_cannot_pass() {
-    for actions in ["Despawn(0)", "Seek(0)",
+    for actions in ["Despawn(0)", "Assign(body: 0, actor: ())",
         "Place((20.0, 0.0)), Despawn(0), Despawn(0)",
-        "Place((20.0, 0.0)), Despawn(0), Seek(0)",
-        "Place((20.0, 0.0)), Seek(0), Seek(0)"] {
+        "Place((20.0, 0.0)), Despawn(0), Assign(body: 0, actor: ())",
+        "Place((20.0, 0.0)), Assign(body: 0, actor: (actions: [Wait(ticks: 0)], behavior: Action(0)))"] {
         refuses(&format!("(setup: (actions: [{actions}]), budget: (ticks: 0))"), "setup");
     }
     for assertion in ["expect: (bodies: [(nth: 0, alive: false, pos: (x: 20.0, z: 0.0, tol: 0.0))])",
         "checkpoints: [(at: 0, expect: (bodies: [(nth: 0, alive: false, pos: (x: 20.0, z: 0.0, tol: 0.0))]))]"] {
         refuses(&format!("(setup: (actions: [Place((20.0, 0.0)), Despawn(0)]), budget: (ticks: 1), {assertion})"), "bodies[0].pos");
     }
+}
+
+#[test]
+fn behavior_edits_refuse_unreachable_invalid_and_stale_assignments() {
+    for command in [
+        "behaviors: [(at: 1, body: 0, actor: ())]",
+        "behaviors: [(at: 0, body: 0, actor: (actions: [Wait(ticks: 0)], behavior: Action(0)))]",
+        "behaviors: [(at: 0, body: 99, actor: ())]",
+    ] {
+        refuses(&format!("(setup: (actions: [Place((20.0, 0.0))]), budget: (ticks: 1), {command})"), "behaviors");
+    }
+    refuses("(setup: (actions: [Place((20.0, 0.0)), Despawn(0)]), behaviors: [(at: 0, body: 0, actor: ())], budget: (ticks: 1))", "behaviors");
 }

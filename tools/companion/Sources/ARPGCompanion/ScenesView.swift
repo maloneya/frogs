@@ -46,7 +46,7 @@ struct ScenesView: View {
                     }.frame(minWidth: 340)
                     inspector(document).frame(minWidth: 210, idealWidth: 240, maxWidth: 280)
                 } else {
-                    ContentUnavailableView("Open a scene to edit", systemImage: "square.grid.3x3", description: Text("Place enemies, draw walls and arrange sources on a map. Save & play starts the layout in the game."))
+                    ContentUnavailableView("Open a scene to edit", systemImage: "square.grid.3x3", description: Text("Place actors, draw walls and arrange sources on a map. Save & play starts the layout in the game."))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
@@ -102,7 +102,7 @@ struct ScenesView: View {
                 Text("Tools").font(.headline).padding(.bottom, 8)
                 toolButton("Select / Pan", "cursorarrow", "select")
                 Divider().padding(.vertical, 6)
-                toolButton("Enemy", "figure.stand", "body")
+                toolButton("Actor", "figure.stand", "body")
                 toolButton("Wall", "rectangle", "wall")
                 toolButton("Source", "circle.dashed", "source")
                 toolButton("Formation", "square.grid.3x3", "grid")
@@ -187,7 +187,7 @@ struct ScenesView: View {
                     Button("Undo") { model.undoScene(); fieldDrafts.removeAll(); colourDrafts.removeAll(); objectNameDraft = selected?.name ?? "" }.keyboardShortcut("z").disabled(model.busy || model.undoScenes.isEmpty)
                     Button("Redo") { model.redoScene(); fieldDrafts.removeAll(); colourDrafts.removeAll(); objectNameDraft = selected?.name ?? "" }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(model.busy || model.redoScenes.isEmpty)
                 }
-                Text("Templates apply to a body, every formation member, or everything a source emits. Fixed props cannot seek. Doors and chests start locked.").font(.caption).foregroundStyle(.secondary)
+                Text("Actor definitions apply to a body, every formation member, or everything a source emits. Add actions, then combine them as a sequence or priority. Doors and chests start locked.").font(.caption).foregroundStyle(.secondary)
             }.padding(14)
         }
     }

@@ -4,19 +4,21 @@ use arpg_game::{
     ChestSpec, DefeatObjective, DoorSpec, EncounterAction as Action, EncounterObjective,
     EncounterSpec, EncounterStart, Game, GameScene,
 };
-use arpg_sim::{Accumulator, Condition, Dt, Placed, SourceSpec, Template};
+use arpg_sim::{Accumulator, Condition, Dt};
+use arpg_game::SourceSpec;
+use arpg_game::Placed;
 use arpg_content::{SceneDocument, SceneObjectKind as Kind, SceneObjectLabel, SceneObjectRef as Target};
 
 fn target(kind: Kind, index: usize) -> Target { Target { kind, index } }
 fn scene() -> SceneDocument {
     let mut scene = GameScene::default();
     scene.engine.bodies = (0..5).map(|i| Placed {
-        pos: (i as f32 * 3.0, 0.0), what: Template::BLOCK,
+        pos: (i as f32 * 3.0, 0.0), what: arpg_game::ActorDefinition::prop(),
     }).collect();
-    scene.engine.bodies[0].what = Template::BLOCK.interactive();
+    scene.engine.bodies[0].what = arpg_game::ActorDefinition::prop().interactive();
     scene.engine.sources = (0..3).map(|i| SourceSpec {
         pos: (i as f32 * 3.0, 8.0), radius: 0.0, every: 60,
-        when: Condition::Always, what: Template::BODY, enabled: false,
+        when: Condition::Always, what: arpg_game::ActorDefinition::passive_hostile(), enabled: false,
     }).collect();
     scene.doors = vec![DoorSpec { body: 1 }, DoorSpec { body: 2 }];
     scene.chests = vec![ChestSpec { body: 3 }, ChestSpec { body: 4 }];

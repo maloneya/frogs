@@ -20,7 +20,6 @@ pub(crate) enum ExpectedEvent {
         #[serde(deserialize_with = "crate::spec::tolerance")]
         value: f32,
     },
-    GaitsChanged { walking: usize, running: usize, sprinting: usize },
     SceneLoaded { id: String },
     SceneEvicted { id: String },
     Impulsed {
@@ -49,6 +48,7 @@ pub(crate) enum ExpectedEvent {
     ChannelStopped,
     HitboxOpened,
     HitboxClosed,
+    Damaged { actor: (u32, u32), target: (u32, u32), remaining: u8 },
     Hit { id: (u32, u32), remaining: u8 },
     AttackRecoveryChanged { recovery: arpg_sim::RecoveryTicks },
     AttackProfileChanged { profile: arpg_sim::AttackProfile },
@@ -58,7 +58,6 @@ impl ExpectedEvent {
     pub(crate) fn kind(&self) -> EventKind {
         match self {
             Self::TuningChanged { .. } => EventKind::TuningChanged,
-            Self::GaitsChanged { .. } => EventKind::GaitsChanged,
             Self::SceneLoaded { .. } => EventKind::SceneLoaded,
             Self::SceneEvicted { .. } => EventKind::SceneEvicted,
             Self::Impulsed { .. } => EventKind::Impulsed,
@@ -81,6 +80,7 @@ impl ExpectedEvent {
             Self::ChannelStopped => EventKind::ChannelStopped,
             Self::HitboxOpened => EventKind::HitboxOpened,
             Self::HitboxClosed => EventKind::HitboxClosed,
+            Self::Damaged { .. } => EventKind::Damaged,
             Self::Hit { .. } => EventKind::Hit,
             Self::AttackRecoveryChanged { .. } => EventKind::AttackRecoveryChanged,
             Self::AttackProfileChanged { .. } => EventKind::AttackProfileChanged,
@@ -91,8 +91,6 @@ impl ExpectedEvent {
         match (self, actual) {
             (Self::TuningChanged { field, value }, Event::TuningChanged { field: actual, value: changed }) =>
                 *field == actual && *value == changed,
-            (Self::GaitsChanged { walking, running, sprinting }, Event::GaitsChanged { walking: w, running: r, sprinting: s }) =>
-                (*walking, *running, *sprinting) == (w, r, s),
             (Self::SceneLoaded { id }, Event::SceneLoaded { id: actual })
             | (Self::SceneEvicted { id }, Event::SceneEvicted { id: actual }) => arpg_sim::SceneId::parse(id) == Some(actual),
             (Self::Impulsed { id, source, value, tolerance }, Event::Impulsed { id: actual, source: origin, impulse }) => {
@@ -104,6 +102,7 @@ impl ExpectedEvent {
             (Self::Activated { id }, Event::Activated { id: actual })
             | (Self::Placed { id }, Event::Placed { id: actual })
             | (Self::Removed { id }, Event::Removed { id: actual }) => *id == actual.diagnostic_identity(),
+            (Self::Damaged { actor, target, remaining }, Event::Damaged { actor: a, target: t, remaining: r }) => *actor == a.diagnostic_identity() && *target == t.diagnostic_identity() && *remaining == r,
             (Self::Hit { id, remaining }, Event::Hit { id: actual, remaining: value }) => *id == actual.diagnostic_identity() && *remaining == value,
             (Self::SourceAdded { id }, Event::SourceAdded { id: actual })
             | (Self::SourceRemoved { id }, Event::SourceRemoved { id: actual }) => arpg_sim::SourceId::parse(id) == Some(actual),
@@ -160,15 +159,6 @@ mod tests {
         assert!(!run::validate(&oversized).is_empty());
     }
 
-    #[test]
-    fn gait_transition_predictions_check_each_count() {
-        let expected: ExpectedEvent = ron::from_str("GaitsChanged(walking: 1, running: 2, sprinting: 3)").unwrap();
-        assert_eq!(expected.kind(), EventKind::GaitsChanged);
-        assert!(expected.matches(Event::GaitsChanged { walking: 1, running: 2, sprinting: 3 }));
-        for (walking, running, sprinting) in [(0, 2, 3), (1, 0, 3), (1, 2, 0)] {
-            assert!(!expected.matches(Event::GaitsChanged { walking, running, sprinting }));
-        }
-    }
 
     #[test]
     fn count_payloads_are_checked_independently_of_event_category() {

@@ -3,10 +3,9 @@
     setup: (actions: [Place((-2.8, 1.2))]),
     attack_profiles: [(at: 0, profile: Cleave)],
     attacks: [0, 22],
-    tuning: [(at: 1, values: { PlayerSpeed: 9.0, MonsterWalk: 1.5, MonsterRun: 2.5, MonsterSprint: 4.0,
-        MonsterAcceleration: 30.0, CleaveImpulse: 12.0, SlamImpulse: 72.0 })],
+    tuning: [(at: 1, values: { PlayerSpeed: 9.0, CleaveImpulse: 12.0, SlamImpulse: 72.0 })],
     despawns: [(at: 21, body: 0)],
-    spawns: [(at: 22, pos: (-2.8, 1.2))],
+    spawns: [(at: 22, pos: (-2.8, 1.2), what: (physical: (health: Some(3), character: true), role: Hostile))],
     checkpoints: [
         (at: 5, expect: (struck: 0, bodies: [(nth: 0, velocity: (x: 0.0, z: 0.0, tol: 0.00001))])),
         (at: 6, expect: (struck: 1, bodies: [(nth: 0, velocity: (x: 0.0, z: 6.0, tol: 0.00001))])),

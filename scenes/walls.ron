@@ -11,9 +11,9 @@
                 (centre: (5.5, 5.0), size: (4.0, 0.3), yaw: 0.7853982),
             ],
             bodies: [
-                (pos: (0.0, 2.6)),
-                (pos: (4.0, 2.6)),
-                (pos: (-1.5, 4.0), what: (seeks: true)),
+                (pos: (0.0, 2.6), what: (physical: (health: Some(3), character: true), role: Hostile)),
+                (pos: (4.0, 2.6), what: (physical: (health: Some(3), character: true), role: Hostile)),
+                (pos: (-1.5, 4.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
             ],
         ),
     ),

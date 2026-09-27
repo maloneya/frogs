@@ -20,6 +20,7 @@ pub(crate) fn movement(attack: &Attack, intent: Intent) -> MoveDir {
 /// positions, so the new velocity first displaces a body on the following tick.
 #[expect(clippy::too_many_arguments, reason = "separate impulse and damage capabilities keep the pass out of mutable World")]
 pub(crate) fn strike(
+    actor: EntityId,
     beam: Beam,
     pulse: bool,
     ids: &[EntityId],
@@ -33,7 +34,7 @@ pub(crate) fn strike(
     let push = (beam.end() - beam.start()).normalize_or_zero() * Beam::KNOCKBACK;
     let impulse = Impulse::try_from((push.x, push.y)).expect("finite beam tuning");
     for (&id, &position) in ids.iter().zip(positions) {
-        if !beam.touches(position, ENEMY_RADIUS)
+        if id == actor || !beam.touches(position, ENEMY_RADIUS)
             || walls.obstructs(beam.start(), position)
             || !damage.contains(id)
         { continue; }
@@ -41,6 +42,7 @@ pub(crate) fn strike(
         if pulse && let Some(remaining) = damage.hit(id, core::num::NonZeroU8::MIN) {
             hits.push(position);
             trace.emit(Event::Hit { id, remaining });
+            trace.emit(Event::Damaged { actor, target: id, remaining });
         }
     }
 }

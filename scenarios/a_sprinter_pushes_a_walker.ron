@@ -4,17 +4,17 @@
 // speed because of the physical push, and the sprinter gives up momentum.
 (
     description: "A faster chaser physically pushes a slower chaser instead of passing through it.",
-    setup: (actions: [Place((0.0, -20.0)), Place((10.5, 0.0)), Seek(1),
-        Place((10.0, 0.0)), Seek(2)]),
+    setup: (actions: [Place((0.0, -20.0)), Place((10.5, 0.0)), Assign(body: 1, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 4.0, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
+        Place((10.0, 0.0)), Assign(body: 2, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 1.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))]),
     checkpoints: [(at: 2, expect: (bodies: [
-        (nth: 1, gait: Sprint, velocity: (x: -1.355, z: 0.0, tol: 0.00001)),
-        (nth: 2, gait: Walk, velocity: (x: -1.355, z: 0.0, tol: 0.00001)),
+        (nth: 1, action: Move, velocity: (x: -1.355, z: 0.0, tol: 0.00001)),
+        (nth: 2, action: Move, velocity: (x: -1.355, z: 0.0, tol: 0.00001)),
     ]))],
     budget: (ticks: 4),
     expect: (contacts: 0, crowd_contacts: 1, bodies: [
-        (nth: 1, gait: Sprint, pos: (x: 10.42642083, z: 0.0, tol: 0.00001),
+        (nth: 1, action: Move, pos: (x: 10.42642083, z: 0.0, tol: 0.00001),
             velocity: (x: -1.60975, z: 0.0, tol: 0.00001)),
-        (nth: 2, gait: Walk, pos: (x: 9.92642083, z: 0.0, tol: 0.00001),
+        (nth: 2, action: Move, pos: (x: 9.92642083, z: 0.0, tol: 0.00001),
             velocity: (x: -1.60975, z: 0.0, tol: 0.00001)),
     ]),
 )

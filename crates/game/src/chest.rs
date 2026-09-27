@@ -47,7 +47,7 @@ impl Chests {
     pub(crate) fn validate(
         &self,
         specs: &[ChestSpec],
-        bodies: &[arpg_sim::Placed],
+        bodies: &[crate::Placed],
         doors: &[crate::DoorSpec],
     ) -> Result<(), crate::SceneError> {
         if specs.len() > MAX_CHESTS - self.rows.len() {
@@ -59,7 +59,7 @@ impl Chests {
             }
             if !bodies
                 .get(chest.body)
-                .is_some_and(|body| body.what.fixed() && !body.what.interactable())
+                .is_some_and(|body| body.what.physical.fixed() && !body.what.physical.is_character() && !body.what.physical.interactable())
             {
                 return Err(crate::SceneError::Encounter(
                     "chest must bind an explicit non-interactable static prop",

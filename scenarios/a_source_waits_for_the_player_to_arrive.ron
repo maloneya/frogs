@@ -16,7 +16,7 @@
     description: "A proximity source fires on the exact tick the player crosses its radius, having waited ready since tick 0.",
     setup: (
         sources: [
-            (pos: (10.0, 0.0), every: 60, when: PlayerWithin(5.0)),
+            (pos: (10.0, 0.0), every: 60, when: PlayerWithin(5.0), what: (physical: (health: Some(3), character: true), role: Hostile)),
         ],
     ),
     inputs: [
@@ -26,11 +26,10 @@
     expect: (
         player_pos: (x: 6.0, z: 0.0, tol: 0.001),
         enemy_count: 1,
-        seekers: 0,
         sources: 1,
         contacts: 0,
         bodies: [
-            (nth: 0, seeking: false, pos: (x: 10.0, z: 0.0, tol: 0.0001)),
+            (nth: 0, action: Idle, pos: (x: 10.0, z: 0.0, tol: 0.0001)),
         ],
         events: (
         kinds: [Fired, Placed, Refused],

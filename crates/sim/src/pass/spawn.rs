@@ -8,7 +8,6 @@ use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
 use crate::hash::Fnv;
-use crate::members::Members;
 use crate::scene::Scenes;
 use crate::slots::EntityId;
 use crate::trace::{Event, TraceSink};
@@ -21,77 +20,53 @@ use crate::MAX_BODIES;
 pub(crate) const QUEUE_CAPACITY: usize = 256;
 const _: () = assert!(QUEUE_CAPACITY > 0, "a zero-length queue would refuse everything, silently");
 
-/// Body capabilities, shared by runtime placement and authored templates.
+/// Independent physical, health and presentation capabilities of a body.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Template {
-    /// Whether the body chases the player. See [`crate::pass::seek`].
-    seeks: bool,
-    /// Immovable and immune to damage; uses the shared body footprint.
     fixed: bool,
-    /// Grants a one-shot Ready to Activated interaction.
     interactable: bool,
+    health: Option<core::num::NonZeroU8>,
+    character: bool,
 }
 
 impl Template {
-    /// A body and nothing else: it stands where it is put, and the solvers
-    /// shove it around. What the horde has always been.
-    pub const BODY: Self = Self { seeks: false, fixed: false, interactable: false };
-
-    /// The same movable body, granted the chase behaviour.
-    /// Panics for static props, which cannot acquire powered movement.
+    /// Neutral movable body, without health, interaction or character rendering.
+    pub const BODY: Self = Self { fixed: false, interactable: false, health: None, character: false };
+    /// Immovable neutral prop using the shared body footprint.
+    pub const BLOCK: Self = Self { fixed: true, ..Self::BODY };
+    /// Grants independently validated starting health.
     #[must_use]
-    pub const fn seeking(self) -> Self {
-        assert!(!self.fixed, "a static body cannot chase");
-        Self { seeks: true, ..self }
-    }
-
-    /// Whether this template chases. Read by [`place`], and by a scenario
-    /// deciding what it just asked for.
+    pub const fn with_health(self, health: core::num::NonZeroU8) -> Self { Self { health: Some(health), ..self } }
+    /// Selects character presentation without implying hostility or health.
     #[must_use]
-    pub const fn seeks(self) -> bool {
-        self.seeks
-    }
-
-    /// A static prop, with no chase or damage capability.
-    pub const BLOCK: Self = Self { seeks: false, fixed: true, interactable: false };
-
-    /// Grants interaction independently of physical movement or health.
+    pub const fn character(self) -> Self { Self { character: true, ..self } }
+    /// Grants one-shot interaction independently of other capabilities.
     #[must_use]
-    pub const fn interactive(self) -> Self {
-        Self { interactable: true, ..self }
-    }
-
-    /// Whether the body supports interaction.
+    pub const fn interactive(self) -> Self { Self { interactable: true, ..self } }
+    /// Initial health; absent means damage cannot affect this body.
     #[must_use]
-    pub const fn interactable(self) -> bool {
-        self.interactable
-    }
-
-    /// Whether the body is immovable.
+    pub const fn hit_points(self) -> Option<core::num::NonZeroU8> { self.health }
+    /// Whether this body uses character presentation.
     #[must_use]
-    pub const fn fixed(self) -> bool {
-        self.fixed
-    }
-
-    /// Refuses contradictory grants and static placements outside the arena.
-    /// Shared by scene admission and the only spawn door.
+    pub const fn is_character(self) -> bool { self.character }
+    /// Whether this body supports interaction.
+    #[must_use]
+    pub const fn interactable(self) -> bool { self.interactable }
+    /// Whether this body is immovable.
+    #[must_use]
+    pub const fn fixed(self) -> bool { self.fixed }
+    /// Shared file and runtime admission. Static bodies must already fit the arena.
     pub(crate) fn valid_at(self, at: Vec2) -> bool {
-        at.is_finite()
-            && (!self.fixed
-                || (!self.seeks
-                    && at.abs().max_element() <= crate::ARENA_HALF - crate::ENEMY_RADIUS))
+        crate::valid_position(at) && (!self.fixed || at.abs().max_element() <= crate::ARENA_HALF - crate::ENEMY_RADIUS)
     }
-
-    pub(crate) fn hash_into(self, h: &mut Fnv) {
-        // Exhaustive, as every hash in this crate is: a behaviour added to the
-        // template stops this compiling until it is fed in, and two pending
-        // requests that differ only in what they will grant are different
-        // simulation state.
-        let Self { seeks, fixed, interactable } = self;
+    /// Hashes every admitted capability, including initial health and presentation.
+    pub fn hash_into(self, h: &mut Fnv) {
+        let Self { fixed, interactable, health, character } = self;
         h.usize(usize::from(interactable));
         h.usize(usize::from(fixed));
-        h.usize(usize::from(seeks));
+        h.usize(health.map_or(0, |value| usize::from(value.get())));
+        h.usize(usize::from(character));
     }
 }
 
@@ -99,6 +74,11 @@ impl Template {
 /// Scene eviction never reuses tickets; restarting creates a fresh lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpawnTicket(u64);
+
+impl SpawnTicket {
+    /// Stable numeric ticket identity for replay state owned by callers.
+    pub fn hash_into(self, hash: &mut Fnv) { hash.u64(self.0); }
+}
 
 impl core::fmt::Display for SpawnTicket {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -177,6 +157,7 @@ impl SpawnQueue {
     }
 
     pub(crate) fn push_from(&mut self, at: Vec2, what: Template, owner: Option<SceneId>, source: Option<crate::SourceId>) -> Option<SpawnTicket> {
+        if !what.valid_at(at) { return None; }
         if self.pending.len() >= QUEUE_CAPACITY {
             self.refused += 1;
             return None;
@@ -242,20 +223,11 @@ impl SpawnQueue {
 /// `Bodies` owns parallel-array updates and seeds interpolation endpoints.
 pub(crate) fn place(
     enemies: &mut Bodies,
-    seekers: &mut Members,
     at: Vec2,
     what: Template,
     trace: &mut TraceSink<'_>,
 ) -> Option<EntityId> {
     let id = enemies.spawn(at, what)?;
-
-    // The grants. One line per behaviour, and the reason it is a line here
-    // rather than a loop over some registry is the same reason `World::hash`
-    // destructures: a behaviour added without a decision about whether a
-    // template can grant it should be visible, not defaulted.
-    if what.seeks {
-        seekers.add(id);
-    }
 
     // Diagnostics describe placement; authoritative outcomes bind request identities.
     trace.emit(Event::Placed { id });
@@ -267,7 +239,6 @@ pub(crate) fn place(
 pub(crate) fn drain(
     queue: &mut SpawnQueue,
     enemies: &mut Bodies,
-    seekers: &mut Members,
     scenes: &mut Scenes,
     mut trace: TraceSink<'_>,
 ) {
@@ -283,7 +254,7 @@ pub(crate) fn drain(
         let entity = if request.cancelled || request.owner.is_some_and(|id| !scenes.contains(id)) {
             None
         } else {
-            place(enemies, seekers, request.at, request.what, &mut trace)
+            place(enemies, request.at, request.what, &mut trace)
         };
         if let Some(id) = entity {
             enemies.health.set_origin(id, request.source);
@@ -311,16 +282,15 @@ mod tests {
     fn a_full_horde_refuses_what_it_cannot_hold() {
         let mut enemies = Bodies::default();
         for _ in 0..MAX_BODIES {
-            enemies.spawn(Vec2::ZERO, Template::BODY).unwrap();
+            enemies.spawn(Vec2::ZERO, crate::TEST_CHARACTER).unwrap();
         }
         assert_eq!(enemies.len(), MAX_BODIES + 1, "the horde did not actually fill");
 
-        let mut seekers = Members::default();
         let mut queue = SpawnQueue::default();
         let mut trace = crate::Trace::default();
 
-        assert!(queue.push(Vec2::ZERO, Template::BODY).is_some(), "the queue refused before the horde could");
-        drain(&mut queue, &mut enemies, &mut seekers, &mut Scenes::default(), trace.sink(0));
+        assert!(queue.push(Vec2::ZERO, crate::TEST_CHARACTER).is_some(), "the queue refused before the horde could");
+        drain(&mut queue, &mut enemies, &mut Scenes::default(), trace.sink(0));
 
         assert_eq!(enemies.len(), MAX_BODIES + 1, "the budget was overrun");
         let events: Vec<_> = trace.iter().map(|(_, e)| e).collect();
@@ -334,27 +304,24 @@ mod tests {
         let mut scenes = world.scenes;
         let mut queue = SpawnQueue::default();
         for _ in 0..QUEUE_CAPACITY {
-            queue.push_owned(Vec2::ZERO, Template::BODY, Some(owner)).unwrap();
+            queue.push_owned(Vec2::ZERO, crate::TEST_CHARACTER, Some(owner)).unwrap();
         }
         queue.cancel_scene(owner);
         assert_eq!(queue.len(), 0, "cancelled work reserves no body capacity");
-        assert!(queue.push(Vec2::ZERO, Template::BODY).is_none(), "outcome slots remain bounded until drain");
+        assert!(queue.push(Vec2::ZERO, crate::TEST_CHARACTER).is_none(), "outcome slots remain bounded until drain");
         let mut enemies = Bodies::default();
-        let mut seekers = Members::default();
         let mut trace = crate::Trace::default();
-        drain(&mut queue, &mut enemies, &mut seekers, &mut scenes, trace.sink(0));
+        drain(&mut queue, &mut enemies, &mut scenes, trace.sink(0));
         assert_eq!(queue.outcomes().len(), QUEUE_CAPACITY);
         assert!(queue.outcomes().iter().all(|result| result.entity.is_none()));
-        assert!(queue.push(Vec2::ZERO, Template::BODY).is_some());
+        assert!(queue.push(Vec2::ZERO, crate::TEST_CHARACTER).is_some());
     }
 
-    /// Every placement door rejects immovable/chasing contradictions and an
+    /// Every placement door rejects an
     /// out-of-arena static body before identity or capability storage changes.
     #[test]
     fn invalid_static_grants_are_refused_without_mutation() {
-        let invalid = Template { seeks: true, ..Template::BLOCK };
         for (position, what) in [
-            (Vec2::Y, invalid),
             (Vec2::splat(crate::ARENA_HALF), Template::BLOCK),
             (Vec2::splat(f32::NAN), Template::BLOCK),
         ] {

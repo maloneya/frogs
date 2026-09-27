@@ -256,7 +256,7 @@ impl TryFrom<SourceSpec> for Source {
             return Err("source position/radius must be finite; radius must be nonnegative");
         }
         if !what.valid_at(centre.abs() + Vec2::splat(radius)) {
-            return Err("invalid source template or static placement extent");
+            return Err("invalid source template or placement extent");
         }
         if let Condition::PlayerWithin(distance) = when
             && (!distance.is_finite() || distance < 0.0)
@@ -437,7 +437,7 @@ mod tests {
         let mut world = World::empty();
         let id = world.add_source(
             Source::try_from(SourceSpec { pos: (20.0, 0.0), radius: 0.0, every: 2,
-                when: Condition::Always, what: Template::BODY, enabled: true }).unwrap(),
+                when: Condition::Always, what: crate::TEST_CHARACTER, enabled: true }).unwrap(),
         );
         // Exercise the interval between decision and drain directly: the
         // enablement setter has no authority over an already accepted request.
@@ -447,7 +447,7 @@ mod tests {
         for dt in Accumulator::default().pending(Dt::SECS) {
             world.step(dt, Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
         }
-        assert_eq!(world.enemy_count(), 1);
+        assert_eq!(world.damageable_count(), 1);
         assert_eq!(world.source_state(id), Some(SourceState {
             enabled: false, countdown: 1, emitted: 1,
         }));

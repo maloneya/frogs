@@ -1,10 +1,11 @@
 //! Encounter composition through Game, with real combat and full lifetime checks.
+use arpg_game::{Placed, SourceSpec, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{
     DefeatObjective, DoorSpec, DoorState, EncounterAction as Action, EncounterObjective,
     EncounterPhase as Phase, EncounterSpec, EncounterStart, Game, GameScene,
 };
-use arpg_sim::{Accumulator, AttackProfile, Condition, Dt, Placed, SourceSpec, Template};
+use arpg_sim::{Accumulator, AttackProfile, Condition, Dt, };
 use glam::{Vec2, Vec3};
 
 fn source(pos: (f32, f32)) -> SourceSpec {
@@ -13,7 +14,7 @@ fn source(pos: (f32, f32)) -> SourceSpec {
         radius: 0.0,
         every: 10_000,
         when: Condition::Always,
-        what: Template::BODY,
+        what: ActorDefinition::passive_hostile(),
         enabled: false,
     }
 }
@@ -36,19 +37,19 @@ fn scene() -> GameScene {
     scene.engine.bodies = vec![
         Placed {
             pos: (1.0, 0.0),
-            what: Template::BLOCK.interactive(),
+            what: ActorDefinition::prop().interactive(),
         },
         Placed {
             pos: (-1.0, 0.0),
-            what: Template::BLOCK.interactive(),
+            what: ActorDefinition::prop().interactive(),
         },
         Placed {
             pos: (1.4, 94.5),
-            what: Template::BLOCK,
+            what: ActorDefinition::prop(),
         },
         Placed {
             pos: (-20.0, 0.0),
-            what: Template::BLOCK,
+            what: ActorDefinition::prop(),
         },
     ];
     scene.engine.sources = vec![source((0.0, 95.7)), source((-50.0, 0.0))];
@@ -111,7 +112,7 @@ fn two_trials_count_their_own_defeats_and_final_tick_success_unlocks_only_its_do
     step(&mut game, 702, false);
     assert_eq!(game.door_state(id, 0), Some(DoorState::Open));
     assert!(!game.is_alive(door));
-    let replacement = game.place(Vec2::new(1.4, 94.5), Template::BLOCK).unwrap();
+    let replacement = game.place(Vec2::new(1.4, 94.5), ActorDefinition::prop()).unwrap();
     step(&mut game, 703, true);
     assert!(game.is_alive(replacement));
 }
@@ -140,13 +141,13 @@ fn despawn_and_recycled_identity_do_not_award_progress_and_endpoint_loss_stops_s
     step(&mut game, 1, false);
     let spawned = *game.scene_bodies(id).unwrap().last().unwrap();
     assert!(game.despawn_body(spawned));
-    let replacement = game.place(Vec2::new(0.0, 95.7), Template::BODY).unwrap();
+    let replacement = game.place(Vec2::new(0.0, 95.7), ActorDefinition::passive_hostile()).unwrap();
     assert_ne!(spawned, replacement);
     step(&mut game, 2, false);
     assert_eq!(game.encounter_state(id, 0).unwrap().defeated, 0);
     let door = game.scene_bodies(id).unwrap()[2];
     assert!(game.despawn_body(door));
-    let other = game.place(Vec2::new(1.4, 94.5), Template::BLOCK).unwrap();
+    let other = game.place(Vec2::new(1.4, 94.5), ActorDefinition::prop()).unwrap();
     step(&mut game, 3, false);
     assert_eq!(game.encounter_state(id, 0).unwrap().phase, Phase::Orphaned);
     assert_eq!(game.door_state(id, 0), Some(DoorState::Missing));
@@ -159,7 +160,7 @@ fn despawn_and_recycled_identity_do_not_award_progress_and_endpoint_loss_stops_s
 fn load_rejection_is_atomic_even_with_pending_spawns_and_activation() {
     let mut game = Game::from_scene(&scene()).unwrap();
     step(&mut game, 0, true);
-    assert!(game.request_spawn(Vec2::new(20.0, 20.0), Template::BODY).is_some());
+    assert!(game.request_spawn(Vec2::new(20.0, 20.0), ActorDefinition::passive_hostile()).is_some());
     let before = observed(&game);
     let mut invalid = Vec::new();
     let mut s = scene();
@@ -198,10 +199,10 @@ fn load_rejection_is_atomic_even_with_pending_spawns_and_activation() {
     s.engine.sources[0].enabled = true;
     invalid.push(s);
     let mut s = scene();
-    s.engine.sources[0].what = Template::BLOCK;
+    s.engine.sources[0].what = ActorDefinition::prop();
     invalid.push(s);
     let mut s = scene();
-    s.engine.bodies[0].what = Template::BLOCK;
+    s.engine.bodies[0].what = ActorDefinition::prop();
     invalid.push(s);
     let mut s = scene();
     let EncounterObjective::Defeat(o) = &mut s.encounters[1].objective;
@@ -209,6 +210,9 @@ fn load_rejection_is_atomic_even_with_pending_spawns_and_activation() {
     invalid.push(s);
     let mut s = scene();
     s.engine.sources[0].pos.0 = f32::NAN;
+    invalid.push(s);
+    let mut s = scene();
+    s.engine.bodies[2].what.physical = arpg_sim::Template::BLOCK.character();
     invalid.push(s);
     for invalid in invalid {
         assert!(game.load_scene(&invalid).is_err());
@@ -253,7 +257,7 @@ fn removing_a_pending_start_or_source_cannot_retarget_a_replacement() {
             let start = game.scene_bodies(id).unwrap()[0];
             assert!(game.despawn_body(start));
             let _ = game
-                .place(Vec2::new(1.0, 0.0), Template::BLOCK.interactive())
+                .place(Vec2::new(1.0, 0.0), ActorDefinition::prop().interactive())
                 .unwrap();
         } else {
             let removed_source = game.scene_sources(id).unwrap()[0];
@@ -278,7 +282,7 @@ fn defeating_an_unrelated_replacement_never_counts_as_a_source_defeat() {
     step(&mut game, 1, false);
     let spawned = *game.scene_bodies(id).unwrap().last().unwrap();
     assert!(game.despawn_body(spawned));
-    let replacement = game.place(Vec2::new(0.0, 95.7), Template::BODY).unwrap();
+    let replacement = game.place(Vec2::new(0.0, 95.7), ActorDefinition::passive_hostile()).unwrap();
     for tick in 2..700 {
         step(&mut game, tick, false);
     }

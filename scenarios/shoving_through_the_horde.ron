@@ -11,7 +11,7 @@
 // reviewable artifact rather than a claim that nothing important moved.
 (
     description: "Walking into a 64-body crowd and out the other side, recorded tick by tick.",
-    setup: (scenes: [(engine: (name: "shoving_through_the_horde", grids: [(origin: (-2.45, -2.45), columns: 8, rows: 8, spacing: 0.7)]))]),
+    setup: (scenes: [(engine: (name: "shoving_through_the_horde", grids: [(origin: (-2.45, -2.45), columns: 8, rows: 8, spacing: 0.7, what: (physical: (health: Some(3), character: true), role: Hostile))]))]),
     inputs: [
         (at: 0, ticks: 60, dir: (1.0, 0.0)),
     ],

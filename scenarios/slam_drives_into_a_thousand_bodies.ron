@@ -3,8 +3,8 @@
 (
     description: "A huge Slam launch into a 1024-body crowd stays finite and within the physics budget.",
     setup: (scenes: [(engine: (name: "Slam horde",
-        bodies: [(pos: (0.0, 4.3))],
-        grids: [(origin: (-10.5, 5.3), columns: 31, rows: 33, spacing: 0.7)],
+        bodies: [(pos: (0.0, 4.3), what: (physical: (health: Some(3), character: true), role: Hostile))],
+        grids: [(origin: (-10.5, 5.3), columns: 31, rows: 33, spacing: 0.7, what: (physical: (health: Some(3), character: true), role: Hostile))],
     ))]),
     attack_profiles: [(at: 0, profile: Slam)],
     attacks: [0],

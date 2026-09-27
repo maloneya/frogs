@@ -1,7 +1,8 @@
 //! Walls composed through the same public Game used by app and scenarios.
+use arpg_game::{Scene, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene};
-use arpg_sim::{Accumulator, AttackProfile, Beam, Dt, Impulse, MAX_WALLS, Scene, Template, Wall};
+use arpg_sim::{Accumulator, AttackProfile, Beam, Dt, Impulse, MAX_WALLS, Wall};
 use glam::{Vec2, Vec3};
 
 fn wall(centre: Vec2, size: Vec2, yaw: f32) -> Wall {
@@ -39,12 +40,12 @@ fn wall_admission_is_atomic_and_lifetime_preserves_stable_scene_indices() {
     let survivor = game.walls().next().unwrap();
     assert_eq!((survivor.0, survivor.1), (second, 0));
     assert!(report(&game).contains(&format!("\"{second}/0\"")));
-    assert!(game.request_spawn(Vec2::new(10.0, 0.0), Template::BODY).is_some());
+    assert!(game.request_spawn(Vec2::new(10.0, 0.0), ActorDefinition::passive_hostile()).is_some());
     let mut control = Game::from_scene(&content).unwrap();
     let control_first = control.walls().next().unwrap().0;
     control.load_scene(&content).unwrap();
     assert!(control.evict_scene(control_first));
-    assert!(control.request_spawn(Vec2::new(10.0, 0.0), Template::BODY).is_some());
+    assert!(control.request_spawn(Vec2::new(10.0, 0.0), ActorDefinition::passive_hostile()).is_some());
     let before = (game.hash(), report(&game), game.trace().render());
     let full = scene(vec![content.engine.walls[0]; MAX_WALLS]);
     assert!(game.load_scene(&full).is_err());
@@ -134,8 +135,8 @@ fn crowd_correction_cannot_push_a_body_through_a_wall() {
         0.0,
     )]))
     .unwrap();
-    let front = game.place(Vec2::new(0.0, 1.74), Template::BODY).unwrap();
-    let rear = game.place(Vec2::new(0.0, 1.3), Template::BODY).unwrap();
+    let front = game.place(Vec2::new(0.0, 1.74), ActorDefinition::passive_hostile()).unwrap();
+    let rear = game.place(Vec2::new(0.0, 1.3), ActorDefinition::passive_hostile()).unwrap();
     assert!(game.apply_impulse(rear, Impulse::try_from((0.0, 20.0)).unwrap()));
     for _ in 0..20 {
         step(&mut game, Vec3::Z, Vec3::Z, false, false);
@@ -154,7 +155,7 @@ fn every_attack_obeys_cover_but_exposed_targets_remain_hittable() {
     ] {
         let content = scene(vec![wall(Vec2::new(0.0, 0.8), Vec2::new(4.0, 0.1), 0.0)]);
         let mut game = Game::from_scene(&content).unwrap();
-        let target = game.place(Vec2::new(0.0, 1.3), Template::BODY).unwrap();
+        let target = game.place(Vec2::new(0.0, 1.3), ActorDefinition::passive_hostile()).unwrap();
         game.set_attack_profile(profile);
         for tick in 0..30 {
             step(
@@ -222,12 +223,12 @@ fn beam_endpoint_uses_nearest_rotated_wall_and_survives_origin_inside_a_wall() {
 #[test]
 fn seeker_crowd_cannot_cross_the_face_while_compressing() {
     let mut content = scene(vec![wall(Vec2::new(0.0, 2.0), Vec2::new(40.0, 0.4), 0.0)]);
-    content.engine.grids.push(arpg_sim::BodyGrid {
+    content.engine.grids.push(arpg_game::BodyGrid {
         origin: (-10.85, 4.0),
         columns: 32,
         rows: 32,
         spacing: 0.7,
-        what: Template::BODY.seeking(),
+        what: ActorDefinition::hostile(),
     });
     let mut game = Game::from_scene(&content).unwrap();
     let ids = game
@@ -264,7 +265,7 @@ fn reported_beam_endpoint_matches_the_clipped_game_observation() {
 #[test]
 fn wall_recovery_at_an_arena_edge_chooses_an_in_bounds_exit() {
     let mut game = Game::empty();
-    let body = game.place(Vec2::new(95.5, 0.0), Template::BODY).unwrap();
+    let body = game.place(Vec2::new(95.5, 0.0), ActorDefinition::passive_hostile()).unwrap();
     game.load_scene(&scene(vec![wall(
         Vec2::new(95.0, 0.0),
         Vec2::new(2.0, 8.0),

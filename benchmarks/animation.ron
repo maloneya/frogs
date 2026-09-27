@@ -5,7 +5,7 @@
         name: "Benchmark — moving animated crowd",
         grids: [(
             origin: (-74.25, -74.25), columns: 100, rows: 100, spacing: 1.5,
-            what: (seeks: true),
+            what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)),
         )],
     ),
     torches: [(

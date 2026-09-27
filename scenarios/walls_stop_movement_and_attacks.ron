@@ -4,7 +4,7 @@
     description: "A wall stops walking and shields an enemy from Slam.",
     setup: (scenes: [(engine: (name: "Wall cover",
         walls: [(centre: (0.0, 2.0), size: (6.0, 0.4))],
-        bodies: [(pos: (0.0, 2.6))],
+        bodies: [(pos: (0.0, 2.6), what: (physical: (health: Some(3), character: true), role: Hostile))],
     ))]),
     inputs: [(at: 0, ticks: 20, dir: (0.0, 1.0))],
     attack_profiles: [(at: 0, profile: Slam)],

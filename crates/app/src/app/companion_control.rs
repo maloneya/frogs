@@ -28,13 +28,7 @@ impl App {
                 Ok(format!("Collision outlines {}", if enabled { "on" } else { "off" }))
             }
             Control::Vsync(enabled) => self.set_vsync(enabled),
-            Control::Zoom(direction) => {
-                let camera = self.camera.as_mut().ok_or("No camera yet")?;
-                const STEP: f32 = 1.2;
-                camera.zoom_by(match direction { ZoomDirection::In => 1.0 / STEP, ZoomDirection::Out => STEP });
-                self.perf.reset();
-                Ok(format!("Camera height: {:.1} m", camera.view_height()))
-            }
+            Control::Zoom(direction) => self.zoom(direction),
             Control::Capture(path) => {
                 if self.renderer.is_none() { return Err("No renderer yet".into()); }
                 self.capture.request(path, None, std::time::Instant::now())?;
@@ -42,6 +36,14 @@ impl App {
             }
         }?;
         Ok(message)
+    }
+
+    pub(super) fn zoom(&mut self, direction: ZoomDirection) -> Result<String, String> {
+        let camera = self.camera.as_mut().ok_or("No camera yet")?;
+        const STEP: f32 = 1.2;
+        camera.zoom_by(match direction { ZoomDirection::In => 1.0 / STEP, ZoomDirection::Out => STEP });
+        self.perf.reset();
+        Ok(format!("Camera height: {:.1} m", camera.view_height()))
     }
 
     pub(super) fn set_vsync(&mut self, enabled: bool) -> Result<String, String> {
@@ -73,10 +75,7 @@ impl App {
             let a = field.attribute();
             json!({"key":a.key, "group":a.group, "label":a.label, "unit":a.unit,
                 "default":a.default, "min":a.min, "max":a.max, "step":a.step,
-                "value":tuning.get(field), "saved":self.tuning_saved.get(field),
-                "note":(field == TuningField::MonsterAcceleration).then(|| format!(
-                    "Motor speed ceiling: {:.2} m/s. Increase acceleration to reach higher target speeds.",
-                    tuning.monster_speed_limit()))})
+                "value":tuning.get(field), "saved":self.tuning_saved.get(field)})
         }).collect();
         json!({"ok":error.is_none(), "error":error, "state":{
             "session":std::process::id(), "fields":fields, "unsaved":tuning != self.tuning_saved,

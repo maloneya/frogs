@@ -1,0 +1,16 @@
+(
+    description: "A leap warns for 42 ticks, travels for 36 without damage, hits once on landing, then recovers before a close swipe.",
+    setup: (scenes: [(engine: (name: "Leap timing", bodies: [
+        (pos: (0.0, 4.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
+    ]),)]),
+    checkpoints: [
+        (at: 41, expect: (player_health: 5)),
+        (at: 42, expect: (player_health: 5)),
+        (at: 77, expect: (player_health: 5)),
+        (at: 78, expect: (player_health: 4)),
+        (at: 131, expect: (player_health: 4)),
+        (at: 167, expect: (player_health: 4)),
+    ],
+    budget: (ticks: 169),
+    expect: (player_health: 3, enemy_count: 1),
+)

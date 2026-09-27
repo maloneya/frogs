@@ -2,15 +2,15 @@
 // Mean Game step budget leaves room within 16.67 ms for presentation and spikes.
 // Use release builds for performance conclusions; the gate also runs optimized sim.
 (
-    description: "Ten thousand seekers remain finite and deterministic while stepping within a 10 ms mean budget.",
+    description: "Ten thousand pursuing actors remain finite and deterministic while stepping within a 10 ms mean budget.",
     setup: (scenes: [(engine: (name: "Dense crowd test", grids: [(
         origin: (-34.65, -34.65), columns: 100, rows: 100, spacing: 0.7,
-        what: (seeks: true),
+        what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)),
     )]))]),
     budget: (ticks: 1200, max_mean_step_micros: 10000.0),
     checkpoints: [
-        (at: 0, expect: (enemy_count: 10000, seekers: 10000, scene_count: 1)),
-        (at: 899, expect: (enemy_count: 10000, seekers: 10000, scene_count: 1)),
+        (at: 0, expect: (enemy_count: 10000, scene_count: 1)),
+        (at: 899, expect: (enemy_count: 10000, scene_count: 1)),
     ],
-    expect: (enemy_count: 10000, seekers: 10000, scene_count: 1),
+    expect: (enemy_count: 10000, scene_count: 1),
 )

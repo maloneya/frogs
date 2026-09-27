@@ -3,7 +3,7 @@
 (
     description: "A held beam defeats three columns in a 1024-body horde within the existing 4ms physics budget.",
     setup: (scenes: [(engine: (name: "Beam horde", grids: [
-        (origin: (0.0, 1.0), columns: 64, rows: 16, spacing: 0.7),
+        (origin: (0.0, 1.0), columns: 64, rows: 16, spacing: 0.7, what: (physical: (health: Some(3), character: true), role: Hostile)),
     ]))]),
     attack_profiles: [(at: 0, profile: Disintegrate)],
     channels: [(at: 0, ticks: 120)],

@@ -1,14 +1,15 @@
 //! Crowd clearing and fast shared motion through the playable Game boundary.
+use arpg_game::{Scene, BodyGrid, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::Game;
-use arpg_sim::{Accumulator, AttackProfile, BodyGrid, Dt, Impulse, Scene, Template, Wall};
+use arpg_sim::{Accumulator, AttackProfile, Dt, Impulse, Wall};
 use glam::{Vec2, Vec3};
 
 #[test]
 fn a_sweeping_beam_can_remove_most_of_a_thousand_seekers_in_thirty_seconds() {
     let scene = Scene {
         grids: vec![BodyGrid { origin: (-10.85, 3.0), columns: 32, rows: 32,
-            spacing: 0.7, what: Template::BODY.seeking() }],
+            spacing: 0.7, what: ActorDefinition::hostile() }],
         ..Default::default()
     }.into();
     let mut game = Game::from_scene(&scene).unwrap();
@@ -34,8 +35,8 @@ fn fast_motion_shares_momentum_but_misses_and_walls_do_not() {
             scene.walls.push(Wall::new(Vec2::new(0.0, 5.5), Vec2::new(4.0, 0.1), 0.0).unwrap());
         }
         let mut game = Game::from_scene(&scene.into()).unwrap();
-        let a = game.place(Vec2::new(0.0, 5.0), Template::BODY).unwrap();
-        let b = game.place(Vec2::new(offset, 5.0 + distance), Template::BODY).unwrap();
+        let a = game.place(Vec2::new(0.0, 5.0), ActorDefinition::passive_hostile()).unwrap();
+        let b = game.place(Vec2::new(offset, 5.0 + distance), ActorDefinition::passive_hostile()).unwrap();
         assert!(game.apply_impulse(a, Impulse::try_from((0.0, 72.0)).unwrap()));
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));

@@ -21,7 +21,7 @@ use crate::harness::Command;
 fn invalid_harness_sources_preserve_pending_work() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut app = App { game: Game::empty(), harness: Some(rx), ..Default::default() };
-    let ticket = app.game.request_spawn(Vec2::new(20.0, 0.0), arpg_sim::Template::BODY).unwrap();
+    let ticket = app.game.request_spawn(Vec2::new(20.0, 0.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
     let before = (app.game.hash(), app.game.trace().render());
     for input in [
         "source (pos: (0.0, 0.0), radius: -1.0)",
@@ -35,6 +35,16 @@ fn invalid_harness_sources_preserve_pending_work() {
         assert!(response.try_recv().unwrap().starts_with("error:"));
         assert_eq!((app.game.hash(), app.game.trace().render()), before);
     }
+    let (reply, response) = std::sync::mpsc::channel();
+    let invalid = arpg_game::ActorDefinition {
+        actions: vec![arpg_game::ActionDefinition::Wait { ticks: 0 }],
+        behavior: arpg_game::BehaviorNode::Action(0),
+        ..arpg_game::ActorDefinition::civilian()
+    };
+    tx.send(Request { command: Command::Spawn { x: 4.0, z: 4.0, what: invalid }, reply }).unwrap();
+    assert!(!app.drain_harness());
+    assert_eq!(response.try_recv().unwrap(), "error: invalid wait duration");
+    assert_eq!((app.game.hash(), app.game.trace().render()), before);
     for dt in arpg_sim::Accumulator::default().pending(arpg_sim::Dt::SECS) {
         app.game.step(dt, arpg_core::Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
     }
@@ -99,12 +109,12 @@ fn deferred_replies_wait_for_release_and_preserve_future_deadlines() {
 }
 
 fn pair() -> Scene {
-    arpg_sim::Scene {
+    arpg_game::Scene {
         walls: Vec::new(),
         name: "pair".into(),
-        bodies: vec![arpg_sim::Placed {
+        bodies: vec![arpg_game::Placed {
             pos: (20.0, 0.0),
-            what: arpg_sim::Template::BODY,
+            what: arpg_game::ActorDefinition::passive_hostile(),
         }],
         grids: vec![],
         sources: vec![],
@@ -224,7 +234,7 @@ fn restart_resets_the_complete_playtest_boundary() {
         app.game.player_id(),
         arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()
     ));
-    assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY).is_some());
+    assert!(app.game.request_spawn(Vec2::ZERO, arpg_game::ActorDefinition::passive_hostile()).is_some());
     let mut camera = OrthoCamera::new(1280, 720);
     camera.snap_to(glam::Vec3::new(40.0, 0.0, 40.0));
     app.camera = Some(camera);
@@ -345,7 +355,7 @@ fn perf_queries_and_reset_preserve_gameplay_and_pending_work() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut app = App { harness: Some(rx), ..Default::default() };
     app.start_playtest(pair()).unwrap();
-    assert!(app.game.request_spawn(Vec2::ZERO, arpg_sim::Template::BODY).is_some());
+    assert!(app.game.request_spawn(Vec2::ZERO, arpg_game::ActorDefinition::passive_hostile()).is_some());
     record_perf_frame(&mut app);
     let before = app.report_state();
     let trace = app.game.trace().render();
@@ -436,7 +446,7 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
         app.game.step(dt, Intent::new(MoveDir::NONE, arpg_core::AimDir::FORWARD, false)
             .with_attack_held(true));
         app.enemy_feedback.observe(&app.game);
-        let id = app.game.enemy_presentations(Alpha::ZERO).next().unwrap().id();
+        let id = app.game.character_presentations(Alpha::ZERO).next().unwrap().id();
         assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 1.0);
         id
     };
@@ -463,7 +473,7 @@ fn tuning_edits_save_restore_and_restart_through_the_shared_app_boundary() {
     let path = directory.join("tuning.ron");
     let mut app = App { tuning_path: path.clone(), ..Default::default() };
     app.start_playtest(Scene::default()).unwrap();
-    let pending = app.game.request_spawn(Vec2::new(20.0, 0.0), arpg_sim::Template::BODY).unwrap();
+    let pending = app.game.request_spawn(Vec2::new(20.0, 0.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
     let before = app.game.hash();
     assert!(app.edit_tuning(Edit::Set(TuningField::PlayerSpeed, f32::NAN)).is_err());
     assert_eq!(app.game.hash(), before);

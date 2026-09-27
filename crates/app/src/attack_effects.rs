@@ -17,12 +17,21 @@ const THROAT_SEGMENTS: usize = 4;
 const TAIL_SEGMENTS: usize = 8;
 const MAX_MARKERS: usize = 128;
 const MARKER_LIFE: f32 = 6.0;
-pub(crate) const MAX_ATTACK_VERTICES: usize = CAPACITY * 8 * 12 + RING_SEGMENTS * 18 + MAX_MARKERS * 24;
+// Four telegraphs fit alongside player trails, hit sparks and all torch flames
+// in the shared effect buffer. Gameplay admission does not size renderer memory.
+pub(crate) const MAX_VISIBLE_ACTIONS: usize = 4;
+pub(crate) const MAX_ATTACK_VERTICES: usize = CAPACITY * 8 * 12 + RING_SEGMENTS * 18 + MAX_MARKERS * 24 + MAX_VISIBLE_ACTIONS * RING_SEGMENTS * 9;
 const _: () = assert!(MAX_ATTACK_VERTICES <= MAX_EFFECT_VERTICES);
 // Three bands: blade glow, throat, body and tapered tail; each band segment is 12 vertices.
 const _: () = assert!(
     (THROAT_SEGMENTS + TAIL_SEGMENTS + 2) * 3 * 12 + MAX_MARKERS * 24 <= MAX_ATTACK_VERTICES
 );
+
+/// Poses and ground markers consume the same bounded, ordered observations.
+pub(crate) fn visible_actions(actions: impl Iterator<Item = arpg_game::ActionStatus>) -> impl Iterator<Item = arpg_game::ActionStatus> {
+    actions.filter(|action| matches!(action.kind, arpg_game::ActionKind::Swipe | arpg_game::ActionKind::Leap)
+        && action.phase != AttackPhase::Idle).take(MAX_VISIBLE_ACTIONS)
+}
 
 #[derive(Clone, Copy)]
 struct Sample {
@@ -152,6 +161,7 @@ impl AttackEffects {
 
         let tick = game.tick();
         self.vertices.clear();
+        for attack in visible_actions(game.action_statuses()) { action_telegraph(&mut self.vertices, attack, alpha); }
         for marker in &self.markers {
             let age = tick.saturating_sub(marker.tick) as f32 + alpha.get();
             let opacity = (1.0 - age / MARKER_LIFE).clamp(0.0, 1.0);
@@ -428,6 +438,36 @@ fn band(out: &mut Vec<EffectVertex>, a: [Vec3; 3], b: [Vec3; 3], colour: LinearR
     }
 }
 
+// The disc is the gameplay-owned strike shape. Filling it communicates time to
+// impact without expanding the promised reach; a leap briefly flashes on landing.
+fn action_telegraph(out: &mut Vec<EffectVertex>, attack: arpg_game::ActionStatus, alpha: Alpha) {
+    if !matches!(attack.kind, arpg_game::ActionKind::Swipe | arpg_game::ActionKind::Leap) { return; }
+    let leap = attack.kind == arpg_game::ActionKind::Leap;
+    let landing = leap && attack.phase == AttackPhase::Recovery && attack.elapsed < 9;
+    if !matches!(attack.phase, AttackPhase::Startup | AttackPhase::Active) && !landing { return; }
+    let progress = ((attack.elapsed as f32 + alpha.get()) / attack.duration as f32).clamp(0.0, 1.0);
+    let active = if leap { landing } else { attack.phase == AttackPhase::Active };
+    let colour = if active { LinearRgb::new(1.0, 0.035, 0.012) }
+        else if leap { LinearRgb::new(0.65, 0.12, 1.0) }
+        else { LinearRgb::new(1.0, 0.45, 0.035) };
+    let centre = Vec3::new(attack.centre.x, 0.045, attack.centre.y);
+    for i in 0..RING_SEGMENTS {
+        let radial = |j: usize| {
+            let angle = j as f32 * std::f32::consts::TAU / RING_SEGMENTS as f32;
+            Vec3::new(angle.cos(), 0.0, angle.sin())
+        };
+        let a = radial(i);
+        let b = radial(i + 1);
+        let edge = colour.with_alpha(if active { 0.95 } else { 0.7 });
+        let inner = attack.radius - 0.045;
+        triangle(out, [centre + a * inner, centre + a * attack.radius, centre + b * attack.radius], [edge; 3]);
+        triangle(out, [centre + a * inner, centre + b * attack.radius, centre + b * inner], [edge; 3]);
+        let fill = attack.radius * if active || (leap && attack.phase == AttackPhase::Active) { 1.0 } else { progress };
+        triangle(out, [centre, centre + a * fill, centre + b * fill],
+            [colour.with_alpha(if active { 0.45 * (1.0 - progress) } else { 0.18 }); 3]);
+    }
+}
+
 fn triangle(out: &mut Vec<EffectVertex>, points: [Vec3; 3], colours: [LinearRgba; 3]) {
     assert!(
         out.len() + 3 <= MAX_EFFECT_VERTICES,
@@ -567,7 +607,7 @@ mod beam_tests {
     fn beam_bands_and_glow_stop_at_flat_and_diagonal_thin_walls_after_turning() {
         for yaw in [0.0, std::f32::consts::FRAC_PI_4, -std::f32::consts::FRAC_PI_4] {
             let wall = arpg_sim::Wall::new(glam::Vec2::new(0.0, 2.0), glam::Vec2::new(6.0, 0.1), yaw).unwrap();
-            let mut game = Game::from_scene(&arpg_sim::Scene { walls: vec![wall], ..Default::default() }.into()).unwrap();
+            let mut game = Game::from_scene(&arpg_game::Scene { walls: vec![wall], ..Default::default() }.into()).unwrap();
             game.set_attack_profile(AttackProfile::Disintegrate);
             let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
             let mut effects = AttackEffects::default();
@@ -622,7 +662,7 @@ mod beam_tests {
     fn beam_markers_include_lethal_hits_expire_and_reset() {
         let mut game = Game::empty();
         game.set_attack_profile(AttackProfile::Disintegrate);
-        let target = game.place(glam::Vec2::new(0.0, 3.0), arpg_sim::Template::BODY).unwrap();
+        let target = game.place(glam::Vec2::new(0.0, 3.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
         let mut effects = AttackEffects::default();
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         for tick in 0..=24 {
@@ -650,4 +690,110 @@ mod beam_tests {
         assert!(effects.markers.is_empty());
     }
 
+}
+
+#[cfg(test)]
+mod enemy_tests {
+    use super::*;
+    use arpg_core::{AimDir, Intent, MoveDir};
+    use arpg_game::{GameScene};
+    use arpg_sim::{Accumulator, Dt};
+use arpg_game::Scene;
+use arpg_game::Placed;
+
+    #[test]
+    fn telegraph_matches_committed_disc_is_bounded_and_disappears_in_recovery() {
+        let mut game = Game::from_scene(&GameScene {
+            engine: Scene { bodies: vec![Placed { pos: (0.0, 1.4), what: arpg_game::ActorDefinition::attacker() }], ..Default::default() },
+            ..Default::default()
+        }).unwrap();
+        let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+        let mut effects = AttackEffects::default();
+        for tick in 0..84 {
+            game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+            let hash = game.hash();
+            effects.observe(&game);
+            effects.rebuild(&game, Alpha::ONE, None);
+            let attack = game.action_statuses().next().unwrap();
+            if tick < 45 {
+                assert_eq!(effects.vertices.len(), RING_SEGMENTS * 9);
+                for vertex in &effects.vertices {
+                    assert!(vertex.position().xz().distance(attack.centre) <= attack.radius + 0.00001);
+                }
+            } else { assert!(effects.vertices.is_empty()); }
+            assert_eq!(game.hash(), hash);
+        }
+        let body = game.action_statuses().next().unwrap().body;
+        game.despawn_body(body);
+        effects.rebuild(&game, Alpha::ONE, None);
+        assert!(effects.vertices.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod leap_tests {
+    use super::*;
+    use arpg_core::{AimDir, Intent, MoveDir};
+    use arpg_game::GameScene;
+    use arpg_sim::{Accumulator, Dt};
+use arpg_game::Scene;
+use arpg_game::Placed;
+
+    #[test]
+    fn simultaneous_leap_markers_stay_bounded_and_retire_after_landing() {
+        let positions = [(0.0,4.0),(4.0,0.0),(0.0,-4.0),(-4.0,0.0),(3.0,3.0),(-3.0,-3.0)];
+        // Waiting actors hold their authored leap positions; pursuit is a separate behavior.
+        let actor = arpg_game::ActorDefinition {
+            actions: vec![arpg_game::ActionDefinition::Leap(arpg_game::LeapAction::default())],
+            behavior: arpg_game::BehaviorNode::Action(0),
+            ..arpg_game::ActorDefinition::passive_hostile()
+        };
+        let mut game = Game::from_scene(&GameScene {
+            engine: Scene { bodies: positions.into_iter().map(|pos| Placed { pos, what: actor.clone() }).collect(), ..Default::default() },
+            ..Default::default()
+        }).unwrap();
+        let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+        let mut effects = AttackEffects::default();
+        for tick in 0..88 {
+            game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+            let hash = game.hash();
+            effects.observe(&game);
+            for alpha in [Alpha::ZERO, Alpha::ONE] {
+                effects.rebuild(&game, alpha, None);
+                assert!(effects.vertices.len() <= MAX_VISIBLE_ACTIONS * RING_SEGMENTS * 9);
+                if tick == 36 { assert_eq!(effects.vertices.len(), 4 * RING_SEGMENTS * 9); }
+                if tick == 87 { assert_eq!(effects.vertices.len(), 3 * RING_SEGMENTS * 9); }
+                assert!(effects.vertices.iter().all(|v| v.position().is_finite()));
+                assert_eq!(game.hash(), hash);
+            }
+        }
+        game.start_scene(&GameScene::default()).unwrap();
+        effects.rebuild(&game, Alpha::ONE, None);
+        assert!(effects.vertices.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod observation_budget_tests {
+    use super::*;
+    #[test]
+    fn routine_actions_do_not_consume_telegraph_capacity_and_extra_markers_are_bounded() {
+        let mut game = Game::empty();
+        let id = game.place(glam::Vec2::new(0.0, 4.0), arpg_game::ActorDefinition::attacker()).unwrap();
+        let mut leap = game.action_status(id).unwrap();
+        // Observation budgeting remains valid independently of combat policy.
+        leap.kind = arpg_game::ActionKind::Leap;
+        leap.phase = AttackPhase::Startup;
+        leap.duration = 42;
+        leap.radius = 0.9;
+        let mut movement = leap;
+        movement.kind = arpg_game::ActionKind::Move;
+        movement.phase = AttackPhase::Active;
+        let observations = std::iter::repeat_n(movement, 1000)
+            .chain(std::iter::repeat_n(leap, MAX_VISIBLE_ACTIONS + 10));
+        let mut vertices = Vec::new();
+        for action in visible_actions(observations) { action_telegraph(&mut vertices, action, Alpha::ONE); }
+        assert_eq!(vertices.len(), MAX_VISIBLE_ACTIONS * RING_SEGMENTS * 9);
+        assert!(vertices.len() <= MAX_ATTACK_VERTICES);
+    }
 }

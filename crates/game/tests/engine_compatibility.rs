@@ -1,13 +1,21 @@
-//! Compatibility at the adapter boundary: the game must preserve the engine's
+//! Shared physical mechanisms at the adapter boundary preserve the engine's
 //! tick history and physical output. Gameplay reports are checked by lifecycle tests.
 
 use arpg_core::{AimDir, Intent, MoveDir, Report};
-use arpg_game::Game;
+use arpg_game::{Game, ActorDefinition, Scene, Placed, BodyGrid, SourceSpec};
 use arpg_sim::{
-    Accumulator, Alpha, AttackProfile, Condition, Dt, Event, Impulse, Placed,
-    Scene, SourceSpec, Template, World,
+    Accumulator, Alpha, AttackProfile, Condition, Dt, Event, Impulse, World,
 };
 use glam::{Vec2, Vec3};
+
+fn physical(scene:&Scene)->arpg_sim::Scene {
+    arpg_sim::Scene {
+        name:scene.name.clone(), walls:scene.walls.clone(),
+        bodies:scene.bodies.iter().map(|b|arpg_sim::Placed{pos:b.pos,what:b.what.physical}).collect(),
+        grids:scene.grids.iter().map(|g|arpg_sim::BodyGrid{origin:g.origin,columns:g.columns,rows:g.rows,spacing:g.spacing,what:g.what.physical}).collect(),
+        sources:scene.sources.iter().map(|s|arpg_sim::SourceSpec{enabled:s.enabled,pos:s.pos,radius:s.radius,every:s.every,when:s.when,what:s.what.physical}).collect(),
+    }
+}
 
 fn assert_same(game: &Game, world: &World) {
     assert_eq!(game.tick(), world.tick());
@@ -28,10 +36,10 @@ fn assert_same(game: &Game, world: &World) {
 fn construction_matches_the_engine_scene_loading_path() {
     assert_same(&Game::default(), &World::default());
     assert_same(&Game::empty(), &World::empty());
-    let scene = Scene { name: "authored crowd".into(), grids: vec![arpg_sim::BodyGrid {
-        origin: (-10.85, -10.85), columns: 32, rows: 32, spacing: 0.7, what: Template::BODY,
+    let scene = Scene { name: "authored crowd".into(), grids: vec![BodyGrid {
+        origin: (-10.85, -10.85), columns: 32, rows: 32, spacing: 0.7, what: ActorDefinition::passive_hostile(),
     }], ..Default::default() };
-    let world = World::from_scene(&scene).unwrap();
+    let world = World::from_scene(&physical(&scene)).unwrap();
     assert_same(&Game::from_scene(&scene.into()).unwrap(), &world);
 }
 
@@ -41,18 +49,18 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
         walls: Vec::new(),
         name: "entry point compatibility".into(),
         bodies: vec![
-            Placed { pos: (1.0, 0.0), what: Template::BLOCK.interactive() },
-            Placed { pos: (0.0, 1.0), what: Template::BODY },
+            Placed { pos: (1.0, 0.0), what: ActorDefinition::prop().interactive() },
+            Placed { pos: (0.0, 1.0), what: ActorDefinition::passive_hostile() },
         ],
         sources: vec![SourceSpec {
             enabled: true,
             pos: (4.0, 4.0), radius: 1.0, every: 12,
-            when: Condition::FewerThan(8), what: Template::BODY.seeking(),
+            when: Condition::FewerThan(8), what: ActorDefinition::passive_hostile(),
         }],
         grids: vec![],
     };
     let mut game = Game::from_scene(&scene.clone().into()).unwrap();
-    let mut world = World::from_scene(&scene).unwrap();
+    let mut world = World::from_scene(&physical(&scene)).unwrap();
     assert_same(&game, &world);
     let mut clock = Accumulator::default();
     let mut stepped = 0;
@@ -66,8 +74,8 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
                 let impulse = Impulse::try_from((2.0, -1.0)).unwrap();
                 assert!(game.apply_impulse(game.player_id(), impulse));
                 assert!(world.apply_impulse(world.player_id(), impulse));
-                assert!(game.request_spawn(Vec2::new(-3.0, 2.0), Template::BODY).is_some());
-                assert!(world.request_spawn(Vec2::new(-3.0, 2.0), Template::BODY).is_some());
+                assert!(game.request_spawn(Vec2::new(-3.0, 2.0), ActorDefinition::passive_hostile()).is_some());
+                assert!(world.request_spawn(Vec2::new(-3.0, 2.0), ActorDefinition::passive_hostile().physical).is_some());
             }
             if stepped == 20 {
                 game.set_attack_profile(AttackProfile::Slam);
@@ -91,8 +99,8 @@ fn mixed_inputs_preserve_ticks_trace_reports_and_interpolation() {
             assert_eq!(actual.facing(), expected.facing());
             assert_eq!(actual.displacement(), expected.displacement());
             assert_eq!(actual.attack().phase, expected.attack().phase);
-            let enemies = |p: arpg_sim::EnemyPresentation| (p.id(), p.ground_position(), p.displacement());
-            assert_eq!(game.enemy_presentations(alpha).map(enemies).collect::<Vec<_>>(), world.enemy_presentations(alpha).map(enemies).collect::<Vec<_>>());
+            let enemies = |p: arpg_sim::CharacterPresentation| (p.id(), p.ground_position(), p.displacement());
+            assert_eq!(game.character_presentations(alpha).map(enemies).collect::<Vec<_>>(), world.character_presentations(alpha).map(enemies).collect::<Vec<_>>());
             let props = |p: arpg_sim::PropPresentation| (p.id(), p.ground_position(), p.interaction());
             assert_eq!(game.prop_presentations(alpha).map(props).collect::<Vec<_>>(), world.prop_presentations(alpha).map(props).collect::<Vec<_>>());
         }
@@ -124,9 +132,9 @@ fn crowd_observations_follow_the_same_game_schedule_without_changing_replay() {
     }
     let scene = arpg_game::GameScene {
         engine: Scene {
-            grids: vec![arpg_sim::BodyGrid {
+            grids: vec![BodyGrid {
                 origin: (-3.0, -3.0), columns: 10, rows: 10, spacing: 0.6,
-                what: Template::BODY.seeking(),
+                what: ActorDefinition::hostile(),
             }], ..Default::default()
         }, ..Default::default()
     };

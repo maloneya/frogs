@@ -74,7 +74,7 @@ absent in release, and a final check cannot detect poison already hidden earlier
 **Cause:** fewer exact tests do not guarantee cheaper candidate discovery.
 Repeated sorting, re-scanning cells as a body oscillates across a boundary,
 and one-pointer-per-body bucket traversal can outweigh the discarded tests.
-**Check:** measure the entire crowd pass after seekers fully compress, not just
+**Check:** measure the entire crowd pass after pursuing actors fully compress, not just
 candidate counts or a short run of the initial spawn layout.
 **Safeguards:** the crowd owner uses ordered bitsets, scans each cell once per
 outer row, and stores indices in contiguous pages. Brute-force equivalence tests

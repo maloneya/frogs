@@ -374,6 +374,8 @@ impl core::fmt::Display for AttackPhase {
 /// A read-only snapshot. Changing it cannot change the simulation.
 #[derive(Clone, Copy, Debug)]
 pub struct AttackStatus {
+    /// Shared lifecycle of the committed swing or held channel.
+    pub execution: Option<crate::ActionExecution>,
     /// Current phase.
     pub phase: AttackPhase,
     /// Elapsed ticks in the current swing, or zero when idle.
@@ -401,6 +403,7 @@ pub struct AttackStatus {
 impl AttackStatus {
     pub(crate) fn report(self, out: &mut arpg_core::Report) {
         let Self {
+            execution,
             phase,
             channeling,
             channel_tick,
@@ -413,6 +416,7 @@ impl AttackStatus {
             swing_recovery,
             struck,
         } = self;
+        out.object("action_execution", |out| { if let Some(execution) = execution { execution.report(out); } });
         out.bool("channeling", channeling);
         out.int("channel_tick", u64::from(channel_tick.unwrap_or(0)));
         out.bool("swinging", phase != AttackPhase::Idle && !channeling);

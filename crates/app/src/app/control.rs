@@ -165,10 +165,12 @@ impl App {
                     // happened: the body appears when the next tick runs. A
                     // reply claiming otherwise would make a `state` taken
                     // immediately afterwards look like a bug.
-                    if self.game.request_spawn(Vec2::new(x, z), what).is_some() {
-                        format!("queued at ({x}, {z}) seeks={}", what.seeks())
+                    if let Err(error) = what.validate() {
+                        format!("error: {error}")
+                    } else if self.game.request_spawn(Vec2::new(x, z), what).is_some() {
+                        format!("queued at ({x}, {z})")
                     } else {
-                        "error: spawn queue full".to_string()
+                        "error: invalid placement or spawn queue full".to_string()
                     }
                 }
                 Command::Source(spec) => {

@@ -3,7 +3,7 @@
 (
  description: "Beam obstruction follows scene lifetime without retaining stale blockers.",
  setup: (scenes: [
-   (engine: (name: "targets", bodies: [(pos: (0.0, 1.0)), (pos: (0.0, 3.0))])),
+   (engine: (name: "targets", bodies: [(pos: (0.0, 1.0), what: (physical: (health: Some(3), character: true), role: Hostile)), (pos: (0.0, 3.0), what: (physical: (health: Some(3), character: true), role: Hostile))])),
    (engine: (name: "cover", walls: [(centre: (0.0, 2.0), size: (4.0, 0.2))])),
  ]),
  attack_profiles: [(at: 0, profile: Disintegrate)],

@@ -2,7 +2,7 @@
     description: "Interaction checks final positions: tick 0 is too far, tick 3 is within reach; later presses do not reactivate.",
     setup: (scenes: [(engine: (
     name: "Activate a static block (E)",
-    bodies: [(pos: (0.0, 2.0), what: (fixed: true, interactable: true))],
+    bodies: [(pos: (0.0, 2.0), what: (physical: (fixed: true, interactable: true), role: Prop))],
 ))]),
     inputs: [(at: 0, ticks: 4, dir: (0.0, 1.0))],
     interactions: [0, 3, 4, 10],

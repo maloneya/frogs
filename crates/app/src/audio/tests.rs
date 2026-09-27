@@ -1,7 +1,9 @@
 use super::*;
 use arpg_core::{AimDir, MoveDir};
-use arpg_game::{EnemyAttackSpec, GameScene};
-use arpg_sim::{Accumulator, Dt, Impulse, Placed, Scene, Template};
+use arpg_game::{GameScene};
+use arpg_sim::{Accumulator, Dt, Impulse};
+use arpg_game::Scene;
+use arpg_game::Placed;
 use glam::Vec3;
 
 fn intent(movement: Vec3, attack: bool) -> Intent {
@@ -41,8 +43,8 @@ fn committed_swings_sound_at_activation_and_misses_have_no_impact() {
 fn a_slam_hitting_multiple_enemies_produces_one_contact_cue() {
     let scene: GameScene = Scene {
         name: "contacts".into(),
-        bodies: vec![Placed { pos: (-0.5, 1.2), what: Template::BODY },
-            Placed { pos: (0.5, 1.2), what: Template::BODY }],
+        bodies: vec![Placed { pos: (-0.5, 1.2), what: arpg_game::ActorDefinition::passive_hostile() },
+            Placed { pos: (0.5, 1.2), what: arpg_game::ActorDefinition::passive_hostile() }],
         ..Default::default()
     }.into();
     let mut game = Game::from_scene(&scene).unwrap();
@@ -92,21 +94,20 @@ fn holding_movement_against_the_arena_wall_is_silent() {
 fn health_loss_sounds_once_and_restart_resets_observations() {
     let scene = GameScene {
         engine: Scene { name: "attacker".into(),
-            bodies: vec![Placed { pos: (0.0, 0.55), what: Template::BODY.seeking() }],
+            bodies: vec![Placed { pos: (0.0, 0.55), what: arpg_game::ActorDefinition::attacker() }],
             ..Default::default() },
-        enemy_attack: Some(EnemyAttackSpec { body: 0 }),
         ..Default::default()
     };
     let mut game = Game::from_scene(&scene).unwrap();
     let mut audio = Audio::default();
-    step(&mut game, &mut audio, intent(Vec3::ZERO, false));
+    for _ in 0..37 { step(&mut game, &mut audio, intent(Vec3::ZERO, false)); }
     assert_eq!(audio.cues[Cue::Hurt as usize], 1);
     for _ in 0..5 { step(&mut game, &mut audio, intent(Vec3::ZERO, false)); }
     assert_eq!(audio.cues[Cue::Hurt as usize], 1);
     game.restart().unwrap();
     audio.reset(&game);
     assert_eq!(audio.cues, [0; Cue::ALL.len()]);
-    step(&mut game, &mut audio, intent(Vec3::ZERO, false));
+    for _ in 0..37 { step(&mut game, &mut audio, intent(Vec3::ZERO, false)); }
     assert_eq!(audio.cues[Cue::Hurt as usize], 1, "a reused tick is fresh after restart");
 }
 
@@ -114,7 +115,7 @@ fn health_loss_sounds_once_and_restart_resets_observations() {
 fn beam_pulses_sound_once_for_many_targets_including_defeat_and_misses_are_silent() {
     let mut game = Game::empty();
     let mut audio = Audio::default();
-    for z in [3.0, 6.0] { game.place(glam::Vec2::new(0.0, z), Template::BODY).unwrap(); }
+    for z in [3.0, 6.0] { game.place(glam::Vec2::new(0.0, z), arpg_game::ActorDefinition::passive_hostile()).unwrap(); }
     game.set_attack_profile(AttackProfile::Disintegrate);
     for tick in 0..30 {
         step(&mut game, &mut audio, intent(Vec3::ZERO, false).with_attack_held(true));

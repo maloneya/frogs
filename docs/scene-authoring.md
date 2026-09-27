@@ -41,7 +41,8 @@ whole-number precision; send JSON integers without converting through floating p
 A batch applies edits in order and returns only a fully accepted result; it
 never writes files. A rejected batch returns no partial draft. Each intermediate
 edit must be valid; even an empty batch validates its input. Complete encounters
-are one operation so source enablement and relationships change atomically.
+and Actor definitions each have a typed replacement operation for changes that
+need several fields to become valid together.
 A new file omits `revision`; replacing an existing file requires the revision
 returned by `open` or the previous `save`. Keep `editor.path` and `editor.revision`
 separately while editing: only `open` and `save` return disk identity. Revisions

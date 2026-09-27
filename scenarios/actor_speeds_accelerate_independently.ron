@@ -1,0 +1,29 @@
+// At 30m/s², v[n+1] = min(desired, .9*v[n]+.5).
+// The three authored speeds produce distinct distances over 24 ticks.
+(
+    description: "Three actors use independently authored movement speeds while an idle body stays still.",
+    setup: (actions: [Place((20.0, 0.0)), Assign(body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))), Place((-20.0, 0.0)), Assign(body: 1, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 4.0, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
+        Place((0.0, 20.0)), Assign(body: 2, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 1.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))), Place((0.0, -20.0))]),
+    checkpoints: [
+        (at: 0, expect: (bodies: [
+            (nth: 0, action: Move, velocity: (x: -0.5, z: 0.0, tol: 0.00001)),
+            (nth: 1, action: Move, velocity: (x: 0.5, z: 0.0, tol: 0.00001)),
+            (nth: 2, action: Move, velocity: (x: 0.0, z: -0.5, tol: 0.00001)),
+        ])),
+        (at: 23, expect: (contacts: 0, crowd_contacts: 0, bodies: [
+            (nth: 0, action: Move, pos: (x: 19.10141925, z: 0.0, tol: 0.0001),
+                velocity: (x: -2.5, z: 0.0, tol: 0.00001)),
+            (nth: 1, action: Move, pos: (x: -18.74558165, z: 0.0, tol: 0.0001),
+                velocity: (x: 4.0, z: 0.0, tol: 0.00001)),
+            (nth: 2, action: Move, pos: (x: 0.0, z: 19.42825, tol: 0.0001),
+                velocity: (x: 0.0, z: -1.5, tol: 0.00001)),
+            (nth: 3, action: Idle, pos: (x: 0.0, z: -20.0, tol: 0.0)),
+        ])),
+    ],
+    budget: (ticks: 24),
+    expect: (contacts: 0, crowd_contacts: 0, bodies: [
+        (nth: 0, action: Move, velocity: (x: -2.5, z: 0.0, tol: 0.00001)),
+        (nth: 1, action: Move, velocity: (x: 4.0, z: 0.0, tol: 0.00001)),
+        (nth: 2, action: Move, velocity: (x: 0.0, z: -1.5, tol: 0.00001)),
+    ]),
+)

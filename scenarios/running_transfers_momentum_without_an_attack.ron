@@ -4,7 +4,7 @@
 // contact shares (-.725-.225)/2=-.475, then the passive body damps to -.4275.
 (
     description: "Locomotion alone carries a shove into a passive neighbour.",
-    setup: (actions: [Place((10.5, 0.0)), Seek(0), Place((10.0, 0.0))]),
+    setup: (actions: [Place((10.5, 0.0)), Assign(body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))), Place((10.0, 0.0))]),
     checkpoints: [(at: 0, expect: (crowd_contacts: 1, bodies: [
         (nth: 0, pos: (x: 10.4958333, z: 0.0, tol: 0.00001), velocity: (x: -0.25, z: 0.0, tol: 0.00001)),
         (nth: 1, pos: (x: 9.9958333, z: 0.0, tol: 0.00001), velocity: (x: -0.225, z: 0.0, tol: 0.00001)),
@@ -12,6 +12,6 @@
     budget: (ticks: 2),
     expect: (contacts: 0, crowd_contacts: 1, bodies: [
         (nth: 0, pos: (x: 10.4879167, z: 0.0, tol: 0.00001), velocity: (x: -0.475, z: 0.0, tol: 0.00001)),
-        (nth: 1, seeking: false, pos: (x: 9.9879167, z: 0.0, tol: 0.00001), velocity: (x: -0.4275, z: 0.0, tol: 0.00001)),
+        (nth: 1, action: Idle, pos: (x: 9.9879167, z: 0.0, tol: 0.00001), velocity: (x: -0.4275, z: 0.0, tol: 0.00001)),
     ]),
 )

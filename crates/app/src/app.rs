@@ -330,8 +330,9 @@ impl App {
 
         self.enemy_feedback.observe(&self.game);
         if let Some(horde) = &mut self.horde_preview {
-            horde.rebuild(self.game.enemy_presentations(alpha), presentation_seconds,
-                |id| self.enemy_feedback.flash(id, self.game.tick(), alpha));
+            horde.rebuild(self.game.character_presentations(alpha), presentation_seconds,
+                |id| self.enemy_feedback.flash(id, self.game.tick(), alpha),
+                self.game.action_statuses(), alpha);
             horde.rebuild_corpses(self.game.corpses());
         }
         if let Some(character) = &mut self.character_preview {

@@ -1,9 +1,9 @@
 //! Channel lifecycle and physical composition through the public Game boundary.
+use arpg_game::{Placed, Scene, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene};
 use arpg_sim::{
-    Accumulator, AttackPhase, AttackProfile, Beam, Dt, Impulse, Placed, Scene, Template,
-};
+    Accumulator, AttackPhase, AttackProfile, Beam, Dt, Impulse, };
 use glam::{Vec2, Vec3};
 
 fn step(game: &mut Game, held: bool) {
@@ -36,7 +36,7 @@ fn channel_allows_physics_and_restart_clears_it_while_refusal_preserves_it() {
     let bad: GameScene = Scene {
         bodies: vec![Placed {
             pos: (f32::NAN, 0.0),
-            what: Template::BODY,
+            what: ActorDefinition::passive_hostile(),
         }],
         ..Scene::default()
     }
@@ -57,7 +57,7 @@ fn scene_eviction_and_slot_reuse_do_not_leave_beam_target_memory() {
     let scene: GameScene = Scene {
         bodies: vec![Placed {
             pos: (0.0, 4.0),
-            what: Template::BODY,
+            what: ActorDefinition::passive_hostile(),
         }],
         ..Scene::default()
     }
@@ -70,7 +70,7 @@ fn scene_eviction_and_slot_reuse_do_not_leave_beam_target_memory() {
     assert_eq!(game.beam_hits(), &[Vec2::new(0.0, 4.0)]);
     assert!(game.evict_scene(id));
     assert_eq!(game.beam_hits(), &[Vec2::new(0.0, 4.0)], "historical outcome survives removal");
-    let new = game.place(Vec2::new(0.0, 4.0), Template::BODY).unwrap();
+    let new = game.place(Vec2::new(0.0, 4.0), ActorDefinition::passive_hostile()).unwrap();
     assert_ne!(old, new);
     for _ in 1..Beam::HIT_EVERY {
         step(&mut game, true);
@@ -103,7 +103,7 @@ fn beam_waits_for_the_entire_committed_swing_and_release_resets_cadence() {
     step(&mut game, false);
     assert!(game.beam().is_none());
     let target = game
-        .place(Vec2::new(game.player_pos().x, 4.0), Template::BODY)
+        .place(Vec2::new(game.player_pos().x, 4.0), ActorDefinition::passive_hostile())
         .unwrap();
     step(&mut game, true);
     assert_eq!(
@@ -116,7 +116,7 @@ fn beam_waits_for_the_entire_committed_swing_and_release_resets_cadence() {
 #[test]
 fn beam_hit_outcomes_are_hashed_reported_and_restart_clears_them() {
     let scene: GameScene = Scene {
-        bodies: vec![Placed { pos: (0.0, 3.0), what: Template::BODY }],
+        bodies: vec![Placed { pos: (0.0, 3.0), what: ActorDefinition::passive_hostile() }],
         ..Default::default()
     }.into();
     let mut game = Game::from_scene(&scene).unwrap();
@@ -131,7 +131,7 @@ fn beam_hit_outcomes_are_hashed_reported_and_restart_clears_them() {
     assert!(report.contains("\"hit_positions\":{\"0\":[0.0000,0.0000,3.0000]}"));
     let hash = game.hash();
     let invalid: GameScene = Scene {
-        bodies: vec![Placed { pos: (f32::NAN, 0.0), what: Template::BODY }],
+        bodies: vec![Placed { pos: (f32::NAN, 0.0), what: ActorDefinition::passive_hostile() }],
         ..Default::default()
     }.into();
     assert!(game.start_scene(&invalid).is_err());

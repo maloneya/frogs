@@ -1,0 +1,26 @@
+(
+    description: "Existing monsters decelerate toward new action speeds; newly spawned monsters accelerate toward the same values.",
+    setup: (actions: [Place((20.0, 0.0)), Assign(body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))]),
+    behaviors: [
+        (at: 5, body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 1.0, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
+        (at: 8, body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 10.0, acceleration: 300.0, stop_distance: 0.55))], behavior: Action(0))),
+        (at: 8, body: 1, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 10.0, acceleration: 300.0, stop_distance: 0.55))], behavior: Action(0))),
+    ],
+    spawns: [(at: 5, pos: (-20.0, 0.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 1.0, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))],
+    checkpoints: [
+        (at: 4, expect: (bodies: [(nth: 0, velocity: (x: -2.04755, z: 0.0, tol: 0.00001))])),
+        (at: 5, expect: (bodies: [
+            (nth: 0, velocity: (x: -1.342795, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 0.5, z: 0.0, tol: 0.00001)),
+        ])),
+        (at: 6, expect: (bodies: [
+            (nth: 0, velocity: (x: -1.0, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 0.95, z: 0.0, tol: 0.00001)),
+        ])),
+    ],
+    budget: (ticks: 11),
+    expect: (bodies: [
+        (nth: 0, velocity: (x: -10.0, z: 0.0, tol: 0.00001)),
+        (nth: 1, velocity: (x: 10.0, z: 0.0, tol: 0.00001)),
+    ]),
+)

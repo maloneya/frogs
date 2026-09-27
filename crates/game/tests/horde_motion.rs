@@ -1,88 +1,54 @@
-//! Gait timing, identity and lifecycle through the same Game as the live app.
+//! Authored movement choices, bounded motors and stable identity through Game.
 use arpg_core::{AimDir, Intent, MoveDir, Report};
-use arpg_game::Game;
-use arpg_sim::{Accumulator, Dt, Event, Gait, Placed, Scene, Template};
+use arpg_game::{ActionDefinition, ActionKind, ActorDefinition, Game, Placed, Scene};
+use arpg_sim::{Accumulator, Dt};
 use glam::Vec2;
-
 fn step(game: &mut Game) {
-    game.step(Accumulator::default().pending(Dt::SECS).next().unwrap(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+    game.step(Accumulator::default().pending(Dt::SECS).next().unwrap(), Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
 }
-
+fn moving(speed:f32) -> ActorDefinition {
+    let mut definition=ActorDefinition::hostile();
+    let ActionDefinition::Move(movement)=&mut definition.actions[0] else { panic!("move preset") };
+    movement.speed=speed; definition
+}
 fn scene() -> arpg_game::GameScene {
-    Scene {
-        bodies: vec![
-            Placed { pos: (20.0, 0.0), what: Template::BODY.seeking() },
-            Placed { pos: (-20.0, 0.0), what: Template::BODY.seeking() },
-            Placed { pos: (0.0, 20.0), what: Template::BODY.seeking() },
-        ],
-        ..Scene::default()
-    }.into()
+    Scene { bodies:vec![Placed{pos:(20.0,0.0),what:moving(2.5)},Placed{pos:(-20.0,0.0),what:moving(4.0)},Placed{pos:(0.0,20.0),what:moving(1.5)}],..Default::default() }.into()
 }
-
 #[test]
-fn staggered_choices_change_at_their_boundary_and_accelerate_instead_of_snapping() {
-    let mut game = Game::from_scene(&scene()).unwrap();
-    let owner = game.scene_instances().next().unwrap().0;
-    let ids = game.scene_bodies(owner).unwrap().to_vec();
-    assert_eq!(ids.iter().map(|&id| game.gait(id)).collect::<Vec<_>>(),
-        [Some(Gait::Run), Some(Gait::Sprint), Some(Gait::Walk)]);
-    for _ in 0..27 { step(&mut game); }
-    assert_eq!(game.gait(ids[0]), Some(Gait::Run));
-    assert_eq!(game.motion(ids[0]).unwrap().velocity(), Vec2::new(-2.5, 0.0));
-    step(&mut game); // Tick 27: 2.5*.9+.5 = 2.75, not an instant 4m/s.
-    assert_eq!(game.gait(ids[0]), Some(Gait::Sprint));
-    assert!((game.motion(ids[0]).unwrap().velocity().x + 2.75).abs() < 0.00001);
-    assert_eq!(game.gait(ids[1]), Some(Gait::Sprint));
-    assert!(game.trace().iter().any(|(tick, event)| tick == 27
-        && event == Event::GaitsChanged { walking: 0, running: 0, sprinting: 1 }));
+fn changing_an_authored_action_accelerates_instead_of_replacing_velocity() {
+    let mut game=Game::from_scene(&scene()).unwrap();
+    let owner=game.scene_instances().next().unwrap().0;
+    let ids=game.scene_bodies(owner).unwrap().to_vec();
+    for _ in 0..27 {step(&mut game);}
+    for (id,speed) in ids.iter().zip([2.5,4.0,1.5]) {assert!((game.motion(*id).unwrap().velocity().length()-speed).abs()<1e-5);}
+    game.assign_behavior(ids[0],moving(4.0)).unwrap();
+    game.assign_behavior(ids[1],moving(2.5)).unwrap();
     step(&mut game);
-    step(&mut game);
-    assert_eq!(game.gait(ids[1]), Some(Gait::Sprint));
-    step(&mut game); // Tick 30: 4*.9-.5 = 3.1 while requesting Run.
-    assert_eq!(game.gait(ids[1]), Some(Gait::Run));
-    assert!((game.motion(ids[1]).unwrap().velocity().x - 3.1).abs() < 0.00001);
-    let mut report = Report::default();
-    game.report(&mut report);
-    let text = report.finish();
-    assert!(text.contains("\"gaits\""));
-    assert!(text.contains("\"gait\":\"sprint\",\"desired_speed\":4"));
-    let before = game.hash();
-    game.clear_trace();
-    assert_eq!(game.hash(), before, "diagnostic transitions cannot drive gait choices");
+    assert!((game.motion(ids[0]).unwrap().velocity().x+2.75).abs()<1e-5);
+    assert!((game.motion(ids[1]).unwrap().velocity().x-3.1).abs()<1e-5);
+    assert_eq!(game.action_status(ids[0]).unwrap().kind,ActionKind::Move);
+    let mut report=Report::default();game.report(&mut report);
+    assert!(report.finish().contains("actions"));
+    let before=game.hash();game.clear_trace();assert_eq!(game.hash(),before);
 }
-
 #[test]
-fn row_moves_retirement_eviction_and_restart_preserve_the_choice_contract() {
-    let mut game = Game::from_scene(&scene()).unwrap();
-    let mut control = Game::from_scene(&scene()).unwrap();
-    let owner = game.scene_instances().next().unwrap().0;
-    let ids = game.scene_bodies(owner).unwrap().to_vec();
+fn row_moves_stale_ids_eviction_and_restart_preserve_independent_execution() {
+    let mut game=Game::from_scene(&scene()).unwrap();
+    let mut control=Game::from_scene(&scene()).unwrap();
+    let owner=game.scene_instances().next().unwrap().0;
+    let ids=game.scene_bodies(owner).unwrap().to_vec();
     assert!(game.despawn_body(ids[0]));
-    assert_eq!(game.gait(ids[0]), None);
-    let replacement = game.place(Vec2::new(0.0, -30.0), Template::BODY).unwrap();
-    assert!(!game.add_seek(ids[0]), "stale identity must not grant a motor");
-    assert_eq!(game.gait(replacement), None);
-    assert!(!game.add_seek(game.player_id()));
-    let block = game.place(Vec2::new(30.0, 30.0), Template::BLOCK).unwrap();
-    assert!(!game.add_seek(block));
-    for _ in 0..90 {
-        step(&mut game);
-        step(&mut control);
-        for &id in &ids[1..] {
-            assert_eq!(game.gait(id), control.gait(id));
-            assert_eq!(game.body_pos(id), control.body_pos(id));
-            assert_eq!(game.motion(id).unwrap().velocity(), control.motion(id).unwrap().velocity());
-        }
-    }
-    assert!(game.evict_scene(owner));
-    for id in ids { assert_eq!(game.gait(id), None); }
-    game.restart().unwrap();
-    let mut fresh = Game::from_scene(&scene()).unwrap();
-    assert_eq!(game.hash(), fresh.hash());
-    for _ in 0..220 {
-        step(&mut game);
-        step(&mut fresh);
-        assert_eq!(game.hash(), fresh.hash());
-    }
+    let replacement=game.place(Vec2::new(0.0,-30.0),ActorDefinition::passive_hostile()).unwrap();
+    let before=game.hash();
+    assert!(game.assign_behavior(ids[0],moving(2.5)).is_err());
+    assert_eq!(game.hash(),before);
+    assert_eq!(game.action_status(replacement).unwrap().kind,ActionKind::Idle);
+    assert!(game.assign_behavior(game.player_id(),moving(2.5)).is_err());
+    let block=game.place(Vec2::new(30.0,30.0),ActorDefinition::prop()).unwrap();
+    assert!(game.assign_behavior(block,moving(2.5)).is_err());
+    for _ in 0..90 {step(&mut game);step(&mut control);for &id in &ids[1..]{assert_eq!(game.body_pos(id),control.body_pos(id));assert_eq!(game.motion(id).unwrap().velocity(),control.motion(id).unwrap().velocity());}}
+    assert!(game.evict_scene(owner));for id in ids{assert!(game.action_status(id).is_none());}
+    game.restart().unwrap();let mut fresh=Game::from_scene(&scene()).unwrap();
+    assert_eq!(game.hash(),fresh.hash());
+    for _ in 0..220{step(&mut game);step(&mut fresh);assert_eq!(game.hash(),fresh.hash());}
 }

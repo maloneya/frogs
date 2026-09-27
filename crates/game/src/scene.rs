@@ -9,18 +9,19 @@ use serde::{Deserialize, Serialize};
 use crate::chest::{ChestSpec, Chests};
 use crate::door::{DoorSpec, Doors};
 use crate::encounter::{EncounterSpec, Encounters};
-use crate::enemy_attack::{EnemyAttackSpec, EnemyAttacks};
+use crate::behavior::Actors;
+use crate::population::Births;
 use crate::torch::{Torches, TorchSpec};
 
-/// Authored gameplay wraps the engine definition without copying its fields.
+/// Complete authored actor content, decoration and gameplay relationships.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GameScene {
     /// Scene-wide illumination, independent of the number of torches.
     #[serde(default)]
     pub environment: EnvironmentSpec,
-    /// Physical content, still defined and validated by sim.
-    pub engine: arpg_sim::Scene,
+    /// Actor births and physical geometry; sim validates their physical projection.
+    pub engine: crate::Scene,
     /// Stationary lights owned by this scene instance. Omitted means no lights.
     #[serde(default)]
     pub torches: Vec<TorchSpec>,
@@ -36,13 +37,10 @@ pub struct GameScene {
     /// Independently instantiated gameplay encounters.
     #[serde(default)]
     pub encounters: Vec<EncounterSpec>,
-    /// The one melee attacker supported by the initial damage slice.
-    #[serde(default)]
-    pub enemy_attack: Option<EnemyAttackSpec>,
 }
 
-impl From<arpg_sim::Scene> for GameScene {
-    fn from(engine: arpg_sim::Scene) -> Self {
+impl From<crate::Scene> for GameScene {
+    fn from(engine: crate::Scene) -> Self {
         Self { engine, ..Self::default() }
     }
 }
@@ -51,23 +49,23 @@ impl GameScene {
     /// The only installation path, shared by fresh runs and additive loads.
     /// Validate relationships before physical admission can mutate the world.
     pub(crate) fn install(&self, world: &mut World, live: LiveSceneState<'_>) -> Result<SceneId, SceneError> {
-        let LiveSceneState { trees, torches, environments, doors, chests, encounters, attacks } = live;
+        let LiveSceneState { trees, torches, environments, doors, chests, encounters, actors, births } = live;
         Doors::validate(&self.doors, &self.engine.bodies)?;
         chests.validate(&self.chests, &self.engine.bodies, &self.doors)?;
         encounters.validate_add(self)?;
         trees.validate_add(&self.trees)?;
         torches.validate_add(&self.torches)?;
-        attacks.validate_add(self.enemy_attack, &self.engine.bodies)?;
+
         // Append trunk shapes after authored walls so authored wall identities
         // and body indices stay stable. Engine admission validates the combined
         // wall capacity before mutating any live state.
-        let mut physical = self.engine.clone();
+        let mut physical = self.engine.physical().map_err(SceneError::Behavior)?;
         physical.walls.extend(self.trees.iter().map(|tree| tree.collider()));
         let owner = world.load_scene(&physical)?;
         doors.install(owner, &self.doors, world.scene_bodies(owner).expect("admitted scene"));
         chests.install(owner, &self.chests, world.scene_bodies(owner).expect("admitted scene"));
         encounters.install(owner, &self.encounters, world.scene_bodies(owner).expect("admitted scene"), world.scene_sources(owner).expect("admitted scene"));
-        attacks.install(owner, self.enemy_attack, world.scene_bodies(owner).expect("admitted scene"));
+        births.install(&self.engine, owner, world.scene_bodies(owner).expect("admitted scene"), world.scene_sources(owner).expect("admitted scene"), actors);
         trees.install(owner, self.engine.walls.len(), &self.trees);
         torches.install(owner, &self.torches);
         environments.install(owner, self.environment);
@@ -84,7 +82,8 @@ pub(crate) struct LiveSceneState<'a> {
     pub(crate) doors: &'a mut Doors,
     pub(crate) chests: &'a mut Chests,
     pub(crate) encounters: &'a mut Encounters,
-    pub(crate) attacks: &'a mut EnemyAttacks,
+    pub(crate) actors: &'a mut Actors,
+    pub(crate) births: &'a mut Births,
 }
 
 /// Rejection of a complete scene, before any partial installation.
@@ -98,8 +97,8 @@ pub enum SceneError {
     Decoration(&'static str),
     /// Invalid encounter or door composition.
     Encounter(&'static str),
-    /// Invalid or excess enemy-attack relationship.
-    EnemyAttack(&'static str),
+    /// Invalid actor definition or behavior composition.
+    Behavior(&'static str),
 }
 
 impl From<arpg_sim::SceneError> for SceneError {
@@ -111,7 +110,7 @@ impl std::fmt::Display for SceneError {
         match self {
             Self::Engine(error) => error.fmt(out),
             Self::Decoration(reason) | Self::Lighting(reason) | Self::Encounter(reason)
-            | Self::EnemyAttack(reason) => out.write_str(reason),
+            | Self::Behavior(reason) => out.write_str(reason),
         }
     }
 }
@@ -134,7 +133,8 @@ pub(crate) struct PreparedScene {
     pub(crate) doors: Doors,
     pub(crate) chests: Chests,
     pub(crate) encounters: Encounters,
-    pub(crate) attacks: EnemyAttacks,
+    pub(crate) actors: Actors,
+    pub(crate) births: Births,
     pub(crate) restart: RestartScene,
 }
 
@@ -148,14 +148,15 @@ impl RestartScene {
         let mut doors = Doors::default();
         let mut chests = Chests::default();
         let mut encounters = Encounters::default();
-        let mut attacks = EnemyAttacks::default();
+        let mut actors = Actors::default();
+        let mut births = Births::default();
         scene.install(&mut world, LiveSceneState {
             trees: &mut trees, torches: &mut torches, environments: &mut environments, doors: &mut doors,
-            chests: &mut chests, encounters: &mut encounters, attacks: &mut attacks,
+            chests: &mut chests, encounters: &mut encounters, actors: &mut actors, births: &mut births,
         })?;
-        let content_hash = fingerprint(&world, (&torches, &trees, &environments), &doors, &chests, &encounters, &attacks);
+        let content_hash = fingerprint(&world, (&torches, &trees, &environments), &doors, &chests, &encounters, &actors, &births);
         let snapshot = Self { scene: scene.clone(), content_hash };
-        Ok(PreparedScene { world, trees, torches, environments, doors, chests, encounters, attacks, restart: snapshot })
+        Ok(PreparedScene { world, trees, torches, environments, doors, chests, encounters, actors, births, restart: snapshot })
     }
 
     pub(crate) fn description(&self) -> &GameScene {
@@ -200,7 +201,7 @@ impl std::error::Error for RestartError {}
 
 /// Hash every gameplay store in a fixed order, including empty stores.
 /// Each store encodes its length or presence, so adjacent stores stay distinct.
-pub(crate) fn fingerprint(world: &World, decorations: (&Torches, &Trees, &Environments), doors: &Doors, chests: &Chests, encounters: &Encounters, attacks: &EnemyAttacks) -> u64 {
+pub(crate) fn fingerprint(world: &World, decorations: (&Torches, &Trees, &Environments), doors: &Doors, chests: &Chests, encounters: &Encounters, actors: &Actors, births: &Births) -> u64 {
     let mut hash = Fnv::default();
     decorations.0.hash(&mut hash);
     decorations.1.hash(&mut hash);
@@ -208,7 +209,8 @@ pub(crate) fn fingerprint(world: &World, decorations: (&Torches, &Trees, &Enviro
     doors.hash(&mut hash);
     chests.hash(&mut hash);
     encounters.hash(&mut hash);
-    attacks.hash(&mut hash);
+    actors.hash(&mut hash);
+    births.hash(&mut hash);
     hash.u64(world.hash());
     hash.finish()
 }
@@ -221,13 +223,11 @@ impl GameScene {
         if index >= self.engine.bodies.len() { return Err("body no longer exists"); }
         if self.doors.iter().any(|s| s.body == index)
             || self.chests.iter().any(|s| s.body == index)
-            || self.enemy_attack.is_some_and(|s| s.body == index)
             || self.encounters.iter().any(|s| matches!(s.start, EncounterStart::Activated(i) if i == index))
-        { return Err("This body is used by a door, chest, attack or encounter and cannot be deleted."); }
+        { return Err("This body is used by a door, chest or encounter and cannot be deleted."); }
         self.engine.bodies.remove(index);
         for s in &mut self.doors { if s.body > index { s.body -= 1; } }
         for s in &mut self.chests { if s.body > index { s.body -= 1; } }
-        if let Some(s) = &mut self.enemy_attack && s.body > index { s.body -= 1; }
         for s in &mut self.encounters {
             let EncounterStart::Activated(i) = &mut s.start;
             if *i > index { *i -= 1; }

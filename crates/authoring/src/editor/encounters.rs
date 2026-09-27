@@ -41,7 +41,7 @@ pub struct EncounterDraft {
 
 pub(super) fn place(scene: &mut SceneDocument, kind: PropKind, pos: (f32, f32)) -> Target {
     let index = scene.scene.engine.bodies.len();
-    let what = if matches!(kind, PropKind::Switch) { Template::BLOCK.interactive() } else { Template::BLOCK };
+    let what = if matches!(kind, PropKind::Switch) { ActorDefinition::prop().interactive() } else { ActorDefinition::prop() };
     scene.scene.engine.bodies.push(Placed { pos, what });
     match kind {
         PropKind::Door => scene.scene.doors.push(DoorSpec { body: index }),
@@ -60,7 +60,7 @@ pub(super) fn component(scene: &mut SceneDocument, body: usize, role: u32) -> Re
     if let Some(index) = door { scene.scene.remove_door(index)?; }
     if let Some(index) = chest { scene.scene.remove_chest(index)?; }
     if role != 0 {
-        scene.scene.engine.bodies[body].what = Template::BLOCK;
+        scene.scene.engine.bodies[body].what = ActorDefinition::prop();
         if role == 1 { scene.scene.doors.push(DoorSpec { body }); }
         else { scene.scene.chests.push(ChestSpec { body }); }
     }

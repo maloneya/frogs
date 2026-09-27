@@ -3,8 +3,8 @@
 (
     description: "Independent sources share the world population gate and stop together at its cap.",
     setup: (sources: [
-        (pos: (-20.0, 0.0), radius: 0.0, every: 2, when: FewerThan(4)),
-        (pos: (20.0, 0.0), radius: 0.0, every: 2, when: FewerThan(4)),
+        (pos: (-20.0, 0.0), radius: 0.0, every: 2, when: FewerThan(4), what: (physical: (health: Some(3), character: true), role: Hostile)),
+        (pos: (20.0, 0.0), radius: 0.0, every: 2, when: FewerThan(4), what: (physical: (health: Some(3), character: true), role: Hostile)),
     ]),
     checkpoints: [
         (at: 0, expect: (enemy_count: 2)),
