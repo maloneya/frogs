@@ -29,7 +29,11 @@ cargo run --release
 python3 scripts/companion.py open
 ```
 
-The companion command accepts `--socket` and always opens a new native instance.
+The companion command builds the native app and bundles `arpg-author`, accepts
+`--socket`, and opens a new native instance with an absolute scene-directory path.
+The native executable accepts `--scenes <directory>`; without it, the catalog
+uses `scenes/` relative to its working directory. File browsing is local to the
+companion and works offline.
 Packaged builds provide `play.command` for the game and `tools.command` for both
 (Python 3 required).
 
@@ -89,7 +93,9 @@ ARPG_COMPANION_CAPTURE=/tmp/scenes.png target/"ARPG Companion.app"/Contents/MacO
 ```
 
 `--tab` accepts `scenes`, `tuning` or `debug`; optional `--scene` opens a draft
-without starting it. Capture contains only the companion's view. Use Debug or
+without waiting for the game connection. The bundled backend is used by default;
+`ARPG_AUTHORING_BIN` overrides its executable for development/tests.
+Capture contains only the companion's view. Use Debug or
 harness `shot` for a game frame. `ARPG_COMPANION_TEST_SOCKET` enables live client
 checks against an isolated game; give that game a temporary `ARPG_TUNING_FILE`
 because the checks save settings. See the [playtest guide](../.claude/skills/playtest/SKILL.md)

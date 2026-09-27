@@ -56,14 +56,15 @@ assigning another moves that binding.
 
 Source `FewerThan` conditions count enemies across the world. A formation expands
 into bodies on load; its preview draws at most 2,000 individual markers across
-all formations. The editor supports 4,096 explicit placements, subject to the
-game's tighter per-kind and total-capacity limits. Campfires share the
+all formations. The shared authoring API supports 4,096 placement entries,
+counting a formation as one entry, subject to the game's tighter per-kind and
+total-capacity limits. Campfires share the
 [eight-light budget](lighting.md); tree trunks share [wall capacity](walls.md).
 
 The map uses the game camera's rotation and vertical compression: up on the map
 is up in the game view. The compass shows world X/Z; **P** is the fixed player
 start. **Snap** affects mouse placement/movement in world metres; inspector
-positions remain exact. Inspector rotation is degrees; RON yaw is radians.
+positions are not snapped. Inspector rotation is degrees; RON yaw is radians.
 **Pan**, zoom and **Fit** change only the editor view. Ground footprints cannot
 show tree height, canopy occlusion or the final lighting; judge those in the game.
 
@@ -77,6 +78,8 @@ edits preserve the accepted draft and display an error.
 Name objects in the inspector so encounter choices read “North gate” or “Shrine”
 instead of numbered entries. Names are unique within the scene, persist in the
 file, and do not affect gameplay; clear a name to restore its generated label.
+Names label choices; bindings still use authored indices, which the shared edits
+remap on deletion. Manual file reordering must preserve those references.
 
 **Scene lighting** controls ambient fill and sun/moon colour, brightness,
 direction and elevation. Colours are stored as linear RGB. Adding a campfire
@@ -114,17 +117,17 @@ an encounter in play never changes the draft or restart snapshot.
 
 ## Files and current limits
 
-Files wrap the complete game-owned [GameScene](../crates/game/src/scene.rs)
-in an authoring document with optional names; see the [shared format](scene-authoring.md#document-and-runtime-boundary). RON editing is optional. Campfires are stored in `torches`. There is no
+Files use the [shared authoring format](scene-authoring.md#document-and-runtime-boundary),
+including optional object names. Campfires are stored in `torches`. There is no
 player-start tool, arbitrary asset browser, terrain sculpting, audio placement
 or live-world capture. Assets follow the separate [Blender workflow](../.claude/skills/author-blender-asset/SKILL.md).
 
 Saving canonicalizes RON, preserves leading line comments and drops inline
 comments. Existing files require the revision read on open: an external edit
 causes refusal. Preserve a draft with **Save as…** to a new path before reopening
-a changed file. Save & play saves the validated file, then sends a load request. Validation,
-revision or write failure prevents that request. A failed load preserves the
-running game and reports that the file was saved.
+a changed file. **Save & play** saves the validated file, then sends a load request.
+Validation, revision or write failure prevents that request. A failed load
+preserves the running game and reports that the file was saved.
 
 Scenes referenced by `File(...)` in `scenarios/` are also regression inputs.
 Use **Save as…** for exploration, or deliberately update their predictions when

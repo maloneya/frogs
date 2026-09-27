@@ -103,7 +103,9 @@ checkpoints. Requesting a dead body's position fails even alongside `alive: fals
 - [Source enablement](../../../docs/source-enablement.md): switches run before
   source evaluation; assertions consume the engine-owned `SourceState`.
 - [Encounters](../../../docs/encounters.md): complete inline scenes use
-  `Inline(...)` with the same `GameScene` definition as scene files. Assert activation
+  `Inline(...)` containing `GameScene` directly. File inputs wrap it under `scene`
+  with optional authoring labels; see the
+  [format boundary](../../../docs/scene-authoring.md#document-and-runtime-boundary). Assert activation
   on N and permitted emission on N+1, as well as one-shot start, deadline, reward and lifetime.
 - [Scene authoring](../create-scene/SKILL.md): load the playable file through
   `File(...)` so the tested content is the content the user plays.

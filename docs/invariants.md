@@ -29,6 +29,7 @@ lint helps only when its command actually runs.
 | Fixed time and read-only presentation | [time](../crates/sim/src/time.rs), World presentation methods and adjacent tests |
 | Physical queries and restricted effects | [contact](../crates/sim/src/contact.rs), [motion](../crates/sim/src/pass/motion.rs), [attack](../crates/sim/src/pass/attack.rs) |
 | Complete game lifecycle | [Game](../crates/game/src/lib.rs), [game scenes](../crates/game/src/scene.rs), public lifecycle tests |
+| Shared authoring admission and persistence | [SceneDocument::validate](../crates/content/src/document.rs), [authoring API](../crates/authoring/src/lib.rs), [CLI round trips and refusals](../crates/authoring/tests/cli.rs) |
 | Replay, checkpoints and rejected assertions | [scenario execution](../crates/scenario/src/run.rs), [scenario schema](../crates/scenario/src/spec.rs), CLI tests and [scenarios](../scenarios) |
 | Asset admission and rendering contracts | [assets](../crates/assets/src/lib.rs), [gfx](../crates/gfx/src/lib.rs), importer and GPU tests |
 | Rust API documentation links | Required rustdoc command with broken intra-doc links denied |

@@ -40,10 +40,11 @@ to the companion releases gameplay input while simulation continues.
 
 ## Where things live
 
-- `scenes/`: playable starting layouts, using the game-owned `GameScene` format.
+- `scenes/`: [authoring documents](docs/scene-authoring.md#document-and-runtime-boundary)
+  containing playable `GameScene` data and optional object names.
 - `scenarios/`: headless input timelines and assertions through the same `Game`.
 - `tools/companion/`: native authoring, tuning and diagnostic UI.
-- `crates/`: simulation, gameplay, content, assets, rendering and app integration;
+- `crates/`: simulation, gameplay, content, headless authoring, assets and presentation;
   see [ownership and working rules](CLAUDE.md).
 - [Verification](docs/verification.md): `python3 scripts/verify.py full`.
 - [Experiments](experimental/README.md): independent research, outside the game.

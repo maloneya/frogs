@@ -1,6 +1,8 @@
 # Scene lighting
 
-Each scene owns an `environment` and an optional list of stationary `torches`.
+Use **Scene lighting** and **Campfire** in the [editor](scene-editor.md), or the
+[headless API](scene-authoring.md). Each playable scene owns an `environment`
+and optional stationary `torches`, both inside the file's `scene` field.
 The environment supplies ambient fill and one directional light; torches add
 local pools of illumination. Adding or removing a torch never changes the
 environment. Colours are linear RGB, with sRGB encoding only at display output.

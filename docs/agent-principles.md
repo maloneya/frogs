@@ -11,10 +11,12 @@ Prefer a new arrangement of existing rules over code written for one encounter.
 A row of enemies beside a wall can reveal more about knockback than another
 abstract mechanic proposal.
 
-The engine supplies validated rules; the scene combines them; the companion
-makes iteration fast. A missing authoring control is a tooling gap, not a reason
-to put a scene-specific exception in simulation. Add a new mechanic only when
-an actual playtest needs behaviour the current vocabulary cannot express.
+The engine supplies validated rules; the scene combines them. The companion and
+agents author complete documents through the [same headless API](scene-authoring.md).
+Every authorable concept must work through both. The UI owns drafts and history;
+Game receives only playable data, with no editor state or process dependency.
+A missing control is a tooling gap. Add a mechanic when a playtest needs a rule
+the current vocabulary cannot express, and expose it through both authoring paths.
 
 Keep authored content separate from its running instance. A death or moved enemy
 must not silently rewrite the starting layout. A scene can be a disposable

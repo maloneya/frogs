@@ -110,7 +110,7 @@ see [playtesting](.claude/skills/playtest/SKILL.md).
 
 Read only what the task needs:
 
-- [Create a scene](.claude/skills/create-scene/SKILL.md), [editor](docs/scene-editor.md), [scene lifetime](docs/scene-playtests.md)
+- [Create a scene](.claude/skills/create-scene/SKILL.md), [editor](docs/scene-editor.md), [headless API](docs/scene-authoring.md), [scene lifetime](docs/scene-playtests.md)
 - [Write scenarios](.claude/skills/scenario/SKILL.md), [live playtests](.claude/skills/playtest/SKILL.md)
 - [Add/change a sim pass](.claude/skills/add-sim-pass/SKILL.md)
 - [Blender assets](.claude/skills/author-blender-asset/SKILL.md), [asset contract](docs/character-assets-authoring.md)

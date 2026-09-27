@@ -8,12 +8,16 @@ The library's dependency guard excludes the application and graphics crates.
 ```sh
 cargo build --release -p arpg-authoring --bin arpg-author
 printf '%s\n' '{"action":"new"}' | target/release/arpg-author
+printf '%s\n' '{"action":"open","path":"scenes/soul_trial.ron"}' | target/release/arpg-author
 ```
 
-Each invocation reads one JSON request from stdin and returns one JSON reply.
+Each invocation reads one JSON request through stdin EOF and returns one JSON
+reply. Close stdin after sending it; a newline alone does not finish the request.
 Success is `{"ok":true,"editor":{...},"error":null}`; refusal sets `ok:false`,
-provides an error and exits nonzero. Requests are bounded to 8 MiB. There is no
-session, retained process state or automatic retry.
+provides an error and exits nonzero. Requests are bounded to 8 MiB; the derived
+editor representation is bounded to 6 MiB. Both clients share the
+[placement limits](scene-editor.md#placement-and-map). Paths resolve from the
+CLI's working directory. There is no session, retained state or automatic retry.
 
 | Action | Fields |
 |---|---|
@@ -35,10 +39,14 @@ and `validate` API directly. Inspector fields marked `integer: true` preserve
 whole-number precision; send JSON integers without converting through floating point.
 
 A batch applies edits in order and returns only a fully accepted result; it
-never writes files. Each intermediate edit must be valid. Complete encounters
+never writes files. A rejected batch returns no partial draft. Each intermediate
+edit must be valid; even an empty batch validates its input. Complete encounters
 are one operation so source enablement and relationships change atomically.
 A new file omits `revision`; replacing an existing file requires the revision
-returned by `open` or the previous `save`. Refused saves preserve existing files.
+returned by `open` or the previous `save`. Keep `editor.path` and `editor.revision`
+separately while editing: only `open` and `save` return disk identity. Revisions
+cover file bytes, including comments. On a conflict, save the draft to a new path
+or reopen and reapply the intended edits. Refused saves preserve existing files.
 
 ## Example: create, name, save
 
@@ -82,10 +90,14 @@ Scene files contain a [SceneDocument](../crates/content/src/document.rs):
 )
 ```
 
-`scene` is the existing game-owned `GameScene`. Labels belong to the authoring
-wrapper; Game never stores or validates them. Content decodes the wrapper and
-passes only the playable scene to runtime/scenario consumers. Direct RON authors
-use this same format and validate through the headless API.
+`scene` is the game-owned `GameScene`. Labels belong to the authoring wrapper;
+Game never stores, validates or hashes them. `SceneDocument::validate` checks
+labels and admits the playable scene through Game. Content passes only that
+playable data to runtime/scenario consumers. Direct RON authors use the same
+file format; `open` validates it without a game process.
+
+Scenario `File(...)` inputs load this wrapper; `Inline(...)` inputs contain a
+`GameScene` directly, with `engine` at the top level and no authoring labels.
 
 The editor holds drafts and undo history. Its bundled CLI performs edits,
 validation and saving outside the game process. **Save & play** first saves,

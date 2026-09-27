@@ -154,9 +154,10 @@ Controls
 
 ARPG Companion
     Launched separately by tools.command; closing either app leaves the other running.
-    Scenes          edit scene layouts, save and play, or restart scene
+    Scenes          author layouts, lighting and encounters; save, play or restart
     Tuning          adjust runtime values and save tuning
     Debug           collision outlines, vsync, zoom, readouts and screenshots
+    Editing and saving work with the game closed; drafts are not autosaved.
 
 Requires an Apple Silicon Mac with Metal. Built from $(git rev-parse --short HEAD).
 READER

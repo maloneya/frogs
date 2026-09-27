@@ -1,15 +1,16 @@
 # Authoring encounters
 
-Start with [the playable soul trial](../scenes/soul_trial.ron). Its `encounters`
-entry contains the complete gameplay composition. Physical placements remain
-under `engine`; `doors` and `chests` bind static props to their gameplay components. The soul
+Start with [the playable soul trial](../scenes/soul_trial.ron). Within its `scene`
+field, `encounters` contains the gameplay composition. Physical placements remain
+under `engine`; `doors` and `chests` bind static props to gameplay components. The
 trial uses eight sources around a central light and rewards a chest opening. Multiple
 entries run independently in the same scene, and loading the scene twice makes
 independent copies of every relationship.
 
 Build the layout and complete relationships in the
-[scene editor's encounter form](scene-editor.md#compose-an-encounter), or author
-the same RON directly. Ordinary encounters compose existing rules without runtime
+[scene editor's encounter form](scene-editor.md#compose-an-encounter) or the
+[headless API](scene-authoring.md). The RON fragment below belongs inside `scene`.
+Ordinary encounters compose existing rules without runtime
 changes. [EncounterSpec](../crates/game/src/encounter.rs),
 [DoorSpec](../crates/game/src/door.rs) and [ChestSpec](../crates/game/src/chest.rs)
 own the schema; unknown fields are rejected. Preserve intended outcomes with

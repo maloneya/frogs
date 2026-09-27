@@ -1,6 +1,6 @@
 ---
 name: create-scene
-description: Build or revise playable arpg scenes through the native editor or the shared RON format; playtest compositions and preserve intended gameplay with scenarios.
+description: Build or revise playable arpg scenes through the shared headless API, native editor or RON files; playtest compositions and preserve intended gameplay with scenarios.
 ---
 
 # Create a scene
@@ -22,11 +22,9 @@ missing authoring controls separately from genuinely missing gameplay rules.
 
 ## Author with one vocabulary
 
-The companion authors all current scene concepts: placements, body templates,
-lighting, named objects, the single attacker, doors/chests and complete encounters.
-Agents may author the same RON directly or use
-the [headless authoring API](../../../docs/scene-authoring.md); no UI automation or
-parallel scene schema is required. Both routes validate through Game.
+Use the [headless authoring API](../../../docs/scene-authoring.md) for the same
+edits and admission as the companion, without a running game. Direct RON editing
+uses the same document format; validate it with the CLI's `open` action.
 
 Files wrap playable data under `scene` with optional authoring `labels`.
 Read [GameScene](../../../crates/game/src/scene.rs) and the relevant owners:
@@ -38,8 +36,8 @@ owner when predicting an outcome. Existing files are examples, not a schema auth
 
 Use `grids` for regular crowds, individual `bodies` for deliberate placements.
 Name the scene and save a `.ron` regular file directly inside `scenes/` for catalog
-discovery. Name important objects; the encounter form binds triggers, sources and
-unlock actions by those labels, with complete validation before accepting an edit.
+discovery. Name important objects so encounter choices are recognizable. Bindings
+use authored indices; shared edits remap them, while manual reordering requires care.
 Inline comments are lost on editor save, so do not rely on them to explain manual
 index bindings. Runtime tuning is saved separately from the scene.
 
