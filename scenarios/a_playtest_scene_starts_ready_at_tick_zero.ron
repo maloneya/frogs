@@ -1,5 +1,5 @@
 (
-    description: "The same authored file used by the live game is fully installed before its first tick; no warm-up or implicit movement occurs.",
+    description: "A test-owned scene is fully installed before its first tick; no warm-up or implicit movement occurs.",
     setup: (scenes: [(engine: (
     name: "Two stationary bodies",
     bodies: [

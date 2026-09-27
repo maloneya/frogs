@@ -506,13 +506,21 @@ def run(args, result):
         print("Building release app…", flush=True)
         build = subprocess.run([*build_args, "--message-format=json"],
                                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        artifacts = []
         with Path(str(args.output) + ".build.log").open("x") as build_log:
             build_log.write(build.stderr)
+            for line in build.stdout.splitlines():
+                message = json.loads(line)
+                if message.get("reason") == "compiler-message":
+                    rendered = message["message"].get("rendered")
+                    if rendered:
+                        build_log.write(rendered)
+                elif message.get("reason") == "compiler-artifact":
+                    artifacts.append(message)
         if build.returncode:
             raise ValueError("release build failed; inspect build log")
-        artifacts = [json.loads(line) for line in build.stdout.splitlines()]
         binary = next(Path(a["executable"]) for a in artifacts
-                      if a.get("reason") == "compiler-artifact" and a.get("target", {}).get("name") == ("perf-headless" if headless else "arpg") and a.get("executable"))
+                      if a.get("target", {}).get("name") == ("perf-headless" if headless else "arpg") and a.get("executable"))
         result["binary_sha256"] = file_digest(binary)
         stage = "measurement"
         if headless:

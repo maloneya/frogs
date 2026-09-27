@@ -28,7 +28,7 @@ CORRECTNESS = ("clippy", "tests", "docs", "companion", "scenarios-fast", "scenar
 PERFORMANCE = ("performance-headless", "performance-live")
 CHECKS = CORRECTNESS + PERFORMANCE
 PERFORMANCE_INTERVAL = 10
-PERFORMANCE_PATHS = ("crates", "assets", "scenes", "scripts", "Cargo.toml", "Cargo.lock",
+PERFORMANCE_PATHS = ("crates", "assets", "benchmarks", "scripts", "Cargo.toml", "Cargo.lock",
                      "rust-toolchain.toml", ".cargo", ":(exclude)**/*.md")
 
 
@@ -38,6 +38,16 @@ def digest(data):
 
 def packed(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def checkout_environment():
+    # Hooks can inherit Git variables pointing at another index/worktree. Every
+    # Git operation here must address its explicit cwd, especially snapshot edits.
+    local = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+             "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+             "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE",
+             "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT")
+    return {name: value for name, value in os.environ.items() if name not in local}
 
 
 def input_digest(path, active=frozenset()):
@@ -71,7 +81,8 @@ def source_manifest(root=ROOT):
     paths as well as bytes. A generated evidence index remains a real input: its
     changes must invalidate verification rather than silently escaping the key.
     """
-    names = subprocess.check_output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root)
+    names = subprocess.check_output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                                    cwd=root, env=checkout_environment())
     return {os.fsdecode(name): input_digest(root / os.fsdecode(name))
             for name in sorted(set(names.split(b"\0")) - {b""})}
 
@@ -167,7 +178,7 @@ def cached_record(cache, key, exit_code=0):
         return None
 
 
-def run_check(name, command, source, machine, artifact, cache, fresh=False, root=ROOT, retry=False, source_inputs=None):
+def run_check(name, command, source, machine, artifact, cache, fresh=False, root=ROOT, retry=False, source_inputs=None, pass_fds=()):
     performance = name in PERFORMANCE
     inputs = {**machine, "baseline_inputs": perf.evidence_identity()} if performance else machine
     key = cache_key(source, inputs, command, artifact)
@@ -183,7 +194,8 @@ def run_check(name, command, source, machine, artifact, cache, fresh=False, root
     log = artifact / (name + ".log")
     started = time.monotonic()
     with log.open("x") as out:
-        code = subprocess.run(command, cwd=root, stdout=out, stderr=subprocess.STDOUT, check=False).returncode
+        code = subprocess.run(command, cwd=root, stdout=out, stderr=subprocess.STDOUT, check=False,
+                              pass_fds=pass_fds, env=checkout_environment()).returncode
     record = {"name": name, "key": key, "command": command, "exit_code": code,
               "seconds": round(time.monotonic() - started, 3), "cached": False,
               "evidence": [{"path": str(log), "sha256": digest(log.read_bytes())}]}
@@ -200,6 +212,9 @@ def run_check(name, command, source, machine, artifact, cache, fresh=False, root
             pass  # Unclassified failures must not suppress future measurements.
     if extra.exists():
         record["evidence"].append({"path": str(extra), "sha256": digest(extra.read_bytes())})
+    if performance:
+        record["evidence"].extend({"path": str(path), "sha256": digest(path.read_bytes())}
+                                  for path in perf.output_paths(extra)[1:] if path.is_file())
     after = source_manifest(root)
     if manifest_identity(after) != source:
         record["exit_code"] = 2
@@ -230,7 +245,8 @@ def performance_checkpoint(root, base):
     Dirty runs count at their HEAD, conservatively leaving the eventual commit
     to count toward the next checkpoint. Modes have independent checkpoints.
     """
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    environment = checkout_environment()
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True, env=environment).strip()
     distances = {}
     for path in base.glob("run-*/verification.json"):
         try:
@@ -239,11 +255,11 @@ def performance_checkpoint(root, base):
             if result.get("reason"):
                 continue
             if subprocess.run(["git", "merge-base", "--is-ancestor", revision, head],
-                              cwd=root, capture_output=True).returncode:
+                              cwd=root, capture_output=True, env=environment).returncode:
                 continue
             distance = int(subprocess.check_output(
                 ["git", "rev-list", "--count", revision + ".." + head, "--", *PERFORMANCE_PATHS],
-                cwd=root, text=True))
+                cwd=root, text=True, env=environment))
             for row in result["checks"]:
                 name = row["name"]
                 if name not in PERFORMANCE or row["exit_code"] != 0 or not row["evidence"]:
@@ -267,6 +283,7 @@ def main(argv=None):
     parser.add_argument("--fresh", action="store_true", help="do not reuse correctness results")
     parser.add_argument("--snapshot", action="store_true", help="verify an isolated copy of current files while work continues")
     parser.add_argument("--snapshot-result", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--snapshot-lock-fd", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.only and (args.live or args.performance):
         parser.error("--only cannot be combined with --live or --performance")
@@ -315,7 +332,8 @@ def main(argv=None):
         for name in selected:
             print("Checking " + name + "…", flush=True)
             row = run_check(name, commands(name, artifact, root=ROOT), source, machine, artifact, base / "cache", args.fresh,
-                            root=ROOT, retry=name in requested or args.only in PERFORMANCE, source_inputs=before)
+                            root=ROOT, retry=name in requested or args.only in PERFORMANCE, source_inputs=before,
+                            pass_fds=() if args.snapshot_lock_fd is None else (args.snapshot_lock_fd,))
             result["checks"].append(row)
             state = "deferred infrastructure failure" if row.get("deferred") else "cached pass" if row["cached"] else "pass" if row["exit_code"] == 0 else "inconclusive" if row["exit_code"] == 2 else "failed"
             print(f"  {state}: {row['seconds']:.2f}s; {row['evidence'][0]['path']}", flush=True)
@@ -342,9 +360,8 @@ def main(argv=None):
         result.update(status="inconclusive", complete=False, reason=str(error))
         code = 2
     path = artifact / "verification.json"
-    if result.get("reason") and not any(
-            failure["category"] == "source-change" and failure["affected_paths"] == result.get("source_changes")
-            for failure in result["failures"]):
+    if result.get("reason") and not ("source_changes" in result and any(
+            row.get("source_changes") == result["source_changes"] for row in result["checks"])):
         summary = verify_summary.runner_failure(result["reason"], retry_root,
             "python3 scripts/verify.py " + args.scope + " --snapshot", result.get("source_changes", []))
         result["failures"].append(summary)

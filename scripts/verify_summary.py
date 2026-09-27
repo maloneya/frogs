@@ -34,8 +34,7 @@ def log_diagnostic(path):
                     category = "compiler"
                 elif line.startswith("FAIL  "):
                     category = "scenario"
-                    if len(scenarios) < 10:
-                        scenarios.append(line.split(None, 1)[1])
+                    scenarios.append(line.split(None, 1)[1])
                 elif re.search(r"^thread .+ panicked at |^.+: error: -\[|^AssertionError", line):
                     category = "test"
                 if category and category not in candidates:
@@ -72,7 +71,7 @@ def failure(row, cwd, checked_root=None):
     elif category == "scenario":
         paths = [arg for arg in row.get("command", []) if arg.endswith(".ron") and Path(arg).stem in scenarios]
         action = "Compare the expected and actual outcome; fix the cause without blessing or weakening the assertion."
-        if paths:
+        if paths and len(paths) <= 10:
             retry = shlex.join(["cargo", "run", "--quiet", "-p", "scenario", "--", *paths])
     elif category == "test":
         action = "Fix the failing test's cause, then retry this check."
@@ -103,6 +102,12 @@ def failure(row, cwd, checked_root=None):
             category = "infrastructure"
             diagnostic = clipped(str(infrastructure.get("stage", "benchmark")) + ": " + str(infrastructure.get("reason", "unknown infrastructure failure")))
             action = "Repair the reported infrastructure problem before explicitly retrying this mode."
+            if infrastructure.get("stage") == "build":
+                build_log = next((path for path in evidence if path.endswith(".build.log")), None)
+                if build_log:
+                    _, detail, line, paths, _ = log_diagnostic(build_log)
+                    diagnostic = clipped(diagnostic + "\n" + detail)
+                    evidence = [build_log] + [path for path in evidence if path != build_log]
         elif isinstance(assessment, dict) and assessment:
             raw_metrics = assessment.get("metrics", [])
             metrics = [m for m in raw_metrics if isinstance(m, dict) and m.get("status") in ("regression", "inconclusive")] if isinstance(raw_metrics, list) else []
@@ -114,7 +119,8 @@ def failure(row, cwd, checked_root=None):
             details += [f"{m.get('workload')}/{m.get('metric')}: {m.get('status')}; trials_ms={m.get('current_ms')}; budget_ms={m.get('budget_ms')}" for m in metrics[:3]]
             diagnostic = clipped("\n".join(map(str, details)) or "Benchmark assessment: " + str(assessment.get("status", "unknown")))
             action = "Investigate the measured regression; preserve the budget." if category == "performance-regression" else "Resolve the measurement uncertainty and rerun this mode with no competing heavy work."
-        line = None
+        if not evidence or not evidence[0].endswith(".build.log"):
+            line = None
         if name == "performance-live":
             action += " Reserve an uninterrupted foreground session for the retry."
     if checked_root is not None:

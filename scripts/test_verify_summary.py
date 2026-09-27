@@ -62,6 +62,14 @@ class FailureSummaries(unittest.TestCase):
         self.assertIn('left: 1', result['diagnostic'])
         self.assertEqual(result['affected_paths'], ['crates/sim/src/tests.rs'])
 
+    def test_many_failed_scenarios_keep_total_count_and_retry_entire_suite(self):
+        row = self.row(''.join(f'FAIL  case-{i}\n  expected: 1\n  actual: 2\n' for i in range(12)), 'scenarios-fast')
+        row['command'] = [f'scenarios/case-{i}.ron' for i in range(12)]
+        result = summary.failure(row, self.root)
+        self.assertEqual(result['affected_path_count'], 12)
+        self.assertEqual(len(result['affected_paths']), 10)
+        self.assertEqual(result['retry_command'], 'python3 scripts/verify.py --snapshot --only scenarios-fast')
+
     def test_drift_overrides_misleading_test_output_and_bounds_paths(self):
         row = self.row('error[E0308]: from changing input\n', reason='inputs changed during check',
                        source_changes=[f'source-{i}.rs' for i in range(30)])

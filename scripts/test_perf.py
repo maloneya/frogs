@@ -1,7 +1,9 @@
 """Evidence-policy regressions; synthetic timings make these hardware independent."""
+import argparse
 import copy
 import contextlib
 import io
+import json
 from pathlib import Path
 import tempfile
 import subprocess
@@ -56,6 +58,28 @@ def set_step_ms(trial, milliseconds):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_failed_build_preserves_rendered_cargo_diagnostics_without_raw_json(self):
+        rendered = "error[E0308]: mismatched types\n  --> crates/core/src/instance.rs:172:4\n"
+        messages = [
+            {"reason": "compiler-message", "message": {"rendered": rendered,
+                "spans": [{"irrelevant_payload": "x" * 10_000}]}},
+            {"reason": "build-finished", "success": False},
+        ]
+        build = subprocess.CompletedProcess([], 101,
+            stdout="\n".join(json.dumps(message) for message in messages),
+            stderr="error: could not compile `arpg-core`\n")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "result.json"
+            args = argparse.Namespace(mode="headless", output=output)
+            result = fixture()
+            with patch.object(perf.subprocess, "run", return_value=build), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                perf.run(args, result)
+            log = Path(str(output) + ".build.log").read_text()
+            self.assertEqual(log, build.stderr + rendered)
+            self.assertEqual(result["failure"]["kind"], "infrastructure")
+            self.assertEqual(result["failure"]["stage"], "build")
+
     def test_workloads_cannot_depend_on_playable_scenes_even_through_symlinks(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(perf, "ROOT", Path(directory)):
             root = Path(directory)

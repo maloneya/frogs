@@ -15,7 +15,7 @@ import verify_summary
 
 def git(root, *args, data=None):
     return subprocess.run(["git", *args], cwd=root, input=data, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, check=True).stdout
+                          stderr=subprocess.PIPE, check=True, env=verify.checkout_environment()).stdout
 
 
 def check_links(path, root):
@@ -116,17 +116,15 @@ def run(root, args):
             workspace = (state / "workspace").resolve()
             captured = capture(root, workspace, artifact)
             print("Captured snapshot " + captured["source"] + "; continuing edits will not change these inputs.", flush=True)
-            flags = [args.scope, "--snapshot-result", str(artifact)]
+            flags = [args.scope, "--snapshot-result", str(artifact), "--snapshot-lock-fd", str(lock.fileno())]
             for name in ("fresh", "performance", "live"):
                 if getattr(args, name):
                     flags.append("--" + name)
             if args.only:
                 flags += ["--only", args.only]
-            environment = dict(os.environ, CARGO_TARGET_DIR=str(state.resolve() / "build"), PWD=str(workspace))
-            for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
-                environment.pop(name, None)
+            environment = dict(verify.checkout_environment(), CARGO_TARGET_DIR=str(state.resolve() / "build"), PWD=str(workspace))
             code = subprocess.run([sys.executable, "-B", "scripts/verify.py", *flags],
-                                  cwd=workspace, env=environment, check=False).returncode
+                                  cwd=workspace, env=environment, check=False, pass_fds=(lock.fileno(),)).returncode
             result = json.loads((artifact / "verification.json").read_text())
             result["snapshot"] = captured
             result["live_checkout"] = live_comparison(captured)

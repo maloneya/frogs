@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import verify
 import verify_snapshot
+import verify_summary
 
 
 class Workspace(unittest.TestCase):
@@ -76,6 +77,37 @@ class Workspace(unittest.TestCase):
         self.assertFalse((workspace / "source.rs").exists())
         self.assertFalse((workspace / "target/live-build").exists())
         self.assertEqual(verify.source_identity(workspace), verify.source_identity(self.root))
+
+    def test_snapshot_git_operations_cannot_be_redirected_into_live_metadata(self):
+        index = self.root / ".git/index"
+        head = self.root / ".git/HEAD"
+        original = (index.read_bytes(), head.read_bytes())
+        with patch.dict(os.environ, {"GIT_DIR": str(self.root / ".git"),
+                                     "GIT_WORK_TREE": str(self.root), "GIT_INDEX_FILE": str(index)}):
+            workspace, _ = self.snapshot()
+        self.assertEqual((index.read_bytes(), head.read_bytes()), original)
+        self.assertEqual(verify.source_identity(workspace), verify.source_identity(self.root))
+
+    def test_failed_capture_with_inherited_index_never_mutates_live_index(self):
+        index = self.root / ".git/index"
+        before = index.read_bytes()
+        git = verify_snapshot.git
+        def fail_update(root, *args, **kwargs):
+            if args[0] == "update-index":
+                raise OSError("capture failed after read-tree")
+            return git(root, *args, **kwargs)
+        with patch.dict(os.environ, {"GIT_INDEX_FILE": str(index)}), \
+             patch.object(verify_snapshot, "git", side_effect=fail_update), \
+             self.assertRaisesRegex(OSError, "capture failed"):
+            self.snapshot()
+        self.assertEqual(index.read_bytes(), before)
+
+    def test_running_check_inherits_snapshot_reservation(self):
+        with (self.root / "target/lock").open("w") as lock:
+            row = verify.run_check("tests", [sys.executable, "-c", f"import os; os.fstat({lock.fileno()})"],
+                                   verify.source_identity(self.root), self.machine, self.artifact, self.cache,
+                                   root=self.root, pass_fds=(lock.fileno(),))
+        self.assertEqual(row["exit_code"], 0)
 
     def test_snapshot_refuses_external_links_and_changes_during_copy(self):
         (self.root / "external").symlink_to(self.temp.name)  # Absolute links can escape capture.
@@ -258,6 +290,29 @@ class Workspace(unittest.TestCase):
             self.assertEqual(row["exit_code"], 2)
             self.next_run()
 
+    def test_performance_build_diagnostic_is_preserved_and_sidecar_damage_retries(self):
+        def attempt():
+            output = self.artifact / "performance-headless.json"
+            build = Path(str(output) + ".build.log")
+            failure = {"failure": {"kind": "infrastructure", "stage": "build", "reason": "release build failed; inspect build log"}}
+            script = ("from pathlib import Path; "
+                      f"Path({str(output)!r}).write_text({json.dumps(failure)!r}); "
+                      f"Path({str(build)!r}).write_text('error[E0308]: mismatched types\\n  --> crates/core/src/instance.rs:172:61\\n'); "
+                      "raise SystemExit(2)")
+            return verify.run_check("performance-headless", [sys.executable, "-c", script],
+                                    verify.source_identity(self.root), self.machine, self.artifact, self.cache, root=self.root)
+        row = attempt()
+        summary = verify_summary.failure(row, self.root)
+        self.assertEqual(summary["category"], "infrastructure")
+        self.assertIn("mismatched types", summary["diagnostic"])
+        self.assertTrue(summary["evidence"][0].endswith(".build.log"))
+        self.assertEqual(summary["affected_paths"], ["crates/core/src/instance.rs"])
+        self.next_run()
+        self.assertTrue(attempt()["deferred"])
+        Path(summary["evidence"][0]).write_text("damaged")
+        self.next_run()
+        self.assertNotIn("deferred", attempt())
+
     def test_full_reports_deferred_failure_but_runs_all_correctness(self):
         def fake(name, *args, **kwargs):
             row = {"name": name, "cached": False, "exit_code": 0, "seconds": 0,
@@ -354,14 +409,16 @@ class Workspace(unittest.TestCase):
         self.assertEqual(result["coverage"], [])
 
     def test_completion_reports_changed_paths_once_and_keeps_coverage_empty(self):
-        command = [sys.executable, "-c", "from pathlib import Path; Path('source.rs').write_text('changed')"]
+        command = [sys.executable, "-c", "from pathlib import Path; [Path(f'new-{i:02}.rs').write_text('changed') for i in range(20)]"]
         with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
              patch.object(verify, "commands", return_value=command), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(verify.main(["--only", "tests"]), 2)
         result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
-        self.assertEqual(result["source_changes"], ["source.rs"])
-        self.assertEqual(result["failures"][0]["affected_paths"], ["source.rs"])
+        expected = [f"new-{i:02}.rs" for i in range(20)]
+        self.assertEqual(result["source_changes"], expected)
+        self.assertEqual(result["failures"][0]["affected_paths"], expected[:10])
+        self.assertEqual(result["failures"][0]["affected_path_count"], 20)
         self.assertEqual(output.getvalue().count("[source-change]"), 1)
         self.assertEqual(result["coverage"], [])
 
@@ -508,9 +565,13 @@ class Workspace(unittest.TestCase):
             subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
                             "commit", "-qm", "change"], cwd=self.root, check=True)
         commit(self.root / "crates/README.md", "documentation only")
+        commit(self.root / "scenes/play.ron", "playable scene experiment")
         self.assertEqual(verify.performance_checkpoint(self.root, base)["commits_since_pass"],
                          dict.fromkeys(verify.PERFORMANCE, 0))
-        for number in range(9):
+        commit(self.root / "benchmarks/compressed.ron", "benchmark workload change")
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["commits_since_pass"],
+                         dict.fromkeys(verify.PERFORMANCE, 1))
+        for number in range(8):
             commit(self.root / "crates/example.rs", str(number))
         self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], [])
         (self.root / "crates/example.rs").write_text("dirty")

@@ -66,7 +66,10 @@ The isolated checkout lives at `target/verify/snapshot/workspace`, with its own
 reusable build cache at `target/verify/snapshot/build`. Its first build is cold;
 later runs reuse that cache without competing for the live checkout's build
 directory. One snapshot run at a time owns this workspace and cache; a second run
-refuses immediately. Historical source archives remain after the next capture
+refuses immediately. The verifier and its direct checks retain the reservation
+if the waiting parent process exits. Git operations ignore inherited checkout/index
+overrides so capturing a snapshot cannot rewrite the live index.
+Historical source archives remain after the next capture
 replaces the workspace. Unmerged index entries and absolute/external source
 symlinks are refused because they cannot form this isolated candidate.
 
@@ -87,7 +90,10 @@ Full logs and existing pass/fail, cache and benchmark retry rules remain authori
 For source drift, `source_changes` lists changed inputs without their contents.
 Summaries show at most ten paths and 1,200 diagnostic characters; follow the
 evidence link for more. Deferred infrastructure failures retain the original
-diagnostic and are labeled repeated. Snapshot retry commands target the live
+diagnostic and are labeled repeated. Benchmark build failures include rendered
+compiler diagnostics and integrity-checked build logs. More than ten failing
+scenarios use a suite retry rather than silently omitting cases.
+Snapshot retry commands target the live
 checkout; a focused scenario command checks only the listed cases and does not
 certify a full suite. Live retries still need a reserved foreground session.
 
