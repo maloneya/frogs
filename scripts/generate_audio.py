@@ -1,7 +1,8 @@
-"""Regenerate the original prototype WAVs in assets/audio (Python stdlib only).
+"""Regenerate hurt, beam and ambience prototype WAVs (Python stdlib only).
 
 These are deliberately synthetic placeholders, not sampled third-party recordings.
 Fixed seeds and periodic loop harmonics make regeneration and loop seams repeatable.
+The sampled combat/movement cues are documented in assets/audio/README.md.
 """
 
 import math
@@ -36,14 +37,6 @@ def envelope(t, duration, decay):
 def main():
     ROOT.mkdir(parents=True, exist_ok=True)
     tau = math.tau
-    write("cleave.wav", 0.24, lambda t, n, c:
-          envelope(t, 0.24, 8) * (0.32 * n + 0.12 * math.sin(tau * (650*t - 700*t*t))))
-    write("slam.wav", 0.45, lambda t, n, c:
-          envelope(t, 0.45, 10) * (0.3 * math.sin(tau * (105*t - 55*t*t)) + 0.15*n))
-    write("impact.wav", 0.16, lambda t, n, c:
-          envelope(t, 0.16, 22) * (0.35*n + 0.22*math.sin(tau*170*t)))
-    write("footstep.wav", 0.10, lambda t, n, c:
-          envelope(t, 0.10, 32) * (0.25*n + 0.28*math.sin(tau*95*t)))
     write("hurt.wav", 0.28, lambda t, n, c:
           envelope(t, 0.28, 10) * (0.30*math.sin(tau*(240*t - 170*t*t)) + 0.13*n))
     # Integer numbers of cycles over each loop avoid a discontinuity at wrap.
