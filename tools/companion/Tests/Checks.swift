@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 // A synthetic catalog intentionally uses an unknown field: UI must not depend on
 // the current game's seven keys, groups, ranges or defaults.
@@ -213,6 +214,7 @@ struct Checks {
         try encounterFormsPreserveCompleteRelationships()
         try integerInspectorPreservesPrecision()
         sceneCoordinatesRoundTrip()
+        scenePointerButtonsAndDelete()
         try await liveSceneEditorChecks(Model(path: "/tmp/no-authoring-game-\(UUID().uuidString).sock"))
         await localTransportFailsClearlyWithoutAGame()
         await editAdmissionWaitsForRefreshWithoutQueuingMoreEdits()
@@ -454,4 +456,71 @@ func integerInspectorPreservesPrecision() throws {
         precondition(field.stepped(up: true) == (n == UInt64.max ? nil : .unsigned(n + 1)))
         for invalid in ["-1", "1.5", "18446744073709551616", ""] { precondition(field.parsed(invalid) == nil) }
     }
+}
+
+
+@MainActor
+func scenePointerButtonsAndDelete() {
+    let view = ScenePointerView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+    var changes: [ScenePointerDrag] = []
+    var ends: [ScenePointerDrag] = []
+    var deletes = 0
+    view.changed = { changes.append($0) }
+    view.ended = { ends.append($0) }
+    view.deleteSelection = { deletes += 1 }
+    func mouse(_ type: NSEvent.EventType, _ x: Double, _ y: Double) -> NSEvent {
+        let eventType: CGEventType
+        let button: CGMouseButton
+        switch type {
+        case .leftMouseDown: eventType = .leftMouseDown; button = .left
+        case .leftMouseDragged: eventType = .leftMouseDragged; button = .left
+        case .leftMouseUp: eventType = .leftMouseUp; button = .left
+        case .rightMouseDown: eventType = .rightMouseDown; button = .right
+        case .rightMouseDragged: eventType = .rightMouseDragged; button = .right
+        case .rightMouseUp: eventType = .rightMouseUp; button = .right
+        default: preconditionFailure("Expected a mouse event")
+        }
+        // Construct and deliver locally; never post events to the desktop.
+        return NSEvent(cgEvent: CGEvent(mouseEventSource: nil, mouseType: eventType,
+                                      mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: button)!)!
+    }
+    func delete(_ code: UInt16 = 51, repeating: Bool = false) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                        windowNumber: 0, context: nil, characters: "\u{7f}",
+                        charactersIgnoringModifiers: "\u{7f}", isARepeat: repeating, keyCode: code)!
+    }
+    for right in [false, true] {
+        changes.removeAll(); ends.removeAll()
+        if right {
+            view.rightMouseDown(with: mouse(.rightMouseDown, 20, 30))
+            view.rightMouseDragged(with: mouse(.rightMouseDragged, 70, 90))
+        } else {
+            view.mouseDown(with: mouse(.leftMouseDown, 20, 30))
+            view.mouseDragged(with: mouse(.leftMouseDragged, 70, 90))
+        }
+        precondition(changes.count == 2 && changes[0].began && !changes[1].began)
+        precondition(changes.allSatisfy { $0.rightButton == right && $0.start == changes[0].start })
+        precondition(abs(changes[1].translation.width) == 50 && abs(changes[1].translation.height) == 60)
+        view.keyDown(with: delete())
+        precondition(deletes == 0, "Deletion during a drag must not invalidate its target")
+        if right {
+            view.mouseDown(with: mouse(.leftMouseDown, 99, 99))
+            view.mouseUp(with: mouse(.leftMouseUp, 99, 99))
+            precondition(ends.isEmpty && changes.count == 2, "A second button cannot replace the active drag")
+            view.rightMouseUp(with: mouse(.rightMouseUp, 80, 100))
+        } else {
+            view.rightMouseDown(with: mouse(.rightMouseDown, 99, 99))
+            view.rightMouseUp(with: mouse(.rightMouseUp, 99, 99))
+            precondition(ends.isEmpty && changes.count == 2)
+            view.mouseUp(with: mouse(.leftMouseUp, 80, 100))
+        }
+        precondition(ends.count == 1 && ends[0].rightButton == right)
+        precondition(abs(ends[0].translation.width) == 60 && abs(ends[0].translation.height) == 70)
+    }
+    view.keyDown(with: delete())
+    view.keyDown(with: delete(117))
+    precondition(deletes == 2, "Both Mac Delete and forward Delete remove the selection")
+    view.keyDown(with: delete(repeating: true))
+    precondition(deletes == 2, "Holding Delete must not repeatedly remove objects")
+    print("Native companion: left/right pointer routing, overlapping buttons and Delete passed")
 }

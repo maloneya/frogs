@@ -4,7 +4,6 @@ import UniformTypeIdentifiers
 
 struct ScenesView: View {
     @ObservedObject var model: Model
-    @Binding var selection: String?
     @State private var tool = "select"
     @State private var snap = 0.5
     @State private var viewport = SceneViewport()
@@ -22,35 +21,21 @@ struct ScenesView: View {
         VStack(spacing: 0) {
             HStack {
                 Text(model.editor.map { $0.name + (model.editorDirty ? " *" : "") } ?? "Scene editor").font(.title2.bold()).lineLimit(1)
+                sceneFilesMenu
                 Spacer()
                 Text(model.state?.scenes.current.map { "Playing: \($0)" } ?? "Choose a scene to play")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Button("Restart scene") { Task { await model.action(.restart) } }.disabled(!model.editable || model.state?.scenes.current == nil)
             }.padding(12)
             HSplitView {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("Scene files").font(.headline)
-                        Spacer()
-                        Button { model.refreshSceneFiles() } label: { Image(systemName: "arrow.clockwise") }
-                            .help("Refresh scene files").disabled(!model.canAuthor)
-                    }
-                    List(model.sceneFiles, selection: $selection) { file in
-                        Text(file.label).lineLimit(1).help(file.path).tag(file.path)
-                    }.listStyle(.plain).scrollContentBackground(.hidden)
-                    Button("Open selected") {
-                        if let selection { open(EditorRequest(action: "open", path: selection)) }
-                    }.disabled(!model.canAuthor || selection == nil)
-                    Button("New scene") { open(EditorRequest(action: "new")) }.disabled(!model.canAuthor)
-                    if let error = model.sceneFileError { Text(error).font(.caption).foregroundStyle(.red) }
-                }.padding(12).frame(minWidth: 150, idealWidth: 180, maxWidth: 220)
+                toolList
                 if let document = model.editor {
                     VStack(spacing: 0) {
                         toolbar
                             .onAppear { nameDraft = document.name; fit(document) }
                         SceneCanvas(document: document, selection: $model.editorSelection, viewport: $viewport,
                                     encounter: document.encounters.first { $0.index == model.editorEncounter },
-                                    tool: tool, snap: snap, editable: model.canAuthor, edit: { edit in Task { await model.editScene(edit) } })
+                                    tool: tool, snap: snap, editable: model.canAuthor, deleteSelection: deleteSelection, edit: { edit in Task { await model.editScene(edit) } })
                         HStack {
                             Text("Game camera orientation · metres · P = player start").font(.caption).foregroundStyle(.secondary)
                             Spacer()
@@ -97,36 +82,65 @@ struct ScenesView: View {
     }
     private var hasPendingInspectorEdits: Bool { !fieldDrafts.isEmpty || !colourDrafts.isEmpty || (model.editor != nil && nameDraft != model.editor?.name) || (selected != nil && objectNameDraft != selected?.name) }
     private var canSave: Bool { model.canAuthor && model.editor != nil && !hasPendingInspectorEdits }
+    private var sceneFilesMenu: some View {
+        Menu("Scene files", systemImage: "folder") {
+            Button("New scene") { open(EditorRequest(action: "new")) }
+            Divider()
+            ForEach(model.sceneFiles) { file in
+                Button(file.label) { open(EditorRequest(action: "open", path: file.path)) }
+                    .help(file.path)
+            }
+            if model.sceneFiles.isEmpty { Text("No scene files") }
+            Divider()
+            Button("Refresh files") { model.refreshSceneFiles() }
+            if let error = model.sceneFileError { Text(error) }
+        }.fixedSize().disabled(!model.canAuthor)
+    }
+    private var toolList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Tools").font(.headline).padding(.bottom, 8)
+                toolButton("Select / Pan", "cursorarrow", "select")
+                Divider().padding(.vertical, 6)
+                toolButton("Enemy", "figure.stand", "body")
+                toolButton("Wall", "rectangle", "wall")
+                toolButton("Source", "circle.dashed", "source")
+                toolButton("Formation", "square.grid.3x3", "grid")
+                toolButton("Tree", "tree", "tree")
+                toolButton("Campfire", "flame", "campfire")
+                Divider().padding(.vertical, 6)
+                toolButton("Static prop", "cube", "prop")
+                toolButton("Switch / shrine", "hand.tap", "switch")
+                toolButton("Door", "door.left.hand.closed", "door")
+                toolButton("Chest", "shippingbox", "chest")
+            }.padding(12)
+        }.frame(minWidth: 150, idealWidth: 180, maxWidth: 220)
+            .disabled(model.editor == nil)
+    }
+    private func toolButton(_ label: String, _ symbol: String, _ value: String) -> some View {
+        Button { tool = value } label: {
+            Label(label, systemImage: symbol)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                .background(tool == value ? Color.accentColor.opacity(0.18) : .clear,
+                            in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityAddTraits(tool == value ? [.isSelected] : [])
+    }
     private var toolbar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Picker("Tool", selection: $tool) {
-                    Label("Select", systemImage: "cursorarrow").tag("select")
-                    Label("Pan", systemImage: "hand.draw").tag("pan")
-                    Divider()
-                    Label("Enemy", systemImage: "figure.stand").tag("body")
-                    Label("Wall", systemImage: "rectangle").tag("wall")
-                    Label("Source", systemImage: "circle.dashed").tag("source")
-                    Label("Formation", systemImage: "square.grid.3x3").tag("grid")
-                    Label("Tree", systemImage: "tree").tag("tree")
-                    Label("Campfire", systemImage: "flame").tag("campfire")
-                    Divider()
-                    Label("Static prop", systemImage: "cube").tag("prop")
-                    Label("Switch / shrine", systemImage: "hand.tap").tag("switch")
-                    Label("Door", systemImage: "door.left.hand.closed").tag("door")
-                    Label("Chest", systemImage: "shippingbox").tag("chest")
-                }.pickerStyle(.menu).frame(maxWidth: 200)
-                Spacer()
-                Button("Select") { tool = "select" }.help("Return to selecting and moving objects")
-            }
-            HStack {
-                Text(tool == "wall" ? "Drag to draw a wall" : tool == "select" ? "Click to select · drag to move" : tool == "pan" ? "Drag to pan the map" : "Click the map to place").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Picker("Snap", selection: $snap) {
-                    Text("Off").tag(0.0); Text("0.25 m").tag(0.25); Text("0.5 m").tag(0.5); Text("1 m").tag(1.0)
-                }.fixedSize()
-            }
+        HStack {
+            Text(tool == "select" ? "Either button: select / move · drag empty space to pan" :
+                 tool == "wall" ? "Left drag: draw wall · right button: select / pan" :
+                 "Left click: place · right button: select / pan")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Picker("Snap", selection: $snap) {
+                Text("Off").tag(0.0); Text("0.25 m").tag(0.25); Text("0.5 m").tag(0.5); Text("1 m").tag(1.0)
+            }.fixedSize()
         }.padding(10)
+    }
+    private func deleteSelection() {
+        guard model.canAuthor, let selected else { return }
+        action("delete", selected)
     }
     private func inspector(_ document: SceneDocument) -> some View {
         ScrollView {
@@ -164,7 +178,7 @@ struct ScenesView: View {
                     ForEach(object.fields) { field in inspectorField(object, field) }
                     HStack {
                         Button("Duplicate") { action("duplicate", object) }.keyboardShortcut("d").disabled(!model.canAuthor)
-                        Button("Delete", role: .destructive) { action("delete", object) }.disabled(!model.canAuthor)
+                        Button("Delete", role: .destructive, action: deleteSelection).disabled(!model.canAuthor)
                     }
                     Text("Duplicate copies the placement; encounter links stay with the original.").font(.caption).foregroundStyle(.secondary)
                 }

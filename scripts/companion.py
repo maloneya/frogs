@@ -59,6 +59,7 @@ if __name__ == "__main__":
         subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "6", "-warnings-as-errors",
                         str(sources / "Connection.swift"), str(sources / "Model.swift"),
                         str(sources / "SceneDocument.swift"), str(sources / "Authoring.swift"),
+                        str(sources / "SceneCanvasInput.swift"),
                         str(ROOT / "tools/companion/Tests/Checks.swift"),
                         "-o", str(checks)], check=True)
         subprocess.run([str(checks)], check=True, env=dict(os.environ, ARPG_AUTHORING_BIN=str(ROOT / "target/release/arpg-author")))

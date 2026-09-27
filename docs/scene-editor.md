@@ -9,9 +9,9 @@ test with inputs and assertions; the editor does not author those timelines.
 
 1. Run `python3 scripts/dev.py` for the game and [ARPG Companion](companion.md),
    or `python3 scripts/companion.py open` to author without a running game.
-2. In **Scenes**, choose a file and **Open selected**, or **New scene**. Use
-   **Refresh files** after adding files outside the app. The catalog lists regular
-   `.ron` files directly inside `scenes/`.
+2. In **Scenes**, open the **Scene files** menu and choose a file or **New scene**.
+   Use **Refresh files** in that menu after adding files outside the app. The catalog
+   lists regular `.ron` files directly inside `scenes/`.
 3. Place and duplicate objects, adjust their inspector fields and scene lighting,
    then **Save & play**. Save a new scene under `scenes/` to keep it discoverable.
 4. Play the result. Adjust type-wide movement/combat values in **Tuning**;
@@ -34,9 +34,13 @@ A new game launch rereads the last played file, unlike a restart. See
 
 ## Placement and map
 
-Choose a **Tool**, then return to **Select** to move existing objects. Selection
-also works through the inspector's object list. Every placement supports
-move, duplicate, delete and undo/redo.
+Choose a tool from the left sidebar. **Select / Pan** uses either mouse button:
+click an object to select it, drag an object to move it, or drag empty space to
+pan. Right-click and right-drag also select, move and pan while a placement tool
+is active; the left button places or draws. Selection also works through the
+inspector's object list. Press **Delete** (or forward Delete) with the map focused
+to delete the selected object; Delete in a text field still edits text. Every
+placement supports move, duplicate, delete and undo/redo.
 
 | Tool | Authoring controls |
 |---|---|
@@ -65,7 +69,7 @@ The map uses the game camera's rotation and vertical compression: up on the map
 is up in the game view. The compass shows world X/Z; **P** is the fixed player
 start. **Snap** affects mouse placement/movement in world metres; inspector
 positions are not snapped. Inspector rotation is degrees; RON yaw is radians.
-**Pan**, zoom and **Fit** change only the editor view. Ground footprints cannot
+Panning, zoom and **Fit** change only the editor view. Ground footprints cannot
 show tree height, canopy occlusion or the final lighting; judge those in the game.
 
 ## Inspector and history

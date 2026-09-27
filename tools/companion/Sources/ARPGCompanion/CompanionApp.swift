@@ -71,7 +71,6 @@ enum ToolPage: String { case scenes, tuning, debug }
 
 struct CompanionView: View {
     @ObservedObject var model: Model
-    @State private var sceneSelection: String?
     @State private var tuningGroup: String?
     @State private var page: ToolPage = {
         let args = CommandLine.arguments
@@ -90,7 +89,7 @@ struct CompanionView: View {
             }.pickerStyle(.segmented).labelsHidden().frame(width: 360).padding(.top, 16)
             Group {
                 switch page {
-                case .scenes: ScenesView(model: model, selection: $sceneSelection)
+                case .scenes: ScenesView(model: model)
                 case .tuning: TuningView(model: model, selection: $tuningGroup)
                 case .debug: DebugView(model: model)
                 }
@@ -106,9 +105,6 @@ struct CompanionView: View {
                 if model.state?.busy == true { Text("Performance trial").foregroundStyle(.secondary) }
             }.font(.caption).padding(16)
         }.frame(minWidth: 960, minHeight: 640)
-        .onChange(of: model.sceneFiles.map(\.path)) { _, paths in
-            if !(paths.contains { $0 == sceneSelection }) { sceneSelection = nil }
-        }
         .onChange(of: model.state?.groups, initial: true) { _, groups in
             if !(groups?.contains { $0 == tuningGroup } ?? false) { tuningGroup = groups?.first }
         }

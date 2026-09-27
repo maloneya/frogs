@@ -8,56 +8,66 @@ struct SceneCanvas: View {
     let tool: String
     let snap: Double
     let editable: Bool
+    let deleteSelection: () -> Void
     let edit: (JSONValue) -> Void
     @State private var dragObject: SceneObject?
     @State private var dragStart: CGPoint?
     @State private var dragEnd: CGPoint?
     @State private var startViewport: SceneViewport?
+    @State private var dragTool: String?
 
     var body: some View {
         GeometryReader { geometry in
             Canvas { context, size in draw(context, size) }
                 .background(Color(nsColor: .textBackgroundColor))
                 .clipped().contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                    if dragStart == nil {
-                        dragStart = value.startLocation; startViewport = viewport
-                        if tool == "select" {
-                            let (x, z) = point(value.startLocation, geometry.size, snap: 0)
-                            dragObject = viewport.hit(document.objects, x: x, z: z,
-                                tolerance: document.projection.worldTolerance(8 / viewport.scale(width: geometry.size.width, height: geometry.size.height)))
-                            selection = dragObject?.id
+                .overlay {
+                    SceneCanvasInput(changed: { value in
+                        if value.began {
+                            dragStart = value.start; startViewport = viewport
+                            dragTool = value.rightButton ? "select" : tool
+                            if dragTool == "select" {
+                                let (x, z) = point(value.start, geometry.size, snap: 0)
+                                dragObject = viewport.hit(document.objects, x: x, z: z,
+                                    tolerance: document.projection.worldTolerance(8 / viewport.scale(width: geometry.size.width, height: geometry.size.height)))
+                                selection = dragObject?.id
+                            }
                         }
-                    }
-                    dragEnd = value.location
-                    if tool == "pan", let startViewport {
-                        let (dx, dz) = startViewport.delta(x: value.translation.width, y: value.translation.height,
-                            width: geometry.size.width, height: geometry.size.height, projection: document.projection)
-                        viewport.centreX = startViewport.centreX - dx
-                        viewport.centreZ = startViewport.centreZ - dz
-                    }
-                }.onEnded { value in
-                    defer { dragStart = nil; dragEnd = nil; dragObject = nil; startViewport = nil }
-                    guard editable else { return }
-                    let (x, z) = point(value.location, geometry.size, snap: snap)
-                    switch tool {
-                    case "select":
-                        if let object = dragObject, hypot(value.translation.width, value.translation.height) > 2 {
-                            let (a, b) = moved(object, size: geometry.size, translation: value.translation)
-                            edit(.object(["action": .string("move"), "target": object.target, "pos": .point(a, b)]))
+                        guard dragStart != nil else { return }
+                        dragEnd = value.location
+                        if dragTool == "select", dragObject == nil, let startViewport {
+                            let (dx, dz) = startViewport.delta(x: value.translation.width, y: value.translation.height,
+                                width: geometry.size.width, height: geometry.size.height, projection: document.projection)
+                            viewport.centreX = startViewport.centreX - dx
+                            viewport.centreZ = startViewport.centreZ - dz
                         }
-                    case "wall":
-                        if hypot(value.translation.width, value.translation.height) > 3 {
-                            let (a, b) = point(value.startLocation, geometry.size, snap: snap)
-                            edit(.object(["action": .string("draw_wall"), "start": .point(a, b), "end": .point(x, z)]))
-                        } else { edit(.object(["action": .string("add"), "kind": .string(tool), "pos": .point(x, z)])) }
-                    case "prop", "switch", "door", "chest": edit(.object(["action": .string("place"), "kind": .string(tool), "pos": .point(x, z)]))
-                    case "body", "source", "grid", "tree", "campfire": edit(.object(["action": .string("add"), "kind": .string(tool), "pos": .point(x, z)]))
-                    default: break
-                    }
-                })
+                    }, ended: { value in
+                        defer { clearDrag() }
+                        guard editable, let dragTool else { return }
+                        let (x, z) = point(value.location, geometry.size, snap: snap)
+                        switch dragTool {
+                        case "select":
+                            if let object = dragObject, hypot(value.translation.width, value.translation.height) > 2 {
+                                let (a, b) = moved(object, size: geometry.size, translation: value.translation)
+                                edit(.object(["action": .string("move"), "target": object.target, "pos": .point(a, b)]))
+                            }
+                        case "wall":
+                            if hypot(value.translation.width, value.translation.height) > 3 {
+                                let (a, b) = point(value.start, geometry.size, snap: snap)
+                                edit(.object(["action": .string("draw_wall"), "start": .point(a, b), "end": .point(x, z)]))
+                            } else { edit(.object(["action": .string("add"), "kind": .string(dragTool), "pos": .point(x, z)])) }
+                        case "prop", "switch", "door", "chest": edit(.object(["action": .string("place"), "kind": .string(dragTool), "pos": .point(x, z)]))
+                        case "body", "source", "grid", "tree", "campfire": edit(.object(["action": .string("add"), "kind": .string(dragTool), "pos": .point(x, z)]))
+                        default: break
+                        }
+                    }, deleteSelection: deleteSelection)
+                }
+                .onChange(of: document.document) { _, _ in clearDrag() }
                 .accessibilityLabel("Scene map. Select objects and edit precise coordinates in the inspector. The map follows the game camera; the grid shows world X and Z.")
         }.frame(minHeight: 300)
+    }
+    private func clearDrag() {
+        dragStart = nil; dragEnd = nil; dragObject = nil; startViewport = nil; dragTool = nil
     }
     private func point(_ point: CGPoint, _ size: CGSize, snap: Double) -> (Double, Double) {
         viewport.world(x: point.x, y: point.y, width: size.width, height: size.height, snap: snap, projection: document.projection)
@@ -175,7 +185,7 @@ struct SceneCanvas: View {
         }
         context.fill(circle(0,0,document.player_radius), with: .color(.green))
         context.draw(Text("P").font(.caption.bold()).foregroundStyle(.green), at: screen(0,-1))
-        if tool == "wall", let start = dragStart, let end = dragEnd {
+        if dragTool == "wall", let start = dragStart, let end = dragEnd {
             let (x,z)=point(start,size,snap:snap), (a,b)=point(end,size,snap:snap)
             context.stroke(rectangle(min(x,a),min(z,b),max(x,a),max(z,b)), with:.color(.accentColor),lineWidth:2)
         }
