@@ -19,8 +19,9 @@ const REASON: &str = "a scenario must run headless, with no GPU, no window and n
                       naming a renderer or a window system.";
 
 /// The complete set. `arpg-game` is what is under test; `arpg-sim`,
-/// `arpg-core` and `glam` supply the shared vocabulary. `arpg-content` loads shared scenes; `ron`/`serde` parse
-/// assertion scripts, which belong only to this runner.
+/// `arpg-core` and `glam` supply the shared vocabulary. `ron`/`serde` parse
+/// assertion scripts, which belong only to this runner. `arpg-content` loads
+/// benchmark-owned scene documents for the separate perf-headless binary.
 const ALLOWED: &[&str] = &["arpg-core", "arpg-sim", "arpg-game", "arpg-content", "glam", "ron", "serde"];
 
 #[path = "../../build_support/dependencies.rs"]

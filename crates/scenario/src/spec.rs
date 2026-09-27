@@ -180,9 +180,9 @@ pub(crate) struct Checkpoint {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Setup {
-    /// Real authored content, instantiated through the same door as the game.
+    /// Test-owned scene setups, admitted through the same boundary as the game.
     #[serde(default)]
-    pub(crate) scenes: Vec<SceneRef>,
+    pub(crate) scenes: Vec<arpg_game::GameScene>,
     /// Bodies placed and removed, in order, after authored scenes load.
     ///
     /// **This is what makes a scenario able to say anything precise.** A horde
@@ -556,30 +556,6 @@ pub(crate) struct ImpulseAt {
     pub(crate) value: Impulse,
 }
 
-/// Test orchestration uses the same complete gameplay content as scene files.
-#[derive(Debug, Deserialize)]
-pub(crate) enum SceneRef {
-    Inline(Box<arpg_game::GameScene>),
-    File(std::path::PathBuf),
-}
-
-impl SceneRef {
-    pub(crate) fn resolve(&mut self, base: &std::path::Path) -> Result<(), arpg_content::LoadError> {
-        match self {
-            Self::File(path) => *self = Self::Inline(Box::new(arpg_content::load_scene(&base.join(path))?)),
-            Self::Inline(_) => {}
-        }
-        Ok(())
-    }
-
-    pub(crate) fn content(&self) -> &arpg_game::GameScene {
-        match self {
-            Self::Inline(scene) => scene,
-            Self::File(_) => panic!("scene references must resolve before validation and replay"),
-        }
-    }
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SceneAt {
@@ -590,7 +566,7 @@ pub(crate) struct SceneAt {
 /// Indices refer to load order, including setup, never to a content name.
 #[derive(Debug, Deserialize)]
 pub(crate) enum SceneAction {
-    Load(SceneRef),
+    Load(Box<arpg_game::GameScene>),
     Evict(usize),
 }
 

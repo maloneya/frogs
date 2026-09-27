@@ -115,9 +115,9 @@ rejected, even when asserting absence or blessing traces. See
 
 [The independent-trials scenario](../scenarios/two_encounters_resolve_independently.ron)
 pins activation, the final allowed kill, independent timeout and physical passage
-through the opened door. The playable scene has both
-[a completion scenario](../scenarios/soul_trial_can_be_completed.ron) and
-[a timeout scenario](../scenarios/soul_trial_times_out_without_defeats.ron).
+through the opened door using its own setup. Game tests independently cover
+chest rewards, source ownership, eviction and restart. Playable encounter layouts
+are evaluated through playtesting, not automated feasibility checks.
 
 ## Extending a rule
 

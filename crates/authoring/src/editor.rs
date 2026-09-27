@@ -445,8 +445,7 @@ mod tests {
 
     #[test]
     fn editing_preserves_complete_scene_and_remaps_relationships_on_delete() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/soul_trial.ron");
-        let (mut scene, _) = arpg_content::read_scene_document(&path).unwrap();
+        let mut scene = super::authoring_tests::composed_scene();
         // Insert an unrelated body/source before every referenced object, then
         // remove them. Every original relationship and state hash must return.
         let original = Game::from_scene(&scene.scene).unwrap().hash();

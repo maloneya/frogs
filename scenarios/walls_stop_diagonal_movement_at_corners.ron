@@ -2,10 +2,10 @@
 // Ten diagonal steps are 1.5/sqrt(2) per axis; later steps reach the corner.
 (
  description: "Joined rectangular walls stop both axes without preventing retreat along a face.",
- setup: (scenes: [Inline((engine: (name: "corner", walls: [
+ setup: (scenes: [(engine: (name: "corner", walls: [
    (centre: (0.0, 2.0), size: (8.0, 0.2)),
    (centre: (2.0, 0.0), size: (0.2, 8.0)),
- ])))]),
+ ]))]),
  inputs: [(at: 0, ticks: 30, dir: (1.0, 1.0)), (at: 30, ticks: 5, dir: (-1.0, 0.0))],
  checkpoints: [
    (at: 9, expect: (player_pos: (x: 1.0606602, z: 1.0606602, tol: 0.0001))),

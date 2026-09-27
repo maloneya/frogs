@@ -5,7 +5,9 @@ description: Write, run and update headless scenarios for simulation and gamepla
 
 # Headless scenarios
 
-Scenes are playable content; scenarios test rules and compositions. They drive
+Playable scenes are game content; scenarios own their setups and test rules
+and a small set of complex test-only compositions. They never load `scenes/` files.
+They drive
 `Game::step` without a GPU, window or wall-clock pacing. They
 assert checkpoints, final state and optional golden traces. Every run also
 replays and compares Game hashes tick by tick. Repeatability alone does not
@@ -102,13 +104,13 @@ checkpoints. Requesting a dead body's position fails even alongside `alive: fals
   velocity as impulses. See [crowd motion](../../../docs/crowd-collision.md#gaits-and-pushing).
 - [Source enablement](../../../docs/source-enablement.md): switches run before
   source evaluation; assertions consume the engine-owned `SourceState`.
-- [Encounters](../../../docs/encounters.md): complete inline scenes use
-  `Inline(...)` containing `GameScene` directly. File inputs wrap it under `scene`
-  with optional authoring labels; see the
-  [format boundary](../../../docs/scene-authoring.md#document-and-runtime-boundary). Assert activation
-  on N and permitted emission on N+1, as well as one-shot start, deadline, reward and lifetime.
-- [Scene authoring](../create-scene/SKILL.md): load the playable file through
-  `File(...)` so the tested content is the content the user plays.
+- [Encounters](../../../docs/encounters.md): `setup.scenes` and timeline `Load(...)`
+  contain test-owned `GameScene` values directly, with `engine` at the top level.
+  Assert activation on N and permitted emission on N+1, as well as one-shot
+  start, deadline, reward and lifetime. External scene references are not supported.
+- [Complex integration](../../../scenarios/two_encounters_resolve_independently.ron):
+  combine rules only when the interaction is the subject. Keep ordinary system
+  cases small; do not reproduce a playable level to test one mechanism.
 
 For a new rule, assert its own result and an interaction with an existing rule.
 For a regression, demonstrate the failure before fixing it where practical.

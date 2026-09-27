@@ -2,10 +2,10 @@
 // player remains undisturbed at the origin, across a 40 m continuous face.
 (
  description: "A thousand seekers stay behind a rectangle with bounded step work.",
- setup: (scenes: [Inline((engine: (name: "crowd at wall",
+ setup: (scenes: [(engine: (name: "crowd at wall",
    walls: [(centre: (0.0, 2.0), size: (40.0, 0.4))],
    grids: [(origin: (-10.85, 4.0), columns: 32, rows: 32, spacing: 0.7, what: (seeks: true))],
- )))]),
+ ))]),
  budget: (ticks: 360, max_mean_step_micros: 13000.0),
  expect: (enemy_count: 1024, seekers: 1024, player_pos: (x: 0.0, z: 0.0, tol: 0.0001)),
 )

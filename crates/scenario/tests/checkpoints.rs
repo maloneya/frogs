@@ -15,9 +15,9 @@ fn torch_observations_reject_nonexistent_indices_and_wrong_checkpoints() {
         "torch_count: 0",
     ] {
         let fixture = Fixture::new(&format!(r#"(
-            setup: (scenes: [Inline((engine: (name: "lit"), torches: [
+            setup: (scenes: [(engine: (name: "lit"), torches: [
                 (position: (0.0, 2.0, 0.0), colour: (1.0, 0.5, 0.1), intensity: 10.0, range: 8.0)
-            ]))]),
+            ])]),
             checkpoints: [(at: 0, expect: ({expect}))],
             budget: (ticks: 2), expect: (torch_count: 1),
         )"#));
@@ -33,8 +33,8 @@ fn torch_observations_reject_nonexistent_indices_and_wrong_checkpoints() {
 fn out_of_order_loads_cannot_validate_absence_against_a_different_scene() {
     let fixture = Fixture::new(r#"(
         scenes: [
-            (at: 1, action: Load(Inline((engine: (name: "source", sources: [(pos: (20.0, 0.0))]))))),
-            (at: 0, action: Load(Inline((engine: (name: "empty"))))),
+            (at: 1, action: Load((engine: (name: "source", sources: [(pos: (20.0, 0.0))])))),
+            (at: 0, action: Load((engine: (name: "empty")))),
         ],
         budget: (ticks: 2),
         expect: (source_states: [(scene: 0, source: 0, state: None)]),
@@ -96,9 +96,9 @@ fn scene_batches_bind_identities_even_when_diagnostic_history_overflows() {
     let bodies = "(pos: (20.0, 0.0)),".repeat(17_000);
     let fixture = Fixture::new(&format!(
         r#"(scenes: [
-            (at: 0, action: Load(Inline((engine: (name: "large", bodies: [{bodies}]))))),
+            (at: 0, action: Load((engine: (name: "large", bodies: [{bodies}])))),
             (at: 0, action: Evict(0)),
-            (at: 0, action: Load(Inline((engine: (name: "large again", bodies: [{bodies}]))))),
+            (at: 0, action: Load((engine: (name: "large again", bodies: [{bodies}])))),
             (at: 0, action: Evict(1)),
         ], spawns: [(at: 0, pos: (40.0, 0.0))], budget: (ticks: 1),
         expect: (bodies: [(nth: 0, alive: false), (nth: 16999, alive: false),
@@ -113,16 +113,32 @@ fn scene_batches_bind_identities_even_when_diagnostic_history_overflows() {
 fn scene_commands_and_content_fail_loudly_even_when_blessing() {
     for source in [
         r#"(setup: (scenes: [File("missing.ron")]), budget: (ticks: 1))"#,
-        r#"(setup: (scenes: [Inline((engine: (name: "bad", bodies: [(pos: (NaN, 0.0))])))]), budget: (ticks: 1))"#,
+        r#"(setup: (scenes: [(engine: (name: "bad", bodies: [(pos: (NaN, 0.0))]))]), budget: (ticks: 1))"#,
         r#"(setup: (enemies: 1), budget: (ticks: 1))"#,
-        r#"(scenes: [(at: 1, action: Load(Inline((engine: (name: "late")))))], budget: (ticks: 1))"#,
+        r#"(scenes: [(at: 1, action: Load((engine: (name: "late"))))], budget: (ticks: 1))"#,
         r#"(scenes: [(at: 0, action: Evict(0))], budget: (ticks: 1))"#,
-        r#"(setup: (scenes: [Inline((engine: (name: "typo", bodys: [])))]), budget: (ticks: 1))"#,
+        r#"(setup: (scenes: [(engine: (name: "typo", bodys: []))]), budget: (ticks: 1))"#,
     ] {
         let fixture = Fixture::new(source);
         for flags in [&[][..], &["--bless"][..]] {
             let (output, text) = fixture.run(flags);
             assert_eq!(output.status.code(), Some(1), "invalid scene passed: {source}\n{text}");
+        }
+    }
+}
+
+#[test]
+fn scenarios_reject_external_scene_files_in_setup_and_timeline() {
+    for setup in [
+        r#"setup: (scenes: [File("scene.ron")])"#,
+        r#"scenes: [(at: 0, action: Load(File("scene.ron")))]"#,
+    ] {
+        let fixture = Fixture::new(&format!("({setup}, budget: (ticks: 1))"));
+        std::fs::write(fixture.0.join("scene.ron"), "(scene: (engine: (name: \"External\")))").unwrap();
+        for flags in [&[][..], &["--bless"][..]] {
+            let (output, text) = fixture.run(flags);
+            assert_eq!(output.status.code(), Some(1), "external scene was accepted: {text}");
+            assert!(text.contains("parse"), "external scenes must be rejected by the schema: {text}");
         }
     }
 }
@@ -328,7 +344,7 @@ fn gameplay_content_and_relationship_assertions_fail_closed() {
         "despawns: [(at: 0, body: 99)]",
     ] {
         let fixture = Fixture::new(&format!(
-            "(setup: (scenes: [Inline(({scene}))]), budget: (ticks: 2), {fields})"
+            "(setup: (scenes: [({scene})]), budget: (ticks: 2), {fields})"
         ));
         for flags in [&[][..], &["--bless"][..]] {
             let (output, text) = fixture.run(flags);
@@ -368,7 +384,7 @@ fn encounter_admission_and_observation_errors_cannot_be_blessed() {
         (scene.replace("UnlockDoor(0)", "UnlockDoor(99)"), ""),
         (scene.replace("count:1", "count:1, typo:3"), ""),
     ] {
-        let fixture=Fixture::new(&format!("(setup:(scenes:[Inline(({content}))]), checkpoints:[(at:0,expect:({expect}))], budget:(ticks:2))"));
+        let fixture=Fixture::new(&format!("(setup:(scenes:[({content})]), checkpoints:[(at:0,expect:({expect}))], budget:(ticks:2))"));
         for flags in [&[][..], &["--bless"][..]] {
             let (output,text)=fixture.run(flags);
             assert_eq!(output.status.code(),Some(1),"invalid encounter passed: {text}");

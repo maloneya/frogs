@@ -3,7 +3,10 @@
 // Use release builds for performance conclusions; the gate also runs optimized sim.
 (
     description: "Ten thousand seekers remain finite and deterministic while stepping within a 10 ms mean budget.",
-    setup: (scenes: [File("../scenes/crowd_stress.ron")]),
+    setup: (scenes: [(engine: (name: "Dense crowd test", grids: [(
+        origin: (-34.65, -34.65), columns: 100, rows: 100, spacing: 0.7,
+        what: (seeks: true),
+    )]))]),
     budget: (ticks: 1200, max_mean_step_micros: 10000.0),
     checkpoints: [
         (at: 0, expect: (enemy_count: 10000, seekers: 10000, scene_count: 1)),

@@ -1,6 +1,8 @@
 (
     description: "After taking contact damage, the next movement tick still covers the full player walking distance and leaving reach prevents more damage.",
-    setup: (scenes: [File("../scenes/single_enemy.ron")]),
+    setup: (scenes: [(engine: (name: "Contact attacker", bodies: [
+        (pos: (0.0, 4.0), what: (seeks: true)),
+    ]), enemy_attack: (body: 0))]),
     inputs: [(at: 72, ticks: 60, dir: (1.0, 0.0))],
     checkpoints: [
         (at: 71, expect: (player_health: 4, player_pos: (x: 0.0, z: 0.0, tol: 0.0001))),

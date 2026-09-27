@@ -1,0 +1,19 @@
+// Both sources read the population before emissions. Each emits on ticks 0
+// and 2; at tick 4 both see four bodies and remain ready without emitting.
+(
+    description: "Independent sources share the world population gate and stop together at its cap.",
+    setup: (sources: [
+        (pos: (-20.0, 0.0), radius: 0.0, every: 2, when: FewerThan(4)),
+        (pos: (20.0, 0.0), radius: 0.0, every: 2, when: FewerThan(4)),
+    ]),
+    checkpoints: [
+        (at: 0, expect: (enemy_count: 2)),
+        (at: 1, expect: (enemy_count: 2)),
+        (at: 2, expect: (enemy_count: 4)),
+    ],
+    budget: (ticks: 5),
+    expect: (enemy_count: 4, sources: 2, source_states: [
+        (source: 0, state: Some((enabled: true, countdown: 0, emitted: 2))),
+        (source: 1, state: Some((enabled: true, countdown: 0, emitted: 2))),
+    ]),
+)

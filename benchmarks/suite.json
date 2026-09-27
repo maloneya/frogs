@@ -15,7 +15,7 @@
     },
     {
       "name": "compressed",
-      "scene": "scenes/crowd_stress.ron",
+      "scene": "benchmarks/compressed.ron",
       "warmup_ticks": 900,
       "sample_ticks": 180,
       "input": "idle",
@@ -24,7 +24,7 @@
     },
     {
       "name": "combat",
-      "scene": "scenes/crowd_stress.ron",
+      "scene": "benchmarks/compressed.ron",
       "warmup_ticks": 900,
       "sample_ticks": 240,
       "input": "combat",

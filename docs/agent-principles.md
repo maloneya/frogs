@@ -42,9 +42,11 @@ instructions a caller may forget; see [enforcement](invariants.md).
 
 Types cannot prove timing or gameplay outcomes. Scenarios drive the same Game
 with predicted inputs and assertions. Replay establishes repeatability, not
-correctness; traces explain transitions, but never drive gameplay. When a
-composition becomes a regression case, load its actual scene file instead of
-maintaining a second layout in the test.
+correctness; traces explain transitions, but never drive gameplay. Tests own
+minimal setups for individual systems and a small set of complex test-only
+compositions for interactions. Playable scenes are freely editable and are not
+automated test inputs. A regression discovered while playing becomes a focused
+test of the underlying rule, not a contract for that scene layout.
 
 ## Learn through small changes
 

@@ -1,18 +1,18 @@
 (
     description: "Source and encounter indices follow actual load order: setup first, then tick order, with file order breaking ties. Removal retains original bindings.",
-    setup: (scenes: [Inline((engine: (name: "setup")))]),
+    setup: (scenes: [(engine: (name: "setup"))]),
     scenes: [
-        (at: 3, action: Load(Inline((engine: (name: "late"))))),
-        (at: 0, action: Load(Inline((
+        (at: 3, action: Load((engine: (name: "late")))),
+        (at: 0, action: Load((
     engine: (
         name: "Encounter",
         bodies: [(pos: (1.0, 0.0), what: (fixed: true, interactable: true))],
         sources: [(pos: (20.0, 0.0), radius: 2.0, every: 4, enabled: false)],
     ),
     encounters: [(name: "Trial", start: Activated(0), objective: Defeat((sources: [0], count: 1, within_ticks: 10)))],
-)))),
-        (at: 0, action: Load(Inline((engine: (name: "external source",
-            sources: [(pos: (-20.0, 0.0), enabled: false)]))))),
+))),
+        (at: 0, action: Load((engine: (name: "external source",
+            sources: [(pos: (-20.0, 0.0), enabled: false)])))),
         (at: 3, action: Evict(1)),
     ],
     interactions: [0],

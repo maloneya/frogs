@@ -1,5 +1,6 @@
 // A short trial catches a moving crowd before it compresses into a dense pack.
 (
+    scene: (
     engine: (
         name: "Benchmark — moving animated crowd",
         grids: [(
@@ -10,4 +11,5 @@
     torches: [(
         position: (2.5, 2.2, 1.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0,
     )],
+),
 )

@@ -130,11 +130,10 @@ a changed file. **Save & play** saves the validated file, then sends a load requ
 Validation, revision or write failure prevents that request. A failed load
 preserves the running game and reports that the file was saved.
 
-Scenes referenced by `File(...)` in `scenarios/` are also regression inputs.
-Use **Save as…** for exploration, or deliberately update their predictions when
-the intended content changes. Never bless a failing trace simply because a
-layout changed. Once a useful gameplay composition should remain reliable,
-[test the same file](../.claude/skills/create-scene/SKILL.md#verify-and-hand-off).
+Playable scenes are not automated test inputs. Edit them freely; **Save as…**
+keeps a variant when you want one. Automated tests own their setups and verify
+systems and selected interactions. Use playtesting to judge encounter
+feasibility and feel; see [scene handoff](../.claude/skills/create-scene/SKILL.md#verify-and-hand-off).
 
 ## Shared headless interface
 

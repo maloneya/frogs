@@ -1,6 +1,6 @@
 ---
 name: create-scene
-description: Build or revise playable arpg scenes through the shared headless API, native editor or RON files; playtest compositions and preserve intended gameplay with scenarios.
+description: Build or revise playable arpg scenes through the shared headless API, native editor or RON files; playtest compositions without coupling experiments to automated tests.
 ---
 
 # Create a scene
@@ -16,9 +16,10 @@ purpose/playtest note in leading line comments, which editor saves preserve.
 Use deliberate placements; keep unrelated content constant when comparing variants.
 Proceed with reasonable defaults unless a missing choice changes the trial materially.
 
-Prefer composing existing rules over adding engine code for an encounter. Use
-**Save as…** to explore a scene already referenced by regression tests. Identify
-missing authoring controls separately from genuinely missing gameplay rules.
+Prefer composing existing rules over adding engine code for an encounter.
+Playable scenes are not test fixtures; edit them freely and use **Save as…**
+when you want to keep a variant. Identify missing authoring controls separately
+from genuinely missing gameplay rules.
 
 ## Author with one vocabulary
 
@@ -44,19 +45,11 @@ index bindings. Runtime tuning is saved separately from the scene.
 ## Verify and hand off
 
 Validate/load the authored content and use the [playtest guide](../playtest/SKILL.md)
-when appearance or feel is the question. Exploratory placement and lighting do
-not need a new automated scenario for every iteration. When a gameplay composition
-is intended to remain reliable, create/update assertions loading the actual file:
-
-```ron
-setup: (scenes: [File("../scenes/name.ron")]),
-```
-
-Do not copy its layout into a second setup. The [scenario guide](../scenario/SKILL.md)
-covers predictions, intermediate ticks, refusal and replay; a checkpoint at zero
-observes the first completed step. Changes to simulation/gameplay rules still
-require passing scenarios. Review any existing tests that reference edited files;
-do not bless failures without understanding the changed outcome.
+for appearance, encounter feasibility and feel. Do not add automated tests of
+playable layouts. When a playtest exposes a system bug or requires a new rule,
+write a focused test with its own minimal setup through the
+[scenario guide](../scenario/SKILL.md). Keep a small set of complex test-only
+compositions for interactions; do not copy entire playable levels.
 
 Run the applicable [repository checks](../../../docs/verification.md). Hand off
 what to try, what was verified and the remaining feel question. Link to the

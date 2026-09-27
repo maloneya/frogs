@@ -9,7 +9,7 @@ getting them running. [README](README.md) is the human entry point.
 - **Build through scenes.** Compose playable content in the [scene editor](docs/scene-editor.md),
   play it, adjust layout/tuning, and repeat. Prefer existing rules and authored
   data; extend code when a concrete playtest needs a missing capability. Scenes
-  are game content; scenarios test that content and its rules. When extending
+  are freely editable game content; tests own their setups and test the rules. When extending
   authorable content, update persistence and editor support or state the remaining
   authoring gap.
 - **Simulation first.** Build consistent rules that compose. An attack submits
@@ -48,8 +48,9 @@ getting them running. [README](README.md) is the human entry point.
 7. **Verify outcomes.** Simulation/gameplay behaviour changes need a passing
    scenario through Game, with predictions made before observing results. Check
    intermediate ticks, interactions, refused inputs and stale IDs where relevant.
-   Never weaken a gate or bless a trace just to pass. Referenced scene files are
-   test inputs too; use variants for exploration rather than silently changing fixtures.
+   Never weaken a gate or bless a trace just to pass. Tests must not load playable
+   `scenes/` files. Test systems independently, with a small set of complex
+   test-only compositions for interactions; benchmarks own their workloads too.
 8. **Diagnose from evidence.** Search [traps](docs/traps.md) first. Record symptom,
    cause and check after a misleading failure costs ten minutes; replace recurring
    advice with executable safeguards.

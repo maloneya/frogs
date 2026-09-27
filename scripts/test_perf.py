@@ -56,6 +56,21 @@ def set_step_ms(trial, milliseconds):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_workloads_cannot_depend_on_playable_scenes_even_through_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(perf, "ROOT", Path(directory)):
+            root = Path(directory)
+            (root / "benchmarks").mkdir()
+            (root / "scenes").mkdir()
+            scene = root / "scenes/play.ron"
+            scene.write_text("playable content")
+            (root / "benchmarks/link.ron").symlink_to(scene)
+            for name in ["scenes/play.ron", "benchmarks/../scenes/play.ron", "benchmarks/link.ron"]:
+                with self.assertRaisesRegex(ValueError, "must be owned by benchmarks"):
+                    perf.workload_scenes({"workloads": [{"scene": name}]})
+            own = root / "benchmarks/test.ron"
+            own.write_text("test-owned content")
+            self.assertEqual(perf.workload_scenes({"workloads": [{"scene": "benchmarks/test.ron"}]}), [own.resolve()])
+
     def test_stable_same_work_passes_and_slower_work_regresses(self):
         base = fixture()
         self.assertEqual(perf.assess(base, base)["status"], "pass")

@@ -1,8 +1,8 @@
 //! Authoring documents and file I/O shared by authoring, game and headless tests.
 //! Owns file I/O and RON decoding, not a second content schema. Scene and
 //! template definitions stay in sim; gameplay descriptions stay in game.
-//! Assertion scripts stay in the scenario binary. Both the app and runner use
-//! this crate without depending on each other.
+//! Assertion scripts own their setups in the scenario binary; the app and
+//! headless benchmark driver use this crate to load scene documents.
 
 use std::path::Path;
 mod document;
@@ -288,17 +288,24 @@ mod scene_document_tests {
     use super::*;
 
     #[test]
-    fn every_authored_scene_round_trips_through_the_owning_schema() {
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes");
-        for entry in std::fs::read_dir(directory).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().and_then(|v| v.to_str()) != Some("ron") { continue; }
-            let original = load_scene(&path).unwrap();
-            let text = ron::ser::to_string_pretty(&original, ron::ser::PrettyConfig::default()).unwrap();
-            let decoded = parse_scene(&text).unwrap();
-            assert_eq!(arpg_game::Game::from_scene(&original).unwrap().hash(),
-                arpg_game::Game::from_scene(&decoded).unwrap().hash(), "{}", path.display());
-        }
+    fn test_owned_scene_round_trips_through_the_owning_schema() {
+        let original = parse_scene(r#"(
+            engine: (name: "Round-trip test", bodies: [
+                (pos: (1.0, 0.0), what: (fixed: true, interactable: true)),
+                (pos: (5.0, 0.0), what: (fixed: true)),
+            ], sources: [(pos: (0.0, 8.0), enabled: false)],
+            walls: [(centre: (10.0, 0.0), size: (0.5, 4.0))],
+            grids: [(origin: (-10.0, -10.0), columns: 2, rows: 2, spacing: 1.0)]),
+            chests: [(body: 1)],
+            encounters: [(name: "Round-trip trial", start: Activated(0),
+                objective: Defeat((sources: [0], count: 1, within_ticks: 60)), on_success: [UnlockChest(0)])],
+            trees: [(kind: Pine, position: (12.0, 3.0), yaw: 0.5, scale: 1.0)],
+            torches: [(position: (0.0, 2.0, 0.0), colour: (1.0, 0.5, 0.2), intensity: 10.0, range: 8.0)],
+        )"#).unwrap();
+        let text = ron::ser::to_string_pretty(&original, ron::ser::PrettyConfig::default()).unwrap();
+        let decoded = parse_scene(&text).unwrap();
+        assert_eq!(arpg_game::Game::from_scene(&original).unwrap().hash(),
+            arpg_game::Game::from_scene(&decoded).unwrap().hash());
     }
 
     #[test]

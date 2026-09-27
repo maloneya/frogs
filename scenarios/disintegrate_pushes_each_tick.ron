@@ -3,11 +3,11 @@
 // The wall-shielded target, off-axis target and fixed prop receive no impulse.
 (
     description: "Disintegrate pushes on non-damage ticks, stops pushing on release, and respects walls and props.",
-    setup: (scenes: [Inline((engine: (name: "Beam push",
+    setup: (scenes: [(engine: (name: "Beam push",
         walls: [(centre: (0.0, 6.0), size: (6.0, 0.4))],
         bodies: [(pos: (0.0, 3.0)), (pos: (0.0, 8.0)),
             (pos: (2.0, 3.0)), (pos: (0.0, 4.0), what: (fixed: true))],
-    )))]),
+    ))]),
     attack_profiles: [(at: 0, profile: Disintegrate)],
     channels: [(at: 0, ticks: 2)],
     checkpoints: [

@@ -20,7 +20,7 @@
 
 (
     description: "One scene's authored body, then its two grids in order, expand row by row into nine bodies numbered the way assertions address them.",
-    setup: (scenes: [Inline((engine: (
+    setup: (scenes: [(engine: (
         name: "grid ordering",
         bodies: [
             (pos: (-6.0, 4.0)),
@@ -29,7 +29,7 @@
             (origin: (0.0, 4.0), columns: 3, rows: 2, spacing: 1.5),
             (origin: (-6.0, 8.0), columns: 2, rows: 1, spacing: 2.0, what: (seeks: true)),
         ],
-    )))]),
+    ))]),
     budget: (ticks: 1),
     expect: (
         scene_count: 1, enemy_count: 9, sources: 0, seekers: 2,

@@ -7,7 +7,7 @@
 const CRATE: &str = "arpg-content";
 const FILE: &str = "crates/content/build.rs";
 
-const REASON: &str = "content decodes game- and sim-owned definitions for both app and scenario; \
+const REASON: &str = "content decodes game- and sim-owned definitions for the app, authoring and benchmarks; \
                       it must not depend on the renderer, window system, or test runner.";
 
 /// Game and sim supply definitions and validation; RON supplies file-format plumbing.

@@ -42,7 +42,8 @@ to the companion releases gameplay input while simulation continues.
 
 - `scenes/`: [authoring documents](docs/scene-authoring.md#document-and-runtime-boundary)
   containing playable `GameScene` data and optional object names.
-- `scenarios/`: headless input timelines and assertions through the same `Game`.
+- `scenarios/`: test-owned setups, input timelines and assertions through the same `Game`.
+  These never load playable `scenes/` files. Benchmarks own their scenes under `benchmarks/`.
 - `tools/companion/`: native authoring, tuning and diagnostic UI.
 - `crates/`: simulation, gameplay, content, headless authoring, assets and presentation;
   see [ownership and working rules](CLAUDE.md).

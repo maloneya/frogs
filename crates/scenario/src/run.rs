@@ -110,9 +110,9 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     }
     let scenes: Vec<_> = scenario.setup.scenes.iter().chain(scenario.scene_commands().into_iter()
         .filter_map(|command| match &command.action {
-            crate::spec::SceneAction::Load(scene) => Some(scene),
+            crate::spec::SceneAction::Load(scene) => Some(scene.as_ref()),
             crate::spec::SceneAction::Evict(_) => None,
-        })).map(crate::spec::SceneRef::content).collect();
+        })).collect();
     let source_exists = |scene: Option<usize>, source: usize| match scene {
         None => source < scenario.setup.sources.len(),
         Some(nth) => scenes.get(nth).is_some_and(|scene| source < scene.engine.sources.len()),
@@ -247,7 +247,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     // here is what makes that case reachable at all.
     let mut placed: Vec<Option<EntityId>> = Vec::new();
     for scene in &scenario.setup.scenes {
-        load_scene(&mut game, scene.content(), &mut instances, &mut installed_sources, &mut placed, &mut command_failures);
+        load_scene(&mut game, scene, &mut instances, &mut installed_sources, &mut placed, &mut command_failures);
     }
     for action in &scenario.setup.actions {
         match action {
@@ -322,7 +322,7 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
                     crate::spec::SceneAction::Load(scene) => {
                         load_scene(
                             &mut game,
-                            scene.content(),
+                            scene,
                             &mut instances,
                             &mut installed_sources,
                             &mut placed,

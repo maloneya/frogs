@@ -98,11 +98,11 @@ Scene files contain a [SceneDocument](../crates/content/src/document.rs):
 `scene` is the game-owned `GameScene`. Labels belong to the authoring wrapper;
 Game never stores, validates or hashes them. `SceneDocument::validate` checks
 labels and admits the playable scene through Game. Content passes only that
-playable data to runtime/scenario consumers. Direct RON authors use the same
+playable data to runtime consumers. Direct RON authors use the same
 file format; `open` validates it without a game process.
 
-Scenario `File(...)` inputs load this wrapper; `Inline(...)` inputs contain a
-`GameScene` directly, with `engine` at the top level and no authoring labels.
+Scenarios own `GameScene` setups directly, with `engine` at the top level and
+no authoring labels or file references. They do not load playable documents.
 
 The editor holds drafts and undo history. Its bundled CLI performs edits,
 validation and saving outside the game process. **Save & play** first saves,
@@ -110,5 +110,6 @@ then asks the game to load that path. A play failure reports that the file was
 saved and preserves the running scene. Saving alone never contacts the game.
 The game still validates admission itself and preserves tuning on replacement.
 
-Use [scenarios](../.claude/skills/scenario/SKILL.md) for predicted gameplay outcomes;
+Use [scenarios](../.claude/skills/scenario/SKILL.md) with test-owned setups for
+predicted system behaviour. Playtest authored encounters for feasibility and feel;
 a valid document alone does not establish that its encounter is winnable or fun.

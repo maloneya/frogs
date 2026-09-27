@@ -1,0 +1,12 @@
+// Test-only workload: 10,000 seekers compress around the player.
+(
+    scene: (
+        engine: (
+            name: "Benchmark — compressed crowd",
+            grids: [(
+                origin: (-34.65, -34.65), columns: 100, rows: 100, spacing: 0.7,
+                what: (seeks: true),
+            )],
+        ),
+    ),
+)

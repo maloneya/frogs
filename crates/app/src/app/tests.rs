@@ -159,9 +159,6 @@ fn companion_uses_the_fresh_start_boundary_and_survives_bad_files() {
     assert_eq!(companion(&mut app, json!({"op":"start_scene", "path":path}))["ok"], true);
     assert_ne!(app.game.hash(), initial);
     assert_eq!(app.run_id, 4);
-    let expected = scene_catalog(std::path::Path::new("scenes"));
-    assert_eq!(companion(&mut app, json!({"op":"refresh_scenes"}))["ok"], expected.is_ok());
-    assert_eq!(app.scene_catalog.as_ref(), Some(&expected));
     std::fs::remove_dir_all(directory).unwrap();
 }
 

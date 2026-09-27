@@ -100,17 +100,17 @@ with built-in tuning; current tuning is hashed separately. `sim_hash` covers
 active engine/game state and the restart effect; `Game::engine_hash` isolates
 physical state. All owned resources participate in eviction, restart and reports.
 
-Scenarios can load the playable file and add/evict instances on a timeline:
+Scenarios own their scene setups and can add/evict test instances on a timeline:
 
 ```ron
-setup: (scenes: [File("../scenes/seekers.ron")]),
+setup: (scenes: [(engine: (name: "Test seeker", bodies: [(pos: (0.0, 4.0), what: (seeks: true))]))]),
 scenes: [
-    (at: 2, action: Load(Inline((engine: (name: "another", bodies: []))))),
+    (at: 2, action: Load((engine: (name: "another", bodies: [])))),
     (at: 4, action: Evict(1)),
 ],
 ```
 
-File references resolve relative to the scenario, once before both replay runs.
+External scene references are not supported; playable files remain free to change.
 Scene indices follow setup order, then ascending tick and authored order within
 a tick. Placed-body numbering includes setup scenes, setup actions, then later
 loads/emissions in execution order. Stable spawn tickets and completed-tick

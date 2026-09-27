@@ -459,9 +459,20 @@ def app(binary, output):
                     stop(awake)
 
 
+def workload_scenes(suite):
+    """Performance inputs belong to benchmarks, never to editable game content."""
+    directory = (ROOT / "benchmarks").resolve()
+    paths = [(ROOT / work["scene"]).resolve() for work in suite["workloads"]]
+    for path in paths:
+        if not path.is_relative_to(directory):
+            raise ValueError("benchmark scene must be owned by benchmarks/: " + str(path))
+    return paths
+
+
 def prepare(args, result):
     """Collect baseline eligibility metadata before building or measuring."""
     suite = load(SUITE)
+    workload_files = workload_scenes(suite)
     headless = args.mode == "headless"
     if args.workload:
         suite["workloads"] = [w for w in suite["workloads"] if w["name"] in args.workload]
@@ -477,7 +488,6 @@ def prepare(args, result):
     result["conditions"] = host_conditions()
     build_args = ["cargo", "build", "--release", "-p", "scenario", "--bin", "perf-headless"] if headless else ["cargo", "build", "--release", "-p", "arpg"]
     result["conditions"]["build"] = " ".join(build_args)
-    workload_files = [ROOT / w["scene"] for w in load(SUITE)["workloads"]]
     workload_files += [ROOT / "benchmarks/driver.rs"]
     if not headless:
         workload_files += sorted((ROOT / "assets").rglob("*.glb"))

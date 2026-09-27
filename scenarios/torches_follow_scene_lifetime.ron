@@ -1,6 +1,6 @@
 (
     description: "An inline scene owns both lights. An additive scene survives its eviction; removing both leaves no global light.",
-    setup: (scenes: [Inline((
+    setup: (scenes: [(
     engine: (
         name: "Two torches: warm and cool",
         bodies: [
@@ -13,11 +13,11 @@
         (position: (-3.5, 2.2, 1.5), colour: (1.0, 0.52, 0.18), intensity: 24.0, range: 14.0),
         (position: (3.5, 2.2, 1.5), colour: (0.18, 0.45, 1.0), intensity: 24.0, range: 14.0),
     ],
-))]),
+)]),
     scenes: [
-        (at: 1, action: Load(Inline((engine: (name: "extra torch"), torches: [
+        (at: 1, action: Load((engine: (name: "extra torch"), torches: [
             (position: (0.0, 3.0, 12.0), colour: (1.0, 1.0, 1.0), intensity: 10.0, range: 8.0),
-        ])))),
+        ]))),
         (at: 2, action: Evict(0)),
         (at: 3, action: Evict(1)),
     ],

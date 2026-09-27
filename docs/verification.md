@@ -66,10 +66,17 @@ failures are never suppressed by it.
 
 ## Scenario coverage and evidence
 
+Tests own their setups; playable `scenes/` files are not automated test inputs.
+Prefer minimal independent system cases and a small set of complex test-only
+compositions for interactions. The scenario schema accepts `GameScene` values
+directly and has no external scene-file loading. Benchmarks likewise use only
+their own workload scenes under `benchmarks/`.
+
 [The suite manifest](../scenarios/suites.json) explicitly assigns expensive cases
 to the extended suite; every other `.ron` is fast. Full verification runs both.
 Missing manifest files fail, and no filename heuristic silently drops coverage.
-Preserve a removed scenario's distinct assertions elsewhere.
+Preserve distinct system assertions when consolidating tests; playable layout
+and feasibility assertions are intentionally outside automated coverage.
 
 Both suites save per-case timings. For a focused profile:
 

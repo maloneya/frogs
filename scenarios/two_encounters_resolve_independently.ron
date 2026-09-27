@@ -3,7 +3,7 @@
 // Only A's source produces the target at the wall: A succeeds, B times out.
 (
     description: "Two trials share a scene but not progress, source control, or door rewards; a last-tick defeat wins and the opened door clears its passage.",
-    setup: (scenes: [Inline((
+    setup: (scenes: [(
         engine: (
             name: "Independent trials",
             bodies: [
@@ -22,7 +22,7 @@
             (name: "East", start: Activated(0), objective: Defeat((sources: [0], count: 1, within_ticks: 699)), on_success: [UnlockDoor(0)]),
             (name: "West", start: Activated(1), objective: Defeat((sources: [1], count: 1, within_ticks: 697)), on_success: [UnlockDoor(1)]),
         ],
-    ))]),
+    )]),
     interactions: [0, 2, 699, 701],
     inputs: [(at: 0, ticks: 630, dir: (0.0, 1.0)), (at: 703, ticks: 20, dir: (1.0, 0.0))],
     attack_profiles: [(at: 0, profile: Slam)], attacks: [630, 690],

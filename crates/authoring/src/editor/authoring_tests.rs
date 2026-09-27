@@ -42,6 +42,25 @@ fn authored_trial() -> SceneDocument {
     apply(&mut scene, Edit::Encounter { index: None, value: draft() });
     scene
 }
+pub(super) fn composed_scene() -> SceneDocument {
+    serde_json::from_value(json!({"scene": {
+        "engine": {"name": "Authoring composition test", "bodies": [
+            {"pos": [1.0, 0.0], "what": {"fixed": true, "interactable": true}},
+            {"pos": [0.0, 3.0], "what": {"fixed": true}},
+        ], "sources": [{"pos": [0.0, 8.0], "radius": 0.5, "every": 60, "enabled": false}]},
+        "chests": [{"body": 1}],
+        "encounters": [{"name": "Test trial", "start": {"Activated": 0},
+            "objective": {"Defeat": {"sources": [0], "count": 1, "within_ticks": 60}},
+            "on_success": [{"UnlockChest": 0}]}],
+        "trees": [
+            {"kind": "Pine", "position": [12.0, 0.0], "yaw": 0.3, "scale": 0.9},
+            {"kind": "Broadleaf", "position": [-12.0, 0.0], "yaw": -0.2, "scale": 1.1},
+            {"kind": "Bare", "position": [0.0, -12.0], "yaw": 0.0, "scale": 1.0},
+        ],
+        "torches": [{"position": [2.0, 2.2, 0.0], "colour": [1.0, 0.65, 0.3], "intensity": 20.0, "range": 12.0}],
+    }})).unwrap()
+}
+
 fn step(game: &mut Game, interact: bool, beam: bool) {
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
     game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)
@@ -217,9 +236,8 @@ fn names_and_encounters_round_trip_and_refused_save_preserves_the_file() {
 }
 
 #[test]
-fn soul_trial_can_be_rebuilt_through_editor_operations_without_editing_ron() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/soul_trial.ron");
-    let (reference, _) = arpg_content::read_scene_document(&path).unwrap();
+fn test_composition_can_be_built_through_editor_operations_without_editing_ron() {
+    let reference = composed_scene();
     let mut scene = SceneDocument::default();
     apply(&mut scene, Edit::Rename { name: reference.scene.engine.name.clone() });
     for body in &reference.scene.engine.bodies {
@@ -228,7 +246,8 @@ fn soul_trial_can_be_rebuilt_through_editor_operations_without_editing_ron() {
     }
     for (index, source) in reference.scene.engine.sources.iter().enumerate() {
         apply(&mut scene, Edit::Add { kind: Kind::Source, pos: source.pos });
-        for (field, value) in [("radius", source.radius), ("every", source.every as f32), ("condition", 0.0)] {
+        for (field, value) in [("radius", source.radius), ("every", source.every as f32), ("condition", 0.0),
+            ("seeks", if source.what.seeks() { 1.0 } else { 0.0 })] {
             set_field(&mut scene, target(Kind::Source, index), field, value);
         }
     }
@@ -279,7 +298,7 @@ fn soul_trial_can_be_rebuilt_through_editor_operations_without_editing_ron() {
     step(&mut game, true, false);
     step(&mut game, false, false);
     assert_eq!(game.encounter_state(owner, 0).unwrap().phase, EncounterPhase::Running);
-    assert_eq!(game.encounter_state(owner, 0).unwrap().target, 30);
-    assert_eq!(game.enemy_count(), 8);
+    assert_eq!(game.encounter_state(owner, 0).unwrap().target, 1);
+    assert_eq!(game.enemy_count(), 1);
     assert_eq!(game.chest_state(owner, 0), Some(ChestState::Locked));
 }

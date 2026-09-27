@@ -1,14 +1,14 @@
 (
     description: "Solid trunks stop walking at the body edge; scene eviction removes collision and permits movement immediately.",
-    setup: (scenes: [Inline((engine: (name: "grove"), trees: [
+    setup: (scenes: [(engine: (name: "grove"), trees: [
         (kind: Pine, position: (1.0, 0.0), yaw: 0.0, scale: 1.0),
         (kind: Broadleaf, position: (12.0, 3.0), yaw: 0.8, scale: 1.2),
-    ]))]),
+    ])]),
     inputs: [(at: 0, ticks: 10, dir: (1.0, 0.0))],
     scenes: [
-        (at: 1, action: Load(Inline((engine: (name: "bare grove"), trees: [
+        (at: 1, action: Load((engine: (name: "bare grove"), trees: [
             (kind: Bare, position: (-12.0, 0.0), yaw: 0.0, scale: 1.0),
-        ])))),
+        ]))),
         (at: 6, action: Evict(0)),
         (at: 9, action: Evict(1)),
     ],

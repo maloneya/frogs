@@ -1,8 +1,11 @@
 // 20 steps north would travel 3 m. The wall's near face is z=1.8;
 // the player radius is .3, so it stops at z=1.5. Enemy 0 stays shielded.
 (
-    description: "The playable wall scene stops walking and shields an enemy from Slam.",
-    setup: (scenes: [File("../scenes/walls.ron")]),
+    description: "A wall stops walking and shields an enemy from Slam.",
+    setup: (scenes: [(engine: (name: "Wall cover",
+        walls: [(centre: (0.0, 2.0), size: (6.0, 0.4))],
+        bodies: [(pos: (0.0, 2.6))],
+    ))]),
     inputs: [(at: 0, ticks: 20, dir: (0.0, 1.0))],
     attack_profiles: [(at: 0, profile: Slam)],
     attacks: [20],
