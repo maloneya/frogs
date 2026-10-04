@@ -1,0 +1,42 @@
+// Wait on the south side of the wall: sources build a crowd against the locked door.
+// Pressure should break its latch and swing the retained panel into the player's room.
+// Try pushing or striking first, then restart and let the crowd do the work.
+// Tune mass, motor acceleration and latch impulse; no rule counts enemies or exempts the player.
+(
+    scene: (
+        engine: (
+            name: "Crowd pressure — door breach",
+            bodies: [
+                (pos: (0.0, 5.0), what: (physical: (mass: 30.0), role: Prop)),
+            ],
+            walls: [
+                (centre: (-2.3, 5.0), size: (2.0, 0.4), yaw: 0.0),
+                (centre: (2.3, 5.0), size: (2.0, 0.4), yaw: 0.0),
+                (centre: (-3.3, 10.0), size: (0.4, 10.4), yaw: 0.0),
+                (centre: (3.3, 10.0), size: (0.4, 10.4), yaw: 0.0),
+                (centre: (0.0, 15.0), size: (6.8, 0.4), yaw: 0.0),
+            ],
+            sources: [
+                (pos: (-1.5, 12.0), radius: 1.0, every: 20, when: Always,
+                    what: (physical: (mass: 40.0, health: Some(3), character: true), role: Hostile,
+                        actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
+                (pos: (1.5, 12.0), radius: 1.0, every: 20, when: Always,
+                    what: (physical: (mass: 40.0, health: Some(3), character: true), role: Hostile,
+                        actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
+            ],
+        ),
+        doors: [
+            (body: 0, panel: (width: 2.4, thickness: 0.18, closed_yaw: 0.0,
+                min_angle: -1.55, max_angle: 1.55, latch_impulse: 300.0)),
+        ],
+        torches: [
+            (position: (-2.0, 2.2, 2.5), colour: (1.0, 0.65, 0.3), intensity: 20.0, range: 14.0),
+            (position: (2.0, 2.2, 10.0), colour: (1.0, 0.65, 0.3), intensity: 20.0, range: 14.0),
+        ],
+    ),
+    labels: [
+        (target: (kind: body, index: 0), name: "Pressure gate"),
+        (target: (kind: source, index: 0), name: "West horde"),
+        (target: (kind: source, index: 1), name: "East horde"),
+    ],
+)

@@ -1,6 +1,8 @@
 // Beam pulses on 0, 12, 24: death on 24 admits a corpse with 600 ticks.
 // The corpse still exists on 623, then expires on 624. Walking through it
 // after death must not generate contact or change the predicted distance.
+// Forty motor steps, each tick's change ramped over four substeps (a tick
+// covers (v + 5/8 change) * dt), sum to 4.95787848m.
 (
     description: "Defeat leaves noncolliding remains for exactly ten seconds.",
     setup: (actions: [Place((0.0, 3.0))]),
@@ -10,7 +12,7 @@
     checkpoints: [
         (at: 23, expect: (enemy_count: 1, corpse_count: 0)),
         (at: 24, expect: (enemy_count: 0, corpse_count: 1, bodies: [(nth: 0, alive: false)])),
-        (at: 64, expect: (corpse_count: 1, contacts: 0, player_pos: (x: 0.0, z: 6.0, tol: 0.001))),
+        (at: 64, expect: (corpse_count: 1, contacts: 0, player_pos: (x: 0.0, z: 4.9578785, tol: 0.001))),
         (at: 623, expect: (corpse_count: 1)),
         (at: 624, expect: (corpse_count: 0)),
     ],

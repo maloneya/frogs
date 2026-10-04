@@ -14,20 +14,25 @@ use glam::{Vec2, Vec3};
 
 use arpg_core::{Intent, Report};
 
+mod action_execution;
 mod angle;
 mod attack;
-mod action_execution;
-pub use action_execution::{ActionControls, ActionExecution, ActionOutcome, ActionSchedule, ActionTimeline, Interruption};
+pub use action_execution::{
+    ActionControls, ActionExecution, ActionOutcome, ActionSchedule, ActionTimeline, Interruption,
+};
 mod beam;
+mod contact_memory;
+mod panel;
+mod solver;
 mod wall;
-pub use wall::{Wall, WallHit, MAX_WALLS};
 pub use beam::Beam;
-mod contact;
-mod hash;
+pub use panel::{LatchState, MAX_PANELS, PanelConfig, PanelPresentation, PanelSpec, PanelState};
+pub use wall::{MAX_WALLS, Wall, WallHit};
 mod grid;
+mod hash;
 mod members;
 mod observe;
-pub use observe::{CrowdWork, StepObserver};
+pub use observe::{CrowdWork, PhysicsCounter, PhysicsPhase, StepObserver};
 mod pass;
 mod presentation;
 mod scene;
@@ -42,13 +47,13 @@ pub use attack::{
 };
 pub use hash::Fnv;
 use members::Members;
-use pass::health::Health;
 pub use pass::health::Defeat;
+use pass::health::Health;
 use pass::interact::Interactions;
 pub use pass::interact::{INTERACTION_REACH, InteractionState};
 use pass::motion::Physics;
-pub use pass::motion::{Impulse, Motion};
-pub use pass::motion::{MotorCommand, stopping_speed, motor_speed_limit};
+pub use pass::motion::{Impulse, Mass, Motion};
+pub use pass::motion::{MotorCommand, motor_speed_limit, stopping_speed};
 /// Read-only snapshot of a source's enablement, cadence, and emission progress.
 pub use pass::source::SourceState;
 use pass::source::Sources;
@@ -59,7 +64,9 @@ use pass::spawn::SpawnQueue;
 /// What to make, and what behaviours it should be granted. See
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
 pub use pass::spawn::{SpawnOutcome, SpawnTicket, Template};
-pub use presentation::{AttackDisc, CollisionDisc, CharacterPresentation, PlayerPresentation, PropPresentation};
+pub use presentation::{
+    AttackDisc, CharacterPresentation, CollisionDisc, PlayerPresentation, PropPresentation,
+};
 use scene::Scenes;
 pub use scene::{BodyGrid, Placed, Scene, SceneError, SceneId};
 pub use slots::EntityId;
@@ -75,7 +82,7 @@ pub use step::{PreparedStep, ResolvedStep};
 pub const PLAYER_MAX_HEALTH: u8 = 5;
 
 mod tuning;
-pub use tuning::{Tuning, TuningField, TuningAttribute};
+pub use tuning::{Tuning, TuningAttribute, TuningField};
 
 /// Interpolates the shortest arc, avoiding a full turn at the ±π wrap.
 fn blend_angle(from: f32, to: f32, alpha: Alpha) -> f32 {
@@ -104,16 +111,28 @@ pub const ENEMY_RADIUS: f32 = 0.25;
 /// Player collision footprint, independent of the authored mesh.
 pub const PLAYER_RADIUS: f32 = 0.3;
 
-/// Centre distance where an enemy rests against the player.
-pub(crate) const PLAYER_ENEMY_CONTACT_DISTANCE: f32 = PLAYER_RADIUS + ENEMY_RADIUS;
-
 const _: () = assert!(ENEMY_RADIUS > 0.0 && PLAYER_RADIUS > 0.0);
+/// Collision radius of a body row; row 0 is always the player.
+pub(crate) fn body_radius(row: usize) -> f32 {
+    if row == 0 {
+        PLAYER_RADIUS
+    } else {
+        ENEMY_RADIUS
+    }
+}
 /// Half the arena width, in metres. Presentation scales its ground to this extent.
 pub const ARENA_HALF: f32 = 96.0;
 const _: () = assert!(ARENA_HALF.is_finite() && ARENA_HALF > PLAYER_RADIUS);
 
 /// Legacy player report height, preserved independently of asset dimensions.
 const PLAYER_HALF_HEIGHT: f32 = 0.6;
+
+/// Grow a scratch buffer to at least `capacity` without shrinking it.
+pub(crate) fn reserve_capacity<T>(buffer: &mut Vec<T>, capacity: usize) {
+    if buffer.capacity() < capacity {
+        buffer.reserve(capacity - buffer.len());
+    }
+}
 
 /// Numeric position admission shared by body placement and gameplay destinations.
 /// The conservative component bound keeps the squared separation of any two
@@ -150,7 +169,11 @@ impl Default for Bodies {
             pos: Vec::new(),
             prev_pos: Vec::new(),
         };
-        bodies.spawn(Vec2::ZERO, Template::BODY).expect("the initial player fits");
+        let mass = Mass::try_from(Tuning::default().get(TuningField::PlayerMass))
+            .expect("validated player mass");
+        bodies
+            .spawn(Vec2::ZERO, Template::BODY.with_mass(mass))
+            .expect("the initial player fits");
         bodies
     }
 }
@@ -179,12 +202,10 @@ impl Bodies {
         let id = slots.insert();
         physics.grant(
             id,
-            if is_player {
-                pass::motion::PLAYER_INV_MASS
-            } else if what.fixed() {
+            if what.fixed() {
                 0.0
             } else {
-                pass::motion::ENEMY_INV_MASS
+                what.mass().kilograms().recip()
             },
         );
         pos.push(at);
@@ -193,23 +214,39 @@ impl Bodies {
             interactions.grant(id);
         }
         if is_player {
-            health.grant(id, core::num::NonZeroU8::new(PLAYER_MAX_HEALTH).expect("positive player health"));
+            health.grant(
+                id,
+                core::num::NonZeroU8::new(PLAYER_MAX_HEALTH).expect("positive player health"),
+            );
         } else if let Some(initial) = what.hit_points() {
             health.grant(id, initial);
         }
-        if !is_player && what.is_character() { characters.add(id); }
+        if !is_player && what.is_character() {
+            characters.add(id);
+        }
         self.debug_check_paired();
         Some(id)
     }
 
     /// Debug-only alignment checks for storage owned here.
     fn debug_check_paired(&self) {
-        debug_assert_eq!(self.slots.len(), self.physics.len(), "physics and bodies disagree");
+        debug_assert_eq!(
+            self.slots.len(),
+            self.physics.len(),
+            "physics and bodies disagree"
+        );
         debug_assert_eq!(self.slots.len(), self.pos.len(), "slots and pos disagree");
-        debug_assert_eq!(self.slots.len(), self.prev_pos.len(), "slots and prev_pos disagree");
+        debug_assert_eq!(
+            self.slots.len(),
+            self.prev_pos.len(),
+            "slots and prev_pos disagree"
+        );
         // Capability rows belong to their own membership sets. Checking their
         // count is constant time; rescanning all ids on each spawn was quadratic.
-        debug_assert!(self.health.len() <= self.slots.len(), "health belongs to live bodies");
+        debug_assert!(
+            self.health.len() <= self.slots.len(),
+            "health belongs to live bodies"
+        );
     }
 
     /// Removes one body. Returns whether the id named a live one.
@@ -313,7 +350,7 @@ pub struct World {
     scenes: Scenes,
     /// Lossless outcomes of the latest tick, replaced only by the next step.
     defeats: Vec<Defeat>,
-    /// Enemy pairs the crowd solver pushed apart in the last [`World::step`].
+    /// Non-player pairs overlapping in the last [`World::step`].
     ///
     /// Kept apart from `contacts` rather than summed into it: one number
     /// covering both cannot distinguish the player wading into a pack from the
@@ -367,7 +404,9 @@ fn remove_body(
     trace: &mut trace::TraceSink<'_>,
 ) -> Option<RemovedBody> {
     let position = bodies.pos_of(id)?;
-    if !bodies.despawn(id) { return None; }
+    if !bodies.despawn(id) {
+        return None;
+    }
     let scene = scenes.forget_body(id);
     trace.emit(Event::Removed { id });
     Some(RemovedBody { position, scene })
@@ -443,7 +482,8 @@ impl World {
     /// Repeated settings succeed without adding trace events or changing state.
     #[must_use]
     pub fn set_source_enabled(&mut self, id: SourceId, enabled: bool) -> bool {
-        self.sources.set_enabled(id, enabled, self.trace.sink(self.tick))
+        self.sources
+            .set_enabled(id, enabled, self.trace.sink(self.tick))
     }
 
     /// Queues a body for the next tick and returns its stable ticket.
@@ -456,7 +496,9 @@ impl World {
     /// Results of all accepted queued requests drained in the latest tick, in FIFO order.
     /// Replaced by the next step; independent of diagnostic trace retention.
     #[must_use]
-    pub fn spawn_outcomes(&self) -> &[SpawnOutcome] { self.queue.outcomes() }
+    pub fn spawn_outcomes(&self) -> &[SpawnOutcome] {
+        self.queue.outcomes()
+    }
 
     /// Removes one non-player body and its capabilities. Returns whether it existed.
     ///
@@ -500,7 +542,9 @@ impl World {
     }
 
     /// Initial health capacity of a live body, independent of its current health.
-    pub fn max_health(&self, id: EntityId) -> Option<u8> { self.bodies.health.maximum(id) }
+    pub fn max_health(&self, id: EntityId) -> Option<u8> {
+        self.bodies.health.maximum(id)
+    }
 
     /// The state of a live interaction member, or None for an ordinary body.
     #[must_use]
@@ -520,16 +564,27 @@ impl World {
     }
 
     /// Current type-wide gameplay settings.
-    pub fn tuning(&self) -> Tuning { self.tuning }
+    pub fn tuning(&self) -> Tuning {
+        self.tuning
+    }
 
     /// Applies a validated complete edit between ticks. Movement uses it on the
     /// next tick; in-flight attacks retain their captured values.
     pub fn set_tuning(&mut self, tuning: Tuning) {
+        if self.tuning == tuning {
+            return;
+        }
         for field in TuningField::ALL {
             if self.tuning.get(field) != tuning.get(field) {
-                self.trace.sink(self.tick).emit(Event::TuningChanged { field, value: tuning.get(field) });
+                self.trace.sink(self.tick).emit(Event::TuningChanged {
+                    field,
+                    value: tuning.get(field),
+                });
             }
         }
+        let mass =
+            Mass::try_from(tuning.get(TuningField::PlayerMass)).expect("validated player mass");
+        self.bodies.physics.set_mass(self.player_id(), mass);
         self.tuning = tuning;
         self.player.attack.retune(tuning);
     }
@@ -539,7 +594,9 @@ impl World {
     /// profile and complete runtime value it captured when it began.
     pub fn set_attack_profile(&mut self, profile: AttackProfile) {
         if self.player.attack.set_profile(profile, self.tuning) {
-            self.trace.sink(self.tick).emit(Event::AttackProfileChanged { profile });
+            self.trace
+                .sink(self.tick)
+                .emit(Event::AttackProfileChanged { profile });
         }
     }
 
@@ -549,7 +606,9 @@ impl World {
     /// runtime modifier without changing authored attack content.
     pub fn set_attack_recovery(&mut self, recovery: RecoveryTicks) {
         if self.player.attack.set_recovery(recovery) {
-            self.trace.sink(self.tick).emit(Event::AttackRecoveryChanged { recovery });
+            self.trace
+                .sink(self.tick)
+                .emit(Event::AttackRecoveryChanged { recovery });
         }
     }
 
@@ -559,7 +618,6 @@ impl World {
         self.player.attack.struck()
     }
 
-
     /// Where a named body stands, lifted to world space, or `None` if it is
     /// dead or names the player. The height is a constant of the body's size rather than state —
     /// see [`Bodies::pos`].
@@ -568,7 +626,9 @@ impl World {
         if id == self.player_id() {
             return None;
         }
-        self.bodies.pos_of(id).map(|p| on_ground(p, ENEMY_HALF_HEIGHT))
+        self.bodies
+            .pos_of(id)
+            .map(|p| on_ground(p, ENEMY_HALF_HEIGHT))
     }
 
     /// Whether this id still names a live body.
@@ -614,8 +674,12 @@ impl World {
                 out.object(&defeat.body.to_string(), |out| {
                     out.num("x", defeat.position.x);
                     out.num("z", defeat.position.y);
-                    if let Some(scene) = defeat.scene { out.text("scene", &scene.to_string()); }
-                    if let Some(source) = defeat.source { out.text("source", &source.to_string()); }
+                    if let Some(scene) = defeat.scene {
+                        out.text("scene", &scene.to_string());
+                    }
+                    if let Some(source) = defeat.source {
+                        out.text("source", &source.to_string());
+                    }
                 });
             }
         });
@@ -638,12 +702,23 @@ impl World {
         out.int("queued", queue.len() as u64);
         out.object("spawn_outcomes", |out| {
             for result in queue.outcomes() {
-                let SpawnOutcome { ticket, entity, owner, source } = result;
+                let SpawnOutcome {
+                    ticket,
+                    entity,
+                    owner,
+                    source,
+                } = result;
                 out.object(&ticket.to_string(), |out| {
                     out.bool("spawned", entity.is_some());
-                    if let Some(id) = entity { out.text("entity", &id.to_string()); }
-                    if let Some(id) = owner { out.text("owner", &id.to_string()); }
-                    if let Some(id) = source { out.text("source", &id.to_string()); }
+                    if let Some(id) = entity {
+                        out.text("entity", &id.to_string());
+                    }
+                    if let Some(id) = owner {
+                        out.text("owner", &id.to_string());
+                    }
+                    if let Some(id) = source {
+                        out.text("source", &id.to_string());
+                    }
                 });
             }
         });
@@ -690,14 +765,23 @@ impl World {
     }
 
     /// Configure recent diagnostic history without changing simulation state.
-    pub fn set_trace_retention(&mut self, capacity: usize) -> Result<(), &'static str> { self.trace.set_retention(capacity) }
+    pub fn set_trace_retention(&mut self, capacity: usize) -> Result<(), &'static str> {
+        self.trace.set_retention(capacity)
+    }
 
     /// Capture all engine events for diagnostic serialization checks.
-    pub fn capture_trace(&mut self, limit: usize) -> Result<(), &'static str> { self.trace.capture(limit, |_| true) }
+    pub fn capture_trace(&mut self, limit: usize) -> Result<(), &'static str> {
+        self.trace.capture(limit, |_| true)
+    }
 
     /// Capture selected engine transitions independently of diagnostic history.
-    pub fn capture_events(&mut self, limit: usize, kinds: Vec<EventKind>) -> Result<(), &'static str> {
-        self.trace.capture(limit, move |event| kinds.contains(&event.kind()))
+    pub fn capture_events(
+        &mut self,
+        limit: usize,
+        kinds: Vec<EventKind>,
+    ) -> Result<(), &'static str> {
+        self.trace
+            .capture(limit, move |event| kinds.contains(&event.kind()))
     }
 
     /// What the simulation has done recently, oldest first.
@@ -719,11 +803,15 @@ impl World {
         // The standalone engine has no allegiance policy. Its damageable members
         // are the explicit target set for mechanism-level tests.
         self.player_targets.clear();
-        self.begin_step(dt, intent, population).advance_standalone(observer).finish();
+        self.begin_step(dt, intent, population)
+            .advance_standalone(observer)
+            .finish();
     }
 
     /// Authoritative combat outcomes from the latest completed tick.
-    pub fn defeats(&self) -> &[Defeat] { &self.defeats }
+    pub fn defeats(&self) -> &[Defeat] {
+        &self.defeats
+    }
 
     /// Ticks completed since this world was created.
     #[must_use]
@@ -778,9 +866,13 @@ impl World {
             h.f32(defeat.position.x);
             h.f32(defeat.position.y);
             h.usize(usize::from(defeat.scene.is_some()));
-            if let Some(scene) = defeat.scene { scene.hash_into(&mut h); }
+            if let Some(scene) = defeat.scene {
+                scene.hash_into(&mut h);
+            }
             h.usize(usize::from(defeat.source.is_some()));
-            if let Some(source) = defeat.source { source.hash_into(&mut h); }
+            if let Some(source) = defeat.source {
+                source.hash_into(&mut h);
+            }
         }
         physics.hash(&mut h);
         interactions.hash(&mut h);
@@ -869,7 +961,9 @@ impl World {
             .copied()
             .enumerate()
             .filter_map(move |(offset, id)| {
-                if !self.bodies.characters.contains(id) { return None; }
+                if !self.bodies.characters.contains(id) {
+                    return None;
+                }
                 let row = offset + 1;
                 let position = self.bodies.prev_pos[row].lerp(self.bodies.pos[row], a);
                 Some(CharacterPresentation::new(
@@ -882,34 +976,65 @@ impl World {
 
     /// Damage positions from the completed tick, preserved across target removal.
     /// These are historical points, not live entity references. The next step clears them.
-    pub fn beam_hits(&self) -> &[Vec2] { self.player.attack.beam_hits() }
+    pub fn beam_hits(&self) -> &[Vec2] {
+        self.player.attack.beam_hits()
+    }
 
     /// Active channel capsule at the last completed tick, absent after release.
     pub fn beam(&self) -> Option<Beam> {
-        self.player.attack.beam(self.bodies.pos[0], self.player.facing).map(|beam| beam.clipped(&self.scenes.walls))
+        self.player
+            .attack
+            .beam(self.bodies.pos[0], self.player.facing)
+            .map(|beam| self.bodies.physics.clip_beam(beam, &self.scenes.walls))
     }
 
     /// Committed swing discs (channels expose a capsule through `beam`).
     pub fn attack_discs(&self) -> impl Iterator<Item = AttackDisc> + '_ {
-        self.player.attack.debug_discs(self.bodies.pos[0], self.player.facing)
+        self.player
+            .attack
+            .debug_discs(self.bodies.pos[0], self.player.facing)
     }
 
     /// Read-only collision discs at the last completed simulation tick.
-    /// Includes the player, enemies and props, regardless of physics membership.
+    /// Includes the player, enemies and disc props; hinged panels have their own
+    /// geometry in [`World::panel_presentations`].
     pub fn collision_discs(&self) -> impl Iterator<Item = CollisionDisc> + '_ {
-        self.bodies.slots.ids().iter().copied().enumerate().map(|(row, id)| {
-            CollisionDisc::new(id, on_ground(self.bodies.pos[row], 0.0), if row == 0 { PLAYER_RADIUS } else { ENEMY_RADIUS })
-        })
+        self.bodies
+            .slots
+            .ids()
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(row, id)| {
+                if self.bodies.physics.panel(id).is_some() {
+                    return None;
+                }
+                Some(CollisionDisc::new(
+                    id,
+                    on_ground(self.bodies.pos[row], 0.0),
+                    body_radius(row),
+                ))
+            })
     }
 
     /// Immutable prop facts, excluding the player and character presentations.
     pub fn prop_presentations(&self, alpha: Alpha) -> impl Iterator<Item = PropPresentation> + '_ {
-        self.bodies.slots.ids()[1..].iter().copied().enumerate().filter_map(move |(offset, id)| {
-            if self.bodies.characters.contains(id) { return None; }
-            let row = offset + 1;
-            let position = self.bodies.prev_pos[row].lerp(self.bodies.pos[row], alpha.get());
-            Some(PropPresentation::new(id, on_ground(position, 0.0), self.bodies.interactions.get(id)))
-        })
+        self.bodies.slots.ids()[1..]
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(move |(offset, id)| {
+                if self.bodies.characters.contains(id) || self.bodies.physics.panel(id).is_some() {
+                    return None;
+                }
+                let row = offset + 1;
+                let position = self.bodies.prev_pos[row].lerp(self.bodies.pos[row], alpha.get());
+                Some(PropPresentation::new(
+                    id,
+                    on_ground(position, 0.0),
+                    self.bodies.interactions.get(id),
+                ))
+            })
     }
 
     /// Interpolated position and shortest-arc facing shared by camera and character presentation.
@@ -938,7 +1063,12 @@ impl World {
         if name == "player" {
             return Some(self.player_id());
         }
-        self.bodies.slots.ids().iter().copied().find(|id| id.to_string() == name)
+        self.bodies
+            .slots
+            .ids()
+            .iter()
+            .copied()
+            .find(|id| id.to_string() == name)
     }
 
     /// Read-only physical state for a live body, independent of its behaviours.
@@ -951,16 +1081,37 @@ impl World {
     /// Stale identities are refused rather than affecting a recycled body.
     #[must_use]
     pub fn apply_impulse(&mut self, id: EntityId, impulse: Impulse) -> bool {
-        self.bodies.physics.impulse(id, impulse, None, &mut self.trace.sink(self.tick))
+        self.bodies
+            .physics
+            .impulse(id, impulse, None, &mut self.trace.sink(self.tick))
     }
 
-    /// How many overlapping pairs the last step pushed apart, player against
-    /// horde.
+    /// Apply a world-space point impulse; stale bodies or nonfinite points refuse it.
+    pub fn apply_impulse_at(&mut self, id: EntityId, point: Vec2, impulse: Impulse) -> bool {
+        self.bodies
+            .physics
+            .impulse_at(id, point, impulse, None, &mut self.trace.sink(self.tick))
+    }
+
+    /// Current physical attachment and rotation state.
+    pub fn panel(&self, id: EntityId) -> Option<PanelState> {
+        self.bodies.physics.panel(id)
+    }
+
+    /// Interpolated hinged geometry, independent of ordinary disc props.
+    pub fn panel_presentations(
+        &self,
+        alpha: Alpha,
+    ) -> impl Iterator<Item = PanelPresentation> + '_ {
+        self.bodies.physics.panels.presentations(alpha)
+    }
+
+    /// Player pairs overlapping at the start of the last step's contacts.
     pub fn contacts(&self) -> usize {
         self.contacts
     }
 
-    /// How many overlapping enemy pairs the last step pushed apart.
+    /// Non-player pairs overlapping at the start of the last step's contacts.
     #[must_use]
     pub fn crowd_contacts(&self) -> usize {
         self.crowd_contacts
@@ -975,8 +1126,6 @@ impl World {
             && self.bodies.pos.iter().all(|p| p.is_finite())
             && self.bodies.prev_pos.iter().all(|p| p.is_finite())
     }
-
-
 }
 
 #[cfg(test)]
@@ -987,4 +1136,6 @@ mod tests;
 static COUNTING: tests::alloc_counter::Counting = tests::alloc_counter::Counting;
 
 #[cfg(test)]
-const TEST_CHARACTER: Template = Template::BODY.with_health(core::num::NonZeroU8::new(3).unwrap()).character();
+const TEST_CHARACTER: Template = Template::BODY
+    .with_health(core::num::NonZeroU8::new(3).unwrap())
+    .character();

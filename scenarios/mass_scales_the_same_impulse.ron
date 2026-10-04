@@ -1,6 +1,9 @@
 // Same J=6, enemy inv_mass=1, player=.05. v=(6,.3), then *.9.
+// Disable motor effort to isolate mass. The enemy's passive drag applies after
+// integration; the player's motor drag ramps over the tick: (.3 - 5/8 .03)/60.
 (description: "The player and enemy use the same impulse mechanism with different mass.",
  setup: (actions: [Place((10.0, 0.0))]),
+ tuning: [(at: 0, values: { PlayerSpeed: 9.0, PlayerAcceleration: 0.0, PlayerMass: 20.0, CleaveImpulse: 6.0, SlamImpulse: 72.0, ContactFrequency: 30.0, ContactDamping: 10.0, ContactPushSpeed: 3.0 })],
  impulses: [(at: 0, target: Player, value: (6.0, 0.0)), (at: 0, target: Placed(0), value: (6.0, 0.0))],
- budget: (ticks: 1), expect: (player_pos: (x: 0.005, z: 0.0, tol: 0.000001), player_velocity: (x: 0.27, z: 0.0, tol: 0.000001),
+ budget: (ticks: 1), expect: (player_pos: (x: 0.0046875, z: 0.0, tol: 0.000001), player_velocity: (x: 0.27, z: 0.0, tol: 0.000001),
  bodies: [(nth: 0, pos: (x: 10.1, z: 0.0, tol: 0.00001), velocity: (x: 5.4, z: 0.0, tol: 0.00001))]))

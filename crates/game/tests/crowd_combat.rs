@@ -40,11 +40,17 @@ fn fast_motion_shares_momentum_but_misses_and_walls_do_not() {
         assert!(game.apply_impulse(a, Impulse::try_from((0.0, 72.0)).unwrap()));
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
-        let expected = if offset == 0.0 && !blocked { 32.4 } else { 0.0 };
-        assert!((game.motion(b).unwrap().velocity().y - expected).abs() < 0.00001);
         if !blocked && offset == 0.0 {
-            assert!((game.body_pos(a).unwrap().z - 5.6).abs() < 0.00001);
-            assert!((game.body_pos(b).unwrap().z - (5.6 + distance)).abs() < 0.00001);
+            // Speculative contact closes the gap, then relaxation removes the
+            // closing speed: equal masses share the momentum, then passive drag.
+            let (va, vb) = (game.motion(a).unwrap().velocity().y, game.motion(b).unwrap().velocity().y);
+            assert!((va + vb - 72.0 * 0.9).abs() < 0.001, "momentum {va} + {vb}");
+            assert!((va - vb).abs() < 0.01, "an inelastic contact leaves no closing speed: {va}, {vb}");
+            let gap = game.body_pos(b).unwrap().z - game.body_pos(a).unwrap().z;
+            assert!(gap >= 0.5 - 0.005, "the impact crossed the body: {gap}");
+            assert!(0.5 * (va * va + vb * vb) <= 0.5 * 72.0 * 72.0);
+        } else {
+            assert_eq!(game.motion(b).unwrap().velocity(), Vec2::ZERO);
         }
     }
 }

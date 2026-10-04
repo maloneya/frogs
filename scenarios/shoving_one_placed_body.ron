@@ -1,36 +1,24 @@
-// One body at a known spot makes the contact solver arithmetic.
-//
-// Predicted from the constants, not read back. Contact distance is
-// PLAYER_RADIUS + ENEMY_RADIUS = 0.55, a tick of walking is 0.15, and the
-// 0.05:1.0 mass split gives the player 1/21 of each correction.
-//
-// Ticks 1-16 are free travel. Tick 17 makes contact and separation corrects the
-// overlap **in full** — the load-bearing detail, since a solver correcting a
-// fraction per tick would leave a gap that drifts — so the gap is exactly 0.55
-// from then on and both bodies advance 0.15 * 20/21 per tick:
-//
-//   player  2.5452381 + 13 * 0.1428571 = 4.4023810
-//   body    3.0952381 + 13 * 0.1428571 = 4.9523810
-//
-// The tolerance is a hundred and fiftieth of a tick's walk: wide enough for f32
-// accumulation, far too narrow to hide a one-tick error.
+// The player accelerates 1, 1.9, 2.71m/s, each tick's change ramped over
+// four substeps: x=.01041667, then .03645833. The third tick closes the
+// remaining .01354167m gap in its first substep; the rigid contact then
+// shares momentum by mass: both at 2.58095238m/s. Passive drag leaves the
+// body at .9 of that.
 (
-    description: "A body placed in the player's path is shoved exactly as far as the mass split says.",
-    setup: (
-        actions: [
-            Place((3.0, 0.0)),
-        ],
-    ),
-    inputs: [
-        (at: 0, ticks: 30, dir: (1.0, 0.0)),
+    description: "A bounded player motor reaches contact and shares momentum according to mass without teleporting the other body.",
+    setup: (actions: [Place((0.6, 0.0))]),
+    inputs: [(at: 0, ticks: 3, dir: (1.0, 0.0))],
+    checkpoints: [
+        (at: 0, expect: (player_pos: (x: 0.01041667, z: 0.0, tol: 0.000001),
+            bodies: [(nth: 0, pos: (x: 0.6, z: 0.0, tol: 0.000001), velocity: (x: 0.0, z: 0.0, tol: 0.000001))])),
+        (at: 1, expect: (player_pos: (x: 0.03645833, z: 0.0, tol: 0.000001),
+            bodies: [(nth: 0, pos: (x: 0.6, z: 0.0, tol: 0.000001), velocity: (x: 0.0, z: 0.0, tol: 0.000001))])),
     ],
-    budget: (ticks: 30),
+    budget: (ticks: 3),
     expect: (
-        player_pos: (x: 4.4023810, z: 0.0, tol: 0.001),
-        contacts: 1,
+        player_pos: (x: 0.075297619, z: 0.0, tol: 0.00001),
+        player_velocity: (x: 2.580952381, z: 0.0, tol: 0.00001),
         enemy_count: 1,
-        bodies: [
-            (nth: 0, alive: true, pos: (x: 4.9523810, z: 0.0, tol: 0.001)),
-        ],
+        bodies: [(nth: 0, alive: true, pos: (x: 0.625297619, z: 0.0, tol: 0.00001),
+            velocity: (x: 2.322857143, z: 0.0, tol: 0.00001))],
     ),
 )

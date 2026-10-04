@@ -7,24 +7,28 @@
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use crate::MAX_BODIES;
 use crate::hash::Fnv;
 use crate::scene::Scenes;
 use crate::slots::EntityId;
 use crate::trace::{Event, TraceSink};
 use crate::{Bodies, SceneId};
-#[cfg(test)]
-use crate::MAX_BODIES;
 
 /// Pending-request bound. Cancelled requests retain slots until the next drain
 /// so outstanding outcomes remain bounded too.
 pub(crate) const QUEUE_CAPACITY: usize = 256;
-const _: () = assert!(QUEUE_CAPACITY > 0, "a zero-length queue would refuse everything, silently");
+const _: () = assert!(
+    QUEUE_CAPACITY > 0,
+    "a zero-length queue would refuse everything, silently"
+);
 
 /// Independent physical, health and presentation capabilities of a body.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Template {
     fixed: bool,
+    mass: crate::Mass,
     interactable: bool,
     health: Option<core::num::NonZeroU8>,
     character: bool,
@@ -32,37 +36,87 @@ pub struct Template {
 
 impl Template {
     /// Neutral movable body, without health, interaction or character rendering.
-    pub const BODY: Self = Self { fixed: false, interactable: false, health: None, character: false };
+    pub const BODY: Self = Self {
+        fixed: false,
+        mass: crate::Mass::UNIT,
+        interactable: false,
+        health: None,
+        character: false,
+    };
     /// Immovable neutral prop using the shared body footprint.
-    pub const BLOCK: Self = Self { fixed: true, ..Self::BODY };
+    pub const BLOCK: Self = Self {
+        fixed: true,
+        ..Self::BODY
+    };
+    /// Sets dynamic mass without coupling physics to health, rendering or allegiance.
+    #[must_use]
+    pub const fn with_mass(self, mass: crate::Mass) -> Self {
+        Self { mass, ..self }
+    }
+    /// Authored mass in kilograms; fixed bodies have zero inverse mass regardless.
+    #[must_use]
+    pub const fn mass(self) -> crate::Mass {
+        self.mass
+    }
     /// Grants independently validated starting health.
     #[must_use]
-    pub const fn with_health(self, health: core::num::NonZeroU8) -> Self { Self { health: Some(health), ..self } }
+    pub const fn with_health(self, health: core::num::NonZeroU8) -> Self {
+        Self {
+            health: Some(health),
+            ..self
+        }
+    }
     /// Selects character presentation without implying hostility or health.
     #[must_use]
-    pub const fn character(self) -> Self { Self { character: true, ..self } }
+    pub const fn character(self) -> Self {
+        Self {
+            character: true,
+            ..self
+        }
+    }
     /// Grants one-shot interaction independently of other capabilities.
     #[must_use]
-    pub const fn interactive(self) -> Self { Self { interactable: true, ..self } }
+    pub const fn interactive(self) -> Self {
+        Self {
+            interactable: true,
+            ..self
+        }
+    }
     /// Initial health; absent means damage cannot affect this body.
     #[must_use]
-    pub const fn hit_points(self) -> Option<core::num::NonZeroU8> { self.health }
+    pub const fn hit_points(self) -> Option<core::num::NonZeroU8> {
+        self.health
+    }
     /// Whether this body uses character presentation.
     #[must_use]
-    pub const fn is_character(self) -> bool { self.character }
+    pub const fn is_character(self) -> bool {
+        self.character
+    }
     /// Whether this body supports interaction.
     #[must_use]
-    pub const fn interactable(self) -> bool { self.interactable }
+    pub const fn interactable(self) -> bool {
+        self.interactable
+    }
     /// Whether this body is immovable.
     #[must_use]
-    pub const fn fixed(self) -> bool { self.fixed }
+    pub const fn fixed(self) -> bool {
+        self.fixed
+    }
     /// Shared file and runtime admission. Static bodies must already fit the arena.
     pub(crate) fn valid_at(self, at: Vec2) -> bool {
-        crate::valid_position(at) && (!self.fixed || at.abs().max_element() <= crate::ARENA_HALF - crate::ENEMY_RADIUS)
+        crate::valid_position(at)
+            && (!self.fixed || at.abs().max_element() <= crate::ARENA_HALF - crate::ENEMY_RADIUS)
     }
     /// Hashes every admitted capability, including initial health and presentation.
     pub fn hash_into(self, h: &mut Fnv) {
-        let Self { fixed, interactable, health, character } = self;
+        let Self {
+            fixed,
+            mass,
+            interactable,
+            health,
+            character,
+        } = self;
+        h.f32(mass.kilograms());
         h.usize(usize::from(interactable));
         h.usize(usize::from(fixed));
         h.usize(health.map_or(0, |value| usize::from(value.get())));
@@ -77,7 +131,9 @@ pub struct SpawnTicket(u64);
 
 impl SpawnTicket {
     /// Stable numeric ticket identity for replay state owned by callers.
-    pub fn hash_into(self, hash: &mut Fnv) { hash.u64(self.0); }
+    pub fn hash_into(self, hash: &mut Fnv) {
+        hash.u64(self.0);
+    }
 }
 
 impl core::fmt::Display for SpawnTicket {
@@ -136,8 +192,12 @@ pub(crate) struct SpawnQueue {
 impl Default for SpawnQueue {
     fn default() -> Self {
         // Allocated once, up front — see [`QUEUE_CAPACITY`].
-        Self { pending: Vec::with_capacity(QUEUE_CAPACITY), next_ticket: 0,
-            outcomes: Vec::with_capacity(QUEUE_CAPACITY), refused: 0 }
+        Self {
+            pending: Vec::with_capacity(QUEUE_CAPACITY),
+            next_ticket: 0,
+            outcomes: Vec::with_capacity(QUEUE_CAPACITY),
+            refused: 0,
+        }
     }
 }
 
@@ -152,19 +212,42 @@ impl SpawnQueue {
         self.push_owned(at, what, None)
     }
 
-    pub(crate) fn push_owned(&mut self, at: Vec2, what: Template, owner: Option<SceneId>) -> Option<SpawnTicket> {
+    pub(crate) fn push_owned(
+        &mut self,
+        at: Vec2,
+        what: Template,
+        owner: Option<SceneId>,
+    ) -> Option<SpawnTicket> {
         self.push_from(at, what, owner, None)
     }
 
-    pub(crate) fn push_from(&mut self, at: Vec2, what: Template, owner: Option<SceneId>, source: Option<crate::SourceId>) -> Option<SpawnTicket> {
-        if !what.valid_at(at) { return None; }
+    pub(crate) fn push_from(
+        &mut self,
+        at: Vec2,
+        what: Template,
+        owner: Option<SceneId>,
+        source: Option<crate::SourceId>,
+    ) -> Option<SpawnTicket> {
+        if !what.valid_at(at) {
+            return None;
+        }
         if self.pending.len() >= QUEUE_CAPACITY {
             self.refused += 1;
             return None;
         }
         let ticket = SpawnTicket(self.next_ticket);
-        self.next_ticket = self.next_ticket.checked_add(1).expect("spawn ticket space exhausted");
-        self.pending.push(Request { ticket, cancelled: false, at, what, owner, source });
+        self.next_ticket = self
+            .next_ticket
+            .checked_add(1)
+            .expect("spawn ticket space exhausted");
+        self.pending.push(Request {
+            ticket,
+            cancelled: false,
+            at,
+            what,
+            owner,
+            source,
+        });
         Some(ticket)
     }
 
@@ -172,45 +255,77 @@ impl SpawnQueue {
     /// asked for has not happened yet" and "the spawn I asked for was refused"
     /// look identical from the outside otherwise.
     pub(crate) fn len(&self) -> usize {
-        self.pending.iter().filter(|request| !request.cancelled).count()
+        self.pending
+            .iter()
+            .filter(|request| !request.cancelled)
+            .count()
     }
 
-    pub(crate) fn outcomes(&self) -> &[SpawnOutcome] { &self.outcomes }
+    pub(crate) fn outcomes(&self) -> &[SpawnOutcome] {
+        &self.outcomes
+    }
 
     pub(crate) fn cancel_scene(&mut self, owner: SceneId) {
         // Keep the bounded request slot until the boundary so every accepted
         // ticket receives a result, even after scene eviction.
         for request in &mut self.pending {
-            if request.owner == Some(owner) { request.cancelled = true; }
+            if request.owner == Some(owner) {
+                request.cancelled = true;
+            }
         }
     }
 
     pub(crate) fn hash(&self, h: &mut Fnv) {
-        let Self { pending, next_ticket, outcomes, refused } = self;
+        let Self {
+            pending,
+            next_ticket,
+            outcomes,
+            refused,
+        } = self;
         h.u64(*next_ticket);
         h.usize(outcomes.len());
         for outcome in outcomes {
-            let SpawnOutcome { ticket, entity, owner, source } = outcome;
+            let SpawnOutcome {
+                ticket,
+                entity,
+                owner,
+                source,
+            } = outcome;
             h.u64(ticket.0);
             h.usize(usize::from(entity.is_some()));
-            if let Some(id) = entity { id.hash_into(h); }
+            if let Some(id) = entity {
+                id.hash_into(h);
+            }
             h.usize(usize::from(owner.is_some()));
-            if let Some(id) = owner { id.hash_into(h); }
+            if let Some(id) = owner {
+                id.hash_into(h);
+            }
             h.usize(usize::from(source.is_some()));
-            if let Some(id) = source { id.hash_into(h); }
+            if let Some(id) = source {
+                id.hash_into(h);
+            }
         }
 
         h.usize(pending.len());
         h.usize(*refused);
         for request in pending {
-            let Request { ticket, cancelled, at, what, owner, source } = request;
+            let Request {
+                ticket,
+                cancelled,
+                at,
+                what,
+                owner,
+                source,
+            } = request;
             h.u64(ticket.0);
             h.usize(usize::from(*cancelled));
             h.f32(at.x);
             h.f32(at.y);
             what.hash_into(h);
             h.usize(usize::from(source.is_some()));
-            if let Some(source) = source { source.hash_into(h); }
+            if let Some(source) = source {
+                source.hash_into(h);
+            }
             h.usize(usize::from(owner.is_some()));
             if let Some(owner) = owner {
                 owner.hash_into(h);
@@ -258,12 +373,17 @@ pub(crate) fn drain(
         };
         if let Some(id) = entity {
             enemies.health.set_origin(id, request.source);
-            if let Some(owner) = request.owner { scenes.record_body(owner, id); }
+            if let Some(owner) = request.owner {
+                scenes.record_body(owner, id);
+            }
         } else {
             refused += 1;
         }
         queue.outcomes.push(SpawnOutcome {
-            ticket: request.ticket, entity, owner: request.owner, source: request.source,
+            ticket: request.ticket,
+            entity,
+            owner: request.owner,
+            source: request.source,
         });
     }
 
@@ -284,17 +404,33 @@ mod tests {
         for _ in 0..MAX_BODIES {
             enemies.spawn(Vec2::ZERO, crate::TEST_CHARACTER).unwrap();
         }
-        assert_eq!(enemies.len(), MAX_BODIES + 1, "the horde did not actually fill");
+        assert_eq!(
+            enemies.len(),
+            MAX_BODIES + 1,
+            "the horde did not actually fill"
+        );
 
         let mut queue = SpawnQueue::default();
         let mut trace = crate::Trace::default();
 
-        assert!(queue.push(Vec2::ZERO, crate::TEST_CHARACTER).is_some(), "the queue refused before the horde could");
-        drain(&mut queue, &mut enemies, &mut Scenes::default(), trace.sink(0));
+        assert!(
+            queue.push(Vec2::ZERO, crate::TEST_CHARACTER).is_some(),
+            "the queue refused before the horde could"
+        );
+        drain(
+            &mut queue,
+            &mut enemies,
+            &mut Scenes::default(),
+            trace.sink(0),
+        );
 
         assert_eq!(enemies.len(), MAX_BODIES + 1, "the budget was overrun");
         let events: Vec<_> = trace.iter().map(|(_, e)| e).collect();
-        assert_eq!(events, vec![Event::Refused { count: 1 }], "a body was lost without a word");
+        assert_eq!(
+            events,
+            vec![Event::Refused { count: 1 }],
+            "a body was lost without a word"
+        );
     }
     #[test]
     fn cancelled_requests_keep_bounded_receipts_until_the_boundary() {
@@ -304,16 +440,26 @@ mod tests {
         let mut scenes = world.scenes;
         let mut queue = SpawnQueue::default();
         for _ in 0..QUEUE_CAPACITY {
-            queue.push_owned(Vec2::ZERO, crate::TEST_CHARACTER, Some(owner)).unwrap();
+            queue
+                .push_owned(Vec2::ZERO, crate::TEST_CHARACTER, Some(owner))
+                .unwrap();
         }
         queue.cancel_scene(owner);
         assert_eq!(queue.len(), 0, "cancelled work reserves no body capacity");
-        assert!(queue.push(Vec2::ZERO, crate::TEST_CHARACTER).is_none(), "outcome slots remain bounded until drain");
+        assert!(
+            queue.push(Vec2::ZERO, crate::TEST_CHARACTER).is_none(),
+            "outcome slots remain bounded until drain"
+        );
         let mut enemies = Bodies::default();
         let mut trace = crate::Trace::default();
         drain(&mut queue, &mut enemies, &mut scenes, trace.sink(0));
         assert_eq!(queue.outcomes().len(), QUEUE_CAPACITY);
-        assert!(queue.outcomes().iter().all(|result| result.entity.is_none()));
+        assert!(
+            queue
+                .outcomes()
+                .iter()
+                .all(|result| result.entity.is_none())
+        );
         assert!(queue.push(Vec2::ZERO, crate::TEST_CHARACTER).is_some());
     }
 
@@ -328,15 +474,23 @@ mod tests {
             let mut world = crate::World::empty();
             let before = world.hash();
             assert!(world.bodies.spawn(position, what).is_none());
-            assert_eq!(world.hash(), before, "storage itself must enforce admission");
+            assert_eq!(
+                world.hash(),
+                before,
+                "storage itself must enforce admission"
+            );
             assert!(world.place(position, what).is_none());
             assert_eq!(world.hash(), before);
-            let scene = crate::Scene { name: "invalid".into(), bodies: vec![crate::Placed {
-                pos: position.into(), what,
-            }], ..crate::Scene::default() };
+            let scene = crate::Scene {
+                name: "invalid".into(),
+                bodies: vec![crate::Placed {
+                    pos: position.into(),
+                    what,
+                }],
+                ..crate::Scene::default()
+            };
             assert!(world.load_scene(&scene).is_err());
             assert_eq!(world.hash(), before);
         }
     }
-
 }

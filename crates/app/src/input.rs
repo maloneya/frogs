@@ -7,6 +7,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 
 use arpg_core::{Action, ActionMask, Actions, InputState};
 use arpg_sim::AttackProfile;
+use crate::companion::ZoomDirection;
 
 /// Fixed attacks, in deterministic input priority order. HUD and input use
 /// this same table; there is no mutable loadout to reset.
@@ -33,6 +34,18 @@ const BINDINGS: &[Binding] = &[
     ("space", KeyCode::Space, Action::AttackTertiary),
     ("e", KeyCode::KeyE, Action::Interact),
 ];
+
+/// Camera controls stay outside simulation actions.
+const ZOOM_BINDINGS: &[(&str, KeyCode, ZoomDirection)] = &[
+    ("+", KeyCode::Equal, ZoomDirection::In),
+    ("-", KeyCode::Minus, ZoomDirection::Out),
+    ("numpad+", KeyCode::NumpadAdd, ZoomDirection::In),
+    ("numpad-", KeyCode::NumpadSubtract, ZoomDirection::Out),
+];
+
+pub(crate) fn zoom_key(key: KeyCode) -> Option<ZoomDirection> {
+    ZOOM_BINDINGS.iter().find(|(_, bound, _)| *bound == key).map(|(_, _, direction)| *direction)
+}
 
 /// The one input route used by window events and injected harness keys.
 /// Restarts discard held gameplay and latched edges; a key held across
@@ -197,13 +210,16 @@ impl CursorAim {
 
 /// The key a harness command names, if it is bound to anything.
 pub(crate) fn key_named(name: &str) -> Option<KeyCode> {
-    BINDINGS.iter().find(|(n, ..)| *n == name).map(|&(_, key, ..)| key)
+    BINDINGS.iter().map(|&(name, key, _)| (name, key))
+        .chain(ZOOM_BINDINGS.iter().map(|&(name, key, _)| (name, key)))
+        .find(|(n, _)| *n == name).map(|(_, key)| key)
 }
 
 /// Every bound key's name, for error messages that tell the caller what it
 /// *could* have said.
 pub(crate) fn key_names() -> impl Iterator<Item = &'static str> {
     BINDINGS.iter().map(|&(name, ..)| name)
+        .chain(ZOOM_BINDINGS.iter().map(|&(name, ..)| name))
 }
 
 /// `down` is a bitset over `BINDINGS`, so the table cannot outgrow it quietly.
@@ -368,7 +384,8 @@ mod tests {
     #[test]
     fn every_binding_has_a_unique_name() {
         let mut seen = std::collections::HashSet::new();
-        for (name, key, ..) in BINDINGS {
+        for (name, key) in BINDINGS.iter().map(|(name, key, _)| (name, key))
+            .chain(ZOOM_BINDINGS.iter().map(|(name, key, _)| (name, key))) {
             assert!(!name.is_empty(), "{key:?} has no name");
             assert!(seen.insert(*name), "duplicate name {name:?}");
             assert_eq!(key_named(name), Some(*key), "{name:?} does not resolve back");
@@ -379,7 +396,7 @@ mod tests {
     #[test]
     fn an_unknown_name_is_not_a_key() {
         assert_eq!(key_named("q"), None);
-        for old_key in ["f1", "f2", "f3", "f4", "enter", "escape", "v", "p", "-", "="] {
+        for old_key in ["f1", "f2", "f3", "f4", "enter", "escape", "v", "p", "="] {
             assert_eq!(key_named(old_key), None);
         }
         let mut controls = Controls::default();

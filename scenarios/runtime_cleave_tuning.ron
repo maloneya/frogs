@@ -3,7 +3,7 @@
     setup: (actions: [Place((-2.8, 1.2))]),
     attack_profiles: [(at: 0, profile: Cleave)],
     attacks: [0, 22],
-    tuning: [(at: 1, values: { PlayerSpeed: 9.0, CleaveImpulse: 12.0, SlamImpulse: 72.0 })],
+    tuning: [(at: 1, values: { PlayerSpeed: 9.0, PlayerAcceleration: 60.0, PlayerMass: 20.0, CleaveImpulse: 12.0, SlamImpulse: 72.0, ContactFrequency: 30.0, ContactDamping: 10.0, ContactPushSpeed: 3.0 })],
     despawns: [(at: 21, body: 0)],
     spawns: [(at: 22, pos: (-2.8, 1.2), what: (physical: (health: Some(3), character: true), role: Hostile))],
     checkpoints: [

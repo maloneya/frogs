@@ -12,12 +12,15 @@ Scene files do not contain these type-wide settings; see the
 [editor state model](scene-editor.md#build-play-adjust).
 
 [Sim's catalog](../crates/sim/src/tuning.rs) owns keys, units, ranges, defaults and
-validation. Swift displays that catalog rather than copying it. The derived
-monster motor speed ceiling shows when acceleration limits the requested speed.
-Settings apply to existing and future members of a type, not individual bodies.
+validation. Swift and the harness consume that catalog rather than copying it.
+The Contacts group sets the global [contact response](crowd-collision.md#contact-response):
+frequency, damping ratio and overlap push speed. These settings apply to every
+contacting body; actors and gameplay roles do not override them. The defaults are
+Box2D's: 30 Hz, damping ratio 10 and 3 m/s. They govern how quickly overlap is
+corrected and how far heavy loads compress, not how much load a crowd transmits.
 
-Movement uses accepted settings on the next tick. Zero monster speed does not
-erase carried momentum. Melee changes affect subsequent swings; an active swing
+Movement and contact material use accepted settings on the next tick. Movement
+speed and acceleration govern motor effort; external momentum remains physical. Melee changes affect subsequent swings; an active swing
 keeps its captured impulse. Scene starts, restart, additive loads and eviction
 preserve tuning. Animation retains its bounded buckets and authored reference speeds.
 

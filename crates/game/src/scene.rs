@@ -28,7 +28,7 @@ pub struct GameScene {
     /// Trees owned by this scene, including their solid trunk colliders.
     #[serde(default)]
     pub trees: Vec<TreeSpec>,
-    /// Locked doors owned by this scene instance.
+    /// Gameplay bindings to initially latched physical panels.
     #[serde(default)]
     pub doors: Vec<DoorSpec>,
     /// Locked chests that remain present after opening.
@@ -61,6 +61,9 @@ impl GameScene {
         // wall capacity before mutating any live state.
         let mut physical = self.engine.physical().map_err(SceneError::Behavior)?;
         physical.walls.extend(self.trees.iter().map(|tree| tree.collider()));
+        physical.panels.extend(self.doors.iter().map(|door| arpg_sim::PanelSpec {
+            body: door.body, config: door.panel,
+        }));
         let owner = world.load_scene(&physical)?;
         doors.install(owner, &self.doors, world.scene_bodies(owner).expect("admitted scene"));
         chests.install(owner, &self.chests, world.scene_bodies(owner).expect("admitted scene"));

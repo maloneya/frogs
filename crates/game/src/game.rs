@@ -4,7 +4,7 @@ use crate::scene::{GameScene, LiveSceneState, RestartError, RestartScene, SceneE
 use arpg_core::{Intent, Report};
 use crate::torch::{Torches, TorchSpec};
 use crate::chest::{self, Chests};
-use crate::door::{self, Doors};
+use crate::door::Doors;
 use crate::encounter::{self, Encounters, EncounterEvent};
 use crate::behavior::{Actors, ActionEffect};
 use crate::population::Births;
@@ -145,12 +145,11 @@ impl Game {
         let tick = world.tick();
         let (mut access, _) = world.encounter_access();
         let mut trace = encounter_trace.sink(tick);
-        door::advance(doors, &mut access, &mut trace);
         chest::advance(chests, &access, &mut trace);
         encounter::begin(encounters, doors, chests, &mut access, &mut trace);
         actors.retire(world.actor_view());
         // Structural births are complete before decisions, including source emissions.
-        // Decisions see this tick's player walk and all other actors' last positions.
+        // All decisions see the same start-of-tick physical snapshot.
         let prepared = world.begin_step(dt, intent, actors.population());
         births.admit(prepared.spawn_outcomes(), actors);
         actors.prepare(prepared.view(), dt);
@@ -162,7 +161,10 @@ impl Game {
             let effect = actors.effects()[index];
             let actor = effect.actor();
             let accepted = match effect {
-                ActionEffect::Damage { actor, target, amount } => resolved.damage(actor, target, amount).is_some(),
+                ActionEffect::Strike { actor, target, point, impulse, damage } => {
+                    resolved.impact(actor, target, point, impulse);
+                    damage.is_some_and(|amount| resolved.damage(actor, target, amount).is_some())
+                },
                 ActionEffect::Interact { actor, target } => resolved.interact(actor, target),
             };
             actors.effect_result(actor, accepted);
@@ -236,7 +238,7 @@ impl Game {
         trees.report(out);
         torches.report(out);
         environments.report(out);
-        doors.report(out);
+        doors.report(world, out);
         chests.report(out);
         encounters.report(out);
         actors.report(out);
@@ -363,6 +365,9 @@ impl Game {
         definition.validate()?;
         let old = self.actors.definition(id).ok_or("actor is stale or absent")?;
         if old.physical != definition.physical { return Err("behavior replacement cannot change physical capabilities"); }
+        if self.world.panel(id).is_some() && !Doors::accepts(&definition) {
+            return Err("door must remain a movable prop without actor actions");
+        }
         self.actors.replace(id, self.births.definition(definition));
         Ok(())
     }
@@ -399,6 +404,10 @@ impl Game {
     #[must_use]
     pub fn apply_impulse(&mut self, id: EntityId, impulse: Impulse) -> bool {
         self.world.apply_impulse(id, impulse)
+    }
+    /// Submit physical momentum at a world-ground point, including torque on panels.
+    pub fn apply_impulse_at(&mut self, id: EntityId, point: glam::Vec2, impulse: Impulse) -> bool {
+        self.world.apply_impulse_at(id, point, impulse)
     }
 
     /// Selects the profile for the next swing without changing a committed swing.
@@ -537,16 +546,16 @@ impl Game {
         self.world.walls().filter(|(owner, index, _)| !self.trees.owns_wall(*owner, *index))
     }
 
-    /// Active beam clipped to the first wall at the completed tick.
+    /// Active beam clipped to the first wall or panel at the completed tick.
     pub fn beam(&self) -> Option<arpg_sim::Beam> { self.world.beam() }
 
-    /// Read-only nearest wall contact, using the shared physical geometry.
-    pub fn wall_hit(
+    /// Read-only nearest wall or panel contact, using the shared physical geometry.
+    pub fn solid_hit(
         &self,
         start: Vec2,
         end: Vec2,
     ) -> Result<Option<arpg_sim::WallHit>, &'static str> {
-        self.world.wall_hit(start, end)
+        self.world.solid_hit(start, end)
     }
 
     /// Completed-tick beam damage positions, including targets defeated that tick.
@@ -680,8 +689,12 @@ impl Game {
     pub fn encounter_state(&self, scene: SceneId, nth: usize) -> Option<crate::EncounterState> { self.encounters.state(scene, nth) }
     /// Scene-installation order, then authored order; presentation cannot mutate these facts.
     pub fn encounters(&self) -> impl Iterator<Item = (&str, crate::EncounterState)> { self.encounters.iter() }
-    /// Observe a scene-owned door, including terminal Open or Missing state.
-    pub fn door_state(&self, scene: SceneId, nth: usize) -> Option<crate::DoorState> { self.doors.state(scene, nth) }
+    /// Physical panel observation by stable body identity.
+    pub fn panel(&self, body: EntityId) -> Option<arpg_sim::PanelState> { self.world.panel(body) }
+    /// Interpolated physical panel geometry for presentation.
+    pub fn panel_presentations(&self, alpha: arpg_sim::Alpha) -> impl Iterator<Item = arpg_sim::PanelPresentation> + '_ { self.world.panel_presentations(alpha) }
+    /// Observe a scene-owned door, including broken latches and missing bodies.
+    pub fn door_state(&self, scene: SceneId, nth: usize) -> Option<crate::DoorState> { self.doors.state(scene, nth, &self.world) }
     /// Lossless combat outcomes of the latest completed engine tick.
     pub fn defeats(&self) -> &[arpg_sim::Defeat] { self.world.defeats() }
     /// Encounter, door and chest diagnostics, separate from authoritative progression.

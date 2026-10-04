@@ -142,8 +142,8 @@ struct SceneCanvas: View {
             let selected = object.id == selection || linked.contains(object.id)
             let colour: Color = selected ? .accentColor : object.kind == "tree" ? .green : ["source", "campfire"].contains(object.kind) ? .orange : .primary
             var path = Path()
-            switch object.kind {
-            case "wall", "tree":
+            switch object.rectangular ? "rectangle" : object.kind {
+            case "rectangle":
                 for (i, corner) in [(-1.0,-1.0),(1.0,-1.0),(1.0,1.0),(-1.0,1.0)].enumerated() {
                     let a = corner.0 * object.width / 2, b = corner.1 * object.depth / 2
                     let p = screen(x + a*cos(object.yaw) + b*sin(object.yaw), z - a*sin(object.yaw) + b*cos(object.yaw))

@@ -1,16 +1,16 @@
 // The crowd solver at one pair. Two bodies 0.3 apart against a 0.5 contact
-// distance are 0.2 overlapped; equal masses split it evenly, so each moves 0.1
-// to 2.9 and 3.4 — exactly touching.
+// distance are 0.2 overlapped; equal masses split the correction evenly.
 //
-// Then nothing, and that is the half worth asserting: `crowd_contacts: 0` on
-// the final tick says the pair separated *and stopped*. Exactly touching must
-// not count as overlapping, or a settled crowd jitters forever — see `SLOP` in
-// `crate::contact`.
+// Overlap correction is soft: it closes the overlap at the contact spring's
+// rate (about 9/s at the default 30 Hz, damping ratio 10), capped at the push
+// speed, and relaxation removes the push so no momentum remains. The pair
+// counts as crowded while overlap exceeds 1mm (ticks 0-31), then rests inside
+// the half-millimetre slop around 2.9 and 3.4.
 //
 // Placed at x=3 with the player at the origin and no input, so the player's own
 // 0.55 is nowhere near: this is the crowd solver alone.
 (
-    description: "Two overlapping bodies push apart to exactly touching, then stop.",
+    description: "Two overlapping bodies push apart to touching, then stop.",
     setup: (
         actions: [
             Place((3.0, 0.0)),
@@ -18,19 +18,21 @@
         ],
     ),
     inputs: [],
-    budget: (ticks: 10),
+    checkpoints: [
+        (at: 31, expect: (crowd_contacts: 1)),
+        (at: 32, expect: (crowd_contacts: 0)),
+    ],
+    budget: (ticks: 90),
     expect: (
         contacts: 0,
         crowd_contacts: 0,
         bodies: [
-            (nth: 0, pos: (x: 2.9, z: 0.0, tol: 0.0001)),
-            (nth: 1, pos: (x: 3.4, z: 0.0, tol: 0.0001)),
+            (nth: 0, pos: (x: 2.9, z: 0.0, tol: 0.00025), velocity: (x: 0.0, z: 0.0, tol: 0.0)),
+            (nth: 1, pos: (x: 3.4, z: 0.0, tol: 0.00025), velocity: (x: 0.0, z: 0.0, tol: 0.0)),
         ],
         events: (
-        kinds: [Crowded],
-        sequence: [
-            (0, Crowded(count: 1)),
-        ],
+        kinds: [Momentum],
+        sequence: [],
     ),
     ),
 )

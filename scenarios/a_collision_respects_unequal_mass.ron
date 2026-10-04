@@ -1,15 +1,15 @@
-// Incoming enemy momentum=-6. Total mass=21, so both velocities
-// become -6/21 before damping, -.25714286 after. Projection shares .05
-// penetration in inverse-mass ratio .05:1, never converting it to energy.
+// Four substeps of 1/240s. The speculative contact lets the body close the
+// .05m gap over two substeps at 6m/s, then stops relative approach rigidly:
+// J=6/(1+1/20)=5.7142857, leaving both at -.2857143m/s for the last two
+// substeps. The driven player keeps that; the body then takes .9 drag.
 (description: "An enemy transfers momentum to the heavier player using the same contact response.",
  setup: (actions: [Place((0.6, 0.0))]),
  impulses: [(at: 0, target: Placed(0), value: (-6.0, 0.0))], budget: (ticks: 1),
- expect: (player_pos: (x: -0.00238095, z: 0.0, tol: 0.000001), player_velocity: (x: -0.25714286, z: 0.0, tol: 0.000001),
- bodies: [(nth: 0, pos: (x: 0.54761905, z: 0.0, tol: 0.000001), velocity: (x: -0.25714286, z: 0.0, tol: 0.000001))], events: (
+ expect: (player_pos: (x: -0.002380952, z: 0.0, tol: 0.000001), player_velocity: (x: -0.285714286, z: 0.0, tol: 0.000001),
+ bodies: [(nth: 0, pos: (x: 0.547619048, z: 0.0, tol: 0.000001), velocity: (x: -0.257142857, z: 0.0, tol: 0.000001))], events: (
         kinds: [Impulsed, Contacts, Momentum],
         sequence: [
             (0, Impulsed(id: (1, 1), value: (-6.0000,0.0000), source: None, tolerance: 0.00005)),
-            (0, Contacts(count: 1)),
             (0, Momentum(pairs: 1)),
         ],
     )))

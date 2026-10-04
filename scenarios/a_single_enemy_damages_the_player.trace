@@ -1,2 +1,4 @@
+36 impulse id=#0v1 value=(0.0000,-1.0000) source=#1v1
 36 damaged actor=#1v1 target=#0v1 remaining=4
+120 impulse id=#0v1 value=(0.0000,-1.0000) source=#1v1
 120 damaged actor=#1v1 target=#0v1 remaining=3

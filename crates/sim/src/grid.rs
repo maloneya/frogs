@@ -1,254 +1,233 @@
-//! Uniform 2D broad phase for the crowd's equal-radius discs.
+//! Uniform 2D broad phase, rebuilt once per collision pass.
 //!
-//! Scratch only: every solve rebuilds from the current dense rows after motion.
-//! No entity identity or membership survives into the next solve. The only API
-//! that visits pairs also owns position mutation and repairs both cell links
-//! before another query, so callers cannot query a stale spatial index.
+//! A counting sort places body rows into cells; pairs come from each cell and
+//! four forward neighbours, so every nearby pair is visited exactly once in a
+//! stable order that depends only on positions and row order. Cells are wide
+//! enough that any contact the solver can admit lies in adjacent cells.
 
+use crate::{ARENA_HALF, MAX_BODIES};
 use glam::Vec2;
-use crate::{ARENA_HALF, ENEMY_RADIUS, MAX_BODIES};
 
-const CELL_SIZE: f32 = 2.0 * ENEMY_RADIUS;
-const SIDE: usize = (2.0 * ARENA_HALF / CELL_SIZE) as usize + 1;
-const CELLS: usize = SIDE * SIDE;
-const NONE: u32 = u32::MAX;
-const _: () = assert!(MAX_BODIES < NONE as usize);
+/// Largest centre distance a pair query must find. Owners size their reach to fit.
+pub(crate) const CELL: f32 = 1.0;
+pub(crate) const SIDE: usize = (2.0 * ARENA_HALF / CELL) as usize + 1;
+pub(crate) const CELLS: usize = SIDE * SIDE;
+const _: () = assert!(MAX_BODIES < u32::MAX as usize);
+const _: () = assert!(CELLS < u32::MAX as usize);
 
-// Small contiguous pages avoid one cache-dependent pointer chase per body in
-// crowded cells. Only the head page may be partially full; removal fills a hole
-// from that head, so updating membership remains constant-time.
-const PAGE_SIZE: usize = 8;
-const _: () = assert!(MAX_BODIES * PAGE_SIZE < NONE as usize);
-const _: () = assert!(CELLS < NONE as usize);
+/// Cell coordinates, collapsing positions outside the arena into edge cells.
+/// f64 avoids shifting a near-boundary f32 value into the wrong cell when
+/// adding the arena offset; no f64 value writes back to simulation.
+pub(crate) fn cell_xz(position: Vec2) -> (usize, usize) {
+    let axis = |value: f32| {
+        let scaled = (f64::from(value) + f64::from(ARENA_HALF)) / f64::from(CELL);
+        // NaN never reaches here; negative and huge values clamp to the edges.
+        (scaled.floor().max(0.0) as usize).min(SIDE - 1)
+    };
+    (axis(position.x), axis(position.y))
+}
 
-#[derive(Clone, Copy)]
-struct Page { rows: [u32; PAGE_SIZE], len: u32, next: u32 }
-const EMPTY_PAGE: Page = Page { rows: [0; PAGE_SIZE], len: 0, next: NONE };
+/// Inclusive cell bounds of an axis-aligned box.
+pub(crate) fn cell_box(low: Vec2, high: Vec2) -> ((usize, usize), (usize, usize)) {
+    (cell_xz(low), cell_xz(high))
+}
 
 pub(crate) struct Grid {
-    heads: Vec<u32>,
-    pages: Vec<Page>,
-    allocated: usize,
-    free: Vec<u32>,
+    /// Prefix offsets into `rows`, one per cell plus a terminator.
+    start: Vec<u32>,
+    cursor: Vec<u32>,
+    rows: Vec<u32>,
     cells: Vec<u32>,
-    locations: Vec<u32>,
-    candidates: Vec<u64>,
-    /// During one outer row, only i and already-visited j rows can move.
-    /// A cell already scanned cannot acquire a new unvisited row in that sweep.
-    seen: Vec<u32>,
-    /// Test-only oracle selection; production has exactly one implementation.
-    #[cfg(test)]
-    pub(crate) brute_force: bool,
+    occupied: Vec<u32>,
 }
 
 impl Default for Grid {
     fn default() -> Self {
         Self {
-            heads: vec![NONE; CELLS],
-            pages: vec![EMPTY_PAGE; MAX_BODIES],
-            allocated: 0,
-            free: Vec::with_capacity(MAX_BODIES),
-            cells: vec![0; MAX_BODIES],
-            locations: vec![0; MAX_BODIES],
-            candidates: vec![0; MAX_BODIES.div_ceil(64)],
-            seen: vec![NONE; CELLS],
-            #[cfg(test)]
-            brute_force: false,
+            start: vec![0; CELLS + 1],
+            cursor: vec![0; CELLS],
+            // Sized for admission's population bound so rebuilding never allocates.
+            rows: Vec::with_capacity(MAX_BODIES),
+            cells: Vec::with_capacity(MAX_BODIES),
+            occupied: Vec::with_capacity(MAX_BODIES),
         }
     }
 }
 
 impl Grid {
-    /// Visit potentially touching pairs in the original lexicographic (i,j)
-    /// order. `visit` may change only these two positions. Re-query after i
-    /// crosses a cell, keeping j strictly increasing: newly reachable higher
-    /// rows must be found, but already passed pairs must never be revisited.
-    pub(crate) fn solve(&mut self, positions: &mut [Vec2], mut visit: impl FnMut(usize, usize, &mut Vec2, &mut Vec2)) -> u64 {
-        assert!(positions.len() <= MAX_BODIES, "grid capacity follows physical admission");
-        // No pair can exist. A later nontrivial solve rebuilds all scratch.
-        if positions.len() < 2 { return 0; }
-        self.heads.fill(NONE);
-        self.allocated = 0;
-        self.free.clear();
-        self.seen.fill(NONE);
+    /// Index the rows for which `include` holds. Rows keep ascending order within a cell.
+    pub(crate) fn build(&mut self, positions: &[Vec2], include: impl Fn(usize) -> bool) {
+        assert!(
+            positions.len() <= MAX_BODIES,
+            "grid capacity follows physical admission"
+        );
+        self.start.fill(0);
+        self.cells.clear();
+        self.occupied.clear();
         for (row, &position) in positions.iter().enumerate() {
-            self.insert(row, cell(position));
+            let cell = if include(row) {
+                let (x, z) = cell_xz(position);
+                let cell = z * SIDE + x;
+                self.start[cell + 1] += 1;
+                cell as u32
+            } else {
+                u32::MAX
+            };
+            self.cells.push(cell);
         }
-        let words = positions.len().div_ceil(64);
+        // Collecting in this ascending scan keeps visits in cell order, so
+        // neighbouring rows stay close in memory without a sort.
+        for cell in 0..CELLS {
+            if self.start[cell + 1] != 0 {
+                self.occupied.push(cell as u32);
+            }
+            self.start[cell + 1] += self.start[cell];
+        }
+        self.cursor.copy_from_slice(&self.start[..CELLS]);
+        self.rows.clear();
+        self.rows.resize(self.start[CELLS] as usize, 0);
+        for (row, &cell) in self.cells.iter().enumerate() {
+            if cell != u32::MAX {
+                let slot = &mut self.cursor[cell as usize];
+                self.rows[*slot as usize] = row as u32;
+                *slot += 1;
+            }
+        }
+    }
+
+    fn cell(&self, cell: usize) -> &[u32] {
+        &self.rows[self.start[cell] as usize..self.start[cell + 1] as usize]
+    }
+
+    /// Visit each unordered pair in the same or adjacent cells once. Returns
+    /// the number of candidates offered.
+    pub(crate) fn pairs(&self, mut visit: impl FnMut(usize, usize)) -> u64 {
         let mut tested = 0;
-        for i in 0..positions.len() - 1 {
-            self.candidates[..words].fill(0);
-            self.collect(self.cells[i] as usize, i + 1, i as u32);
-            let mut minimum = i + 1;
-            while let Some(j) = self.next_candidate(minimum, words) {
-                let old_a = positions[i];
-                let old_b = positions[j];
-                let (head, tail) = positions.split_at_mut(j);
-                visit(i, j, &mut head[i], &mut tail[0]);
-                tested += 1;
-                // Most broad-phase candidates are not contacts. Avoid index
-                // arithmetic unless the callback actually changed a position.
-                let moved = positions[i] != old_a && self.update(i, positions[i]);
-                if positions[j] != old_b { self.update(j, positions[j]); }
-                minimum = j + 1;
-                if moved { self.collect(self.cells[i] as usize, minimum, i as u32); }
+        for &cell in &self.occupied {
+            let cell = cell as usize;
+            let (x, z) = (cell % SIDE, cell / SIDE);
+            let here = self.cell(cell);
+            for (k, &a) in here.iter().enumerate() {
+                for &b in &here[k + 1..] {
+                    visit(a as usize, b as usize);
+                    tested += 1;
+                }
+            }
+            // Forward half of the neighbourhood: east, and the three cells
+            // of the next row. The other four see this cell as their forward.
+            let mut forward = [None; 4];
+            if x + 1 < SIDE {
+                forward[0] = Some(cell + 1);
+            }
+            if z + 1 < SIDE {
+                if x > 0 {
+                    forward[1] = Some(cell + SIDE - 1);
+                }
+                forward[2] = Some(cell + SIDE);
+                if x + 1 < SIDE {
+                    forward[3] = Some(cell + SIDE + 1);
+                }
+            }
+            for other in forward.into_iter().flatten() {
+                let there = self.cell(other);
+                for &a in here {
+                    for &b in there {
+                        visit(a as usize, b as usize);
+                        tested += 1;
+                    }
+                }
             }
         }
         tested
     }
 
-    fn insert(&mut self, row: usize, cell: usize) {
-        let mut head = self.heads[cell];
-        if head == NONE || self.pages[head as usize].len as usize == PAGE_SIZE {
-            let page = self.free.pop().unwrap_or_else(|| {
-                assert!(self.allocated < self.pages.len(), "one page per live body suffices");
-                let page = self.allocated as u32;
-                self.allocated += 1;
-                page
-            });
-            self.pages[page as usize] = Page { next: head, ..EMPTY_PAGE };
-            self.heads[cell] = page;
-            head = page;
-        }
-        let page = &mut self.pages[head as usize];
-        self.locations[row] = head * PAGE_SIZE as u32 + page.len;
-        self.cells[row] = cell as u32;
-        page.rows[page.len as usize] = row as u32;
-        page.len += 1;
-    }
-
-    fn update(&mut self, row: usize, position: Vec2) -> bool {
-        let new_cell = cell(position);
-        let old_cell = self.cells[row] as usize;
-        if old_cell == new_cell { return false; }
-        let head = self.heads[old_cell] as usize;
-        let last = self.pages[head].len as usize - 1;
-        let replacement = self.pages[head].rows[last];
-        let location = self.locations[row] as usize;
-        self.pages[location / PAGE_SIZE].rows[location % PAGE_SIZE] = replacement;
-        self.locations[replacement as usize] = location as u32;
-        self.pages[head].len -= 1;
-        if last == 0 {
-            self.heads[old_cell] = self.pages[head].next;
-            self.free.push(head as u32);
-        }
-        self.insert(row, new_cell);
-        true
-    }
-
-    fn collect(&mut self, cell: usize, minimum: usize, outer: u32) {
-        let (x, z) = (cell % SIDE, cell / SIDE);
-        for z in z.saturating_sub(1)..=(z + 1).min(SIDE - 1) {
-            for x in x.saturating_sub(1)..=(x + 1).min(SIDE - 1) {
-                let cell = z * SIDE + x;
-                if self.seen[cell] == outer { continue; }
-                self.seen[cell] = outer;
-                let mut page = self.heads[cell];
-                while page != NONE {
-                    let entries = &self.pages[page as usize];
-                    for &row in &entries.rows[..entries.len as usize] {
-                        if row as usize >= minimum {
-                            self.candidates[row as usize / 64] |= 1 << (row % 64);
-                        }
-                    }
-                    page = entries.next;
+    /// Visit rows in cells overlapping the box, in cell then row order.
+    pub(crate) fn query(&self, low: Vec2, high: Vec2, mut visit: impl FnMut(usize)) {
+        let ((x0, z0), (x1, z1)) = cell_box(low, high);
+        for z in z0..=z1 {
+            for x in x0..=x1 {
+                for &row in self.cell(z * SIDE + x) {
+                    visit(row as usize);
                 }
             }
         }
-        // Union in newly reachable rows instead of sorting/replacing a list.
-        // Old candidates are safe false positives: the exact disc test rejects
-        // them if i has moved away. The increasing cursor prevents revisits.
     }
-
-    fn next_candidate(&self, minimum: usize, words: usize) -> Option<usize> {
-        let mut word = minimum / 64;
-        if word >= words { return None; }
-        let mut bits = self.candidates[word] & (u64::MAX << (minimum % 64));
-        loop {
-            if bits != 0 { return Some(word * 64 + bits.trailing_zeros() as usize); }
-            word += 1;
-            if word == words { return None; }
-            bits = self.candidates[word];
-        }
-    }
-
-}
-
-fn cell(position: Vec2) -> usize {
-    // The pass precedes containment, and authored movable bodies may start
-    // outside the arena within the admitted numeric domain. Collapse those
-    // coordinates into edge cells without changing their physical positions.
-    // This is conservative (possibly slower), including very distant births.
-    // f64 avoids shifting a near-boundary f32 value into the wrong cell when
-    // adding the arena offset; no f64 value writes back to simulation.
-    let axis = |value: f32| {
-        (((f64::from(value) + f64::from(ARENA_HALF)) / f64::from(CELL_SIZE)).floor() as usize).min(SIDE - 1)
-    };
-    axis(position.y) * SIDE + axis(position.x)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn moving_across_cells_discovers_later_pairs_without_revisiting_earlier_ones() {
+    fn pairs(positions: &[Vec2]) -> Vec<(usize, usize)> {
         let mut grid = Grid::default();
-        let mut positions = [Vec2::new(0.49, 0.0), Vec2::new(0.48, 0.0), Vec2::new(1.01, 0.0)];
-        let mut visited = Vec::new();
-        grid.solve(&mut positions, |i, j, a, _| {
-            visited.push((i, j));
-            if (i, j) == (0, 1) { a.x = 0.74; }
-        });
-        assert_eq!(visited, [(0, 1), (0, 2)]);
+        grid.build(positions, |_| true);
+        let mut out = Vec::new();
+        grid.pairs(|a, b| out.push((a.min(b), a.max(b))));
+        out
     }
 
     #[test]
-    fn updating_the_second_body_is_visible_to_later_outer_rows() {
-        let mut grid = Grid::default();
-        let mut positions = [Vec2::ZERO, Vec2::new(2.0, 0.0), Vec2::new(0.1, 0.0)];
-        let mut visited = Vec::new();
-        grid.solve(&mut positions, |i, j, _, b| {
-            visited.push((i, j));
-            if (i, j) == (0, 2) { b.x = 2.1; }
-        });
-        assert_eq!(visited, [(0, 2), (1, 2)]);
-    }
-
-    #[test]
-    fn returning_to_a_previous_cell_retains_its_unvisited_candidates() {
-        let mut grid = Grid::default();
-        let mut positions = [Vec2::new(0.49, 0.0), Vec2::new(0.48, 0.0),
-            Vec2::new(1.01, 0.0), Vec2::new(0.01, 0.0)];
-        let mut visited = Vec::new();
-        grid.solve(&mut positions, |i, j, a, _| {
-            if i == 0 {
-                visited.push(j);
-                if j == 1 { a.x = 0.74; }
-                if j == 2 { a.x = -0.01; }
-            }
-        });
-        assert_eq!(visited, [1, 2, 3]);
-    }
-
-    #[test]
-    fn boundaries_and_far_outside_positions_remain_conservative() {
-        let mut grid = Grid::default();
-        let positions = [
-            Vec2::new(-0.000_000_1, 0.0), Vec2::new(0.499, 0.0),
-            Vec2::new(96.1, -96.5), Vec2::new(96.2, -96.5),
-            Vec2::new(f32::MAX, f32::MAX), Vec2::new(f32::MAX, f32::MAX),
-        ];
-        let mut visited = Vec::new();
-        let mut live = positions;
-        grid.solve(&mut live, |i, j, _, _| visited.push((i, j)));
+    fn every_pair_within_one_cell_is_visited_exactly_once() {
+        // Deterministic scatter including cell edges and a dense cluster.
+        let mut positions = Vec::new();
+        let mut seed = 0x9e37_79b9_u32;
+        for _ in 0..600 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let x = (seed % 4000) as f32 / 400.0 - 5.0;
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let z = (seed % 4000) as f32 / 400.0 - 5.0;
+            positions.push(Vec2::new(x, z));
+        }
+        positions.extend([
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(-0.000_000_1, 0.0),
+        ]);
+        let mut found = pairs(&positions);
+        let visited = found.len();
+        found.sort_unstable();
+        found.dedup();
+        assert_eq!(found.len(), visited, "a pair was visited twice");
         for i in 0..positions.len() {
             for j in i + 1..positions.len() {
-                if positions[i].distance_squared(positions[j]) < CELL_SIZE * CELL_SIZE {
-                    assert!(visited.contains(&(i, j)), "missing ({i},{j})");
+                if positions[i].distance(positions[j]) <= CELL {
+                    assert!(found.binary_search(&(i, j)).is_ok(), "missing ({i},{j})");
                 }
             }
         }
-        assert!(visited.windows(2).all(|p| p[0] < p[1]));
+    }
+
+    #[test]
+    fn outside_and_edge_positions_collapse_into_edge_cells() {
+        let positions = [
+            Vec2::new(96.1, -96.5),
+            Vec2::new(96.2, -96.5),
+            Vec2::new(f32::MAX, f32::MAX),
+            Vec2::new(f32::MAX, f32::MAX),
+            Vec2::new(-f32::MAX, 0.0),
+        ];
+        let found = pairs(&positions);
+        assert!(found.contains(&(0, 1)) && found.contains(&(2, 3)));
+    }
+
+    #[test]
+    fn excluded_rows_and_queries_follow_cell_order() {
+        let positions = [
+            Vec2::new(0.1, 0.1),
+            Vec2::new(0.2, 0.1),
+            Vec2::new(3.0, 3.0),
+        ];
+        let mut grid = Grid::default();
+        grid.build(&positions, |row| row != 1);
+        let mut seen = Vec::new();
+        grid.pairs(|a, b| seen.push((a, b)));
+        assert!(seen.is_empty());
+        let mut hits = Vec::new();
+        grid.query(Vec2::splat(-0.5), Vec2::splat(3.5), |row| hits.push(row));
+        assert_eq!(hits, [0, 2]);
     }
 }

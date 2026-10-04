@@ -1,3 +1,6 @@
+// Twelve motor ticks with v=min(9,.9*v+1), then braking v=max(0,.9*v-1),
+// sum to 1.1453544m: clear of the committed swipe disc. Ramping each change
+// over substeps delays the start and the stop equally.
 (
     description: "Sidestepping during the windup avoids the committed swipe; pursuit stays paused through recovery.",
     setup: (scenes: [(engine: (name: "Dodge trial", bodies: [
@@ -10,5 +13,5 @@
         (at: 44, expect: (player_health: 5)),
     ],
     budget: (ticks: 84),
-    expect: (player_health: 5, enemy_count: 1, player_pos: (x: 1.8, z: 0.0, tol: 0.001)),
+    expect: (player_health: 5, enemy_count: 1, player_pos: (x: 1.1453544, z: 0.0, tol: 0.001)),
 )

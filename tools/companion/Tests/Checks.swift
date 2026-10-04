@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 // A synthetic catalog intentionally uses an unknown field: UI must not depend on
-// the current game's seven keys, groups, ranges or defaults.
+// the current game's keys, groups, ranges or defaults.
 private func reply(value: Double = 9, session: UInt32 = 1, ok: Bool = true) throws -> Reply {
     let data = """
     {"ok":\(ok),"error":\(ok ? "null" : "\"Out of range\""),"state":{
@@ -330,6 +330,13 @@ func sceneJSONPreservesExactIntegers() throws {
 
 func sceneCoordinatesRoundTrip() {
     let view = SceneViewport(centreX: 7, centreZ: -3, span: 48)
+    let panel = SceneObject(id: "body:0", kind: "body", index: 0, label: "Door", name: "Gate", role: "Door",
+        x: 5, z: 5, width: 3, depth: 0.2, yaw: .pi / 4, radius: 0, fields: [])
+    precondition(panel.rectangular)
+    precondition(view.hit([panel], x: 6, z: 4, tolerance: 0.01)?.id == panel.id,
+        "A panel is selectable near its rotated free edge, beyond a body's old circular footprint")
+    precondition(view.hit([panel], x: 5.5, z: 5.5, tolerance: 0.01) == nil,
+        "A panel's empty bounding-box corner is not part of its footprint")
     // Deliberately different from today's camera: the client must follow the
     // supplied projection, with no embedded isometric angle assumptions.
     let projection = SceneProjection([[0.8,-0.6],[-0.3,-0.4]])

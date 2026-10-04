@@ -5,10 +5,17 @@ struct VertexOut {
     @location(0) colour: vec4<f32>,
 };
 @vertex
-fn vs_main(@location(0) point: vec2<f32>, @location(1) centre_radius: vec4<f32>, @location(2) colour: vec4<f32>) -> VertexOut {
+fn vs_main(@location(0) point: vec2<f32>, @location(1) centre_shape: vec4<f32>, @location(2) extents_yaw: vec4<f32>, @location(3) colour: vec4<f32>) -> VertexOut {
     var out: VertexOut;
-    let world = centre_radius.xyz + vec3<f32>(point.x, 0.0, point.y) * centre_radius.w;
-    out.position = camera.view_proj * vec4<f32>(world, 1.0);
+    // The circle mesh includes every diagonal corner. Radial projection to
+    // the unit square makes the same line list cover all four straight edges.
+    var boundary = point;
+    if centre_shape.w == 1.0 { boundary /= max(abs(point.x), abs(point.y)); }
+    let local = boundary * extents_yaw.xy;
+    let c = cos(extents_yaw.z);
+    let s = sin(extents_yaw.z);
+    let offset = vec3<f32>(c * local.x + s * local.y, 0.0, -s * local.x + c * local.y);
+    out.position = camera.view_proj * vec4<f32>(centre_shape.xyz + offset, 1.0);
     out.colour = colour;
     return out;
 }

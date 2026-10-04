@@ -482,6 +482,9 @@ fn tuning_edits_save_restore_and_restart_through_the_shared_app_boundary() {
     }
     assert_eq!(app.game.spawn_outcomes()[0].ticket, pending);
     app.edit_tuning(Edit::Set(TuningField::PlayerSpeed, 3.0)).unwrap();
+    app.edit_tuning(Edit::Set(TuningField::ContactFrequency, 20.0)).unwrap();
+    app.edit_tuning(Edit::Set(TuningField::ContactDamping, 0.75)).unwrap();
+    app.edit_tuning(Edit::Set(TuningField::ContactPushSpeed, 1.5)).unwrap();
     app.edit_tuning(Edit::Save).unwrap();
     assert_eq!(arpg_content::load_tuning(&path).unwrap(), app.game.tuning());
     app.edit_tuning(Edit::Defaults).unwrap();
@@ -489,6 +492,9 @@ fn tuning_edits_save_restore_and_restart_through_the_shared_app_boundary() {
     app.edit_tuning(Edit::Revert).unwrap();
     app.edit_tuning(Edit::Restart).unwrap();
     assert_eq!(app.game.tuning().get(TuningField::PlayerSpeed), 3.0);
+    assert_eq!(app.game.tuning().get(TuningField::ContactFrequency), 20.0);
+    assert_eq!(app.game.tuning().get(TuningField::ContactDamping), 0.75);
+    assert_eq!(app.game.tuning().get(TuningField::ContactPushSpeed), 1.5);
     app.tuning_path = directory.join("missing-parent").join("tuning.ron");
     let saved = app.tuning_saved;
     app.edit_tuning(Edit::Set(TuningField::PlayerSpeed, 4.0)).unwrap();
@@ -511,19 +517,40 @@ fn companion_catalog_edits_errors_and_harness_changes_share_authority() {
     let fields = initial["state"]["fields"].as_array().unwrap();
     assert_eq!(fields.len(), TuningField::ALL.len());
     for (entry, field) in fields.iter().zip(TuningField::ALL) {
-        assert_eq!(entry["key"], field.attribute().key);
+        let attribute = field.attribute();
+        assert_eq!(entry["key"], attribute.key);
+        assert_eq!(entry["group"], attribute.group);
+        assert_eq!(entry["unit"], attribute.unit);
+        for (name, value) in [("default", attribute.default), ("min", attribute.min),
+            ("max", attribute.max), ("step", attribute.step)] {
+            assert_eq!(entry[name].as_f64().unwrap() as f32, value);
+        }
         assert_eq!(entry["value"].as_f64().unwrap() as f32, app.game.tuning().get(field));
     }
     let before = app.game.hash();
     let stale = read(&mut app, Command::Set { session: 0, key: "player_speed".into(), value: 50.0 });
     assert_eq!(stale["ok"], false);
     assert_eq!(app.game.hash(), before);
-    for (key, value) in [("player_speed", -1.0), ("missing", 3.0), ("slam_impulse", f32::INFINITY)] {
+    for (key, value) in [("player_speed", -1.0), ("missing", 3.0), ("slam_impulse", f32::INFINITY),
+        ("contact_frequency", 0.0), ("contact_damping", 20.5), ("contact_push_speed", 0.0)] {
         let reply = read(&mut app, Command::Set { session: std::process::id(), key: key.into(), value });
         assert_eq!(reply["ok"], false);
         assert_eq!(reply["state"]["error"], true);
         assert_eq!(reply["state"]["message"], reply["error"]);
         assert_eq!(app.game.hash(), before);
+    }
+    for (field, value) in [(TuningField::ContactFrequency, 20.0),
+        (TuningField::ContactDamping, 0.75), (TuningField::ContactPushSpeed, 1.5)] {
+        let reply = read(&mut app, Command::Set { session: std::process::id(),
+            key: field.attribute().key.into(), value });
+        assert_eq!(reply["ok"], true);
+        assert_eq!(app.game.tuning().get(field), value);
+        let command = crate::harness::Command::TuningEdit(Edit::Set(field, field.attribute().default));
+        let (reply, response) = std::sync::mpsc::channel();
+        requests.send(crate::harness::Request { command, reply }).unwrap();
+        assert!(!app.drain_harness());
+        assert!(!response.try_recv().unwrap().starts_with("error:"));
+        assert_eq!(app.game.tuning().get(field), field.attribute().default);
     }
     let reply = read(&mut app, Command::Set { session: std::process::id(), key: "player_speed".into(), value: 4.0 });
     assert_eq!(reply["ok"], true);
@@ -600,6 +627,39 @@ fn companion_controls_refuse_stale_sessions_and_performance_trials() {
     assert!(app.capture.path().is_none());
     assert!(app.trial.is_some());
     assert!(pending.try_recv().is_err());
+}
+
+#[test]
+fn keyboard_and_harness_zoom_share_companion_steps_without_gameplay_actions() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App { camera: Some(OrthoCamera::new(800, 600)), harness: Some(rx), ..Default::default() };
+    let before = app.game.hash();
+    let height = app.camera.as_ref().unwrap().view_height();
+    for (closer, farther) in [("+", "-"), ("numpad+", "numpad-")] {
+        let key = crate::input::key_named(closer).unwrap();
+        assert!(app.on_key(key, true, false));
+        let zoomed = app.camera.as_ref().unwrap().view_height();
+        assert!((zoomed - height / 1.2).abs() < 0.0001);
+        app.on_key(key, true, true);
+        app.on_key(key, false, false);
+        assert_eq!(app.camera.as_ref().unwrap().view_height(), zoomed);
+        let (reply, response) = std::sync::mpsc::channel();
+        tx.send(Request { command: Command::Tap(crate::input::key_named(farther).unwrap()), reply }).unwrap();
+        assert!(!app.drain_harness());
+        app.service_schedule();
+        assert_eq!(response.try_recv().unwrap(), "ok");
+        assert!((app.camera.as_ref().unwrap().view_height() - height).abs() < 0.0001);
+        let actions = app.input.sample();
+        for action in arpg_core::Action::ALL {
+            assert!(!actions.held(action) && !actions.just_pressed(action) && !actions.just_released(action));
+        }
+        assert_eq!(app.game.hash(), before);
+    }
+    for _ in 0..100 { app.on_key(KeyCode::Minus, true, false); }
+    assert_eq!(app.camera.as_ref().unwrap().view_height(), 800.0);
+    for _ in 0..100 { app.on_key(KeyCode::Equal, true, false); }
+    assert_eq!(app.camera.as_ref().unwrap().view_height(), 4.0);
+    assert_eq!(app.game.hash(), before);
 }
 
 #[test]

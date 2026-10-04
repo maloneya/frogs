@@ -1,5 +1,7 @@
 // Drag retains 6*.9=5.4m/s; the motor can oppose it by only .5m/s this tick.
+// The whole change from 6 to 4.9 ramps over four substeps: the tick covers
+// (6 - 5/8 * 1.1) / 60 m.
 (description: "Steering brakes a knockback gradually instead of overwriting it.",
  setup: (actions: [Place((10.0, 0.0)), Assign(body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))]),
  impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))], budget: (ticks: 1),
- expect: (bodies: [(nth: 0, action: Move, pos: (x: 10.0816667, z: 0.0, tol: 0.00001), velocity: (x: 4.9, z: 0.0, tol: 0.00001))]))
+ expect: (bodies: [(nth: 0, action: Move, pos: (x: 10.0885417, z: 0.0, tol: 0.00001), velocity: (x: 4.9, z: 0.0, tol: 0.00001))]))

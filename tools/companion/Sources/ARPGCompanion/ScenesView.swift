@@ -187,7 +187,7 @@ struct ScenesView: View {
                     Button("Undo") { model.undoScene(); fieldDrafts.removeAll(); colourDrafts.removeAll(); objectNameDraft = selected?.name ?? "" }.keyboardShortcut("z").disabled(model.busy || model.undoScenes.isEmpty)
                     Button("Redo") { model.redoScene(); fieldDrafts.removeAll(); colourDrafts.removeAll(); objectNameDraft = selected?.name ?? "" }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(model.busy || model.redoScenes.isEmpty)
                 }
-                Text("Actor definitions apply to a body, every formation member, or everything a source emits. Add actions, then combine them as a sequence or priority. Doors and chests start locked.").font(.caption).foregroundStyle(.secondary)
+                Text("Actor definitions apply to a body, every formation member, or everything a source emits. Add actions, then combine them as a sequence or priority. Doors start latched and can be breached by physical impacts; chests start locked.").font(.caption).foregroundStyle(.secondary)
             }.padding(14)
         }
     }

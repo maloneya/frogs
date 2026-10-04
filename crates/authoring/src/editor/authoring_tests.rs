@@ -86,7 +86,7 @@ fn editor_authored_encounter_runs_activation_success_failure_and_restart() {
     step(&mut game, false, true);
     assert_eq!(game.encounter_state(owner, 0).unwrap().phase, EncounterPhase::Running);
     assert_eq!(game.encounter_state(owner, 0).unwrap().remaining_ticks, 24);
-    assert_eq!(game.door_state(owner, 0), Some(DoorState::Unlocked));
+    assert_eq!(game.door_state(owner, 0), Some(DoorState::Released));
     assert_eq!(game.chest_state(owner, 0), Some(ChestState::Locked));
     assert_eq!(game.enemy_count(), 1);
     for _ in 2..25 { step(&mut game, false, true); }
@@ -96,7 +96,7 @@ fn editor_authored_encounter_runs_activation_success_failure_and_restart() {
     assert_eq!(game.encounter_state(owner, 0).unwrap().phase, EncounterPhase::Succeeded);
     assert_eq!(game.encounter_state(owner, 0).unwrap().defeated, 1);
     assert_eq!(game.chest_state(owner, 0), Some(ChestState::Unlocked));
-    assert_eq!(game.door_state(owner, 1), Some(DoorState::Locked));
+    assert_eq!(game.door_state(owner, 1), Some(DoorState::Latched));
     assert!(!game.source_state(source).unwrap().enabled);
     game.restart().unwrap();
     assert_eq!(game.hash(), fresh);
@@ -104,7 +104,7 @@ fn editor_authored_encounter_runs_activation_success_failure_and_restart() {
     for _ in 0..25 { step(&mut game, false, false); }
     assert_eq!(game.encounter_state(owner, 0).unwrap().phase, EncounterPhase::Failed);
     assert_eq!(game.chest_state(owner, 0), Some(ChestState::Locked));
-    assert_eq!(game.door_state(owner, 1), Some(DoorState::Unlocked));
+    assert_eq!(game.door_state(owner, 1), Some(DoorState::Released));
     assert!(!game.source_state(source).unwrap().enabled);
 }
 
@@ -220,6 +220,43 @@ fn components_and_actor_definitions_follow_edit_duplicate_and_delete_lifetimes()
     apply(&mut scene, Edit::Delete { target: target(Kind::Body, 0) });
     assert!(scene.scene.doors.is_empty());
     assert_eq!(scene.scene.chests[0].body, 0);
+}
+
+#[test]
+fn panel_geometry_strength_and_mass_share_the_authoring_round_trip() {
+    let mut scene = SceneDocument::default();
+    apply(&mut scene, Edit::Place { kind: PropKind::Door, pos: (5.0, 5.0) });
+    let body = target(Kind::Body, 0);
+    for (field, value) in [("panel.width", 2.4), ("panel.thickness", 0.2),
+        ("panel.closed_yaw", 30.0), ("panel.min_angle", -60.0),
+        ("panel.max_angle", 90.0), ("panel.latch_impulse", 100.0), ("mass", 30.0)] {
+        set_field(&mut scene, body, field, value);
+    }
+    set_field(&mut scene, body, "interactable", 1.0);
+    assert_eq!(scene.scene.engine.bodies[0].what.physical.mass().kilograms(), 30.0);
+    let config = scene.scene.doors[0].panel;
+    assert!((config.closed_yaw() - 30.0_f32.to_radians()).abs() < 1e-6);
+    let projection = document(&scene, Some(body), None, None).unwrap();
+    assert_eq!(projection["objects"][0]["width"], json!(2.4_f32));
+    assert_eq!(projection["objects"][0]["depth"], json!(0.2_f32));
+    assert_eq!(projection["objects"][0]["radius"], json!(0.0));
+    let copied: SceneDocument = serde_json::from_value(projection["document"].clone()).unwrap();
+    assert_eq!(Game::from_scene(&copied.scene).unwrap().hash(), Game::from_scene(&scene.scene).unwrap().hash());
+    apply(&mut scene, Edit::Duplicate { target: body, offset: (4.0, 0.0) });
+    assert_eq!(scene.scene.doors[1].panel, config);
+    assert_eq!(scene.scene.engine.bodies[1].what.physical.mass().kilograms(), 30.0);
+    let accepted = serde_json::to_value(&scene).unwrap();
+    for (field, value) in [("panel.width", 0.01), ("panel.min_angle", 1.0),
+        ("panel.max_angle", -1.0), ("panel.latch_impulse", 0.0), ("mass", 0.0), ("fixed", 1.0)] {
+        assert!(edit(scene.clone(), Edit::Set { target: body, field: field.into(),
+            value: Number::from_f64(value).unwrap() }).is_err(), "{field}");
+        assert_eq!(serde_json::to_value(&scene).unwrap(), accepted);
+    }
+    let path = std::env::temp_dir().join(format!("arpg-panel-authoring-{}.ron", std::process::id()));
+    arpg_content::save_scene_document(&path, &scene, None).unwrap();
+    let (loaded, _) = arpg_content::read_scene_document(&path).unwrap();
+    assert_eq!(serde_json::to_value(&loaded).unwrap(), accepted);
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

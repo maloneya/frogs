@@ -120,6 +120,9 @@ fn integer<T: TryFrom<u64>>(value: &Number) -> Result<T, String> {
 }
 
 
+/// Panel fields stored in radians and edited in degrees.
+const PANEL_ANGLES: [&str; 3] = ["closed_yaw", "min_angle", "max_angle"];
+
 fn set(scene: &mut SceneDocument, target: Target, field: &str, raw: Number) -> Result<(), String> {
     let scalar = raw.as_f64().ok_or("Value must be numeric.")?;
     let value = scalar as f32;
@@ -131,6 +134,13 @@ fn set(scene: &mut SceneDocument, target: Target, field: &str, raw: Number) -> R
     match target.kind {
         Kind::Body => {
             if field == "component" { encounters::component(scene, target.index, integer::<u32>(&raw)?)?; }
+            else if let Some(key) = field.strip_prefix("panel.") {
+                let door = scene.scene.doors.iter_mut().find(|door| door.body == target.index).ok_or("This body has no panel.")?;
+                let mut config = serde_json::to_value(door.panel).expect("validated panel");
+                let entry = config.as_object_mut().and_then(|object| object.get_mut(key)).ok_or("Unknown panel field.")?;
+                *entry = json!(if PANEL_ANGLES.contains(&key) { value.to_radians() } else { value });
+                door.panel = serde_json::from_value(config).map_err(|error| error.to_string())?;
+            }
             else { behaviors::set(&mut scene.scene.engine.bodies.get_mut(target.index).ok_or_else(missing)?.what, field, &raw)?; }
         }
         Kind::Wall => {
@@ -291,7 +301,7 @@ pub fn edit(mut scene: SceneDocument, edit: Edit) -> Result<(SceneDocument, Opti
                 Kind::Body => {
                     let index = scene.scene.engine.bodies.len();
                     scene.scene.engine.bodies.push(scene.scene.engine.bodies[target.index].clone());
-                    if scene.scene.doors.iter().any(|d| d.body == target.index) { scene.scene.doors.push(arpg_game::DoorSpec { body: index }); }
+                    if let Some(door) = scene.scene.doors.iter().find(|d| d.body == target.index).copied() { scene.scene.doors.push(arpg_game::DoorSpec { body: index, panel: door.panel }); }
                     if scene.scene.chests.iter().any(|c| c.body == target.index) { scene.scene.chests.push(arpg_game::ChestSpec { body: index }); }
                     index
                 }
@@ -368,7 +378,19 @@ pub(crate) fn document(scene: &SceneDocument, selected: Option<Target>, path: Op
         let mut choice = field("component", "Role", "choice", component, 1.0);
         choice["options"] = json!(["Body", "Door", "Chest"]);
         fields.push(choice);
-        push(Kind::Body, i, role, body.pos, 0.0, 0.0, 0.0, arpg_sim::ENEMY_RADIUS, fields);
+        if let Some(door) = scene.scene.doors.iter().find(|door| door.body == i) {
+            let config = serde_json::to_value(door.panel).expect("validated panel");
+            for (key, scalar) in config.as_object().expect("panel object") {
+                let value = scalar.as_f64().expect("physical scalar") as f32;
+                let angle = PANEL_ANGLES.contains(&key.as_str());
+                let unit = if angle { "°" } else if key == "latch_impulse" { "kg m/s" } else { "m" };
+                fields.push(field(&format!("panel.{key}"), &key.replace('_', " "), unit,
+                    if angle { value.to_degrees() } else { value }, if angle { 5.0 } else { 0.1 }));
+            }
+            push(Kind::Body, i, role, body.pos, door.panel.width(), door.panel.thickness(), door.panel.closed_yaw(), 0.0, fields);
+        } else {
+            push(Kind::Body, i, role, body.pos, 0.0, 0.0, 0.0, arpg_sim::ENEMY_RADIUS, fields);
+        }
     }
     for (i, wall) in scene.scene.engine.walls.iter().enumerate() {
         push(Kind::Wall, i, "Wall", wall.centre().into(), wall.size().x, wall.size().y, wall.yaw(), 0.0,

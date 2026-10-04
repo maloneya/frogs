@@ -1,30 +1,55 @@
-//! Unpaced release trials through Game; clocks only surround the step call.
-use std::{io::Write, path::Path, process::ExitCode, time::Instant};
+//! Unpaced release trials through Game; optional read-only physics profiling.
 use arpg_core::Report;
 use arpg_game::Game;
 use arpg_sim::{Accumulator, Dt};
+use std::{io::Write, path::Path, process::ExitCode, time::Instant};
 
 #[path = "../../../../benchmarks/driver.rs"]
 mod driver;
+#[path = "perf-headless/profile.rs"]
+mod profile;
 
 fn run() -> Result<String, String> {
-    if cfg!(debug_assertions) { return Err("headless performance requires --release".into()); }
+    if cfg!(debug_assertions) {
+        return Err("headless performance requires --release".into());
+    }
     let mut args = std::env::args().skip(1);
-    let scene = args.next().ok_or("expected scene warmup samples idle|combat")?;
-    let spec = driver::Spec::parse(args.collect::<Vec<_>>().join(" ").split_whitespace())?;
+    let scene = args
+        .next()
+        .ok_or("expected scene warmup samples idle|combat")?;
+    let mut args: Vec<_> = args.collect();
+    let profile = args.last().is_some_and(|arg| arg == "--profile");
+    if profile {
+        args.pop();
+    }
+    let spec = driver::Spec::parse(args.join(" ").split_whitespace())?;
     let scene = arpg_content::load_scene(Path::new(&scene)).map_err(|e| e.to_string())?;
     let mut game = Game::from_scene(&scene).map_err(|e| e.to_string())?;
     let initial = game.enemy_count();
-    let dt = Accumulator::default().pending(Dt::SECS).next().expect("one fixed tick");
-    for tick in 0..spec.warmup { game.step(dt, spec.intent(tick)); }
+    let dt = Accumulator::default()
+        .pending(Dt::SECS)
+        .next()
+        .expect("one fixed tick");
+    for tick in 0..spec.warmup {
+        game.step(dt, spec.intent(tick));
+    }
     let start = game.enemy_count();
     let mut population = 0;
     let mut timings = Vec::with_capacity(spec.samples as usize);
+    let mut profiles = Vec::with_capacity(if profile { spec.samples as usize } else { 0 });
     for tick in spec.warmup..spec.warmup + spec.samples {
         let intent = spec.intent(tick);
+        let mut observer = profile::Profile::default();
         let began = Instant::now();
-        game.step(dt, intent);
+        if profile {
+            game.step_observed(dt, intent, &mut observer);
+        } else {
+            game.step(dt, intent);
+        }
         timings.push(began.elapsed().as_nanos() as u64);
+        if profile {
+            profiles.push(observer);
+        }
         population += game.enemy_count() as u64;
     }
     let mut out = Report::default();
@@ -41,14 +66,39 @@ fn run() -> Result<String, String> {
     out.bool("finite", game.all_positions_finite());
     out.text("final_hash", &format!("{:016x}", game.hash()));
     out.object("step_ns", |out| {
-        for (index, nanos) in timings.iter().enumerate() { out.int(&index.to_string(), *nanos); }
+        for (index, nanos) in timings.iter().enumerate() {
+            out.int(&index.to_string(), *nanos);
+        }
     });
+    if profile {
+        out.object("physics_profile", |out| {
+            out.int("version", 1);
+            let mut summary = profile::Profile::default();
+            for profile in &profiles {
+                summary.include(profile);
+            }
+            out.object("totals", |out| summary.report(out));
+            out.object("ticks", |out| {
+                for (index, profile) in profiles.iter().enumerate() {
+                    out.object(&(spec.warmup + index as u64 + 1).to_string(), |out| {
+                        profile.report(out)
+                    });
+                }
+            });
+        });
+    }
     Ok(out.finish())
 }
 
 fn main() -> ExitCode {
     match run() {
-        Ok(json) => { let _ = writeln!(std::io::stdout(), "{json}"); ExitCode::SUCCESS }
-        Err(error) => { let _ = writeln!(std::io::stderr(), "{error}"); ExitCode::FAILURE }
+        Ok(json) => {
+            let _ = writeln!(std::io::stdout(), "{json}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "{error}");
+            ExitCode::FAILURE
+        }
     }
 }

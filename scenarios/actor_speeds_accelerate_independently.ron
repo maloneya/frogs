@@ -1,4 +1,5 @@
-// At 30m/s², v[n+1] = min(desired, .9*v[n]+.5).
+// At 30m/s², v[n+1] = min(desired, .9*v[n]+.5); each tick's whole change ramps
+// over four substeps (a tick covers (v + 5/8 change) * dt).
 // The three authored speeds produce distinct distances over 24 ticks.
 (
     description: "Three actors use independently authored movement speeds while an idle body stays still.",
@@ -11,11 +12,11 @@
             (nth: 2, action: Move, velocity: (x: 0.0, z: -0.5, tol: 0.00001)),
         ])),
         (at: 23, expect: (contacts: 0, crowd_contacts: 0, bodies: [
-            (nth: 0, action: Move, pos: (x: 19.10141925, z: 0.0, tol: 0.0001),
+            (nth: 0, action: Move, pos: (x: 19.11704425, z: 0.0, tol: 0.0001),
                 velocity: (x: -2.5, z: 0.0, tol: 0.00001)),
-            (nth: 1, action: Move, pos: (x: -18.74558165, z: 0.0, tol: 0.0001),
+            (nth: 1, action: Move, pos: (x: -18.77058165, z: 0.0, tol: 0.0001),
                 velocity: (x: 4.0, z: 0.0, tol: 0.00001)),
-            (nth: 2, action: Move, pos: (x: 0.0, z: 19.42825, tol: 0.0001),
+            (nth: 2, action: Move, pos: (x: 0.0, z: 19.43762500, tol: 0.0001),
                 velocity: (x: 0.0, z: -1.5, tol: 0.00001)),
             (nth: 3, action: Idle, pos: (x: 0.0, z: -20.0, tol: 0.0)),
         ])),

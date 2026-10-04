@@ -94,7 +94,7 @@ pub(crate) enum Command {
     Quit,
 }
 
-/// Game and UI keys are injected as `KeyCode`s into `Controls::on_key`, so a
+/// Game and UI keys are injected as `KeyCode`s into `App::on_key`, so a
 /// test exercises the real binding table and context routing — only winit's
 /// delivery is skipped.
 ///
@@ -427,6 +427,19 @@ mod tests {
             "scene evict c0 extra",
         ] {
             assert!(parse(bad).is_err(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn tuning_commands_resolve_every_shared_catalog_field() {
+        for field in arpg_sim::TuningField::ALL {
+            let attribute = field.attribute();
+            let command = parse(&format!("tuning set {} {}", attribute.key, attribute.default)).unwrap();
+            let Command::TuningEdit(crate::companion::Edit::Set(parsed, value)) = command else {
+                panic!("expected a tuning edit");
+            };
+            assert_eq!(parsed, field);
+            assert_eq!(value, attribute.default);
         }
     }
 

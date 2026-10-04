@@ -1,5 +1,7 @@
-// A travels .1 into B; equal masses share .1 overlap and velocity 6 equally.
-// End velocities: (6/2)*.9 = 2.7. The second body was never given an impulse.
+// Touching unit masses are inside the contact slop, so the contact is rigid:
+// the first substep's impulse J=6/2=3 leaves both at 3m/s (no restitution).
+// Both travel 3/60m, then passive .9 drag leaves 2.7m/s. They only touch,
+// so nothing counts as crowded; the pair exchanged momentum.
 (description: "A carried body transfers momentum to its neighbour without an attack.",
  setup: (actions: [Place((10.0, 0.0)), Place((10.5, 0.0))]),
  impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))], budget: (ticks: 1),

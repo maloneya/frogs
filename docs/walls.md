@@ -17,45 +17,44 @@ at least one centimetre on both dimensions, and all corners inside the arena.
 The owning module defines the shared live wall limit. Admission includes walls
 from all resident scenes and rejects the complete load before changing state.
 
-Walls are static rectangles, separate from circular player/enemy/prop storage.
+Walls are static rectangles, separate from entity body storage.
 They have no health, mass, autonomous movement, interaction or height. Their stable identity
 is `(SceneId, authored index)`. Installing a scene creates its walls; eviction
 removes them together, and restart rebuilds the cached scene. Clearing enemies
 preserves walls. The hash includes authoritative geometry and ownership;
 `state.sim.scenes.walls` reports the same rectangles under `cN/index` keys.
-Doors use circular prop geometry, not wall rectangles.
+[Doors](physical-doors.md) are articulated rectangular bodies; they reuse rectangle
+geometry while simulation owns their rotation and latch response.
 
 ## Motion
 
-The wall pass sweeps the entire circular body's displacement, including powered
-walking and carried momentum, against the rectangle. It tests flat faces and
-rounded corner contacts, preventing fast movement from crossing a thin wall
-between ticks. Contact removes the velocity component into the wall and retains
-the component along it. There is no bounce or wall-impact damage.
+The [shared contact solver](../crates/sim/src/solver.rs) constrains circular
+bodies against walls with speculative contacts, so a body stops at the face
+rather than entering it. Contact response removes closing velocity while
+allowing tangential motion; there is no wall-impact damage. Bodies faster than
+the solver's collision passes can follow are swept against faces and rounded
+corners, so fast knockback cannot cross a thin wall.
 
-Wall resolution runs before body contacts and again after body separation and
-arena containment, so a crowd correction cannot push a body through a wall.
-The trace aggregates `wall contacts` once per resolving pass. Small existing
-body overlaps can remain when a crowded pile presses against an immovable wall;
-wall exclusion takes priority over fully separating the pile in that tick.
+Walls, crowd contacts and hinged panels participate in the same physical solve.
+A body placed inside a wall is pushed out through the nearest face that keeps it
+inside the arena, at no more than the overlap push speed and without adding
+velocity. Dense or impossible layouts can retain small body overlaps. Do not
+author bodies inside intersecting solids or passages narrower than their diameter.
 
-Bodies initially overlapping a wall are pushed toward the nearest available
-face inside the arena. Sweeps also include arena faces, so sliding cannot redirect
-a body out of bounds.
-Contact work per sweep is bounded; after eight contacts, unspent movement is
-discarded. Do not author bodies inside solid wall intersections or passages
-narrower than their diameter: those layouts may have no valid local placement.
-The current implementation scans the bounded wall list with an inexpensive
-bounding-box rejection. It has no wall spatial index yet.
+The [rectangle owner](../crates/sim/src/wall.rs) supplies swept movement,
+penetration and segment queries. It also keeps a per-cell index of nearby
+walls, rebuilt when walls are installed or evicted, so body contact tests visit
+only walls near each body.
 
 ## Attacks
 
-Cleave, Slam and enemy melee require an unobstructed segment from attacker centre
-to target centre in addition to their existing reach test. A shielded target
-receives neither damage nor attack momentum. This deliberately makes a binary
-cover decision for each target; partial body exposure does not grant a hit.
+Cleave, Slam and autonomous attacks test physical shape overlap and require an
+unobstructed segment from the attack origin to the resulting contact point.
+Static walls and current panel poses provide cover; the contacted panel itself
+is excluded from its own cover test. A shielded target receives neither damage
+nor attack momentum. Damage eligibility is independent of physical contact.
 
-Disintegrate ends at the first wall on its centre ray and still checks cover for
+Disintegrate ends at the first wall or panel on its centre ray and still checks cover for
 each potential target, so its width/end cap cannot damage through the wall.
 The app uses that same clipped endpoint and blocking-face normal to trim the
 full band width, including its glow, at diagonal walls. Beam visuals use the completed tick's
@@ -67,8 +66,8 @@ attack motion/potential reach; they are not solid geometry clipped by walls.
 
 The shared [wall asset](../assets/world/wall/README.md) supplies height and
 appearance. App scales its unit footprint to the authoritative rectangle and
-uses its exact yaw. The simulation never reads the mesh. Companion-enabled body and
-attack outlines remain circular; wall footprints are available in the report.
+uses its exact yaw. The simulation never reads the mesh. Ordinary body and
+attack-disc outlines remain circular; walls and panels have rectangular footprints.
 Walls do not occlude lighting, and pursuit actions have no route planning. They can pile up
 against a wall until the player goes around it.
 

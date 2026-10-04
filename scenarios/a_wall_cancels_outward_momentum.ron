@@ -1,8 +1,16 @@
-// Enemy centre stops at 96-.25=95.75; Z still travels 3/60 then decays.
-(description: "A wall removes outward velocity and preserves tangential sliding.",
+// The arena centre limit is 96-.25=95.75. The speculative edge contact lets
+// the body close the .05m gap in its first two substeps, then removes the
+// outward 6m/s rigidly (no restitution). Z slides freely under .9 drag.
+(description: "The arena edge cancels outward momentum while preserving tangential sliding.",
  setup: (actions: [Place((95.7, 10.0))]),
- impulses: [(at: 0, target: Placed(0), value: (6.0, 3.0))], budget: (ticks: 1),
- expect: (bodies: [(nth: 0, pos: (x: 95.75, z: 10.05, tol: 0.00002), velocity: (x: 0.0, z: 2.7, tol: 0.00001))], events: (
+ impulses: [(at: 0, target: Placed(0), value: (6.0, 3.0))],
+ checkpoints: [(at: 0, expect: (bodies: [(nth: 0,
+   pos: (x: 95.75, z: 10.05, tol: 0.00002),
+   velocity: (x: 0.0, z: 2.7, tol: 0.00001))]))],
+ budget: (ticks: 3),
+ expect: (bodies: [(nth: 0,
+   pos: (x: 95.75, z: 10.1355, tol: 0.00002),
+   velocity: (x: 0.0, z: 2.187, tol: 0.00001))], events: (
         kinds: [Impulsed, Clamped],
         sequence: [
             (0, Impulsed(id: (1, 1), value: (6.0000,3.0000), source: None, tolerance: 0.00005)),

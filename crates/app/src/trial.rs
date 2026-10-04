@@ -104,7 +104,11 @@ mod tests {
             }
             assert_eq!(samples, 1);
             assert_eq!(game.tick(), 65);
-            assert!((game.player_pos().x - 9.0).abs() < 0.0001, "60 eastward ticks at 9 metres/second");
+            // Bounded acceleration gives v(n)=10(1-.9^n), capped at 9m/s from
+            // tick 22. Each tick's change ramps in over four substeps, so a
+            // tick covers (v + 5/8 change) dt. Sum those 60 displacements.
+            assert!((game.player_pos().x - 7.957_878).abs() < 0.0001,
+                "60 eastward motor ticks, including acceleration");
             (game.hash(), game.trace().render(), trial.population_sum)
         };
         assert_eq!(drive(1), drive(6));

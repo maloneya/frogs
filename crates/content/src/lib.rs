@@ -197,7 +197,10 @@ mod tuning_tests {
 
     #[test]
     fn complete_files_round_trip_and_invalid_inputs_are_rejected() {
-        let tuning = Tuning::default().with(TuningField::SlamImpulse, 17.0).unwrap();
+        let tuning = Tuning::default().with(TuningField::SlamImpulse, 17.0).unwrap()
+            .with(TuningField::ContactFrequency, 20.0).unwrap()
+            .with(TuningField::ContactDamping, 0.75).unwrap()
+            .with(TuningField::ContactPushSpeed, 1.5).unwrap();
         let source = ron::ser::to_string(&tuning).unwrap();
         assert_eq!(parse_tuning(&source).unwrap(), tuning);
         for source in [
@@ -207,6 +210,13 @@ mod tuning_tests {
             source.replace("SlamImpulse:17.0", "SlamImpulse:-1.0"),
             source.replace("SlamImpulse:17.0", "SlamImpulse:1001.0"),
             source.replace("SlamImpulse", "UnknownAttribute"),
+            source.replace("ContactFrequency:20.0,", ""),
+            source.replace("ContactFrequency:20.0", "ContactFrequency:0.0"),
+            source.replace("ContactFrequency:20.0", "ContactFrequency:31.0"),
+            source.replace("ContactDamping:0.75", "ContactDamping:NaN"),
+            source.replace("ContactDamping:0.75", "ContactDamping:20.5"),
+            source.replace("ContactPushSpeed:1.5", "ContactPushSpeed:0.0"),
+            source.replace("ContactPushSpeed:1.5", "ContactPushSpeed:20.1"),
         ] {
             assert!(parse_tuning(&source).is_err(), "{source}");
         }

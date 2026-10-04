@@ -82,7 +82,11 @@ fn source_and_queued_births_receive_motors_on_their_first_tick() {
     for id in [queued, emitted] {
         assert_eq!(world.motion(id).unwrap().velocity(), Vec2::X * 0.5);
     }
-    assert!((world.actor_view().position(queued).unwrap().x + 10.0 - 0.5 / 60.0).abs() < 0.00001);
+    // The motor's first change ramps in over four substeps: 5/8 of it moves the body.
+    assert!(
+        (world.actor_view().position(queued).unwrap().x + 10.0 - 0.5 * 0.625 / 60.0).abs()
+            < 0.00001
+    );
     // Gameplay's explicit population prevents the next emission even though
     // the neutral source products have no damageable membership.
     world
@@ -330,7 +334,7 @@ fn numeric_position_admission_is_shared_and_preserves_accepted_work() {
     let negative = -positive;
     assert!(arpg_sim::valid_position(positive) && arpg_sim::valid_position(negative));
     assert!(positive.distance_squared(negative).is_finite());
-    assert!(arpg_sim::stopping_speed(positive.distance(negative), dt(), 300.0).is_finite());
+    assert!(arpg_sim::stopping_speed(positive.distance(negative), 30.0, dt(), 300.0).is_finite());
     world.place(positive, Template::BODY).unwrap();
     world.place(negative, Template::BODY).unwrap();
     world

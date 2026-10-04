@@ -1,11 +1,14 @@
+// The source emits on top of the fixed prop (0.4 apart against a 0.5 contact
+// distance). Soft overlap correction moves only the enemy, at the fixed
+// contact's rate, until it rests inside the half-millimetre slop at z=2.5.
 (
     description: "A prop does not satisfy FewerThan's enemy count; enemies collide with it without moving it.",
     setup: (scenes: [(engine: (name: "Prop and source", bodies: [
         (pos: (0.0, 2.0), what: (physical: (fixed: true), role: Prop)),
     ], sources: [(pos: (0.0, 2.4), every: 1, when: FewerThan(1), what: (physical: (health: Some(3), character: true), role: Hostile))]))]),
-    budget: (ticks: 5),
+    budget: (ticks: 60),
     expect: (enemy_count: 1, bodies: [
         (nth: 0, damageable: false, pos: (x: 0.0, z: 2.0, tol: 0.0)),
-        (nth: 1, health: 3, pos: (x: 0.0, z: 2.5, tol: 0.000001)),
+        (nth: 1, health: 3, pos: (x: 0.0, z: 2.5, tol: 0.0005)),
     ]),
 )

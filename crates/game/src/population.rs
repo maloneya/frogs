@@ -30,7 +30,7 @@ pub struct BodyGrid {
     pub columns: usize,
     /// Number of rows along Z.
     pub rows: usize,
-    /// Positive spacing in metres.
+    /// Spacing in metres; at least a body diameter when the grid holds more than one body.
     pub spacing: f32,
     /// Definition shared by every actor in this formation.
     #[serde(default)]
@@ -71,6 +71,7 @@ impl Scene {
         Ok(arpg_sim::Scene {
             name: self.name.clone(),
             walls: self.walls.clone(),
+            panels: Vec::new(),
             bodies: self
                 .bodies
                 .iter()

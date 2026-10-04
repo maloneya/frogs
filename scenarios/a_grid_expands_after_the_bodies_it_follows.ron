@@ -15,8 +15,9 @@
 //
 // The second grid carries an authored movement action; its two actors
 // are checked through their first-tick motion. They are the only bodies
-// that move during the single tick. The motor accelerates each to .5m/s,
-// closing .5/60 metres along its unit vector toward the origin.
+// that move during the single tick. The motor accelerates each to .5m/s; the
+// change ramps in over four substeps, closing 5/8 of .5/60 metres along its
+// unit vector toward the origin.
 
 (
     description: "One scene's authored body, then its two grids in order, expand row by row into nine bodies numbered the way assertions address them.",
@@ -42,8 +43,8 @@
             (nth: 4, action: Idle, pos: (x:  0.0, z: 5.5, tol: 0.0)),
             (nth: 5, action: Idle, pos: (x:  1.5, z: 5.5, tol: 0.0)),
             (nth: 6, action: Idle, pos: (x:  3.0, z: 5.5, tol: 0.0)),
-            (nth: 7, action: Move,  pos: (x: -5.995,    z: 7.9933333, tol: 0.00001)),
-            (nth: 8, action: Move,  pos: (x: -3.9962732, z: 7.9925464, tol: 0.00001)),
+            (nth: 7, action: Move,  pos: (x: -5.996875, z: 7.9958333, tol: 0.00001)),
+            (nth: 8, action: Move,  pos: (x: -3.9976708, z: 7.9953415, tol: 0.00001)),
         ],
     ),
 )

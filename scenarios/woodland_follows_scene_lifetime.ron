@@ -1,24 +1,29 @@
+// Until eviction, v=min(.9*v+1,9) with each tick's change ramped over four
+// substeps, so a tick covers (v + 5/8 change)/60. The trunk contact is at
+// x=.5: tick 8 would reach .5428 freely, so the speculative contact stops the
+// player there, and its motor's light load rests rigidly inside the slop.
+// Eviction at tick 12 removes the trunk; walking restarts from rest.
 (
-    description: "Solid trunks stop walking at the body edge; scene eviction removes collision and permits movement immediately.",
+    description: "Solid trunks stop walking through the shared contact response; scene eviction removes collision and permits movement immediately.",
     setup: (scenes: [(engine: (name: "grove"), trees: [
         (kind: Pine, position: (1.0, 0.0), yaw: 0.0, scale: 1.0),
         (kind: Broadleaf, position: (12.0, 3.0), yaw: 0.8, scale: 1.2),
     ])]),
-    inputs: [(at: 0, ticks: 10, dir: (1.0, 0.0))],
+    inputs: [(at: 0, ticks: 20, dir: (1.0, 0.0))],
     scenes: [
         (at: 1, action: Load((engine: (name: "bare grove"), trees: [
             (kind: Bare, position: (-12.0, 0.0), yaw: 0.0, scale: 1.0),
         ]))),
-        (at: 6, action: Evict(0)),
-        (at: 9, action: Evict(1)),
+        (at: 12, action: Evict(0)),
+        (at: 19, action: Evict(1)),
     ],
     checkpoints: [
-        (at: 0, expect: (tree_count: 2, scene_count: 1, player_pos: (x: 0.15, z: 0.0, tol: 0.001))),
-        (at: 1, expect: (tree_count: 3, scene_count: 2, player_pos: (x: 0.3, z: 0.0, tol: 0.001))),
-        (at: 3, expect: (tree_count: 3, player_pos: (x: 0.5, z: 0.0, tol: 0.001))),
-        (at: 5, expect: (tree_count: 3, player_pos: (x: 0.5, z: 0.0, tol: 0.001))),
-        (at: 6, expect: (tree_count: 1, scene_count: 1, player_pos: (x: 0.65, z: 0.0, tol: 0.001))),
+        (at: 0, expect: (tree_count: 2, scene_count: 1, player_pos: (x: 0.01041667, z: 0.0, tol: 0.001))),
+        (at: 1, expect: (tree_count: 3, scene_count: 2, player_pos: (x: 0.03645833, z: 0.0, tol: 0.001))),
+        (at: 8, expect: (tree_count: 3, player_pos: (x: 0.5, z: 0.0, tol: 0.001))),
+        (at: 11, expect: (tree_count: 3, player_pos: (x: 0.5, z: 0.0, tol: 0.001))),
+        (at: 12, expect: (tree_count: 1, scene_count: 1, player_pos: (x: 0.5104167, z: 0.0, tol: 0.001))),
     ],
-    budget: (ticks: 10),
-    expect: (tree_count: 0, scene_count: 0, contacts: 0, player_pos: (x: 1.1, z: 0.0, tol: 0.001)),
+    budget: (ticks: 20),
+    expect: (tree_count: 0, scene_count: 0, contacts: 0, player_pos: (x: 0.9434383, z: 0.0, tol: 0.001)),
 )

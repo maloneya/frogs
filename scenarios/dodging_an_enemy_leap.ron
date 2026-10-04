@@ -1,13 +1,17 @@
+// Eighteen motor ticks and the bounded braking tail place the player
+// 2.0281407m aside, beyond the landing disc; twelve ticks no longer leave its
+// radius. Ramping each change over substeps delays the start and the stop
+// equally, so the rest point is unchanged.
 (
     description: "Moving out of the marked landing disc during windup avoids the leap; it does not follow the player.",
     setup: (scenes: [(engine: (name: "Leap dodge", bodies: [
         (pos: (0.0, 4.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
     ]),)]),
-    inputs: [(at: 1, ticks: 12, dir: (1.0, 0.0))],
+    inputs: [(at: 1, ticks: 18, dir: (1.0, 0.0))],
     checkpoints: [
         (at: 77, expect: (player_health: 5)),
         (at: 78, expect: (player_health: 5)),
     ],
     budget: (ticks: 132),
-    expect: (player_health: 5, enemy_count: 1, player_pos: (x: 1.8, z: 0.0, tol: 0.001)),
+    expect: (player_health: 5, enemy_count: 1, player_pos: (x: 2.0281407, z: 0.0, tol: 0.001)),
 )

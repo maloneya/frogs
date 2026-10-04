@@ -14,7 +14,8 @@ fn every_attribute_changes_hash_and_report_and_invalid_edits_preserve_pending_wo
     for field in TuningField::ALL {
         let mut game = Game::empty();
         let before = game.hash();
-        let value = field.attribute().default + 0.5;
+        let attribute = field.attribute();
+        let value = if attribute.default != attribute.min { attribute.min } else { attribute.max };
         game.set_tuning(game.tuning().with(field, value).unwrap());
         assert_ne!(game.hash(), before, "{field:?}");
         let mut out = Report::default();
@@ -39,7 +40,10 @@ fn tuning_survives_scene_start_restart_eviction_and_refused_load() {
     let scene = GameScene::default();
     let mut game = Game::from_scene(&scene).unwrap();
     let tuning = Tuning::default().with(TuningField::PlayerSpeed, 3.0).unwrap()
-        .with(TuningField::SlamImpulse, 12.0).unwrap();
+        .with(TuningField::SlamImpulse, 12.0).unwrap()
+        .with(TuningField::ContactFrequency, 20.0).unwrap()
+        .with(TuningField::ContactDamping, 0.75).unwrap()
+        .with(TuningField::ContactPushSpeed, 1.5).unwrap();
     game.set_tuning(tuning);
     let owner = game.scene_instances().next().unwrap().0;
     assert!(game.evict_scene(owner));

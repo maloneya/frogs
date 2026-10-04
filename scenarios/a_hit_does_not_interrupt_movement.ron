@@ -1,17 +1,20 @@
+// At tick 36 Jz=-1 / player mass 20 gives vz=-.05. Each following tick
+// applies .9 velocity retention, then at most 60/60=1 m/s toward (9,0); the
+// whole change ramps in over four substeps: a tick covers (v + 5/8 change) * dt.
 (
-    description: "After taking a telegraphed swipe, the next movement tick still covers the full player walking distance and leaving reach prevents more damage.",
+    description: "After taking a telegraphed swipe, the bounded player motor immediately accelerates while its impulse carries through; leaving reach prevents more damage.",
     setup: (scenes: [(engine: (name: "Melee attacker", bodies: [
         (pos: (0.0, 1.4), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Swipe(()), Leap(()), Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Priority([Action(0), Action(1), Action(2)]))),
     ]),)]),
     inputs: [(at: 37, ticks: 60, dir: (1.0, 0.0))],
     checkpoints: [
         (at: 36, expect: (player_health: 4, player_pos: (x: 0.0, z: 0.0, tol: 0.0001))),
-        (at: 37, expect: (player_health: 4, player_pos: (x: 0.15, z: 0.0, tol: 0.0001))),
+        (at: 37, expect: (player_health: 4, player_pos: (x: 0.01041654, z: -0.00072917, tol: 0.0001))),
     ],
     budget: (ticks: 97),
     expect: (
         player_health: 4,
-        player_pos: (x: 9.0, z: 0.0, tol: 0.001),
+        player_pos: (x: 7.9578718, z: -0.00297266, tol: 0.001),
         enemy_count: 1,
         trace: "a_hit_does_not_interrupt_movement.trace",
     ),

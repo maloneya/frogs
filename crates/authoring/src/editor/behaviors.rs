@@ -53,6 +53,7 @@ pub(super) fn fields(actor: &ActorDefinition) -> Vec<Value> {
             f32::from(actor.physical.fixed()),
             1.0,
         ),
+        field("mass", "Mass", "kg", actor.physical.mass().kilograms(), 0.1),
         field(
             "character",
             "Character appearance",
@@ -215,6 +216,10 @@ pub(super) fn set(actor: &mut ActorDefinition, key: &str, value: &Number) -> Res
                 _ => return Err("Unknown actor role.".into()),
             }
         }
+        "mass" => {
+            let mass = value.as_f64().ok_or("Mass must be numeric.")? as f32;
+            actor.physical = actor.physical.with_mass(arpg_sim::Mass::try_from(mass)?);
+        }
         "fixed" | "character" | "interactable" | "health" => {
             let physical = actor.physical;
             let fixed = if key == "fixed" {
@@ -251,7 +256,7 @@ pub(super) fn set(actor: &mut ActorDefinition, key: &str, value: &Number) -> Res
             if let Some(hp) = hp {
                 next = next.with_health(hp);
             }
-            actor.physical = next;
+            actor.physical = next.with_mass(physical.mass());
         }
         "action_count" => {
             let count = integer::<usize>(value)?;

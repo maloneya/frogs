@@ -10,7 +10,9 @@ A behavior can select one action, run children in sequence, or choose the first
 admissible child by priority. A monster can prioritize swipe, leap, then pursuit.
 A civilian can sequence movement to a point, waiting, and interaction. Movement
 can yield to a higher-priority action; committed operations retain control until
-completion or cancellation. The definition owner validates references, physical
+completion or cancellation. Movement completes only after bounded braking brings
+the body to rest inside its arrival radius; a following wait starts on the next
+decision tick. The definition owner validates references, physical
 requirements, bounded composition and tuning before admission. Refusal preserves
 accepted state and queued work.
 
@@ -23,20 +25,30 @@ playtest policy of allowing player input.
 
 The [Game schedule](../crates/game/src/game.rs) applies prior interactions, admits
 births, and binds their complete definitions before decisions. Decisions observe
-the current controlled player movement and other actors' preceding positions.
+every actor at its start-of-tick position.
 Player input and autonomous actions use the same [execution lifecycle](../crates/sim/src/action_execution.rs)
 for phase timing, control ownership, completion and cancellation.
-Autonomous actions submit one bounded motor request per actor. Shared physics resolves
+Player control and autonomous actions submit one bounded motor request per actor.
+Releasing movement brakes through the motor; channeling disables the player motor
+so external momentum remains effective. Body mass is an authored physical property;
+player mass and motor acceleration are runtime tuning. Shared physics resolves
 movement, impulses, contacts and walls. Player abilities resolve before autonomous
 effects, so an actor defeated by the player cannot land a late hit. The shared
-effect boundary refuses stale or already-defeated targets; final removal produces
-one defeat. Interactions use the same reach and wall checks for every initiator.
+effect boundary refuses stale producers and targets; damage additionally refuses
+already-defeated targets, and final removal produces one defeat. Interactions use the same reach and wall checks for every initiator.
 
 [Coordination and execution](../crates/game/src/behavior/runtime.rs) are separate
 from behavior selection. Combat reservations include recovery and stagger new
 commitments. Moving, waiting and interacting do not consume combat reservations.
 Swipe commits a direction; leap commits a landing point. Leap uses ordinary ground
-physics plus a presentation arc, so walls and contacts still apply.
+physics plus a presentation arc, so walls and contacts still apply. Every contacted
+body receives the authored attack impulse once per action, including neutral and
+healthless objects. Damage still applies only to the eligible committed target.
+A committed swipe or leap continues after its selected target disappears, using
+its captured direction or landing point; a stale identity cannot receive damage.
+Defeating the producer or explicitly replacing its definition cancels its effects.
+The player's melee and beam likewise separate physical contact from health and
+hostility. Impulse strength belongs to the authored action, not the recipient's role.
 
 The native inspector and [headless API](scene-authoring.md) edit the same typed
 actions and tree. Reordering actions remaps tree references. Use a complete Actor

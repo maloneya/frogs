@@ -43,6 +43,13 @@ never writes files. A rejected batch returns no partial draft. Each intermediate
 edit must be valid; even an empty batch validates its input. Complete encounters
 and Actor definitions each have a typed replacement operation for changes that
 need several fields to become valid together.
+
+The Door placement preset creates a movable prop with a [hinged panel](physical-doors.md).
+Its returned inspector fields expose physical mass and `panel.*` tuning through
+the same edit path in both clients. Keep the returned field units: angle edits
+use degrees, while the serialized `DoorSpec.panel` stores radians. A door's
+placement is its closed centre; its hinge is derived from width and closed yaw.
+Complete scene validation admits the panel's swing before installing any state.
 A new file omits `revision`; replacing an existing file requires the revision
 returned by `open` or the previous `save`. Keep `editor.path` and `editor.revision`
 separately while editing: only `open` and `save` return disk identity. Revisions

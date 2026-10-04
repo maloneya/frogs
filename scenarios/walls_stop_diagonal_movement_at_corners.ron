@@ -1,5 +1,8 @@
-// Each wall face is 1.9 m from the origin. Radius .3 stops at 1.6 on both axes.
-// Ten diagonal steps are 1.5/sqrt(2) per axis; later steps reach the corner.
+// Each wall's centre limit is 1.6; the motor's lean is a light load held
+// rigidly inside the contact slop. Ten free motor steps (each tick's change
+// ramped over four substeps) sum to .64898 along the diagonal, .45889585 per
+// axis. Retreat west is five free steps from rest, 1.6-.19347396; Z stays at
+// the face without adhering while X travels freely along the wall.
 (
  description: "Joined rectangular walls stop both axes without preventing retreat along a face.",
  setup: (scenes: [(engine: (name: "corner", walls: [
@@ -8,9 +11,9 @@
  ]))]),
  inputs: [(at: 0, ticks: 30, dir: (1.0, 1.0)), (at: 30, ticks: 5, dir: (-1.0, 0.0))],
  checkpoints: [
-   (at: 9, expect: (player_pos: (x: 1.0606602, z: 1.0606602, tol: 0.0001))),
+   (at: 9, expect: (player_pos: (x: 0.458895846, z: 0.458895846, tol: 0.0001))),
    (at: 29, expect: (player_pos: (x: 1.6, z: 1.6, tol: 0.0001))),
  ],
  budget: (ticks: 35),
- expect: (player_pos: (x: 0.85, z: 1.6, tol: 0.0001)),
+ expect: (player_pos: (x: 1.4065260417, z: 1.6, tol: 0.0001)),
 )

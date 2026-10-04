@@ -128,6 +128,17 @@ fn scene_catalog(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>,
 }
 
 impl App {
+    /// Native and harness keys share camera controls as well as gameplay input.
+    fn on_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
+        if let Some(direction) = crate::input::zoom_key(key) {
+            if pressed && !repeat {
+                let _ = self.zoom(direction);
+            }
+            return true;
+        }
+        self.input.on_key(key, pressed, repeat)
+    }
+
     fn show_character(&mut self, path: std::path::PathBuf) -> Result<String, String> {
         let Self {
             renderer,
@@ -344,6 +355,7 @@ impl App {
         let world_assets = self.world_assets.as_mut().expect("rendering requires world assets");
         world_assets.rebuild_trees(self.game.trees());
         world_assets.rebuild_walls(self.game.visible_walls());
+        world_assets.rebuild_panels(self.game.panel_presentations(alpha));
         world_assets.rebuild(self.game.prop_presentations(alpha), |id| self.game.chest_state_for_body(id));
         world_assets.torches.rebuild(self.game.torches(), self.attack_effects.vertices());
         self.collision_debug.rebuild(&self.game);
@@ -387,7 +399,7 @@ impl App {
                 character,
                 horde,
                 overlay: self.quads.as_slice(),
-                debug_discs: self.collision_debug.drawings(),
+                debug_outlines: self.collision_debug.drawings(),
                 effects: world_assets.torches.effects(),
             },
             self.capture.path(),
@@ -520,7 +532,7 @@ impl ApplicationHandler for App {
                 };
                 let pressed = key_event.state == ElementState::Pressed;
 
-                let consumed = self.input.on_key(key, pressed, key_event.repeat);
+                let consumed = self.on_key(key, pressed, key_event.repeat);
                 if !consumed && pressed && !key_event.repeat && key == KeyCode::Escape {
                     event_loop.exit();
                 }

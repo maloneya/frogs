@@ -1,7 +1,7 @@
-// #2 sprints and #3 walks. Both initially accelerate equally. On tick 3,
-// sprinter velocity is -(1.355*.9+.5)=-1.7195, walker velocity is -1.5.
-// Equal-mass contact leaves both at -1.60975: the walker exceeds its desired
-// speed because of the physical push, and the sprinter gives up momentum.
+// Both accelerate equally through tick 2 (each tick's motor change ramps over
+// four substeps). Tick 3 requests -1.7195 and -1.5: the touching pair is rigid
+// inside the contact slop, so they share -1.60975m/s. The walker exceeds its
+// desired speed; the sprinter gives up momentum. Touching is not crowding.
 (
     description: "A faster chaser physically pushes a slower chaser instead of passing through it.",
     setup: (actions: [Place((0.0, -20.0)), Place((10.5, 0.0)), Assign(body: 1, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 4.0, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
@@ -11,10 +11,10 @@
         (nth: 2, action: Move, velocity: (x: -1.355, z: 0.0, tol: 0.00001)),
     ]))],
     budget: (ticks: 4),
-    expect: (contacts: 0, crowd_contacts: 1, bodies: [
-        (nth: 1, action: Move, pos: (x: 10.42642083, z: 0.0, tol: 0.00001),
+    expect: (contacts: 0, crowd_contacts: 0, bodies: [
+        (nth: 1, action: Move, pos: (x: 10.436481771, z: 0.0, tol: 0.00001),
             velocity: (x: -1.60975, z: 0.0, tol: 0.00001)),
-        (nth: 2, action: Move, pos: (x: 9.92642083, z: 0.0, tol: 0.00001),
+        (nth: 2, action: Move, pos: (x: 9.936481771, z: 0.0, tol: 0.00001),
             velocity: (x: -1.60975, z: 0.0, tol: 0.00001)),
     ]),
 )

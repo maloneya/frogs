@@ -11,7 +11,7 @@ pub enum PropKind {
     Prop,
     /// Fixed activation body.
     Switch,
-    /// Locked door component on a fixed body.
+    /// Physical hinged panel with a breakable latch.
     Door,
     /// Locked chest component on a fixed body.
     Chest,
@@ -41,10 +41,11 @@ pub struct EncounterDraft {
 
 pub(super) fn place(scene: &mut SceneDocument, kind: PropKind, pos: (f32, f32)) -> Target {
     let index = scene.scene.engine.bodies.len();
-    let what = if matches!(kind, PropKind::Switch) { ActorDefinition::prop().interactive() } else { ActorDefinition::prop() };
+    let mut what = if matches!(kind, PropKind::Switch) { ActorDefinition::prop().interactive() } else { ActorDefinition::prop() };
+    if matches!(kind, PropKind::Door) { what.physical = arpg_sim::Template::BODY; }
     scene.scene.engine.bodies.push(Placed { pos, what });
     match kind {
-        PropKind::Door => scene.scene.doors.push(DoorSpec { body: index }),
+        PropKind::Door => scene.scene.doors.push(DoorSpec { body: index, panel: arpg_sim::PanelConfig::default() }),
         PropKind::Chest => scene.scene.chests.push(ChestSpec { body: index }),
         PropKind::Prop | PropKind::Switch => {}
     }
@@ -61,7 +62,10 @@ pub(super) fn component(scene: &mut SceneDocument, body: usize, role: u32) -> Re
     if let Some(index) = chest { scene.scene.remove_chest(index)?; }
     if role != 0 {
         scene.scene.engine.bodies[body].what = ActorDefinition::prop();
-        if role == 1 { scene.scene.doors.push(DoorSpec { body }); }
+        if role == 1 {
+            scene.scene.engine.bodies[body].what.physical = arpg_sim::Template::BODY;
+            scene.scene.doors.push(DoorSpec { body, panel: arpg_sim::PanelConfig::default() });
+        }
         else { scene.scene.chests.push(ChestSpec { body }); }
     }
     Ok(())

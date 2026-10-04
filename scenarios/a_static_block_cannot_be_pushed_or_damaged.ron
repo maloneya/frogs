@@ -1,3 +1,5 @@
+// The motor's lean on the fixed block is a light load: the contact holds it
+// rigidly inside the half-millimetre slop, at surface contact 2-.25-.3=1.45.
 (
     description: "A prop blocks walking, ignores impulses and sword hits, and does not count as an enemy.",
     setup: (scenes: [(engine: (name: "Static block", bodies: [

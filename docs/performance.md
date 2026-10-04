@@ -29,7 +29,7 @@ remains pending until the next start.
 | `frame_ms` | Redraw-start interval |
 | `simulation_ms` | Input preparation, tick loop and per-tick effect observations |
 | `game_step_ms` | Game::step calls, summed per frame; part of simulation_ms |
-| `crowd_ms` | Grid rebuilding, candidate selection and contact response; part of game_step_ms |
+| `crowd_ms` | Grid rebuilding and contact resolution for the tick; part of game_step_ms |
 | `presentation_ms` | Camera, animation, geometry preparation and HUD |
 | `render_cpu_ms` | Surface acquisition, uploads, submission, present and capture |
 | `other_ms` | Remaining interval, including event handling and waits |
@@ -40,7 +40,8 @@ expensive ticks from catch-up. Check tick counts before interpreting zero means.
 `max_ticks_per_frame`, `zero_tick_frames` and `multi_tick_frames` expose pacing.
 
 `crowd_candidates` and `crowd_possible_pairs` sum exact tests and potential
-non-player pairs across retained ticks, including props. Raw-frame contact counts
+non-player pairs for each tick's first collision pass in retained ticks,
+including props. Their ratio measures spatial filtering. Raw-frame contact counts
 instead describe the last completed tick, even on a zero-tick frame.
 
 `presented_fps` and `ticks_per_second` use the same window duration.
@@ -156,3 +157,38 @@ behaviour/workload changes need reviewed baseline evidence, not relaxed gates.
 Scenario budgets are correctness smoke checks, not substitutes for live frame
 pacing or human judgement of combat feel. Evidence-policy tests run with the
 workspace suite or `python3 -B -m unittest discover -s scripts -p test_perf.py`.
+
+## Detailed physics investigation
+
+The opt-in headless profiler runs the ordinary `Game::step_observed` schedule.
+Clocks remain in the executable; the simulation supplies read-only phase changes
+and work counts. The ordinary benchmark and live recorder keep their existing
+coarse measurements. Use a benchmark-owned scene and a fresh artifact path:
+
+```sh
+cargo build --release -p scenario --bin perf-headless
+target/release/perf-headless benchmarks/compressed.ron 900 180 idle --profile > target/physics-profile.json
+target/release/perf-headless benchmarks/compressed.ron 900 180 idle > target/physics-plain.json
+python3 scripts/physics_profile.py target/physics-profile.json --plain target/physics-plain.json
+```
+
+`physics_profile.ticks` uses completed simulation tick numbers. `phase_ns` contains
+exclusive durations: phases sum to the crowd pass's duration, not the entire
+Game step. The remaining step time includes gameplay and instrumentation outside
+those boundaries. `totals` sums durations and work over sampled ticks. Warm-up is uninstrumented and unreported.
+No reports, hashing or profile-buffer growth occur inside the measured step.
+
+[The observer](../crates/sim/src/observe.rs) owns phase and counter definitions,
+following the [soft step](crowd-collision.md#soft-step): broadphase, crowd and
+solid contact tests, preparation, then per-substep warm start, solve, integrate
+and relax, the continuous sweep, and storing warm-start forces. Counters report
+collision passes, substeps, body and solid rows, speculative rows, swept bodies
+and latch breaks, summed over every collision pass in the tick; candidates count
+the first pass only. More
+than one collision pass means something moved fast enough to split the tick.
+
+Compare identical instrumented/plain schedules and hashes before interpreting
+instrumentation overhead. Alternate repeated trials on an otherwise idle machine;
+a single difference includes noise. These diagnostic artifacts do not replace
+suite budgets, compatible baselines, or live rendering evidence. Profiling does
+not change physics inputs or gameplay decisions.

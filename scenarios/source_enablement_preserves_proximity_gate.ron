@@ -1,8 +1,11 @@
+// Sum (v + 5/8 change)/60 with v_n=min(9,10*(1-.9^n)), each tick's change
+// ramped over four substeps: 20 steps reach 1.9607969m, 21 reach 2.1084672m.
+// The gate requires x >= 2m.
 (
-    description: "An enabled ready source still waits for proximity. Walking 0.15 m per tick first puts the player inside range before source evaluation on tick 14.",
+    description: "An enabled ready source still waits for proximity. The bounded motor first puts the player inside range on tick 20; source evaluation reads that position on tick 21.",
     setup: (sources: [(pos: (3.0, 0.0), when: PlayerWithin(1.0), enabled: false, what: (physical: (health: Some(3), character: true), role: Hostile))]),
     source_switches: [(at: 4, source: 0, enabled: true)],
-    inputs: [(at: 0, ticks: 15, dir: (1.0, 0.0))],
+    inputs: [(at: 0, ticks: 22, dir: (1.0, 0.0))],
     checkpoints: [
         (at: 3, expect: (enemy_count: 0, source_states: [
             (source: 0, state: (enabled: false, countdown: 0, emitted: 0)),
@@ -10,11 +13,11 @@
         (at: 4, expect: (enemy_count: 0, source_states: [
             (source: 0, state: (enabled: true, countdown: 0, emitted: 0)),
         ])),
-        (at: 13, expect: (enemy_count: 0, source_states: [
+        (at: 20, expect: (player_pos: (x: 2.1084672, z: 0.0, tol: 0.0001), enemy_count: 0, source_states: [
             (source: 0, state: (enabled: true, countdown: 0, emitted: 0)),
         ])),
     ],
-    budget: (ticks: 15),
+    budget: (ticks: 22),
     expect: (enemy_count: 1, source_states: [
         (source: 0, state: (enabled: true, countdown: 0, emitted: 1)),
     ]),

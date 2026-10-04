@@ -73,9 +73,9 @@ Bodies are keyed by stable ID, with position, physical velocity and inverse mass
 events mean history was truncated. Verify that new reported fields reflect the
 owner rather than assuming storage automatically makes them visible.
 
-Predict from current owning constants. An open-ground walk covers speed × fixed
-tick duration per tick; wall-clock `hold` does not guarantee a tick count, and
-contacts/momentum can change the result. Use [scenarios](../scenario/SKILL.md)
+Predict from current owning constants. Movement accelerates toward its requested
+speed through the shared bounded motor; contact forces and carried momentum
+affect displacement. Wall-clock `hold` does not guarantee a tick count. Use [scenarios](../scenario/SKILL.md)
 for exact timing and assertions. Keep measured behaviour separate from feel.
 
 ## Capture and performance

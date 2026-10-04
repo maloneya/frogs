@@ -14,7 +14,7 @@ pub const MAX_BEHAVIOR_DEPTH: usize = 8;
 /// Gameplay classification, independent of physical movement and health.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ActorRole {
-    /// Counts towards hostile population gates and is eligible for player attacks.
+    /// Counts towards hostile population gates and is eligible for player attack damage.
     Hostile,
     /// A character that does not count as a hostile or acquire hostility implicitly.
     #[default]
@@ -112,6 +112,8 @@ pub struct SwipeAction {
     pub radius: f32,
     /// Positive damage submitted at most once to the committed target.
     pub damage: NonZeroU8,
+    /// Momentum delivered to each contacted body, independent of health or allegiance.
+    pub impulse: f32,
 }
 impl Default for SwipeAction {
     fn default() -> Self {
@@ -126,6 +128,7 @@ impl Default for SwipeAction {
             offset: 0.75,
             radius: 0.65,
             damage: NonZeroU8::new(1).expect("positive damage"),
+            impulse: 1.0,
         }
     }
 }
@@ -152,6 +155,8 @@ pub struct LeapAction {
     pub acceleration: f32,
     /// Positive landing damage.
     pub damage: NonZeroU8,
+    /// Momentum delivered to each contacted body, independent of health or allegiance.
+    pub impulse: f32,
 }
 impl Default for LeapAction {
     fn default() -> Self {
@@ -169,6 +174,7 @@ impl Default for LeapAction {
             speed: 18.0,
             acceleration: 120.0,
             damage: NonZeroU8::new(1).expect("positive damage"),
+            impulse: 1.0,
         }
     }
 }
@@ -339,7 +345,7 @@ impl ActorDefinition {
                     if settings.target == TargetSelection::NearestInteraction {
                         return Err("a combat action requires a combat target");
                     }
-                    if !settings.timing.valid()
+                    if !valid_impulse(settings.impulse) || !settings.timing.valid()
                         || !positive(settings.reach, 64.0)
                         || !nonnegative(settings.offset, 64.0)
                         || !positive(settings.radius, 64.0)
@@ -359,7 +365,7 @@ impl ActorDefinition {
                         glam::Vec2::X * settings.speed,
                         settings.acceleration,
                     )?;
-                    if !settings.timing.valid()
+                    if !valid_impulse(settings.impulse) || !settings.timing.valid()
                         || !nonnegative(settings.min_range, 64.0)
                         || !positive(settings.max_range, 64.0)
                         || settings.min_range > settings.max_range
@@ -532,6 +538,7 @@ impl ActionDefinition {
                 out.num("offset", settings.offset);
                 out.num("radius", settings.radius);
                 out.int("damage", u64::from(settings.damage.get()));
+                out.num("impulse", settings.impulse);
             }
             Self::Leap(settings) => {
                 out.text("kind", "leap");
@@ -544,6 +551,7 @@ impl ActionDefinition {
                 out.num("speed", settings.speed);
                 out.num("acceleration", settings.acceleration);
                 out.int("damage", u64::from(settings.damage.get()));
+                out.num("impulse", settings.impulse);
             }
         }
     }
@@ -582,6 +590,7 @@ impl ActionDefinition {
                 out.f32(s.offset);
                 out.f32(s.radius);
                 out.usize(usize::from(s.damage.get()));
+                out.f32(s.impulse);
             }
             Self::Leap(s) => {
                 out.usize(4);
@@ -594,6 +603,7 @@ impl ActionDefinition {
                 out.f32(s.speed);
                 out.f32(s.acceleration);
                 out.usize(usize::from(s.damage.get()));
+                out.f32(s.impulse);
             }
         }
     }
@@ -613,4 +623,9 @@ impl ActionTiming {
         out.int("active", u64::from(self.active));
         out.int("recovery", u64::from(self.recovery));
     }
+}
+
+/// Reuse impulse admission without introducing a gameplay-specific magnitude cap.
+fn valid_impulse(magnitude: f32) -> bool {
+    magnitude >= 0.0 && arpg_sim::Impulse::try_from((magnitude, 0.0)).is_ok()
 }

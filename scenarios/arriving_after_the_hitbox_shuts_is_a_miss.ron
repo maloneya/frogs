@@ -1,11 +1,12 @@
 // Slam closes at 14. Final reach is 1.6+2.6+.25-.001=4.449m.
-// With bounded motor acceleration, a seeker at 4.96m is at 4.478086 after
-// tick 13, then 4.436419 after tick 14: inside reach only after shutdown.
+// With bounded motor acceleration (each tick's change ramped over four
+// substeps), a seeker at 4.95m is at 4.483711 after tick 13, then 4.442044
+// after tick 14: inside reach only after shutdown.
 (
     description: "A chaser that comes into range on the tick the hitbox shuts is not hit.",
     setup: (
         actions: [
-            Place((0.0, 4.96)),
+            Place((0.0, 4.95)),
             Assign(body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))),
         ],
     ),
@@ -14,9 +15,9 @@
     attacks: [0],
     checkpoints: [
         (at: 13, expect: (attack_phase: Active, struck: 0,
-            bodies: [(nth: 0, health: 3, pos: (x: 0.0, z: 4.478086, tol: 0.00001))])),
+            bodies: [(nth: 0, health: 3, pos: (x: 0.0, z: 4.483711, tol: 0.00001))])),
         (at: 14, expect: (attack_phase: Recovery, struck: 0,
-            bodies: [(nth: 0, health: 3, pos: (x: 0.0, z: 4.436419, tol: 0.00001))])),
+            bodies: [(nth: 0, health: 3, pos: (x: 0.0, z: 4.442044, tol: 0.00001))])),
     ],
     budget: (ticks: 30),
     expect: (

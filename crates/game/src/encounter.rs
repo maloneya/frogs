@@ -42,7 +42,7 @@ pub enum EncounterObjective {
 /// Typed effects. Targets are scene-local door or chest indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum EncounterAction {
-    /// Unlock a gameplay door; opening still needs a fresh interaction.
+    /// Release a physical door latch; contact forces determine subsequent motion.
     UnlockDoor(usize),
     /// Unlock a chest; a fresh interaction opens its lid.
     UnlockChest(usize),
@@ -119,7 +119,8 @@ pub enum EncounterEvent {
         /// New chest state.
         state: crate::ChestState,
     },
-    /// Door changed state.
+    /// An encounter changed a door's latch. Physical breaches are engine
+    /// transitions, traced as `arpg_sim::Event::LatchBroken`.
     Door {
         /// Owning scene.
         scene: SceneId,
@@ -385,7 +386,7 @@ impl Encounters {
 fn effects(
     owner: SceneId,
     actions: &[EncounterAction],
-    doors: &mut Doors,
+    doors: &Doors,
     chests: &mut Chests,
     access: &mut GameplayAccess<'_>,
     trace: &mut TraceSink<'_, EncounterEvent>,
@@ -407,7 +408,7 @@ fn stop(row: &Encounter, access: &mut GameplayAccess<'_>) {
 /// before any effects, and stop surviving sources if a live encounter is orphaned.
 pub(crate) fn begin(
     encounters: &mut Encounters,
-    doors: &mut Doors,
+    doors: &Doors,
     chests: &mut Chests,
     access: &mut GameplayAccess<'_>,
     trace: &mut TraceSink<'_, EncounterEvent>,
@@ -460,7 +461,7 @@ pub(crate) fn begin(
 /// Spend one tick, then prefer success over timeout on the final allowed tick.
 pub(crate) fn finish(
     encounters: &mut Encounters,
-    doors: &mut Doors,
+    doors: &Doors,
     chests: &mut Chests,
     defeats: &[Defeat],
     access: &mut GameplayAccess<'_>,

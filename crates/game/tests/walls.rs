@@ -2,7 +2,7 @@
 use arpg_game::{Scene, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene};
-use arpg_sim::{Accumulator, AttackProfile, Beam, Dt, Impulse, MAX_WALLS, Wall};
+use arpg_sim::{Accumulator, AttackProfile, Beam, Dt, ENEMY_RADIUS, Impulse, MAX_WALLS, PLAYER_RADIUS, Wall};
 use glam::{Vec2, Vec3};
 
 fn wall(centre: Vec2, size: Vec2, yaw: f32) -> Wall {
@@ -103,10 +103,13 @@ fn rotated_face_and_joined_corner_stop_walk_and_leave_tangent_free() {
     for _ in 0..30 {
         step(&mut game, Vec3::new(1.0, 0.0, 1.0), Vec3::Z, false, false);
     }
+    // The motor's 60N lean on the face is a light load: the contact holds it
+    // rigidly within the half-millimetre slop, at the rotated face.
     let expected = 1.0 - 0.4 / 2.0_f32.sqrt();
     assert!(
+        game.player_pos().abs_diff_eq(Vec3::new(expected, 0.6, expected), 0.0005),
+        "{:?} vs {expected}",
         game.player_pos()
-            .abs_diff_eq(Vec3::new(expected, 0.6, expected), 0.0001)
     );
     let mut game = Game::from_scene(&scene(vec![
         wall(Vec2::new(0.0, 2.0), Vec2::new(8.0, 0.2), 0.0),
@@ -116,15 +119,22 @@ fn rotated_face_and_joined_corner_stop_walk_and_leave_tangent_free() {
     for _ in 0..40 {
         step(&mut game, Vec3::new(1.0, 0.0, 1.0), Vec3::Z, false, false);
     }
+    let resting = 1.6;
     assert!(
+        game.player_pos().abs_diff_eq(Vec3::new(resting, 0.6, resting), 0.0005),
+        "{:?} vs {resting}",
         game.player_pos()
-            .abs_diff_eq(Vec3::new(1.6, 0.6, 1.6), 0.0001)
     );
+    // Moving west leaves the X face freely and slides along Z without adhering.
+    let mut previous = game.player_pos();
     for _ in 0..5 {
         step(&mut game, -Vec3::X, Vec3::Z, false, false);
+        let current = game.player_pos();
+        assert!(current.x < previous.x, "the motor leaves the face");
+        assert!(current.z <= previous.z + 1e-6, "the released face must not pull");
+        previous = current;
     }
-    assert!((game.player_pos().x - 0.85).abs() < 0.0001);
-    assert!((game.player_pos().z - 1.6).abs() < 0.0001);
+    assert!(game.player_pos().z <= 1.6 + 1e-6, "the released face must not adhere");
 }
 
 #[test]
@@ -138,11 +148,15 @@ fn crowd_correction_cannot_push_a_body_through_a_wall() {
     let front = game.place(Vec2::new(0.0, 1.74), ActorDefinition::passive_hostile()).unwrap();
     let rear = game.place(Vec2::new(0.0, 1.3), ActorDefinition::passive_hostile()).unwrap();
     assert!(game.apply_impulse(rear, Impulse::try_from((0.0, 20.0)).unwrap()));
+    // Soft contacts may compress by millimetres, never through the thin wall's
+    // near face at 2 - .01/2, even under the incoming crowd impulse.
+    let enemy_limit = 1.995 - ENEMY_RADIUS + 0.01;
+    let player_limit = 1.995 - PLAYER_RADIUS + 0.01;
     for _ in 0..20 {
         step(&mut game, Vec3::Z, Vec3::Z, false, false);
-        assert!(game.body_pos(front).unwrap().z <= 1.7451);
-        assert!(game.body_pos(rear).unwrap().z <= 1.7451);
-        assert!(game.player_pos().z <= 1.6951);
+        assert!(game.body_pos(front).unwrap().z <= enemy_limit + 0.0001);
+        assert!(game.body_pos(rear).unwrap().z <= enemy_limit + 0.0001);
+        assert!(game.player_pos().z <= player_limit + 0.0001);
     }
 }
 
@@ -235,10 +249,15 @@ fn seeker_crowd_cannot_cross_the_face_while_compressing() {
         .scene_bodies(game.walls().next().unwrap().0)
         .unwrap()
         .to_vec();
-    for _ in 0..360 {
+    // A 32-deep crowd leans on its front rank; the wall's stiffer static
+    // contact holds that load within a few centimetres of its face.
+    let far_face_limit = 2.2 + ENEMY_RADIUS - 0.05;
+    for tick in 0..360 {
         step(&mut game, Vec3::ZERO, Vec3::Z, false, false);
         for &id in &ids {
-            assert!(game.body_pos(id).unwrap().z >= 2.4499);
+            let position = game.body_pos(id).unwrap();
+            assert!(position.z >= far_face_limit - 0.0001,
+                "tick {tick}, {id}: {position:?} crosses the compression limit {far_face_limit}");
         }
     }
 }
@@ -272,10 +291,13 @@ fn wall_recovery_at_an_arena_edge_chooses_an_in_bounds_exit() {
         0.0,
     )]))
     .unwrap();
-    step(&mut game, Vec3::ZERO, Vec3::Z, false, false);
-    // The nearer +X face would eject the body beyond x=96. Choose -X.
-    assert!((game.body_pos(body).unwrap().x - 93.75).abs() < 0.0001);
-    assert!(game.body_pos(body).unwrap().x <= arpg_sim::ARENA_HALF - 0.25);
+    // The nearer +X face would eject the body beyond x=96. It leaves by -X,
+    // at no more than the overlap push speed, and comes to rest outside.
+    for _ in 0..60 {
+        step(&mut game, Vec3::ZERO, Vec3::Z, false, false);
+        assert!(game.body_pos(body).unwrap().x <= arpg_sim::ARENA_HALF - 0.25);
+    }
+    assert!((game.body_pos(body).unwrap().x - 93.75).abs() < 0.001);
 }
 
 #[test]
@@ -297,14 +319,14 @@ fn read_only_wall_segments_share_nearest_geometry_validation_and_scene_lifetime(
         .unwrap();
     let before = game.hash();
     let hit = game
-        .wall_hit(Vec2::ZERO, Vec2::new(0.0, 6.0))
+        .solid_hit(Vec2::ZERO, Vec2::new(0.0, 6.0))
         .unwrap()
         .unwrap();
     assert!(hit.point().abs_diff_eq(Vec2::new(0.0, 1.9), 0.00001));
     assert!(hit.normal().abs_diff_eq(Vec2::NEG_Y, 0.00001));
     assert!((hit.fraction() - 1.9 / 6.0).abs() < 0.00001);
     let inside = game
-        .wall_hit(Vec2::new(0.0, 2.0), Vec2::new(0.0, 6.0))
+        .solid_hit(Vec2::new(0.0, 2.0), Vec2::new(0.0, 6.0))
         .unwrap()
         .unwrap();
     assert_eq!(inside.fraction(), 0.0);
@@ -314,8 +336,8 @@ fn read_only_wall_segments_share_nearest_geometry_validation_and_scene_lifetime(
         Vec2::splat(f32::INFINITY),
         Vec2::splat(f32::MAX),
     ] {
-        assert!(game.wall_hit(invalid, Vec2::ZERO).is_err());
-        assert!(game.wall_hit(Vec2::ZERO, invalid).is_err());
+        assert!(game.solid_hit(invalid, Vec2::ZERO).is_err());
+        assert!(game.solid_hit(Vec2::ZERO, invalid).is_err());
     }
     assert_eq!(
         game.hash(),
@@ -325,7 +347,7 @@ fn read_only_wall_segments_share_nearest_geometry_validation_and_scene_lifetime(
     assert!(game.evict_scene(near));
     assert!(
         (game
-            .wall_hit(Vec2::ZERO, Vec2::new(0.0, 6.0))
+            .solid_hit(Vec2::ZERO, Vec2::new(0.0, 6.0))
             .unwrap()
             .unwrap()
             .point()
@@ -336,7 +358,7 @@ fn read_only_wall_segments_share_nearest_geometry_validation_and_scene_lifetime(
     );
     assert!(game.evict_scene(far));
     assert!(
-        game.wall_hit(Vec2::ZERO, Vec2::new(0.0, 6.0))
+        game.solid_hit(Vec2::ZERO, Vec2::new(0.0, 6.0))
             .unwrap()
             .is_none()
     );

@@ -1,4 +1,4 @@
-# Static props and interaction
+# Props and interaction
 
 In Scenes, open `soul_trial.ron` and **Save & play**. Press E beside the blue
 block: it turns green once and starts the [encounter](encounters.md).
@@ -8,22 +8,26 @@ collision independent of its visible mesh.
 A scene body can grant interaction independently of fixed physics:
 
 ```ron
-(pos: (0.0, 2.0), what: (fixed: true, interactable: true))
+(pos: (0.0, 2.0), what: (physical: (fixed: true, interactable: true), role: Prop))
 ```
 
-Fixed props have zero inverse mass, no health, and cannot seek. A movable enemy
-can also be interactable. Props share body capacity but are excluded from enemy
-counts and source population gates.
+Fixed bodies have zero inverse mass and cannot use movement actions. Health,
+interaction and gameplay role are independent capabilities; movable actors can
+also be interactable. Props share body capacity but are excluded from hostile
+population counts and source population gates.
 
 E activates the nearest Ready object in range after movement and collisions.
-Ties prefer the lower stable entity slot; facing is irrelevant. See
+Static walls and [physical door panels](physical-doors.md) block interaction
+through their current geometry. Releasing a door's latch does not clear that
+obstruction; moving the panel aside does. A panel does not obstruct interaction
+with its own endpoint. Ties prefer the lower stable entity slot; facing is irrelevant. See
 [the interaction owner](../crates/sim/src/pass/interact.rs) for reach and selection.
 
 The harness uses the same templates:
 
 ```text
-spawn (pos: (0.0, 2.0), what: (fixed: true, interactable: true))
-source (pos: (4.0, 0.0), every: 120, what: (fixed: true, interactable: true))
+spawn (pos: (0.0, 2.0), what: (physical: (fixed: true, interactable: true), role: Prop))
+source (pos: (4.0, 0.0), every: 120, what: (physical: (fixed: true, interactable: true), role: Prop))
 tap e
 ```
 

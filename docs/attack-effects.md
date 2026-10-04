@@ -30,7 +30,9 @@ finish first; selecting melee ends the channel on the next tick.
 
 The rendered beam starts at the sampled `BeamOrigin` sword-tip joint. Damage
 uses the player-centred capsule, independently of animation. It pierces enemies
-until a wall, pulses damage, and applies a forward impulse on each touching tick.
+until a wall or physical panel, pulses eligible damage, and applies a forward
+impulse to each unshielded contacted body on every touching tick, independently
+of its health or allegiance.
 Release resets cadence. [Beam](../crates/sim/src/beam.rs) owns reach, width and timing.
 There is no resource cost or damage ramp.
 
@@ -39,9 +41,10 @@ clock and completed-tick `hit_positions`, including lethal hits. Melee-only
 `attack_discs` and collision outlines do not describe the beam capsule.
 Scenarios hold channels with `channels: [(at: 0, ticks: 24)]` (half-open interval).
 
-Presentation uses the [wall-clipped](walls.md#attacks) completed-tick pose. Its
-sword-to-beam path is checked against walls separately, so animation cannot draw
-through an obstruction missed by the damage ray. Release removes the beam
+Presentation uses the [solid-clipped](walls.md#attacks) completed-tick pose. Its
+sword-to-beam path uses `Game::solid_hit` against walls and current panels, sharing
+the beam's nearest-hit geometry so animation cannot draw through an obstruction
+missed by the damage ray. Release removes the beam
 immediately; pose easing and short-lived hit sparks are visual only.
 `state.character_preview.channel_weight` reports the actual overlay during
 entry and release. Visual durations and geometry stay with their app owners.
@@ -53,7 +56,9 @@ for a 0.6-second windup, then snaps forward for a short directional swipe.
 An amber disc fills toward impact; red marks the active damage window.
 The direction commits at windup, so sidestepping can avoid it. Each swipe can
 remove only one health, followed by 0.65 seconds of recovery before pursuit
-resumes. Physical knockback still moves the attacker and walls block damage.
+resumes. Each contacted body also receives its authored physical impulse,
+including neutral and healthless objects. Physical knockback still moves the
+attacker, and walls or panels can shield targets.
 The marker uses the strike radius; the player's collision radius also counts
 for overlap. The animation reuses the bounded crowd poses with an instance tilt.
 

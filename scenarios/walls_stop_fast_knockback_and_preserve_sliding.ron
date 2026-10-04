@@ -1,5 +1,7 @@
-// Enemy velocity (6,300) would cross the 1 cm wall in one tick.
-// Stop at its near face 1.995 minus radius .25; retain tangential x velocity.
+// Enemy velocity (6,300) would cross the 1 cm wall in one tick; even eight
+// collision passes leave it beyond speculative reach. The continuous sweep
+// stops it at the face, centre 1.995-.25=1.745; the next pass's contact then
+// removes v_z rigidly (no restitution). X integrates freely both ticks.
 (
  description: "A thin rectangle stops a fast impulse and preserves sideways momentum.",
  setup: (scenes: [(engine: (name: "thin wall",

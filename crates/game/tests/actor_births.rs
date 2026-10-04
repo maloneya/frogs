@@ -111,6 +111,21 @@ fn simultaneous_lethal_effects_produce_one_defeat_and_no_second_hit() {
     assert_eq!(game.defeats()[0].body, target);
     assert!(!game.is_alive(target));
     assert_eq!(game.enemy_count(), 0);
+    // The first commitment starts at 0 with 20 startup ticks; the second
+    // starts at 12 with eight. Both retain nine active and 39 recovery ticks
+    // after losing their target, completing together at tick 68.
+    for tick in 21..68 {
+        step(&mut game);
+        assert!(game.defeats().is_empty());
+        for actor in [first, second] {
+            assert_eq!(game.action_status(actor).unwrap().kind, ActionKind::Swipe,
+                "committed swing ended before tick 68, at {tick}");
+        }
+    }
+    step(&mut game);
+    assert!(game.defeats().is_empty());
+    assert_eq!(game.action_status(first).unwrap().kind, ActionKind::Idle);
+    assert_eq!(game.action_status(second).unwrap().kind, ActionKind::Idle);
     let hits: Vec<_> = game
         .trace()
         .iter()
@@ -124,11 +139,6 @@ fn simultaneous_lethal_effects_produce_one_defeat_and_no_second_hit() {
         })
         .collect();
     assert_eq!(hits, [(20, first, 0)]);
-    assert!(game.action_status(second).is_some());
-    step(&mut game);
-    assert!(game.defeats().is_empty());
-    assert_eq!(game.action_status(first).unwrap().kind, ActionKind::Idle);
-    assert_eq!(game.action_status(second).unwrap().kind, ActionKind::Idle);
 }
 
 fn report(game: &Game) -> String {

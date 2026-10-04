@@ -41,7 +41,7 @@ struct EncounterEditor: View {
                     rewardChoices("On start", actions: $form.onStart)
                     rewardChoices("On success", actions: $form.onSuccess)
                     rewardChoices("On timeout", actions: $form.onFailure)
-                    Text("Terminal outcomes stop these sources; spawned enemies remain. Unlocking a door or chest still requires a fresh interaction to open it.")
+                    Text("Terminal outcomes stop these sources; spawned enemies remain. Door rewards release the physical latch; chest rewards enable interaction.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.disabled(!model.canAuthor)
             }

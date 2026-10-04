@@ -107,6 +107,7 @@ struct SceneObject: Decodable, Identifiable, Sendable {
     let yaw: Double
     let radius: Double
     let fields: [SceneField]
+    var rectangular: Bool { kind == "wall" || kind == "tree" || role == "Door" }
     var target: JSONValue { .object(["kind": .string(kind), "index": .number(Double(index))]) }
     func value(_ field: String) -> Double { fields.first { $0.key == field }?.value ?? 0 }
 }
@@ -211,7 +212,7 @@ struct SceneViewport {
     func hit(_ objects: [SceneObject], x: Double, z: Double, tolerance: Double) -> SceneObject? {
         objects.reversed().first { o in
             let dx = x - o.x, dz = z - o.z
-            if o.kind == "wall" || o.kind == "tree" {
+            if o.rectangular {
                 let localX = dx * cos(o.yaw) - dz * sin(o.yaw)
                 let localZ = dx * sin(o.yaw) + dz * cos(o.yaw)
                 return abs(localX) <= o.width / 2 + tolerance && abs(localZ) <= o.depth / 2 + tolerance

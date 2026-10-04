@@ -102,15 +102,15 @@ impl App {
                     Err(error) => error.into(),
                 },
                 Command::Press(key) => {
-                    self.input.on_key(key, true, false);
+                    self.on_key(key, true, false);
                     "ok".to_string()
                 }
                 Command::Release(key) => {
-                    self.input.on_key(key, false, false);
+                    self.on_key(key, false, false);
                     "ok".to_string()
                 }
                 Command::Tap(key) => {
-                    self.input.on_key(key, true, false);
+                    self.on_key(key, true, false);
                     self.scheduled.push(Deferred {
                         due: now,
                         release: Some(key),
@@ -296,7 +296,7 @@ impl App {
             r.int("effect_vertices", effect_vertices as u64);
             r.int("effect_draws", u64::from(effect_vertices > 0));
             r.int(
-                "debug_disc_instances",
+                "debug_outline_instances",
                 self.collision_debug.drawings().len() as u64,
             );
             r.int(
@@ -364,7 +364,7 @@ impl App {
             return;
         };
         if let Some(key) = key {
-            self.input.on_key(key, true, false);
+            self.on_key(key, true, false);
         }
         self.scheduled.push(Deferred {
             due,

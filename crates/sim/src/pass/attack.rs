@@ -6,13 +6,11 @@ use super::health::DamageSink;
 use super::motion::{Impulse, ImpulseSink};
 use glam::Vec2;
 
-use crate::contact;
-
 use crate::swing::{Disc, Hitbox, Swing};
 use crate::trace::{Event, TraceSink};
 use crate::{
-    ActionControls, ActionExecution, ActionSchedule, Interruption,
-    AttackPhase, AttackProfile, AttackStatus, ENEMY_RADIUS, EntityId, RecoveryTicks, ResolvedAttack,
+    ActionControls, ActionExecution, ActionSchedule, AttackPhase, AttackProfile, AttackStatus,
+    ENEMY_RADIUS, EntityId, Interruption, RecoveryTicks, ResolvedAttack,
 };
 
 /// Maximum stored discs: one per tick of the longest accepted active window.
@@ -43,10 +41,11 @@ impl InFlight {
             (AttackPhase::Startup, _, _) => Phase::Startup,
             (AttackPhase::Active, sample, _) => Phase::Active(sample as usize),
             (AttackPhase::Recovery, _, _) => Phase::Recovery,
-            (AttackPhase::Idle, _, _) => unreachable!("retired swings are removed before observation"),
+            (AttackPhase::Idle, _, _) => {
+                unreachable!("retired swings are removed before observation")
+            }
         }
     }
-
 }
 
 /// Where the swing has got to.
@@ -64,7 +63,7 @@ pub(crate) struct Attack {
     resolved: Option<ResolvedAttack>,
     /// Tick within the beam damage cadence; no body identities are retained.
     channel: Option<Channel>,
-    /// Targets already hit, preventing repeated damage across active ticks.
+    /// Bodies already struck, preventing repeated physical impacts across active ticks.
     struck: Vec<EntityId>,
     /// Damage positions from this completed tick, including defeated targets.
     beam_hits: Vec<Vec2>,
@@ -78,7 +77,11 @@ struct Channel {
 impl Channel {
     fn new() -> Self {
         Self {
-            execution: ActionExecution::new(ActionSchedule::Open, ActionControls::Movement, Interruption::Interruptible),
+            execution: ActionExecution::new(
+                ActionSchedule::Open,
+                ActionControls::Movement,
+                Interruption::Interruptible,
+            ),
             cadence: 0,
         }
     }
@@ -110,17 +113,21 @@ impl Attack {
     }
 
     pub(crate) fn beam(&self, origin: Vec2, facing: f32) -> Option<crate::Beam> {
-        self.channel.as_ref().map(|_| crate::Beam::new(origin, facing))
+        self.channel
+            .as_ref()
+            .map(|_| crate::Beam::new(origin, facing))
     }
 
-    pub(crate) fn beam_hits(&self) -> &[Vec2] { &self.beam_hits }
+    pub(crate) fn beam_hits(&self) -> &[Vec2] {
+        &self.beam_hits
+    }
 
     /// Whether the current swing still owns facing on the upcoming tick.
     /// Retirement happens before new input, matching the attack pass below.
     pub(crate) fn holds_facing(&self) -> bool {
-        self.swing.as_ref().is_some_and(|swing| {
-            swing.execution.holds_next_tick(ActionControls::Facing)
-        })
+        self.swing
+            .as_ref()
+            .is_some_and(|swing| swing.execution.holds_next_tick(ActionControls::Facing))
     }
 
     /// Whether a swing is in progress.
@@ -131,7 +138,14 @@ impl Attack {
 
     /// A fresh observation, never a second maintained copy of attack state.
     pub(crate) fn status(&self) -> AttackStatus {
-        let Self { swing, profile, resolved, channel, struck, beam_hits: _ } = self;
+        let Self {
+            swing,
+            profile,
+            resolved,
+            channel,
+            struck,
+            beam_hits: _,
+        } = self;
         let phase = match swing.as_ref().map(InFlight::phase) {
             None if channel.is_some() => AttackPhase::Active,
             None => AttackPhase::Idle,
@@ -140,7 +154,10 @@ impl Attack {
             Some(Phase::Recovery) => AttackPhase::Recovery,
         };
         AttackStatus {
-            execution: swing.as_ref().map(|s| s.execution).or_else(|| channel.as_ref().map(|c| c.execution)),
+            execution: swing
+                .as_ref()
+                .map(|s| s.execution)
+                .or_else(|| channel.as_ref().map(|c| c.execution)),
             phase,
             channeling: channel.is_some(),
             channel_tick: channel.as_ref().map(|channel| channel.cadence),
@@ -156,7 +173,11 @@ impl Attack {
     }
 
     /// Observe the stored path during startup, or the exact live sample during active.
-    pub(crate) fn debug_discs(&self, origin: Vec2, facing: f32) -> impl Iterator<Item = crate::AttackDisc> + '_ {
+    pub(crate) fn debug_discs(
+        &self,
+        origin: Vec2,
+        facing: f32,
+    ) -> impl Iterator<Item = crate::AttackDisc> + '_ {
         let (discs, first) = match self.swing.as_ref() {
             Some(swing) => match swing.phase() {
                 Phase::Startup => (swing.hitbox.discs(), 0),
@@ -187,7 +208,9 @@ impl Attack {
     }
 
     pub(crate) fn set_recovery(&mut self, recovery: RecoveryTicks) -> bool {
-        let Some(resolved) = self.resolved else { return false };
+        let Some(resolved) = self.resolved else {
+            return false;
+        };
         let changed = resolved.recovery() != recovery;
         self.resolved = Some(resolved.with_recovery(recovery));
         changed
@@ -195,7 +218,11 @@ impl Attack {
 
     /// Whether the hitbox exists right now.
     pub(crate) fn hitbox_is_live(&self) -> bool {
-        self.channel.is_some() || matches!(self.swing.as_ref().map(InFlight::phase), Some(Phase::Active(_)))
+        self.channel.is_some()
+            || matches!(
+                self.swing.as_ref().map(InFlight::phase),
+                Some(Phase::Active(_))
+            )
     }
 
     /// How many bodies the current or most recent swing struck.
@@ -205,9 +232,18 @@ impl Attack {
 
     /// Feeds the swing into the world hash. Exhaustive, as every hash here is.
     pub(crate) fn hash(&self, h: &mut crate::hash::Fnv) {
-        let Self { swing, profile, resolved, channel, struck, beam_hits } = self;
+        let Self {
+            swing,
+            profile,
+            resolved,
+            channel,
+            struck,
+            beam_hits,
+        } = self;
         h.usize(*profile as usize);
-        if let Some(resolved) = resolved { resolved.hash(h); }
+        if let Some(resolved) = resolved {
+            resolved.hash(h);
+        }
         h.usize(usize::from(channel.is_some()));
         if let Some(Channel { execution, cadence }) = channel {
             execution.hash_into(h);
@@ -217,7 +253,13 @@ impl Attack {
         // `None` and "tick 0 of a swing" are different states and must hash
         // differently, so the discriminant goes in as well as the value.
         h.usize(usize::from(swing.is_some()));
-        if let Some(InFlight { execution, profile, resolved, hitbox }) = swing {
+        if let Some(InFlight {
+            execution,
+            profile,
+            resolved,
+            hitbox,
+        }) = swing
+        {
             execution.hash_into(h);
             h.usize(*profile as usize);
             resolved.hash(h);
@@ -225,7 +267,10 @@ impl Attack {
         }
 
         h.usize(beam_hits.len());
-        for point in beam_hits { h.f32(point.x); h.f32(point.y); }
+        for point in beam_hits {
+            h.f32(point.x);
+            h.f32(point.y);
+        }
         h.usize(struck.len());
         for id in struck {
             id.hash_into(h);
@@ -300,11 +345,25 @@ pub(crate) fn attack(
             0
         };
         state.struck.clear();
-        super::beam::strike(pose.actor, crate::Beam::new(pose.pos, pose.facing).clipped(walls),
-            cadence == 0, bodies, pos, walls, &mut damage, &mut impulses, &mut state.beam_hits, &mut trace);
+        let beam = impulses.clip_beam(crate::Beam::new(pose.pos, pose.facing), walls);
+        super::beam::strike(
+            pose.actor,
+            beam,
+            cadence == 0,
+            bodies,
+            pos,
+            walls,
+            &mut damage,
+            &mut impulses,
+            &mut state.beam_hits,
+            &mut trace,
+        );
         return;
     }
-    if state.swing.is_none() && input.attack() && let Some(resolved) = state.resolved {
+    if state.swing.is_none()
+        && input.attack()
+        && let Some(resolved) = state.resolved
+    {
         let profile = state.profile;
         let path = Swing::new(
             resolved.start(),
@@ -313,8 +372,12 @@ pub(crate) fn attack(
         );
         state.swing = Some(InFlight {
             execution: ActionExecution::new(
-                ActionSchedule::timed(resolved.startup(), resolved.active(), resolved.recovery().get())
-                    .expect("resolved attack has validated timing"),
+                ActionSchedule::timed(
+                    resolved.startup(),
+                    resolved.active(),
+                    resolved.recovery().get(),
+                )
+                .expect("resolved attack has validated timing"),
                 ActionControls::Facing,
                 Interruption::Committed,
             ),
@@ -391,28 +454,27 @@ fn strike(
 ) {
     // Place the committed disc using the current authoritative facing.
     let (centre, radius) = disc.place(pose.pos, pose.facing);
-    let contact_distance = radius + ENEMY_RADIUS;
 
-    // **Cheapest test first.** The distance check rejects almost every body in a
-    // handful of instructions; the two checks that were above it — a load from
-    // a second array, and a linear scan of what this swing has already hit —
-    // then run only for the few that are actually in reach. Measured at 16384
-    // bodies: 53µs a tick to 4µs.
     for (row, body) in pos.iter().enumerate() {
-        if contact::between(centre, *body, contact_distance, row).is_none() {
-            continue;
-        }
-
         let id = bodies[row];
+        let Some(point) = impulses.disc_contact(id, *body, ENEMY_RADIUS, centre, radius) else {
+            continue;
+        };
         if id == pose.actor || struck.contains(&id) {
             continue;
         }
-
-        if walls.obstructs(pose.pos, *body) { continue; }
-        let Some(remaining) = damage.hit(id, hit_damage) else { continue };
+        if impulses.obstructs(walls, pose.pos, point, Some(id)) {
+            continue;
+        }
         struck.push(id);
-        trace.emit(Event::Hit { id, remaining });
-        trace.emit(Event::Damaged { actor: pose.actor, target: id, remaining });
+        if let Some(remaining) = damage.hit(id, hit_damage) {
+            trace.emit(Event::Hit { id, remaining });
+            trace.emit(Event::Damaged {
+                actor: pose.actor,
+                target: id,
+                remaining,
+            });
+        }
         // Normalization preserves equal strength at every angle and distance.
         // Coincident centres use a fixed axis, independent of player facing.
         let direction = if radial {
@@ -420,8 +482,9 @@ fn strike(
         } else {
             Vec2::new(pose.facing.sin(), pose.facing.cos())
         } * knockback;
-        impulses.push(
+        impulses.push_at(
             id,
+            point,
             Impulse::try_from((direction.x, direction.y)).expect("finite facing and tuning"),
             trace,
         );
@@ -450,7 +513,11 @@ mod tests {
         assert_ne!(first, hash(&state));
         let before_hits = hash(&state);
         state.beam_hits.push(Vec2::new(0.0, 3.0));
-        assert_ne!(before_hits, hash(&state), "completed damage positions enter the hash");
+        assert_ne!(
+            before_hits,
+            hash(&state),
+            "completed damage positions enter the hash"
+        );
         let status = state.status();
         assert!(status.channeling);
         assert_eq!(status.channel_tick, Some(1));
@@ -497,8 +564,16 @@ mod tests {
         for tick in 0..ticks {
             attack(
                 &mut state,
-                Pose { actor: player, pos: Vec2::ZERO, facing: 0.0 },
-                arpg_core::Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, press_on.contains(&tick)),
+                Pose {
+                    actor: player,
+                    pos: Vec2::ZERO,
+                    facing: 0.0,
+                },
+                arpg_core::Intent::new(
+                    arpg_core::MoveDir::NONE,
+                    arpg_core::AimDir::FORWARD,
+                    press_on.contains(&tick),
+                ),
                 &[],
                 &[],
                 physics.sink(player),
@@ -521,11 +596,21 @@ mod tests {
 
         assert!(!is_active(startup - 1, t), "live during startup");
         assert!(is_active(startup, t), "not live on the first active tick");
-        assert!(is_active(startup + active - 1, t), "not live on the last active tick");
-        assert!(!is_active(startup + active, t), "still live after the window");
+        assert!(
+            is_active(startup + active - 1, t),
+            "not live on the last active tick"
+        );
+        assert!(
+            !is_active(startup + active, t),
+            "still live after the window"
+        );
 
         let live: Vec<u32> = (0..duration()).filter(|&tick| is_active(tick, t)).collect();
-        assert_eq!(live.len() as u32, active, "the window is not `active` ticks wide");
+        assert_eq!(
+            live.len() as u32,
+            active,
+            "the window is not `active` ticks wide"
+        );
     }
 
     /// A swing occupies exactly its configured duration and then the player is idle
@@ -538,7 +623,10 @@ mod tests {
         for (tick, swinging, _) in &seen[..duration() as usize] {
             assert!(swinging, "idle on tick {tick}, inside the swing");
         }
-        assert!(!seen[duration() as usize].1, "still swinging after its configured duration");
+        assert!(
+            !seen[duration() as usize].1,
+            "still swinging after its configured duration"
+        );
     }
 
     /// **Hitbox liveness is derived from one number, so it cannot disagree with
@@ -550,7 +638,10 @@ mod tests {
             let expected = tick < duration() && is_active(tick, resolved());
             assert_eq!(hitbox, expected, "hitbox wrong on tick {tick}");
             if hitbox {
-                assert!(swinging, "a live hitbox with no swing behind it, tick {tick}");
+                assert!(
+                    swinging,
+                    "a live hitbox with no swing behind it, tick {tick}"
+                );
             }
         }
     }
@@ -561,8 +652,11 @@ mod tests {
         let t = resolved();
         let path = Swing::new(t.start(), t.end(), (t.start_radius(), t.end_radius()));
         let hitbox = path.generate::<HITBOX_SAMPLES>(t.active() as usize);
-        let placed: Vec<(Vec2, f32)> =
-            hitbox.discs().iter().map(|d| d.place(Vec2::ZERO, 0.0)).collect();
+        let placed: Vec<(Vec2, f32)> = hitbox
+            .discs()
+            .iter()
+            .map(|d| d.place(Vec2::ZERO, 0.0))
+            .collect();
 
         for (i, pair) in placed.windows(2).enumerate() {
             let ((from, from_radius), (to, to_radius)) = (pair[0], pair[1]);

@@ -36,7 +36,7 @@ A minimal movement example:
     inputs: [(at: 0, ticks: 30, dir: (1.0, 0.0))],
     budget: (ticks: 30),
     expect: (
-        player_pos: (x: 4.5, z: 0.0, tol: 0.001),
+        player_pos: (x: 3.5141285, z: 0.0, tol: 0.001),
         facing: (value: 1.5708, tol: 0.0001),
         contacts: 0,
     ),
@@ -55,9 +55,10 @@ otherwise contact can change a movement prediction. Place bodies deliberately
 through setup actions or a scene; a fresh Game starts empty.
 
 Read [tuning](../../../crates/sim/src/tuning.rs), [turning](../../../crates/sim/src/pass/face.rs)
-and [bounds](../../../crates/sim/src/lib.rs) before predicting. Distance above is
-speed × fixed tick duration × 30. Keep tolerances below the one-tick error the
-assertion should detect.
+and [bounds](../../../crates/sim/src/lib.rs) before predicting. Distance above
+includes motor acceleration and drag before reaching target speed; see the numeric
+derivation in `scenarios/walk_east.ron`. Keep tolerances below the one-tick error
+the assertion should detect.
 
 ## Time and identity
 

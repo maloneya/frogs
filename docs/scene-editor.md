@@ -45,7 +45,8 @@ placement supports move, duplicate, delete and undo/redo.
 | Tool | Authoring controls |
 |---|---|
 | Enemy / Prop / Switch | Movable body, fixed prop or interactable prop; editable body template |
-| Door / Chest | Locked gameplay component on a fixed prop |
+| Door | Movable rectangular panel with a hinge, angular limits and a breakable latch |
+| Chest | Locked gameplay component on a fixed prop |
 | Source | Position, enablement, emitted template, cadence in ticks, spawn radius and condition |
 | Formation | Position, rows, columns, spacing and template; one compact `BodyGrid` |
 | Wall | Drag opposite corners, or click for a default rectangle; edit width, thickness and rotation |
@@ -61,7 +62,7 @@ role adds or removes door/chest relationships. Both clients validate complete
 edits through the same owner.
 
 Source `FewerThan` conditions count hostile actors across the world, independently of health or movement. A formation expands
-into bodies on load; its preview draws at most 2,000 individual markers across
+into bodies on load; multi-body spacing must be at least a body diameter (0.5 m); its preview draws at most 2,000 individual markers across
 all formations. The shared authoring API supports 4,096 placement entries,
 counting a formation as one entry, subject to the game's tighter per-kind and
 total-capacity limits. Campfires share the
@@ -115,8 +116,9 @@ playing, tuning and diagnostics require the game.
    **Save & play** tries it.
 
 Activation enables the group; success or timeout stops it while spawned enemies
-remain. Unlocking makes a door/chest available for a fresh interaction, rather
-than opening it automatically. See [encounters](encounters.md) for ownership,
+remain. Unlocking releases a door's physical latch; contact forces then swing
+the panel. A chest still requires a fresh interaction after unlocking.
+See [encounters](encounters.md) for ownership,
 progress and tick rules. Forms edit authored state: opening a chest or completing
 an encounter in play never changes the draft or restart snapshot.
 

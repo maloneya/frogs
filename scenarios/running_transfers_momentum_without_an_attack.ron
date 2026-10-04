@@ -1,17 +1,18 @@
-// A seeker at 10.5 accelerates left to .5m/s and overlaps a resting equal mass
-// at 10.0. Each leaves contact at -.25m/s; only the passive body's end-of-tick
-// drag remains to apply, leaving -.225. Next tick's motor is -.25*.9-.5=-.725;
-// contact shares (-.725-.225)/2=-.475, then the passive body damps to -.4275.
+// The driver's .5m/s motor change ramps in over four substeps. Each share
+// reaches the touching passive body through a rigid contact (inside the
+// slop), so both carry -.25m/s after tick 0; only the passive body then takes
+// .9 drag. Tick 1 repeats from -.25 and -.225: -.475 and -.4275.
+// Touching is not crowding.
 (
     description: "Locomotion alone carries a shove into a passive neighbour.",
     setup: (actions: [Place((10.5, 0.0)), Assign(body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0))), Place((10.0, 0.0))]),
-    checkpoints: [(at: 0, expect: (crowd_contacts: 1, bodies: [
-        (nth: 0, pos: (x: 10.4958333, z: 0.0, tol: 0.00001), velocity: (x: -0.25, z: 0.0, tol: 0.00001)),
-        (nth: 1, pos: (x: 9.9958333, z: 0.0, tol: 0.00001), velocity: (x: -0.225, z: 0.0, tol: 0.00001)),
+    checkpoints: [(at: 0, expect: (crowd_contacts: 0, bodies: [
+        (nth: 0, pos: (x: 10.497395833, z: 0.0, tol: 0.00001), velocity: (x: -0.25, z: 0.0, tol: 0.00001)),
+        (nth: 1, pos: (x: 9.997395833, z: 0.0, tol: 0.00001), velocity: (x: -0.225, z: 0.0, tol: 0.00001)),
     ]))],
     budget: (ticks: 2),
-    expect: (contacts: 0, crowd_contacts: 1, bodies: [
-        (nth: 0, pos: (x: 10.4879167, z: 0.0, tol: 0.00001), velocity: (x: -0.475, z: 0.0, tol: 0.00001)),
-        (nth: 1, action: Idle, pos: (x: 9.9879167, z: 0.0, tol: 0.00001), velocity: (x: -0.4275, z: 0.0, tol: 0.00001)),
+    expect: (contacts: 0, crowd_contacts: 0, bodies: [
+        (nth: 0, pos: (x: 10.490963542, z: 0.0, tol: 0.00001), velocity: (x: -0.475, z: 0.0, tol: 0.00001)),
+        (nth: 1, action: Idle, pos: (x: 9.990963542, z: 0.0, tol: 0.00001), velocity: (x: -0.4275, z: 0.0, tol: 0.00001)),
     ]),
 )

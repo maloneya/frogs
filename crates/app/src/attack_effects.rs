@@ -316,7 +316,7 @@ fn beam_geometry(
         return;
     }
     let cast = |a: Vec3, b: Vec3| {
-        game.wall_hit(a.xz(), b.xz())
+        game.solid_hit(a.xz(), b.xz())
             .expect("finite sampled geometry")
     };
     // An animated sword can protrude through nearby solid geometry. Do not

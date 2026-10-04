@@ -47,6 +47,7 @@ pub(super) struct WorldAssets<T> {
     campfire: LoadedMesh<T>,
     trees: [(arpg_game::TreeKind, LoadedMesh<T>, Vec<Instance>); 3],
     walls: Vec<Instance>,
+    panels: Vec<Instance>,
     chest_closed: LoadedMesh<T>,
     chest_open: LoadedMesh<T>,
     closed_chests: Vec<Instance>,
@@ -77,6 +78,7 @@ impl<T> WorldAssets<T> {
             campfire,
             trees,
             walls: Vec::with_capacity(arpg_sim::MAX_WALLS),
+            panels: Vec::with_capacity(arpg_sim::MAX_PANELS),
             chest_closed,
             chest_open,
             closed_chests: Vec::with_capacity(arpg_game::MAX_CHESTS),
@@ -122,6 +124,22 @@ impl<T> WorldAssets<T> {
         }
     }
 
+    pub(super) fn rebuild_panels(&mut self, panels: impl Iterator<Item = arpg_sim::PanelPresentation>) {
+        self.panels.clear();
+        for panel in panels {
+            assert!(self.panels.len() < arpg_sim::MAX_PANELS, "physical panel admission bound");
+            let centre = panel.centre();
+            let size = panel.size();
+            let colour = match panel.latch() {
+                arpg_sim::LatchState::Latched => LinearRgb::new(0.35, 0.12, 0.035),
+                arpg_sim::LatchState::Released => LinearRgb::new(0.25, 0.22, 0.09),
+                arpg_sim::LatchState::Broken => LinearRgb::new(0.55, 0.22, 0.055),
+            };
+            self.panels.push(Instance::new(Vec3::new(centre.x, 0.0, centre.y),
+                Vec3::new(size.x, 1.0, size.y), colour).with_yaw(panel.yaw()));
+        }
+    }
+
     pub(super) fn rebuild_trees(&mut self, trees: impl Iterator<Item = arpg_game::TreeSpec>) {
         for (_, _, instances) in &mut self.trees { instances.clear(); }
         for (count, tree) in trees.enumerate() {
@@ -132,9 +150,9 @@ impl<T> WorldAssets<T> {
         }
     }
 
-    pub(super) fn instance_count(&self) -> usize { 1 + self.trees.iter().map(|(_, _, instances)| instances.len()).sum::<usize>() + self.walls.len() + self.torches.stand().len() + self.props.as_slice().len() + self.closed_chests.len() + self.open_chests.len() }
+    pub(super) fn instance_count(&self) -> usize { 1 + self.trees.iter().map(|(_, _, instances)| instances.len()).sum::<usize>() + self.walls.len() + self.panels.len() + self.torches.stand().len() + self.props.as_slice().len() + self.closed_chests.len() + self.open_chests.len() }
 
-    pub(super) fn draw_count(&self) -> usize { 1 + self.trees.iter().filter(|(_, _, instances)| !instances.is_empty()).count() + usize::from(!self.walls.is_empty()) + usize::from(!self.torches.stand().is_empty()) + usize::from(!self.props.as_slice().is_empty()) + usize::from(!self.closed_chests.is_empty()) + usize::from(!self.open_chests.is_empty()) }
+    pub(super) fn draw_count(&self) -> usize { 1 + self.trees.iter().filter(|(_, _, instances)| !instances.is_empty()).count() + usize::from(!self.walls.is_empty()) + usize::from(!self.panels.is_empty()) + usize::from(!self.torches.stand().is_empty()) + usize::from(!self.props.as_slice().is_empty()) + usize::from(!self.closed_chests.is_empty()) + usize::from(!self.open_chests.is_empty()) }
 
     pub(super) fn report(&self, out: &mut Report) {
         out.object("campfire", |out| self.campfire.report(out));
@@ -146,6 +164,7 @@ impl<T> WorldAssets<T> {
         });
         out.object("wall", |out| self.wall.report(out));
         out.int("wall_instances", self.walls.len() as u64);
+        out.int("panel_instances", self.panels.len() as u64);
         out.object("ground", |out| self.ground.report(out));
         out.object("prop", |out| self.prop.report(out));
         out.object("chest_closed", |out| self.chest_closed.report(out));
@@ -160,10 +179,11 @@ impl<T> WorldAssets<T> {
 }
 
 impl WorldAssets<MeshAsset> {
-    pub(super) fn draws(&self) -> [MeshBatch<'_>; 9] {
+    pub(super) fn draws(&self) -> [MeshBatch<'_>; 10] {
         [
             self.ground.draw(&self.ground_instance),
             self.wall.draw(&self.walls),
+            self.wall.draw(&self.panels),
             self.prop.draw(self.props.as_slice()),
             self.campfire.draw(self.torches.stand()),
             self.chest_closed.draw(&self.closed_chests),

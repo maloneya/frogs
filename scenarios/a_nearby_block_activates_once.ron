@@ -1,26 +1,26 @@
 (
-    description: "Interaction checks final positions: tick 0 is too far, tick 3 is within reach; later presses do not reactivate.",
+    description: "Interaction checks final positions: tick 0 is too far, tick 8 is within reach; later presses do not reactivate.",
     setup: (scenes: [(engine: (
     name: "Activate a static block (E)",
     bodies: [(pos: (0.0, 2.0), what: (physical: (fixed: true, interactable: true), role: Prop))],
 ))]),
-    inputs: [(at: 0, ticks: 4, dir: (0.0, 1.0))],
-    interactions: [0, 3, 4, 10],
+    inputs: [(at: 0, ticks: 9, dir: (0.0, 1.0))],
+    interactions: [0, 8, 9, 16],
     checkpoints: [
         (at: 0, expect: (bodies: [(nth: 0, interaction: Ready)])),
-        (at: 2, expect: (bodies: [(nth: 0, interaction: Ready)])),
-        (at: 3, expect: (bodies: [(nth: 0, interaction: Activated)])),
+        (at: 7, expect: (bodies: [(nth: 0, interaction: Ready)])),
+        (at: 8, expect: (bodies: [(nth: 0, interaction: Activated)])),
     ],
-    budget: (ticks: 12),
+    budget: (ticks: 18),
     expect: (
         enemy_count: 0,
-        player_pos: (x: 0.0, z: 0.6, tol: 0.000001),
+        player_pos: (x: 0.0, z: 0.7463132, tol: 0.000001),
         bodies: [(nth: 0, interaction: Activated, damageable: false,
             pos: (x: 0.0, z: 2.0, tol: 0.0))],
         events: (
         kinds: [Activated],
         sequence: [
-            (3, Activated(id: (1, 1))),
+            (8, Activated(id: (1, 1))),
         ],
     ),
     ),

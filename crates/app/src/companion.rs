@@ -9,7 +9,7 @@ pub(crate) enum Edit {
     Set(TuningField, f32), Save, Revert, Defaults, Restart,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ZoomDirection { In, Out }
 

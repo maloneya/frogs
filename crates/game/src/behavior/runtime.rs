@@ -9,7 +9,7 @@ use arpg_core::Report;
 pub use arpg_sim::ActionOutcome;
 use arpg_sim::{
     ActionControls, ActionExecution, ActionSchedule, ActorView, AttackPhase, Dt, EntityId, Fnv,
-    InteractionState, Interruption, MotorCommand, SceneId,
+    InteractionState, Interruption, MotorCommand, SceneId, Impulse,
 };
 use glam::Vec2;
 use serde::Deserialize;
@@ -82,10 +82,12 @@ pub struct ActionStatus {
 /// Narrow effects submitted after physics. The shared owner revalidates each one.
 #[derive(Clone, Copy)]
 pub(crate) enum ActionEffect {
-    Damage {
+    Strike {
         actor: EntityId,
         target: EntityId,
-        amount: NonZeroU8,
+        point: Vec2,
+        impulse: Impulse,
+        damage: Option<NonZeroU8>,
     },
     Interact {
         actor: EntityId,
@@ -95,7 +97,7 @@ pub(crate) enum ActionEffect {
 impl ActionEffect {
     pub(crate) fn actor(self) -> EntityId {
         match self {
-            Self::Damage { actor, .. } | Self::Interact { actor, .. } => actor,
+            Self::Strike { actor, .. } | Self::Interact { actor, .. } => actor,
         }
     }
 }
@@ -142,7 +144,8 @@ impl Actor {
             kind(&self.definition.actions[running.action])
         })
     }
-    fn complete(&mut self, succeeded: bool) {
+    fn complete(&mut self, succeeded: bool, coordination: &mut Coordination) {
+        coordination.release_strikes(self.body);
         if let Some(mut running) = self.running.take() {
             running.execution.complete(succeeded);
             finish_node(
@@ -159,7 +162,8 @@ impl Actor {
             ActionOutcome::Failed
         };
     }
-    fn cancel(&mut self) {
+    fn cancel(&mut self, coordination: &mut Coordination) {
+        coordination.release_strikes(self.body);
         if let Some(running) = &mut self.running {
             running.execution.cancel();
         }
@@ -214,13 +218,39 @@ impl Actor {
     }
 }
 
+/// This tick's hostile actors, rebuilt in `prepare`: ordered for nearest-target
+/// selection and the simulation's target set, indexed by slot for eligibility.
+/// Derived scratch, not gameplay state.
+struct Hostiles {
+    ids: Vec<EntityId>,
+    by_slot: Vec<Option<EntityId>>,
+}
+impl Hostiles {
+    fn rebuild(&mut self, rows: &[Actor]) {
+        for id in self.ids.drain(..) {
+            self.by_slot[id.diagnostic_identity().0 as usize] = None;
+        }
+        for actor in rows.iter().filter(|actor| actor.definition.role == ActorRole::Hostile) {
+            let slot = actor.body.diagnostic_identity().0 as usize;
+            if self.by_slot.len() <= slot {
+                self.by_slot.resize(slot + 1, None);
+            }
+            self.by_slot[slot] = Some(actor.body);
+            self.ids.push(actor.body);
+        }
+    }
+    fn contains(&self, id: EntityId) -> bool {
+        self.by_slot.get(id.diagnostic_identity().0 as usize) == Some(&Some(id))
+    }
+}
+
 pub(crate) struct Actors {
     rows: Vec<Actor>,
     sparse: Vec<usize>,
     coordination: Coordination,
     drives: Vec<MotorCommand>,
     effects: Vec<ActionEffect>,
-    targets: Vec<EntityId>,
+    targets: Hostiles,
 }
 impl Default for Actors {
     fn default() -> Self {
@@ -230,7 +260,10 @@ impl Default for Actors {
             coordination: Coordination::default(),
             drives: Vec::with_capacity(arpg_sim::MAX_BODIES),
             effects: Vec::with_capacity(arpg_sim::MAX_BODIES),
-            targets: Vec::with_capacity(arpg_sim::MAX_BODIES),
+            targets: Hostiles {
+                ids: Vec::with_capacity(arpg_sim::MAX_BODIES),
+                by_slot: Vec::with_capacity(arpg_sim::MAX_BODIES),
+            },
         }
     }
 }
@@ -266,6 +299,7 @@ impl Actors {
         let row = self.index(id).expect("replacement actor admitted by Game");
         let owner = self.rows[row].owner;
         let was_running = self.rows[row].running.is_some();
+        self.coordination.release_strikes(id);
         self.rows[row] = Actor::new(id, owner, definition);
         if was_running {
             self.rows[row].outcome = ActionOutcome::Cancelled;
@@ -293,12 +327,20 @@ impl Actors {
         for (row, actor) in self.rows.iter().enumerate() {
             self.sparse[actor.body.diagnostic_identity().0 as usize] = row;
         }
+        self.retain_strikes();
         self.coordination.retain_count(self.rows.len());
         if self.rows.is_empty() {
             self.drives.clear();
             self.effects.clear();
-            self.targets.clear();
+            self.targets.rebuild(&[]);
         }
+    }
+    fn retain_strikes(&mut self) {
+        let (rows, sparse) = (&self.rows, &self.sparse);
+        self.coordination.retain_strikes(|id| {
+            sparse.get(id.diagnostic_identity().0 as usize).and_then(|&row| rows.get(row))
+                .is_some_and(|actor| actor.body == id && actor.kind().combat())
+        });
     }
     pub(crate) fn hostile_ids(&self) -> impl Iterator<Item = EntityId> + '_ {
         self.rows
@@ -316,7 +358,7 @@ impl Actors {
         &self.effects
     }
     pub(crate) fn targets(&self) -> &[EntityId] {
-        &self.targets
+        &self.targets.ids
     }
     pub(crate) fn status(&self, id: EntityId, view: ActorView<'_>) -> Option<ActionStatus> {
         self.index(id).and_then(|row| self.rows[row].status(view))
@@ -328,18 +370,12 @@ impl Actors {
         self.rows.iter().filter_map(move |actor| actor.status(view))
     }
 
-    /// Admission already ran. Decisions observe the same post-walk positions for
-    /// every actor; only the motor/physics passes that follow may move them.
+    /// Admission already ran. Decisions observe the same preceding physical state
+    /// for every actor; only the motor/physics passes that follow may move them.
     pub(crate) fn prepare(&mut self, view: ActorView<'_>, dt: Dt) {
         self.drives.clear();
         self.effects.clear();
-        self.targets.clear();
-        self.targets.extend(
-            self.rows
-                .iter()
-                .filter(|actor| actor.definition.role == ActorRole::Hostile)
-                .map(|actor| actor.body),
-        );
+        self.targets.rebuild(&self.rows);
         self.coordination.begin_tick();
         let mut committed = 0;
         for index in 0..self.rows.len() {
@@ -353,7 +389,7 @@ impl Actors {
             };
             if !running.execution.is_running() {
                 let succeeded = running.execution.outcome() == ActionOutcome::Succeeded;
-                self.rows[index].complete(succeeded);
+                self.rows[index].complete(succeeded, &mut self.coordination);
                 continue;
             }
             let selection = match &actor.definition.actions[running.action] {
@@ -361,18 +397,14 @@ impl Actors {
                     Destination::Target(selection) => Some(selection),
                     Destination::Point(_) => None,
                 },
-                ActionDefinition::Swipe(settings) => Some(settings.target),
-                ActionDefinition::Leap(settings) => Some(settings.target),
+                ActionDefinition::Swipe(_) | ActionDefinition::Leap(_) => None,
                 ActionDefinition::Interact { target } => Some(*target),
                 ActionDefinition::Wait { .. } => None,
             };
-            if running.target.is_some_and(|target| {
-                selection.map_or_else(
-                    || view.position(target).is_none(),
-                    |selection| !eligible(selection, actor.body, target, view, self),
-                )
-            }) {
-                self.rows[index].cancel();
+            if selection.is_some_and(|selection| running.target.is_some_and(|target| {
+                !eligible(selection, actor.body, target, view, &self.targets)
+            })) {
+                self.rows[index].cancel(&mut self.coordination);
                 continue;
             }
             let actor = &mut self.rows[index];
@@ -395,6 +427,7 @@ impl Actors {
                             running.destination = destination;
                             running.direction = (destination - origin).normalize_or(Vec2::Y);
                             arrived(origin, destination, settings.stop_distance)
+                                && view.velocity(actor.body) == Some(Vec2::ZERO)
                         },
                     )
                 }
@@ -404,7 +437,7 @@ impl Actors {
                 | ActionDefinition::Leap(_) => false,
             };
             if outcome != ActionOutcome::Running || reached {
-                actor.complete(reached || outcome == ActionOutcome::Succeeded);
+                actor.complete(reached || outcome == ActionOutcome::Succeeded, &mut self.coordination);
             }
             committed += usize::from(actor.kind().combat());
         }
@@ -453,7 +486,7 @@ impl Actors {
                     && kind(&definition.actions[running.action]).combat()
                 {
                     committed += 1;
-                    self.coordination.granted(index, count);
+                    self.coordination.granted(index, count, actor.body);
                     if let ActionDefinition::Leap(settings) = &definition.actions[running.action] {
                         actor.cooldowns[running.action] = settings.cooldown;
                     }
@@ -478,18 +511,13 @@ impl Actors {
                 action,
                 ActionDefinition::Move(_) | ActionDefinition::Wait { .. }
             ) || !view.alive(actor.body)
-                || view.health(actor.body) == Some(0)
             {
                 continue;
             }
             let Some(target) = running.target else {
                 continue;
             };
-            let (Some(origin), Some(destination)) =
-                (view.position(actor.body), view.position(target))
-            else {
-                continue;
-            };
+            let Some(origin) = view.position(actor.body) else { continue; };
             match action {
                 ActionDefinition::Interact { .. } => {
                     if running.execution.is_running() {
@@ -500,37 +528,41 @@ impl Actors {
                     }
                 }
                 ActionDefinition::Swipe(settings) => {
-                    let (phase, _, _) = running.execution.phase();
+                    if running.execution.phase().0 != AttackPhase::Active { continue; }
                     let centre = origin + running.direction * settings.offset;
-                    let reach = settings.radius + target_radius(view, target);
-                    if !running.hit
-                        && phase == AttackPhase::Active
-                        && view.health(target).is_some_and(|health| health > 0)
-                        && centre.distance_squared(destination) <= reach * reach
-                        && view.clear_path(origin, destination)
-                    {
-                        self.effects.push(ActionEffect::Damage {
+                    for (body, point) in view.disc_contacts(origin, centre, settings.radius) {
+                        if body == actor.body || !self.coordination.strike(actor.body, body) { continue; }
+                        let push = running.direction * settings.impulse;
+                        self.effects.push(ActionEffect::Strike {
                             actor: actor.body,
-                            target,
-                            amount: settings.damage,
+                            target: body,
+                            point,
+                            impulse: Impulse::try_from((push.x, push.y)).expect("validated action impulse"),
+                            damage: (body == target && !running.hit
+                                && eligible(settings.target, actor.body, target, view, &self.targets)).then_some(settings.damage),
                         });
                     }
                 }
                 ActionDefinition::Leap(settings) => {
                     let (phase, elapsed, _) = running.execution.phase();
+                    if phase != AttackPhase::Recovery || elapsed != 0 { continue; }
+                    // A displaced landing impacts its actual location; the committed
+                    // destination remains part of selected-target damage admission.
                     let reach = settings.radius + target_radius(view, target);
-                    if !running.hit
-                        && phase == AttackPhase::Recovery
-                        && elapsed == 0
-                        && view.health(target).is_some_and(|health| health > 0)
-                        && running.destination.distance_squared(destination) <= reach * reach
-                        && origin.distance_squared(destination) <= reach * reach
-                        && view.clear_path(origin, destination)
-                    {
-                        self.effects.push(ActionEffect::Damage {
+                    let target_reached = view.position(target).is_some_and(|destination|
+                        running.destination.distance_squared(destination) <= reach * reach);
+                    for (body, point) in view.disc_contacts(origin, origin, settings.radius) {
+                        if body == actor.body || !self.coordination.strike(actor.body, body) { continue; }
+                        let direction = (view.position(body).expect("contact is live") - origin)
+                            .normalize_or(Vec2::X);
+                        let push = direction * settings.impulse;
+                        self.effects.push(ActionEffect::Strike {
                             actor: actor.body,
-                            target,
-                            amount: settings.damage,
+                            target: body,
+                            point,
+                            impulse: Impulse::try_from((push.x, push.y)).expect("validated action impulse"),
+                            damage: (body == target && !running.hit && target_reached
+                                && eligible(settings.target, actor.body, target, view, &self.targets)).then_some(settings.damage),
                         });
                     }
                 }
@@ -560,6 +592,9 @@ impl Actors {
                 owner.hash_into(out);
             }
             out.u64(actor.definition_hash);
+            let struck = self.coordination.struck(actor.body);
+            out.usize(struck.len());
+            for body in struck { body.hash_into(out); }
             out.usize(actor.outcome as usize);
             for cursor in actor.cursors {
                 out.usize(usize::from(cursor));
@@ -667,6 +702,11 @@ impl Actors {
                             );
                         }
                     }
+                    out.object("struck", |out| {
+                        for (index, body) in self.coordination.struck(actor.body).iter().enumerate() {
+                            out.text(&index.to_string(), &body.to_string());
+                        }
+                    });
                     out.object("cooldowns", |out| {
                         for (index, cooldown) in actor
                             .cooldowns
@@ -750,7 +790,7 @@ fn target(
     selection: TargetSelection,
     actor: EntityId,
     view: ActorView<'_>,
-    hostiles: &[EntityId],
+    hostiles: &Hostiles,
 ) -> Option<EntityId> {
     let origin = view.position(actor)?;
     match selection {
@@ -758,6 +798,7 @@ fn target(
         TargetSelection::NearestHostile => nearest(
             origin,
             hostiles
+                .ids
                 .iter()
                 .copied()
                 .filter(|id| *id != actor)
@@ -777,7 +818,7 @@ fn eligible(
     actor: EntityId,
     target: EntityId,
     view: ActorView<'_>,
-    actors: &Actors,
+    hostiles: &Hostiles,
 ) -> bool {
     if actor == target || view.position(target).is_none() {
         return false;
@@ -785,10 +826,7 @@ fn eligible(
     match selection {
         TargetSelection::Player => target == view.player_id(),
         TargetSelection::NearestHostile => {
-            actors
-                .definition(target)
-                .is_some_and(|definition| definition.role == ActorRole::Hostile)
-                && view.health(target).is_some_and(|health| health > 0)
+            hostiles.contains(target) && view.health(target).is_some_and(|health| health > 0)
         }
         TargetSelection::NearestInteraction => {
             view.interaction(target) == Some(InteractionState::Ready)
@@ -816,7 +854,7 @@ fn select(
     index: usize,
     actor: &mut Actor,
     view: ActorView<'_>,
-    hostiles: &[EntityId],
+    hostiles: &Hostiles,
     can_commit: bool,
 ) -> Selection {
     match node {
@@ -859,7 +897,7 @@ fn admit(
     action_index: usize,
     actor: &Actor,
     view: ActorView<'_>,
-    hostiles: &[EntityId],
+    hostiles: &Hostiles,
     can_commit: bool,
 ) -> Selection {
     let action = &actor.definition.actions[action_index];
@@ -906,7 +944,9 @@ fn admit(
                     position
                 }
             };
-            if arrived(origin, destination, settings.stop_distance) {
+            if arrived(origin, destination, settings.stop_distance)
+                && view.velocity(actor.body) == Some(Vec2::ZERO)
+            {
                 return Selection::Success;
             }
             running.destination = destination;
@@ -985,13 +1025,21 @@ fn motor(actor: &Actor, view: ActorView<'_>, dt: Dt) -> Option<MotorCommand> {
             let difference = running.destination - origin;
             let length = difference.length();
             let distance = (length - settings.stop_distance).max(0.0);
+            let approach = if length > 0.0 {
+                view.velocity(actor.body)
+                    .unwrap_or(Vec2::ZERO)
+                    .dot(difference / length)
+            } else {
+                0.0
+            };
             let speed = settings.speed.min(arpg_sim::stopping_speed(
                 distance,
+                approach,
                 dt,
                 settings.acceleration,
             ));
             (
-                if length > 0.0 {
+                if length > 0.0 && !arrived(origin, running.destination, settings.stop_distance) {
                     difference / length * speed
                 } else {
                     Vec2::ZERO

@@ -2,7 +2,8 @@
 
 Start with [the playable soul trial](../scenes/soul_trial.ron). Within its `scene`
 field, `encounters` contains the gameplay composition. Physical placements remain
-under `engine`; `doors` and `chests` bind static props to gameplay components. The
+under `engine`; `doors` bind movable props to physical panels, while `chests` bind
+fixed props to gameplay components. The
 trial uses eight sources around a central light and rewards a chest opening. Multiple
 entries run independently in the same scene, and loading the scene twice makes
 independent copies of every relationship.
@@ -39,9 +40,10 @@ Object names label editor choices; encounter names are unique display labels.
   group order, using normal engine cadence and placement rules. Sources must
   initially be disabled and produce enemies. Optional `on_start` effects can
   unlock doors or chests.
-- `UnlockDoor` grants interaction to a locked static prop. A later nearby E press
-  opens it; the next gameplay pass removes the blocking prop. Opening is a
-  greybox removal, with no animated rectangular door asset yet.
+- `UnlockDoor` releases the physical latch of a [hinged panel](physical-doors.md).
+  It adds no motion and keeps the body present. Contacts and attack impulses
+  move the released panel; sufficient physical load can also break its latch
+  before the encounter releases it.
 
 - `UnlockChest` grants interaction to a locked chest. A fresh nearby E press
   opens its lid on the next gameplay pass. The body stays present, with the
@@ -67,13 +69,16 @@ All terminal outcomes automatically stop the encounter's sources. Existing enemi
 `on_success`; timeout runs `on_failure`. A missing required endpoint produces
 `Orphaned`, stops surviving sources, and runs no reward/failure effects.
 After activation is consumed, the switch is no longer a required endpoint.
-Terminal records preserve their historical result. Restart restores the entire
-cached scene, including locked doors/chests and ready encounters.
+A released or breached door remains a valid endpoint while its panel exists;
+breaching does not orphan the encounter or stop its sources. Terminal records
+preserve their historical result. Restart restores the entire cached scene,
+including closed, latched doors, locked chests and ready encounters.
 
 ## Tick contract
 
-1. Before engine simulation, doors and chests consume the previous tick's interaction.
-   Encounters validate endpoints and consume activation, running start effects.
+1. Before engine simulation, chests consume the previous tick's interaction.
+   Encounters validate endpoints and consume activation, running start effects;
+   door release changes the latch directly.
 2. Engine simulation emits enemies, moves bodies, resolves combat and interaction,
    then records defeats before removing bodies.
 3. After engine simulation, each running encounter consumes that tick's defeat
@@ -82,17 +87,21 @@ cached scene, including locked doors/chests and ready encounters.
 If activation occurs on N, a duration D runs on N+1 through N+D inclusive.
 A defeat on N+D can win. Thirty seconds is 1,800 simulation ticks at the current
 60 Hz rate. Countdown advances with simulation, not wall time. Clearing or
-wrapping diagnostic traces cannot affect progression. A press while a door is
-locked cannot be remembered as an opening request.
+wrapping diagnostic traces cannot affect progression. E activates authored
+interaction endpoints; a door swings in response to physical load.
 
 ## Observe and verify
 
 `Game::encounter_state(scene, index)` returns `EncounterState`; `Game::door_state` returns `DoorState`; `Game::chest_state` returns
-`ChestState`. Chests expose Locked, Unlocked, Open and Missing. Even an open
+`ChestState`. Doors expose Latched, Released, Broken and Missing; their latch
+state does not imply passage clearance. `Game::panel` observes angle, angular
+velocity and latch reaction. Chests expose Locked, Unlocked, Open and Missing. Even an open
 chest becomes Missing if its body disappears; a reused body slot cannot inherit
 its state. Reports expose `encounters`, `doors` and `chests`, keyed by scene/index.
 The HUD is a read-only projection of encounter state. `Game::encounter_trace`
-records progress, phase, door and chest transitions; it is diagnostic only. Engine
+records progress, phase, encounter-driven door release and chest transitions;
+it is diagnostic only. Physical latch state and load are reported under
+`state.sim.panels`. Engine
 source operations at the post-step boundary may have the following tick stamp;
 separate trace streams do not imply a combined chronology.
 
@@ -102,7 +111,7 @@ Scenarios use the same owning types:
 encounters: [(scene: 0, encounter: 0, state: Some((
     phase: Running, defeated: 0, target: 30, remaining_ticks: 1799,
 )))],
-doors: [(scene: 0, door: 0, state: Some(Locked))],
+doors: [(scene: 0, door: 0, state: Some(Latched))],
 ```
 
 `None` asserts eviction of an existing authored entry. Invalid indices are

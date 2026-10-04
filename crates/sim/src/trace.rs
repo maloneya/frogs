@@ -70,7 +70,12 @@ pub enum Event {
         /// Momentum added in world X/Z.
         impulse: crate::Impulse,
     },
-    /// Contact responses that exchanged momentum this pass, aggregated.
+    /// A panel's latch failed under load; the panel keeps its hinge.
+    LatchBroken {
+        /// The panel body's stable identity.
+        id: EntityId,
+    },
+    /// Contact responses that exchanged momentum this tick, aggregated.
     Momentum {
         /// Number of closing pairs resolved.
         pairs: usize,
@@ -157,24 +162,26 @@ pub enum Event {
         /// Hits left after the connection; zero is removed later in this tick.
         remaining: u8,
     },
-    /// Overlapping pairs the solver pushed apart this tick.
+    /// Player pairs overlapping more than a millimetre when this tick's
+    /// contacts were first collided.
     Contacts {
-        /// Overlapping pairs resolved.
+        /// Overlapping pairs.
         count: usize,
     },
-    /// Overlapping enemy pairs the crowd solver pushed apart this tick.
+    /// Non-player pairs overlapping more than a millimetre when this tick's
+    /// contacts were first collided.
     ///
     /// Separate from `Contacts`, which is the player's own. They answer
     /// different questions — "is the character being jostled" and "is the crowd
     /// settling" — and one number covering both could not tell a player wading
     /// into a pack from a pack shaking itself apart with nobody near it.
     Crowded {
-        /// Enemy pairs resolved.
+        /// Overlapping pairs.
         count: usize,
     },
-    /// Movable bodies touching authored walls in one wall-resolution pass.
+    /// Movable bodies and panels that exchanged momentum with a wall this tick.
     WallContacts {
-        /// Bodies whose movement or penetration was corrected.
+        /// Bodies pressed against a wall.
         count: usize,
     },
     /// Bodies the arena wall stopped this tick.
@@ -203,6 +210,8 @@ pub enum EventKind {
     AttackProfileChanged,
     /// The `Impulsed` transition.
     Impulsed,
+    /// The `LatchBroken` transition.
+    LatchBroken,
     /// The `Momentum` transition.
     Momentum,
     /// The `Rested` transition.
@@ -256,6 +265,7 @@ impl Event {
             Self::AttackRecoveryChanged { .. } => EventKind::AttackRecoveryChanged,
             Self::AttackProfileChanged { .. } => EventKind::AttackProfileChanged,
             Self::Impulsed { .. } => EventKind::Impulsed,
+            Self::LatchBroken { .. } => EventKind::LatchBroken,
             Self::Momentum { .. } => EventKind::Momentum,
             Self::Rested { .. } => EventKind::Rested,
             Self::Placed { .. } => EventKind::Placed,
@@ -303,6 +313,7 @@ impl fmt::Display for Event {
                     None => write!(f, "external"),
                 }
             }
+            Self::LatchBroken { id } => write!(f, "latch broken id={id}"),
             Self::Momentum { pairs } => write!(f, "momentum pairs={pairs}"),
             Self::Rested { count } => write!(f, "rested count={count}"),
             Self::Placed { id } => write!(f, "placed id={id}"),

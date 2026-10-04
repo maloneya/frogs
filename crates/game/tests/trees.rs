@@ -109,7 +109,7 @@ fn scaled_rotated_trunks_share_motion_and_attack_obstruction_without_extra_wall_
     assert_eq!(trunk.1, 1);
     assert!(trunk.2.size().abs_diff_eq(Vec2::splat(0.72), 0.00001));
     let near_face = 2.0 - 0.36 * 2.0_f32.sqrt();
-    assert!((game.wall_hit(Vec2::ZERO, Vec2::new(0.0, 4.0)).unwrap().unwrap().point().y - near_face).abs() < 0.00001);
+    assert!((game.solid_hit(Vec2::ZERO, Vec2::new(0.0, 4.0)).unwrap().unwrap().point().y - near_face).abs() < 0.00001);
     game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
     game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));
@@ -122,5 +122,5 @@ fn scaled_rotated_trunks_share_motion_and_attack_obstruction_without_extra_wall_
         assert!(game.body_pos(body).unwrap().z < near_face);
     }
     assert!(game.evict_scene(owner));
-    assert!(game.wall_hit(Vec2::ZERO, Vec2::new(0.0, 4.0)).unwrap().is_none());
+    assert!(game.solid_hit(Vec2::ZERO, Vec2::new(0.0, 4.0)).unwrap().is_none());
 }

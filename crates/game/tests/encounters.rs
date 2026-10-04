@@ -44,31 +44,24 @@ fn scene() -> GameScene {
             what: ActorDefinition::prop().interactive(),
         },
         Placed {
-            pos: (1.4, 94.5),
+            pos: (20.0, 10.0),
             what: ActorDefinition::prop(),
         },
         Placed {
-            pos: (-20.0, 0.0),
+            pos: (-20.0, 10.0),
             what: ActorDefinition::prop(),
         },
     ];
-    scene.engine.sources = vec![source((0.0, 95.7)), source((-50.0, 0.0))];
-    scene.doors = vec![DoorSpec { body: 2 }, DoorSpec { body: 3 }];
+    scene.engine.sources = vec![source((0.0, 4.0)), source((-50.0, 0.0))];
+    scene.doors = vec![DoorSpec { body: 2, panel: arpg_sim::PanelConfig::default() }, DoorSpec { body: 3, panel: arpg_sim::PanelConfig::default() }];
+    for door in &scene.doors { scene.engine.bodies[door.body].what.physical = arpg_sim::Template::BODY; }
     scene.encounters = vec![trial("East", 0, 0, 0, 699), trial("West", 1, 1, 1, 697)];
     scene
 }
 fn step(game: &mut Game, tick: u64, interact: bool) {
-    let movement = if tick < 630 {
-        MoveDir::new(Vec3::Z)
-    } else {
-        MoveDir::NONE
-    };
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
-    game.step(
-        dt,
-        Intent::new(movement, AimDir::FORWARD, [630, 690].contains(&tick))
-            .with_interact(interact),
-    );
+    game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)
+        .with_attack_held(tick >= 675).with_interact(interact));
 }
 fn observed(game: &Game) -> (u64, String, String) {
     let mut out = Report::default();
@@ -81,20 +74,20 @@ fn two_trials_count_their_own_defeats_and_final_tick_success_unlocks_only_its_do
     let mut game = Game::from_scene(&scene()).unwrap();
     let id = game.scene_instances().next().unwrap().0;
     let door = game.scene_bodies(id).unwrap()[2];
-    game.set_attack_profile(AttackProfile::Slam);
+    game.set_attack_profile(AttackProfile::Disintegrate);
     for tick in 0..699 {
         step(&mut game, tick, [0, 2].contains(&tick));
     }
     assert_eq!(game.encounter_state(id, 0).unwrap().phase, Phase::Running);
     assert_eq!(game.encounter_state(id, 0).unwrap().remaining_ticks, 1);
     assert_eq!(game.encounter_state(id, 0).unwrap().defeated, 0);
-    assert_eq!(game.door_state(id, 0), Some(DoorState::Locked));
-    step(&mut game, 699, true); // Locked door cannot consume this press.
+    assert_eq!(game.door_state(id, 0), Some(DoorState::Latched));
+    step(&mut game, 699, true); // Beam pulse lands on the final objective tick.
     assert_eq!(game.encounter_state(id, 0).unwrap().phase, Phase::Succeeded);
     assert_eq!(game.encounter_state(id, 1).unwrap().phase, Phase::Failed);
     assert_eq!(game.encounter_state(id, 1).unwrap().defeated, 0);
-    assert_eq!(game.door_state(id, 0), Some(DoorState::Unlocked));
-    assert_eq!(game.door_state(id, 1), Some(DoorState::Locked));
+    assert_eq!(game.door_state(id, 0), Some(DoorState::Released));
+    assert_eq!(game.door_state(id, 1), Some(DoorState::Latched));
     for source in game.scene_sources(id).unwrap() {
         assert!(!game.source_state(*source).unwrap().enabled);
     }
@@ -106,13 +99,14 @@ fn two_trials_count_their_own_defeats_and_final_tick_success_unlocks_only_its_do
     step(&mut game, 700, false);
     assert!(
         game.is_alive(door),
-        "press while locked must not open later"
+        "releasing a latch preserves its physical panel"
     );
     step(&mut game, 701, true);
     step(&mut game, 702, false);
-    assert_eq!(game.door_state(id, 0), Some(DoorState::Open));
-    assert!(!game.is_alive(door));
-    let replacement = game.place(Vec2::new(1.4, 94.5), ActorDefinition::prop()).unwrap();
+    assert_eq!(game.door_state(id, 0), Some(DoorState::Released));
+    assert!(game.is_alive(door));
+    assert!(game.despawn_body(door));
+    let replacement = game.place(Vec2::new(20.0, 10.0), ActorDefinition::prop()).unwrap();
     step(&mut game, 703, true);
     assert!(game.is_alive(replacement));
 }
@@ -124,13 +118,13 @@ fn timeout_one_tick_before_defeat_never_rewards_a_late_kill() {
     objective.within_ticks = 698.try_into().unwrap();
     let mut game = Game::from_scene(&authored).unwrap();
     let id = game.scene_instances().next().unwrap().0;
-    game.set_attack_profile(AttackProfile::Slam);
+    game.set_attack_profile(AttackProfile::Disintegrate);
     for tick in 0..701 {
         step(&mut game, tick, tick == 0);
     }
     assert_eq!(game.encounter_state(id, 0).unwrap().phase, Phase::Failed);
     assert_eq!(game.encounter_state(id, 0).unwrap().defeated, 0);
-    assert_eq!(game.door_state(id, 0), Some(DoorState::Locked));
+    assert_eq!(game.door_state(id, 0), Some(DoorState::Latched));
 }
 
 #[test]
@@ -141,13 +135,13 @@ fn despawn_and_recycled_identity_do_not_award_progress_and_endpoint_loss_stops_s
     step(&mut game, 1, false);
     let spawned = *game.scene_bodies(id).unwrap().last().unwrap();
     assert!(game.despawn_body(spawned));
-    let replacement = game.place(Vec2::new(0.0, 95.7), ActorDefinition::passive_hostile()).unwrap();
+    let replacement = game.place(Vec2::new(0.0, 4.0), ActorDefinition::passive_hostile()).unwrap();
     assert_ne!(spawned, replacement);
     step(&mut game, 2, false);
     assert_eq!(game.encounter_state(id, 0).unwrap().defeated, 0);
     let door = game.scene_bodies(id).unwrap()[2];
     assert!(game.despawn_body(door));
-    let other = game.place(Vec2::new(1.4, 94.5), ActorDefinition::prop()).unwrap();
+    let other = game.place(Vec2::new(20.0, 10.0), ActorDefinition::prop()).unwrap();
     step(&mut game, 3, false);
     assert_eq!(game.encounter_state(id, 0).unwrap().phase, Phase::Orphaned);
     assert_eq!(game.door_state(id, 0), Some(DoorState::Missing));
@@ -262,11 +256,11 @@ fn removing_a_pending_start_or_source_cannot_retarget_a_replacement() {
         } else {
             let removed_source = game.scene_sources(id).unwrap()[0];
             assert!(game.remove_source(removed_source));
-            let _ = game.add_source(source((0.0, 95.7)).try_into().unwrap());
+            let _ = game.add_source(source((0.0, 4.0)).try_into().unwrap());
         }
         step(&mut game, 1, true);
         assert_eq!(game.encounter_state(id, 0).unwrap().phase, Phase::Orphaned);
-        assert_eq!(game.door_state(id, 0), Some(DoorState::Locked));
+        assert_eq!(game.door_state(id, 0), Some(DoorState::Latched));
     }
 }
 
@@ -277,12 +271,12 @@ fn defeating_an_unrelated_replacement_never_counts_as_a_source_defeat() {
     objective.within_ticks = 800.try_into().unwrap();
     let mut game = Game::from_scene(&authored).unwrap();
     let id = game.scene_instances().next().unwrap().0;
-    game.set_attack_profile(AttackProfile::Slam);
+    game.set_attack_profile(AttackProfile::Disintegrate);
     step(&mut game, 0, true);
     step(&mut game, 1, false);
     let spawned = *game.scene_bodies(id).unwrap().last().unwrap();
     assert!(game.despawn_body(spawned));
-    let replacement = game.place(Vec2::new(0.0, 95.7), ActorDefinition::passive_hostile()).unwrap();
+    let replacement = game.place(Vec2::new(0.0, 4.0), ActorDefinition::passive_hostile()).unwrap();
     for tick in 2..700 {
         step(&mut game, tick, false);
     }
@@ -291,7 +285,7 @@ fn defeating_an_unrelated_replacement_never_counts_as_a_source_defeat() {
     assert_eq!(game.defeats()[0].source, None);
     assert_eq!(game.encounter_state(id, 0).unwrap().defeated, 0);
     assert_eq!(game.encounter_state(id, 0).unwrap().phase, Phase::Running);
-    assert_eq!(game.door_state(id, 0), Some(DoorState::Locked));
+    assert_eq!(game.door_state(id, 0), Some(DoorState::Latched));
 }
 
 #[test]
@@ -304,7 +298,7 @@ fn a_source_group_accepts_either_producer_and_stops_both_on_success() {
     let mut game = Game::from_scene(&authored).unwrap();
     let id = game.scene_instances().next().unwrap().0;
     let sources = game.scene_sources(id).unwrap().to_vec();
-    game.set_attack_profile(AttackProfile::Slam);
+    game.set_attack_profile(AttackProfile::Disintegrate);
     for tick in 0..700 {
         step(&mut game, tick, tick == 0);
     }
@@ -321,26 +315,25 @@ fn a_source_group_accepts_either_producer_and_stops_both_on_success() {
 }
 
 #[test]
-fn opening_is_the_physical_change_unlocking_alone_still_blocks_the_player() {
+fn unlocking_releases_the_latch_and_movement_opens_the_surviving_panel() {
     let mut authored = scene();
     authored.engine.bodies[2].pos = (0.0, 2.0);
-    // Short failure unlocks the door through the same typed effect as success.
     let EncounterObjective::Defeat(objective) = &mut authored.encounters[0].objective;
     objective.within_ticks = 1.try_into().unwrap();
     authored.encounters[0].on_failure = vec![Action::UnlockDoor(0)];
     let mut game = Game::from_scene(&authored).unwrap();
     let id = game.scene_instances().next().unwrap().0;
-    for tick in 0..20 {
-        step(&mut game, tick, tick == 0);
+    let body = game.scene_bodies(id).unwrap()[2];
+    step(&mut game, 0, true);
+    step(&mut game, 1, false);
+    assert_eq!(game.door_state(id, 0), Some(DoorState::Released));
+    assert_eq!(game.panel(body).unwrap().angle(), 0.0, "release itself adds no motion");
+    let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+    for _ in 0..120 {
+        game.step(dt, Intent::new(MoveDir::new(Vec3::Z), AimDir::FORWARD, false));
     }
-    assert_eq!(game.door_state(id, 0), Some(DoorState::Unlocked));
-    assert!(game.player_pos().z < 2.0);
-    step(&mut game, 20, true);
-    step(&mut game, 21, false);
-    assert_eq!(game.door_state(id, 0), Some(DoorState::Open));
-    for tick in 22..42 {
-        step(&mut game, tick, false);
-    }
+    assert!(game.is_alive(body));
+    assert!(game.panel(body).unwrap().angle().abs() > 0.5);
     assert!(game.player_pos().z > 3.0);
 }
 
@@ -374,7 +367,7 @@ fn source_group_starts_once_and_pending_activation_is_discarded_by_restart() {
     step(&mut game, 0, true);
     assert_eq!(game.enemy_count(), 0);
     assert_eq!(game.encounter_state(owner, 0).unwrap().phase, Phase::Ready);
-    assert_eq!(game.door_state(owner, 0), Some(DoorState::Locked));
+    assert_eq!(game.door_state(owner, 0), Some(DoorState::Latched));
     game.restart().unwrap();
     step(&mut game, 0, false);
     step(&mut game, 1, false);
@@ -383,7 +376,7 @@ fn source_group_starts_once_and_pending_activation_is_discarded_by_restart() {
     game.clear_trace();
     step(&mut game, 3, false);
     assert_eq!(game.enemy_count(), 2);
-    assert_eq!(game.door_state(owner, 0), Some(DoorState::Unlocked));
+    assert_eq!(game.door_state(owner, 0), Some(DoorState::Released));
     let enabled: Vec<_> = game.trace().iter().filter_map(|(_, event)| match event {
         arpg_sim::Event::SourceEnablementChanged { id, enabled: true } => Some(id),
         _ => None,

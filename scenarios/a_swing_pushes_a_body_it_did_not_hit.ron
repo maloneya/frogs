@@ -1,19 +1,20 @@
 // Slam reaches 4.45m only on tick 13. A at 4.3 is hit; B at 5.3 is not.
-// Tick 14 predicts the crossing: equal masses share 72m/s before moving .6m.
+// Tick 14: at 72m/s the tick splits into eight collision passes. The .5m gap
+// enters speculative reach on the third; A closes it and the rigid contact
+// leaves both at 36m/s (no restitution). Both end .85m on, then drag .9.
 (description: "A slammed body transfers momentum to a neighbour outside the hitbox.",
  setup: (actions: [Place((0.0, 4.3)), Place((0.0, 5.3))]),
  attack_profiles: [(at: 0, profile: Slam)], attacks: [0], budget: (ticks: 15),
  expect: (struck: 1, bodies: [
- (nth: 0, health: 1, pos: (x: 0.0, z: 4.9, tol: 0.00001), velocity: (x: 0.0, z: 32.4, tol: 0.00001)),
- (nth: 1, health: 3, pos: (x: 0.0, z: 5.9, tol: 0.00001), velocity: (x: 0.0, z: 32.4, tol: 0.00001))], events: (
-        kinds: [AttackProfileChanged, Swung, HitboxOpened, Hit, Impulsed, Crowded, Momentum, HitboxClosed],
+ (nth: 0, health: 1, pos: (x: 0.0, z: 5.15, tol: 0.00001), velocity: (x: 0.0, z: 32.4, tol: 0.00001)),
+ (nth: 1, health: 3, pos: (x: 0.0, z: 5.65, tol: 0.00001), velocity: (x: 0.0, z: 32.4, tol: 0.00001))], events: (
+        kinds: [AttackProfileChanged, Swung, HitboxOpened, Hit, Impulsed, HitboxClosed],
         sequence: [
             (0, AttackProfileChanged(profile: Slam)),
             (0, Swung),
             (9, HitboxOpened),
             (13, Hit(id: (1, 1), remaining: 1)),
             (13, Impulsed(id: (1, 1), value: (0.0000,72.0000), source: Some((0, 1)), tolerance: 0.00005)),
-            (14, Momentum(pairs: 1)),
             (14, HitboxClosed),
         ],
     )))

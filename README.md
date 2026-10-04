@@ -32,6 +32,7 @@ Agents use the [same headless API](docs/scene-authoring.md); editing works with 
 | 2 / right click | Slam |
 | 3 / Space, held | Disintegrate |
 | E | Interact |
+| + / - (also keypad) | Zoom in / out one step per press; = also zooms in |
 | Escape | Quit game |
 
 The HUD shows health, ability state and encounter progress. A melee press during
@@ -48,5 +49,6 @@ to the companion releases gameplay input while simulation continues.
 - `crates/`: simulation, gameplay, content, headless authoring, assets and presentation;
   see [ownership and working rules](CLAUDE.md).
 - [Actor behaviors](docs/behaviors.md): composable actions, NPCs and shared physical effects.
+- [Physical doors](docs/physical-doors.md): hinged panels, transmitted crowd pressure and breakable latches.
 - [Verification](docs/verification.md): checks, benchmark cadence and evidence.
 - [Experiments](experimental/README.md): independent research, outside the game.

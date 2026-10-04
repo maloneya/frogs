@@ -5,8 +5,9 @@ use crate::{
 };
 use arpg_core::Intent;
 use core::num::NonZeroU8;
+use glam::Vec3Swizzles;
 
-/// Births and player movement are visible; gameplay may now choose action motors.
+/// Births are visible; gameplay chooses motors from the shared start-of-tick pose.
 #[must_use = "advance and finish the admitted tick"]
 pub struct PreparedStep<'a> {
     world: Option<&'a mut World>,
@@ -23,7 +24,6 @@ impl World {
     /// Admits all births for this tick before gameplay binds and evaluates actions.
     /// Population is supplied by gameplay, independently of body/health counts.
     pub fn begin_step(&mut self, dt: Dt, intent: Intent, population: usize) -> PreparedStep<'_> {
-        let move_dir = pass::beam::movement(&self.player.attack, intent);
         let mut trace = self.trace.sink(self.tick);
         pass::source::trigger(
             &mut self.sources,
@@ -44,12 +44,6 @@ impl World {
             &self.bodies.pos,
             &mut self.bodies.prev_pos,
         );
-        pass::walk::walk(
-            &mut self.bodies.pos[0],
-            move_dir,
-            dt,
-            self.tuning.get(crate::TuningField::PlayerSpeed),
-        );
         PreparedStep {
             world: Some(self),
             dt,
@@ -58,7 +52,7 @@ impl World {
     }
 }
 impl<'a> PreparedStep<'a> {
-    /// Physical facts after admission and controlled player movement.
+    /// Physical facts after admission, before any actor moves.
     pub fn view(&self) -> ActorView<'_> {
         self.world.as_ref().expect("prepared tick").actor_view()
     }
@@ -67,7 +61,7 @@ impl<'a> PreparedStep<'a> {
         self.world.as_ref().expect("prepared tick").spawn_outcomes()
     }
     /// Apply one motor per actor, shared physics, then player attack effects.
-    /// Target identities are a gameplay decision; only those identities can be hit.
+    /// Target identities are a gameplay decision; only those identities can take health damage.
     pub fn advance(
         mut self,
         motors: &[MotorCommand],
@@ -105,8 +99,19 @@ impl<'a> PreparedStep<'a> {
         let world = self.world.take().expect("prepared tick");
         let dt = self.dt;
         let intent = self.intent;
+        // Releasing input requests bounded braking. A channel disables the motor
+        // entirely, so control suppression does not erase carried knockback.
+        if !world.player.attack.channels(intent.attack_held()) {
+            world.bodies.physics.drive().toward(
+                world.bodies.slots.ids()[0],
+                intent.move_dir().as_vec3().xz()
+                    * world.tuning.get(crate::TuningField::PlayerSpeed),
+                dt,
+                world.tuning.get(crate::TuningField::PlayerAcceleration),
+            );
+        }
         for command in motors {
-            if world.actor_view().movable(command.actor) {
+            if command.actor != world.player_id() && world.actor_view().movable(command.actor) {
                 world.bodies.physics.drive().toward(
                     command.actor,
                     command.velocity,
@@ -116,66 +121,29 @@ impl<'a> PreparedStep<'a> {
             }
         }
         let mut trace = world.trace.sink(world.tick);
-        // Physical velocity moves before contacts. Crowd resolution precedes
-        // player resolution, retaining the existing crowd priority.
-        pass::separate::prevent_crossings(
-            &world.bodies.pos,
-            world.bodies.slots.ids(),
-            &mut world.bodies.physics,
-            &world.scenes.walls,
-            dt,
-            trace.reborrow(),
-        );
-        pass::motion::integrate(
-            &world.bodies.physics,
-            &world.bodies.slots,
-            &mut world.bodies.pos,
-            dt,
-        );
-        pass::walls::resolve(
-            &world.scenes.walls,
-            &world.bodies.prev_pos,
-            &mut world.bodies.pos,
-            world.bodies.slots.ids(),
-            &mut world.bodies.physics,
-            trace.reborrow(),
-        );
         observer.crowd_started();
-        let crowd_work = pass::separate::crowd(
-            &mut world.bodies.pos[1..],
-            &world.bodies.slots.ids()[1..],
+        let (crowd_work, contacts) = crate::solver::solve(
+            crate::solver::Geometry {
+                ids: world.bodies.slots.ids(),
+                walls: &world.scenes.walls,
+                material: world.tuning.contact_material(),
+            },
+            &mut world.bodies.pos,
             &mut world.bodies.physics,
             &mut world.crowd_grid,
+            dt,
             trace.reborrow(),
+            observer,
         );
         world.crowd_contacts = crowd_work.contacts();
+        world.contacts = contacts;
         observer.crowd_finished(crowd_work);
-        world.contacts = pass::separate::player(
-            &mut world.bodies.pos,
-            world.bodies.slots.ids(),
-            &mut world.bodies.physics,
-            trace.reborrow(),
-        );
-        pass::contain::contain(
-            &mut world.bodies.pos,
-            world.bodies.slots.ids(),
-            &mut world.bodies.physics,
-            trace.reborrow(),
-        );
-        pass::walls::resolve(
-            &world.scenes.walls,
-            &world.bodies.prev_pos,
-            &mut world.bodies.pos,
-            world.bodies.slots.ids(),
-            &mut world.bodies.physics,
-            trace.reborrow(),
-        );
         pass::motion::settle(&mut world.bodies.physics, dt, trace.reborrow());
         pass::face::aim(&mut world.player.facing, &world.player.attack, intent, dt);
 
         // **After `face`.** The hitbox is oriented by the facing this
         // tick ended with, and it is tested against where the bodies actually
-        // ended up — after motors, after both solvers, after the wall. Running
+        // ended up — after motors and the shared contact solve. Running
         // it earlier would swing at positions that no longer exist by the time
         // the tick is over.
         pass::attack::attack(
@@ -201,12 +169,36 @@ impl<'a> PreparedStep<'a> {
             intent.interact(),
             &world.bodies.health,
             &world.scenes.walls,
+            &world.bodies.physics,
             trace.reborrow(),
         );
         ResolvedStep { world: Some(world) }
     }
 }
 impl ResolvedStep<'_> {
+    /// Apply physical impact independently of damage eligibility.
+    pub fn impact(
+        &mut self,
+        actor: EntityId,
+        target: EntityId,
+        point: glam::Vec2,
+        impulse: crate::Impulse,
+    ) -> bool {
+        let world = self.world.as_mut().expect("resolved tick");
+        if actor == target
+            || !world.actor_view().can_act(actor)
+            || world.actor_view().position(target).is_none()
+        {
+            return false;
+        }
+        world.bodies.physics.impulse_at(
+            target,
+            point,
+            impulse,
+            Some(actor),
+            &mut world.trace.sink(world.tick),
+        )
+    }
     /// Final positions and health after physics and the player's attack.
     pub fn view(&self) -> ActorView<'_> {
         self.world.as_ref().expect("resolved tick").actor_view()
@@ -238,6 +230,7 @@ impl ResolvedStep<'_> {
             &world.bodies.pos,
             &world.bodies.health,
             &world.scenes.walls,
+            &world.bodies.physics,
             actor,
             target,
             &mut world.trace.sink(world.tick),

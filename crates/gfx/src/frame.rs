@@ -1,7 +1,7 @@
 //! The borrowed presentation data submitted for one frame.
 
 use crate::{
-    CharacterHorde, CharacterPreview, DebugDisc, EffectVertex, MeshBatch, OrthoCamera, PointLight,
+    CharacterHorde, CharacterPreview, DebugOutline, EffectVertex, MeshBatch, OrthoCamera, PointLight,
     Quad,
 };
 
@@ -23,7 +23,7 @@ pub struct RenderFrame<'a> {
     /// UI rectangles and glyphs in physical pixels, with a top-left origin.
     pub overlay: &'a [Quad],
     /// Always-visible world-space diagnostic outlines.
-    pub debug_discs: &'a [DebugDisc],
+    pub debug_outlines: &'a [DebugOutline],
     /// Depth-tested translucent world-space triangles.
     pub effects: &'a [EffectVertex],
 }

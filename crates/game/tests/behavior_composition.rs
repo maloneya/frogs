@@ -303,7 +303,7 @@ fn two_actions_hitting_the_same_lethal_target_in_one_tick_share_damage_admission
 }
 
 #[test]
-fn stale_targets_and_definition_replacement_cancel_committed_actions() {
+fn target_loss_preserves_physical_commitment_but_definition_replacement_cancels() {
     let setup = scene(vec![
         Placed {
             pos: (5.0, 0.0),
@@ -325,8 +325,13 @@ fn stale_targets_and_definition_replacement_cancel_committed_actions() {
     assert_ne!(replacement, ids[1]);
     step(&mut game);
     let status = game.action_status(ids[0]).unwrap();
-    assert_eq!(status.kind, ActionKind::Idle);
-    assert_eq!(status.outcome, ActionOutcome::Cancelled);
+    assert_eq!(status.kind, ActionKind::Swipe);
+    assert_eq!(status.outcome, ActionOutcome::Running);
+    assert_eq!(status.target, Some(ids[1]));
+    for _ in 2..=36 { step(&mut game); }
+    assert!(game.trace().since(0).any(|(_, event)| matches!(event,
+        arpg_sim::Event::Impulsed { id, source: Some(source), .. } if id == replacement && source == ids[0])));
+    assert_eq!(game.health(replacement), None);
     game.restart().unwrap();
     step(&mut game);
     game.assign_behavior(ids[0], ActorDefinition::civilian())
@@ -532,6 +537,55 @@ fn maximum_speed_diagonal_actions_remain_valid_when_velocity_is_rounded() {
 }
 
 #[test]
+fn arrival_keeps_the_motor_until_bounded_braking_has_stopped_the_body() {
+    let actor = ActorDefinition {
+        actions: vec![ActionDefinition::Move(MoveAction {
+            destination: Destination::Point((4.0, 0.0)),
+            speed: 1.0,
+            acceleration: 6.0,
+            stop_distance: 1.0,
+        })],
+        behavior: BehaviorNode::Action(0),
+        ..ActorDefinition::civilian()
+    };
+    for sequence in [false, true] {
+        let mut actor = actor.clone();
+        if sequence {
+            actor.actions.push(ActionDefinition::Wait { ticks: 3 });
+            actor.behavior = BehaviorNode::Sequence(vec![BehaviorNode::Action(0), BehaviorNode::Action(1)]);
+        }
+        let mut game = Game::from_scene(&scene(vec![Placed { pos: (4.0, 0.0), what: actor }])).unwrap();
+        let id = game.action_statuses().next().unwrap().body;
+        assert!(game.apply_impulse(id, arpg_sim::Impulse::try_from((0.2, 0.0)).unwrap()));
+        // Already inside the arrival radius, but 0.2m/s cannot be stopped by the
+        // first tick's 0.1m/s brake. Drag leaves 0.18m/s, then the motor leaves 0.08.
+        // The whole change ramps in over four substeps: the tick covers
+        // (0.2 - 5/8 0.12) dt.
+        step(&mut game);
+        assert_eq!(game.action_status(id).unwrap().kind, ActionKind::Move);
+        assert!((game.motion(id).unwrap().velocity().x - 0.08).abs() < 1e-6);
+        assert!((game.body_pos(id).unwrap().x - (4.0 + 0.125 / 60.0)).abs() < 1e-6);
+        step(&mut game);
+        assert_eq!(game.action_status(id).unwrap().kind, ActionKind::Move);
+        assert_eq!(game.motion(id).unwrap().velocity(), Vec2::ZERO);
+        let stopped = game.body_pos(id);
+        for elapsed in 0..3 {
+            step(&mut game);
+            let status = game.action_status(id).unwrap();
+            if sequence {
+                assert_eq!(status.kind, ActionKind::Wait);
+                assert_eq!(status.elapsed, elapsed);
+                assert_eq!(status.previous_outcome, ActionOutcome::Succeeded);
+            } else {
+                assert_eq!(status.kind, ActionKind::Idle);
+                assert_eq!(status.outcome, ActionOutcome::Succeeded);
+            }
+            assert_eq!(game.body_pos(id), stopped);
+        }
+    }
+}
+
+#[test]
 fn nested_sequences_propagate_completion_without_skipping_or_restarting_children() {
     let actor = ActorDefinition {
         actions: vec![
@@ -664,11 +718,15 @@ fn interrupting_a_nested_sequence_discards_its_abandoned_progress() {
     step(&mut game);
     assert_eq!(game.health(target), None);
     step(&mut game);
+    assert_eq!(game.action_status(id).unwrap().phase, arpg_sim::AttackPhase::Recovery,
+        "defeating the target does not skip physical action recovery");
+    step(&mut game);
+    step(&mut game);
     let status = game.action_status(id).unwrap();
     assert_eq!(
         (status.action, status.elapsed),
         (Some(1), 0),
-        "the interrupted sequence restarts its first wait"
+        "after recovery the interrupted sequence restarts its first wait"
     );
 }
 

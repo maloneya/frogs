@@ -11,9 +11,9 @@ use arpg_core::Report;
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
-use crate::{EntityId, Fnv, SourceId, SourceSpec, Template};
 #[cfg(test)]
 use crate::Condition;
+use crate::{EntityId, Fnv, SourceId, SourceSpec, Template};
 
 /// One authored body, independent of its eventual runtime identity.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -37,8 +37,8 @@ pub struct BodyGrid {
     pub columns: usize,
     /// Rows extending along +Z. Must be nonzero.
     pub rows: usize,
-    /// Positive, finite distance in metres between adjacent centres on both axes.
-    /// May be smaller than a body diameter to deliberately author overlaps.
+    /// Finite distance in metres between adjacent centres on both axes, at
+    /// least a body diameter when the grid holds more than one body.
     pub spacing: f32,
     /// Shared physical capabilities, using the same template as individual placements.
     #[serde(default)]
@@ -47,7 +47,13 @@ pub struct BodyGrid {
 
 impl BodyGrid {
     fn validate(&self) -> Result<usize, SceneError> {
-        let Self { origin, columns, rows, spacing, what: _ } = *self;
+        let Self {
+            origin,
+            columns,
+            rows,
+            spacing,
+            what: _,
+        } = *self;
         if columns == 0 || rows == 0 {
             return Err(SceneError::Invalid("grid rows and columns must be nonzero"));
         }
@@ -56,7 +62,16 @@ impl BodyGrid {
             return Err(SceneError::Capacity);
         }
         if !Vec2::from(origin).is_finite() || !spacing.is_finite() || spacing <= 0.0 {
-            return Err(SceneError::Invalid("grid origin must be finite and spacing positive and finite"));
+            return Err(SceneError::Invalid(
+                "grid origin must be finite and spacing positive and finite",
+            ));
+        }
+        // Overlapping formations start as one dense pile: every pair in a cell
+        // is a contact, so cost grows with the square of the pile.
+        if count > 1 && spacing < 2.0 * crate::ENEMY_RADIUS {
+            return Err(SceneError::Invalid(
+                "grid spacing must be at least a body diameter (0.5 m)",
+            ));
         }
         // Positive spacing makes the opposite corner the largest coordinate.
         // Check with the same arithmetic used for placement, before mutation.
@@ -70,7 +85,10 @@ impl BodyGrid {
 
     fn at(&self, index: usize) -> Placed {
         let offset = Vec2::new((index % self.columns) as f32, (index / self.columns) as f32);
-        Placed { pos: (Vec2::from(self.origin) + offset * self.spacing).into(), what: self.what }
+        Placed {
+            pos: (Vec2::from(self.origin) + offset * self.spacing).into(),
+            what: self.what,
+        }
     }
 
     /// Called only after admission checked multiplication and total capacity.
@@ -87,6 +105,9 @@ pub struct Scene {
     /// Solid static ground rectangles, independent of circular body placements.
     #[serde(default)]
     pub walls: Vec<crate::Wall>,
+    /// Hinged mechanisms bound to explicit dynamic bodies.
+    #[serde(default)]
+    pub panels: Vec<crate::PanelSpec>,
     /// Human-readable content label; never used as runtime identity.
     pub name: String,
     /// Authored order is spawn order, and therefore deterministic id order.
@@ -103,13 +124,42 @@ pub struct Scene {
 
 impl Scene {
     fn validate(&self) -> Result<usize, SceneError> {
-        let Self { name: _, bodies, grids, sources, walls: _ } = self;
-        if bodies.iter().any(|body| !body.what.valid_at(Vec2::from(body.pos))) {
+        let Self {
+            name: _,
+            bodies,
+            grids,
+            sources,
+            walls: _,
+            panels,
+        } = self;
+        if panels.len() > crate::MAX_PANELS {
+            return Err(SceneError::Capacity);
+        }
+        for (index, panel) in panels.iter().enumerate() {
+            let body = bodies
+                .get(panel.body)
+                .ok_or(SceneError::Invalid("panel needs an explicit body"))?;
+            if body.what.fixed()
+                || body.what.is_character()
+                || !panel.config.valid_at(Vec2::from(body.pos))
+                || panels[..index].iter().any(|other| other.body == panel.body)
+            {
+                return Err(SceneError::Invalid(
+                    "panel needs a unique dynamic non-character body and its complete swing must fit the arena",
+                ));
+            }
+        }
+        if bodies
+            .iter()
+            .any(|body| !body.what.valid_at(Vec2::from(body.pos)))
+        {
             return Err(SceneError::Invalid("invalid body position or template"));
         }
         let mut count = bodies.len();
         for grid in grids {
-            count = count.checked_add(grid.validate()?).ok_or(SceneError::Capacity)?;
+            count = count
+                .checked_add(grid.validate()?)
+                .ok_or(SceneError::Capacity)?;
         }
         for source in sources {
             crate::Source::try_from(*source).map_err(SceneError::Invalid)?;
@@ -120,7 +170,7 @@ impl Scene {
 
 /// The identity of one live instantiation, scoped to its World.
 /// Monotonic and never reused in that world; removing records does not rewind it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SceneId(u64);
 
 impl SceneId {
@@ -186,13 +236,24 @@ pub(crate) struct Scenes {
 
 impl Scenes {
     fn can_add(&self) -> Result<(), SceneError> {
-        self.next.checked_add(1).map(|_| ()).ok_or(SceneError::IdExhausted)
+        self.next
+            .checked_add(1)
+            .map(|_| ())
+            .ok_or(SceneError::IdExhausted)
     }
 
     fn add(&mut self, name: &str) -> SceneId {
         let id = SceneId(self.next);
-        self.next = self.next.checked_add(1).expect("scene admission checked identity capacity");
-        self.live.push(Resident { id, name: name.into(), bodies: Vec::new(), sources: Vec::new() });
+        self.next = self
+            .next
+            .checked_add(1)
+            .expect("scene admission checked identity capacity");
+        self.live.push(Resident {
+            id,
+            name: name.into(),
+            bodies: Vec::new(),
+            sources: Vec::new(),
+        });
         id
     }
 
@@ -227,7 +288,9 @@ impl Scenes {
         for scene in &mut self.live {
             let before = scene.bodies.len();
             scene.bodies.retain(|id| *id != body);
-            if scene.bodies.len() != before { return Some(scene.id); }
+            if scene.bodies.len() != before {
+                return Some(scene.id);
+            }
         }
         None
     }
@@ -253,7 +316,12 @@ impl Scenes {
         hash.u64(*next);
         hash.usize(live.len());
         for scene in live {
-            let Resident { id, name, bodies, sources } = scene;
+            let Resident {
+                id,
+                name,
+                bodies,
+                sources,
+            } = scene;
             id.hash_into(hash);
             hash.usize(name.len());
             for byte in name.bytes() {
@@ -275,7 +343,12 @@ impl Scenes {
         out.object("walls", |out| walls.report(out));
         out.int("next_id", *next);
         for scene in live {
-            let Resident { id, name, bodies, sources } = scene;
+            let Resident {
+                id,
+                name,
+                bodies,
+                sources,
+            } = scene;
             out.object(&id.to_string(), |out| {
                 out.text("name", name);
                 out.int("bodies", bodies.len() as u64);
@@ -308,9 +381,13 @@ impl crate::World {
     /// Refusal preserves state and accepted spawn-capacity reservations.
     pub fn load_scene(&mut self, scene: &Scene) -> Result<SceneId, SceneError> {
         let count = scene.validate()?;
-        let available =
-            crate::MAX_BODIES.saturating_sub(self.body_count()).saturating_sub(self.queue.len());
+        let available = crate::MAX_BODIES
+            .saturating_sub(self.body_count())
+            .saturating_sub(self.queue.len());
         if count > available {
+            return Err(SceneError::Capacity);
+        }
+        if self.bodies.physics.panels.rows.len() + scene.panels.len() > crate::MAX_PANELS {
             return Err(SceneError::Capacity);
         }
         self.scenes.can_add()?;
@@ -321,18 +398,44 @@ impl crate::World {
 
         let owner = self.scenes.add(&scene.name);
         self.scenes.walls.install(owner, &scene.walls);
-        for body in scene.bodies.iter().copied().chain(scene.grids.iter().flat_map(BodyGrid::placements)) {
+        for body in scene
+            .bodies
+            .iter()
+            .copied()
+            .chain(scene.grids.iter().flat_map(BodyGrid::placements))
+        {
             let id = self
                 .place(Vec2::from(body.pos), body.what)
                 .expect("scene admission reserved every authored body");
             self.scenes.record_body(owner, id);
         }
-        for source in &scene.sources {
-            let id = self.sources.add_owned(crate::Source::try_from(*source).expect("scene admission validated every source"), Some(owner));
-            self.scenes.record_source(owner, id);
-            self.trace.sink(self.tick).emit(crate::Event::SourceAdded { id });
+        for panel in &scene.panels {
+            let id = self.scene_bodies(owner).expect("installed scene")[panel.body];
+            let centre = self.bodies.pos_of(id).expect("installed body");
+            let mass = self
+                .bodies
+                .physics
+                .get(id)
+                .expect("physical body")
+                .inverse_mass();
+            self.bodies
+                .physics
+                .panels
+                .install(id, centre, panel.config, mass);
         }
-        self.trace.sink(self.tick).emit(crate::Event::SceneLoaded { id: owner });
+        for source in &scene.sources {
+            let id = self.sources.add_owned(
+                crate::Source::try_from(*source).expect("scene admission validated every source"),
+                Some(owner),
+            );
+            self.scenes.record_source(owner, id);
+            self.trace
+                .sink(self.tick)
+                .emit(crate::Event::SourceAdded { id });
+        }
+        self.trace
+            .sink(self.tick)
+            .emit(crate::Event::SceneLoaded { id: owner });
         Ok(owner)
     }
 
@@ -346,6 +449,7 @@ impl crate::World {
             return false;
         };
         self.scenes.walls.evict(id);
+        self.bodies.physics.solver.evict(id);
         self.queue.cancel_scene(id);
         for source in resident.sources {
             self.remove_source(source);
@@ -353,14 +457,16 @@ impl crate::World {
         for body in resident.bodies {
             self.despawn_body(body);
         }
-        self.trace.sink(self.tick).emit(crate::Event::SceneEvicted { id });
+        self.trace
+            .sink(self.tick)
+            .emit(crate::Event::SceneEvicted { id });
         true
     }
 
-    /// Read-only segment query shared with presentation. Uses the same wall
-    /// geometry and ordered nearest-hit rule as physical beam clipping.
+    /// Read-only segment query shared with presentation. Static walls and current
+    /// panel poses use the same nearest-hit rule as physical beam clipping.
     /// Invalid endpoints are refused before any intersection arithmetic.
-    pub fn wall_hit(
+    pub fn solid_hit(
         &self,
         start: glam::Vec2,
         end: glam::Vec2,
@@ -369,9 +475,12 @@ impl crate::World {
             || !end.length_squared().is_finite()
             || !(end - start).length_squared().is_finite()
         {
-            return Err("wall query endpoints must have finite positions and separation");
+            return Err("solid query endpoints must have finite positions and separation");
         }
-        Ok(self.scenes.walls.first_hit(start, end))
+        Ok(self
+            .bodies
+            .physics
+            .solid_hit(&self.scenes.walls, start, end))
     }
 
     /// Immutable walls in scene/authored order, with stable scene-local indices.
@@ -387,7 +496,10 @@ impl crate::World {
 
     /// Ready instances in creation order, with their authored labels.
     pub fn scene_instances(&self) -> impl Iterator<Item = (SceneId, &str)> {
-        self.scenes.live.iter().map(|scene| (scene.id, scene.name.as_str()))
+        self.scenes
+            .live
+            .iter()
+            .map(|scene| (scene.id, scene.name.as_str()))
     }
 
     /// Live source identities in installation order. Read immediately after
@@ -414,8 +526,12 @@ mod tests {
     fn scene() -> Scene {
         Scene {
             walls: Vec::new(),
+            panels: Vec::new(),
             name: "pair".into(),
-            bodies: vec![Placed { pos: (20.0, 0.0), what: crate::TEST_CHARACTER }],
+            bodies: vec![Placed {
+                pos: (20.0, 0.0),
+                what: crate::TEST_CHARACTER,
+            }],
             grids: Vec::new(),
             sources: vec![SourceSpec {
                 enabled: true,
@@ -430,7 +546,10 @@ mod tests {
 
     fn step(world: &mut World) {
         for dt in Accumulator::default().pending(Dt::SECS) {
-            world.step(dt, Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
+            world.step(
+                dt,
+                Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false),
+            );
         }
     }
 
@@ -443,20 +562,37 @@ mod tests {
         let old = world.scene_bodies(a).unwrap().to_vec();
         let survivors = world.scene_bodies(b).unwrap().to_vec();
         assert_eq!(old.len(), 2, "the source descendant must inherit ownership");
-        let cancelled = world.queue.push_owned(Vec2::new(50.0, 0.0), crate::TEST_CHARACTER, Some(a)).unwrap();
-        assert!(world.request_spawn(Vec2::new(-50.0, 0.0), crate::TEST_CHARACTER).is_some());
+        let cancelled = world
+            .queue
+            .push_owned(Vec2::new(50.0, 0.0), crate::TEST_CHARACTER, Some(a))
+            .unwrap();
+        assert!(
+            world
+                .request_spawn(Vec2::new(-50.0, 0.0), crate::TEST_CHARACTER)
+                .is_some()
+        );
         assert!(world.evict_scene(a));
         assert!(!world.evict_scene(a));
         assert_eq!(world.queue.len(), 1, "unowned queued work must survive");
         step(&mut world);
-        let outcome = world.spawn_outcomes().iter().find(|result| result.ticket == cancelled).unwrap();
+        let outcome = world
+            .spawn_outcomes()
+            .iter()
+            .find(|result| result.ticket == cancelled)
+            .unwrap();
         assert_eq!(outcome.entity, None);
         assert_eq!(outcome.owner, Some(a));
-        for _ in 0..3 { step(&mut world); }
+        for _ in 0..3 {
+            step(&mut world);
+        }
         assert!(old.iter().all(|id| !world.is_alive(*id)));
         assert!(survivors.iter().all(|id| world.is_alive(*id)));
         assert_eq!(world.source_count(), 1);
-        assert_eq!(world.damageable_count(), 5, "B's four bodies plus one unowned body");
+        assert_eq!(
+            world.damageable_count(),
+            5,
+            "B's four bodies plus one unowned body"
+        );
         let again = world.load_scene(&scene()).unwrap();
         assert_ne!(a, again);
     }
@@ -466,10 +602,20 @@ mod tests {
         let mut world = World::empty();
         let a = world.load_scene(&Scene::default()).unwrap();
         world.evict_scene(a);
-        assert!(world.queue.push_owned(Vec2::ZERO, crate::TEST_CHARACTER, Some(a)).is_some());
+        assert!(
+            world
+                .queue
+                .push_owned(Vec2::ZERO, crate::TEST_CHARACTER, Some(a))
+                .is_some()
+        );
         step(&mut world);
         assert_eq!(world.damageable_count(), 0);
-        assert!(world.trace().iter().any(|(_, e)| e == crate::Event::Refused { count: 1 }));
+        assert!(
+            world
+                .trace()
+                .iter()
+                .any(|(_, e)| e == crate::Event::Refused { count: 1 })
+        );
     }
 
     #[test]
@@ -478,34 +624,81 @@ mod tests {
         let a = world.load_scene(&scene()).unwrap();
         let old = world.scene_bodies(a).unwrap()[0];
         world.despawn_body(old);
-        let survivor = world.place(Vec2::new(60.0, 0.0), crate::TEST_CHARACTER).unwrap();
+        let survivor = world
+            .place(Vec2::new(60.0, 0.0), crate::TEST_CHARACTER)
+            .unwrap();
         assert_eq!(world.scene_bodies(a).unwrap().len(), 0);
         world.evict_scene(a);
         assert!(world.is_alive(survivor));
-
     }
 
     #[test]
     fn invalid_and_over_capacity_scenes_leave_everything_untouched() {
         let mut world = World::empty();
         let mut invalid = scene();
-        invalid.bodies.push(Placed { pos: (f32::NAN, 0.0), what: crate::TEST_CHARACTER });
+        invalid.bodies.push(Placed {
+            pos: (f32::NAN, 0.0),
+            what: crate::TEST_CHARACTER,
+        });
         let before = world.hash();
         let trace = world.trace().render();
-        assert!(matches!(world.load_scene(&invalid), Err(SceneError::Invalid(_))));
+        assert!(matches!(
+            world.load_scene(&invalid),
+            Err(SceneError::Invalid(_))
+        ));
         assert_eq!(world.hash(), before);
         assert_eq!(world.trace().render(), trace);
         let full = Scene {
             walls: Vec::new(),
+            panels: Vec::new(),
             name: "full".into(),
-            bodies: vec![Placed { pos: (1.0, 0.0), what: crate::TEST_CHARACTER }; crate::MAX_BODIES],
+            bodies: vec![
+                Placed {
+                    pos: (1.0, 0.0),
+                    what: crate::TEST_CHARACTER
+                };
+                crate::MAX_BODIES
+            ],
             sources: vec![],
             grids: Vec::new(),
         };
-        assert!(world.request_spawn(Vec2::ZERO, crate::TEST_CHARACTER).is_some());
+        assert!(
+            world
+                .request_spawn(Vec2::ZERO, crate::TEST_CHARACTER)
+                .is_some()
+        );
         let before = world.hash();
         assert_eq!(world.load_scene(&full), Err(SceneError::Capacity));
-        assert_eq!(world.hash(), before, "accepted queue capacity is reserved too");
+        assert_eq!(
+            world.hash(),
+            before,
+            "accepted queue capacity is reserved too"
+        );
+        let oversized_panels = Scene {
+            bodies: vec![
+                Placed {
+                    pos: (0.0, 0.0),
+                    what: crate::Template::BODY
+                };
+                crate::MAX_PANELS + 1
+            ],
+            panels: (0..=crate::MAX_PANELS)
+                .map(|body| crate::PanelSpec {
+                    body,
+                    config: crate::PanelConfig::default(),
+                })
+                .collect(),
+            ..Scene::default()
+        };
+        assert_eq!(
+            world.load_scene(&oversized_panels),
+            Err(SceneError::Capacity)
+        );
+        assert_eq!(
+            world.hash(),
+            before,
+            "panel refusal preserves accepted work"
+        );
     }
 
     #[test]
@@ -522,8 +715,18 @@ mod tests {
             let before = world.hash();
             let trace = world.trace().render();
             let mut invalid = scene();
-            invalid.sources.push(SourceSpec { pos, radius, every: 1, when, what: crate::TEST_CHARACTER, enabled: true });
-            assert!(matches!(world.load_scene(&invalid), Err(SceneError::Invalid(_))));
+            invalid.sources.push(SourceSpec {
+                pos,
+                radius,
+                every: 1,
+                when,
+                what: crate::TEST_CHARACTER,
+                enabled: true,
+            });
+            assert!(matches!(
+                world.load_scene(&invalid),
+                Err(SceneError::Invalid(_))
+            ));
             assert_eq!(
                 world.hash(),
                 before,
@@ -546,7 +749,10 @@ mod tests {
         assert_eq!(played.hash(), fresh.hash());
         assert_eq!(played.tick(), 0);
         assert_eq!(played.damageable_count(), 1);
-        assert_eq!(played.motion(played.player_id()).unwrap().velocity(), Vec2::ZERO);
+        assert_eq!(
+            played.motion(played.player_id()).unwrap().velocity(),
+            Vec2::ZERO
+        );
     }
 
     #[test]
@@ -567,18 +773,37 @@ mod tests {
         let mut a = World::from_scene(&scene()).unwrap();
         let mut b = World::from_scene(&scene()).unwrap();
         let owner = a.scene_instances().next().unwrap().0;
-        assert!(a.queue.push_owned(Vec2::ZERO, crate::TEST_CHARACTER, Some(owner)).is_some());
-        assert!(b.queue.push_owned(Vec2::ZERO, crate::TEST_CHARACTER, None).is_some());
-        assert_ne!(a.hash(), b.hash(), "queued ownership changes future eviction");
+        assert!(
+            a.queue
+                .push_owned(Vec2::ZERO, crate::TEST_CHARACTER, Some(owner))
+                .is_some()
+        );
+        assert!(
+            b.queue
+                .push_owned(Vec2::ZERO, crate::TEST_CHARACTER, None)
+                .is_some()
+        );
+        assert_ne!(
+            a.hash(),
+            b.hash(),
+            "queued ownership changes future eviction"
+        );
     }
 
     #[test]
     fn a_large_grid_is_ready_without_queue_limits_or_interpolation_streaks() {
-        const { assert!(1024 > crate::pass::spawn::QUEUE_CAPACITY); }
+        const {
+            assert!(1024 > crate::pass::spawn::QUEUE_CAPACITY);
+        }
         let scene = Scene {
             name: "crowd admission".into(),
-            grids: vec![BodyGrid { origin: (-10.85, -10.85), columns: 32, rows: 32,
-                spacing: 0.7, what: crate::TEST_CHARACTER }],
+            grids: vec![BodyGrid {
+                origin: (-10.85, -10.85),
+                columns: 32,
+                rows: 32,
+                spacing: 0.7,
+                what: crate::TEST_CHARACTER,
+            }],
             ..Default::default()
         };
         let world = World::from_scene(&scene).unwrap();
@@ -596,11 +821,15 @@ mod tests {
     /// of that in one comparison, and says it through the door scenes use.
     #[test]
     fn a_grid_stands_for_exactly_the_bodies_it_replaces() {
-        let lead = Placed { pos: (-6.0, 4.0), what: crate::TEST_CHARACTER };
+        let lead = Placed {
+            pos: (-6.0, 4.0),
+            what: crate::TEST_CHARACTER,
+        };
         // Origin and spacing are exact in binary, so shorthand and longhand
         // agree bit for bit rather than within a tolerance.
         let shorthand = Scene {
             walls: Vec::new(),
+            panels: Vec::new(),
             name: "grid".into(),
             bodies: vec![lead],
             grids: vec![BodyGrid {
@@ -614,16 +843,35 @@ mod tests {
         };
         let longhand = Scene {
             walls: Vec::new(),
+            panels: Vec::new(),
             name: "grid".into(),
-            bodies: [lead.pos, (0.0, 4.0), (1.5, 4.0), (3.0, 4.0), (0.0, 5.5), (1.5, 5.5), (3.0, 5.5)]
-                .map(|pos| Placed { pos, what: crate::TEST_CHARACTER })
-                .to_vec(),
+            bodies: [
+                lead.pos,
+                (0.0, 4.0),
+                (1.5, 4.0),
+                (3.0, 4.0),
+                (0.0, 5.5),
+                (1.5, 5.5),
+                (3.0, 5.5),
+            ]
+            .map(|pos| Placed {
+                pos,
+                what: crate::TEST_CHARACTER,
+            })
+            .to_vec(),
             grids: Vec::new(),
             sources: Vec::new(),
         };
         let written = World::from_scene(&longhand).unwrap();
-        assert_eq!(written.damageable_count(), 7, "comparing two empty worlds would prove nothing");
-        assert_eq!(World::from_scene(&shorthand).unwrap().hash(), written.hash());
+        assert_eq!(
+            written.damageable_count(),
+            7,
+            "comparing two empty worlds would prove nothing"
+        );
+        assert_eq!(
+            World::from_scene(&shorthand).unwrap().hash(),
+            written.hash()
+        );
     }
 
     /// A grid multiplies its own mistakes: one bad field is thousands of bad
@@ -632,37 +880,82 @@ mod tests {
     /// untouched as an invalid `Placed` does.
     #[test]
     fn invalid_and_oversized_grids_leave_everything_untouched() {
-        let valid =
-            BodyGrid { origin: (0.0, 4.0), columns: 2, rows: 2, spacing: 1.5, what: crate::TEST_CHARACTER };
+        let valid = BodyGrid {
+            origin: (0.0, 4.0),
+            columns: 2,
+            rows: 2,
+            spacing: 1.5,
+            what: crate::TEST_CHARACTER,
+        };
         let refuse = |grid: BodyGrid, expected: fn(&SceneError) -> bool| {
             let mut world = World::from_scene(&scene()).unwrap();
             let before = world.hash();
             let trace = world.trace().render();
             let mut invalid = scene();
             invalid.grids.push(grid);
-            let error = world.load_scene(&invalid).expect_err("the grid must be refused");
+            let error = world
+                .load_scene(&invalid)
+                .expect_err("the grid must be refused");
             assert!(expected(&error), "refused for the wrong reason: {error}");
-            assert_eq!(world.hash(), before, "the valid preceding body/source must stay uninstalled");
+            assert_eq!(
+                world.hash(),
+                before,
+                "the valid preceding body/source must stay uninstalled"
+            );
             assert_eq!(world.trace().render(), trace);
         };
 
         for grid in [
-            BodyGrid { columns: 0, ..valid },
+            BodyGrid {
+                columns: 0,
+                ..valid
+            },
             BodyGrid { rows: 0, ..valid },
-            BodyGrid { origin: (f32::NAN, 4.0), ..valid },
-            BodyGrid { origin: (0.0, f32::INFINITY), ..valid },
-            BodyGrid { spacing: 0.0, ..valid },
-            BodyGrid { spacing: -1.5, ..valid },
-            BodyGrid { spacing: f32::NAN, ..valid },
+            BodyGrid {
+                origin: (f32::NAN, 4.0),
+                ..valid
+            },
+            BodyGrid {
+                origin: (0.0, f32::INFINITY),
+                ..valid
+            },
+            BodyGrid {
+                spacing: 0.0,
+                ..valid
+            },
+            BodyGrid {
+                spacing: -1.5,
+                ..valid
+            },
+            BodyGrid {
+                spacing: f32::NAN,
+                ..valid
+            },
+            BodyGrid {
+                spacing: 2.0 * crate::ENEMY_RADIUS - 0.001,
+                ..valid
+            },
             // Finite origin, finite spacing, and a far corner that is neither.
-            BodyGrid { origin: (f32::MAX, 4.0), spacing: f32::MAX, ..valid },
+            BodyGrid {
+                origin: (f32::MAX, 4.0),
+                spacing: f32::MAX,
+                ..valid
+            },
         ] {
             refuse(grid, |error| matches!(error, SceneError::Invalid(_)));
         }
 
         for grid in [
-            BodyGrid { columns: usize::MAX, rows: 2, ..valid },
-            BodyGrid { columns: crate::MAX_BODIES + 1, rows: 1, ..valid },
+            BodyGrid {
+                columns: usize::MAX,
+                rows: 2,
+                ..valid
+            },
+            BodyGrid {
+                columns: crate::MAX_BODIES + 1,
+                rows: 1,
+                ..valid
+            },
         ] {
             refuse(grid, |error| *error == SceneError::Capacity);
         }
@@ -670,8 +963,35 @@ mod tests {
         // Each of these fits alone. Only the running total refuses them, and it
         // must do so from the counts rather than by expanding 131,072 bodies.
         let mut greedy = scene();
-        greedy.grids =
-            vec![BodyGrid { columns: crate::MAX_BODIES, rows: 1, ..valid }; 2];
-        assert_eq!(World::empty().load_scene(&greedy), Err(SceneError::Capacity));
+        greedy.grids = vec![
+            BodyGrid {
+                columns: crate::MAX_BODIES,
+                rows: 1,
+                ..valid
+            };
+            2
+        ];
+        assert_eq!(
+            World::empty().load_scene(&greedy),
+            Err(SceneError::Capacity)
+        );
+
+        // Touching bodies and a lone body, whose spacing places nothing, are accepted.
+        for grid in [
+            BodyGrid {
+                spacing: 2.0 * crate::ENEMY_RADIUS,
+                ..valid
+            },
+            BodyGrid {
+                columns: 1,
+                rows: 1,
+                spacing: 0.01,
+                ..valid
+            },
+        ] {
+            let mut accepted = scene();
+            accepted.grids.push(grid);
+            assert!(World::empty().load_scene(&accepted).is_ok());
+        }
     }
 }

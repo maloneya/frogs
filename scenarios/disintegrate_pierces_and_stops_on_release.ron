@@ -1,6 +1,7 @@
 // Beam radius 1.2 + enemy radius .25: x=1.44 touches; x=1.46 misses.
 // First pulse at 0; no second damage until 12. Release at 24 cancels that pulse.
-// Holding movement while channeling covers no distance; release allows .15m/tick.
+// Holding movement while channeling covers no distance; release starts the motor at 1m/s,
+// ramped in over four substeps: 5/8 of 1/60m.
 (
     description: "Disintegrate pierces, respects width/reach, pulses every 12 ticks, and releases immediately.",
     setup: (actions: [Place((0.0, 3.0)), Place((0.0, 7.0)), Place((1.44, 9.0)),
@@ -19,7 +20,7 @@
     ],
     budget: (ticks: 25),
     expect: (attack_phase: Idle, hitbox: false, enemy_count: 6,
-        player_pos: (x: 0.15, z: 0.0, tol: 0.00001),
+        player_pos: (x: 0.01041667, z: 0.0, tol: 0.00001),
         bodies: [(nth: 0, health: 1, velocity: (x: 0.0, z: 1.242315, tol: 0.00001)), (nth: 1, health: 1),
             (nth: 2, health: 1), (nth: 3, health: 3), (nth: 4, health: 3), (nth: 5, health: 3)]),
 )

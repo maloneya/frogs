@@ -16,7 +16,7 @@ mod text;
 
 pub use camera::OrthoCamera;
 pub use arpg_core::PointLight;
-pub use debug::DebugDisc;
+pub use debug::{DebugOutline, OutlineShape};
 pub use effect::{EffectVertex, MAX_EFFECT_VERTICES};
 pub use frame::RenderFrame;
 pub use character::{
@@ -322,7 +322,7 @@ impl Renderer {
         capture_path: Option<&std::path::Path>,
     ) -> FrameOutcome {
         let RenderFrame {
-            camera, lights, environment, meshes, character, horde, overlay, debug_discs, effects,
+            camera, lights, environment, meshes, character, horde, overlay, debug_outlines, effects,
         } = input;
 
         // Acquiring a swapchain image can fail in several recoverable ways —
@@ -382,7 +382,7 @@ impl Renderer {
         self.camera.upload_lights(&self.queue, lights, environment);
         self.static_meshes.upload(&self.queue, meshes);
         let effect_count = self.effects.upload(&self.queue, effects);
-        let debug_count = self.debug.upload(&self.queue, debug_discs);
+        let debug_count = self.debug.upload(&self.queue, debug_outlines);
         let character_draws = self.character_preview.upload(&self.queue, character, horde);
         let quads =
             self.overlay

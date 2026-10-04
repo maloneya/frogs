@@ -5,17 +5,11 @@ pub(crate) mod attack;
 /// physics intact. Attack resolves its damage pulses after final positions and
 /// facing, with continuous impulses, before defeated bodies are removed. Release ends it on that tick.
 pub(crate) mod beam;
-pub(crate) mod contain;
 pub(crate) mod face;
 pub(crate) mod health;
 pub(crate) mod interact;
 pub(crate) mod remember;
-pub(crate) mod separate;
 pub(crate) mod source;
 pub(crate) mod spawn;
-pub(crate) mod walk;
 
 pub(crate) mod motion;
-
-/// Sweep circles against rectangles before crowd contacts and after arena containment.
-pub(crate) mod walls;

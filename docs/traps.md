@@ -63,10 +63,10 @@ Test a new position-changing operation with no intervening tick.
 ## Bodies jump to an arena corner
 
 **Cause:** non-finite solver output may be hidden by clamping arithmetic.
-**Check:** run a debug build; containment checks finiteness before clamping.
-Inspect coincident-body normalization upstream of containment.
-**Safeguard:** contact handles coincident bodies; containment has debug assertions;
-the scenario runner checks final finiteness in all builds. Debug assertions are
+**Check:** run a debug build; the solver's integration checks finiteness before
+clamping to the arena. Inspect coincident-body normalization upstream of it.
+**Safeguard:** contacts give coincident bodies a stable escape direction;
+integration has debug assertions; the scenario runner checks final finiteness in all builds. Debug assertions are
 absent in release, and a final check cannot detect poison already hidden earlier.
 
 ## A grid rejects most pairs but the packed crowd is slower
@@ -76,7 +76,21 @@ Repeated sorting, re-scanning cells as a body oscillates across a boundary,
 and one-pointer-per-body bucket traversal can outweigh the discarded tests.
 **Check:** measure the entire crowd pass after pursuing actors fully compress, not just
 candidate counts or a short run of the initial spawn layout.
-**Safeguards:** the crowd owner uses ordered bitsets, scans each cell once per
-outer row, and stores indices in contiguous pages. Brute-force equivalence tests
-cover returning across cell boundaries; the dense-crowd scenario runs through
+**Safeguards:** the [grid](../crates/sim/src/grid.rs) is a counting sort rebuilt
+once per collision pass that visits each nearby pair once. Brute-force
+equivalence tests cover pair visits; the dense-crowd scenario runs through
 compression with a step-time budget. See [crowd collision](crowd-collision.md).
+
+## Crowd contacts are cheap to find but expensive to resolve
+
+**Cause:** a large, tightly packed graph of perfectly rigid contacts can be
+poorly conditioned. In the physical-door implementation, velocity solving took
+over 98% of the compressed-crowd profile; grid changes and warm starts did not
+resolve the active-set churn (2026-09-27).
+**Check:** profile phases and contact rows after compression, not just total step
+time. A long one-dimensional chain tests momentum transmission, but does not
+establish cost for a packed two-dimensional crowd.
+**Fix:** the solver now uses a fixed-budget soft step with warm starting (Box2D v3);
+see the [audit](physics-scalability-audit.md) for measurements. If a solver
+change regresses cost, profile it (see [performance](performance.md#detailed-physics-investigation))
+before loosening anything; increasing performance budgets is not a substitute.

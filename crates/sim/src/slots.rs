@@ -6,7 +6,7 @@
 use crate::hash::Fnv;
 
 /// Stable body identity until despawn. Use `Option<EntityId>` for an absent target.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EntityId {
     /// Which slot. Recycled after a despawn.
     index: u32,
@@ -17,7 +17,9 @@ pub struct EntityId {
 impl EntityId {
     /// Read-only diagnostic identity. This pair cannot construct a live handle.
     #[must_use]
-    pub fn diagnostic_identity(self) -> (u32, u32) { (self.index, self.generation) }
+    pub fn diagnostic_identity(self) -> (u32, u32) {
+        (self.index, self.generation)
+    }
 
     /// Sparse-table index only; generation must also match when resolving an identity.
     pub(crate) fn slot(self) -> usize {
@@ -46,8 +48,10 @@ impl core::fmt::Display for EntityId {
 /// an all-zero `EntityId` — from zeroed memory, a bad deserialisation, a
 /// forgotten initialisation — dead rather than a valid reference to slot 0.
 const FIRST_GENERATION: u32 = 1;
-const _: () =
-    assert!(FIRST_GENERATION > 0, "generation 0 must stay dead, or a zeroed id names a real body");
+const _: () = assert!(
+    FIRST_GENERATION > 0,
+    "generation 0 must stay dead, or a zeroed id names a real body"
+);
 
 /// Marks a slot with no body in it. `u32::MAX` rather than an `Option<u32>`
 /// because this is one word in a table walked on every lookup, and the niche is
@@ -110,12 +114,18 @@ impl Slots {
             }
             None => {
                 let index = self.slots.len() as u32;
-                self.slots.push(Slot { generation: FIRST_GENERATION, dense });
+                self.slots.push(Slot {
+                    generation: FIRST_GENERATION,
+                    dense,
+                });
                 index
             }
         };
 
-        let id = EntityId { index, generation: self.slots[index as usize].generation };
+        let id = EntityId {
+            index,
+            generation: self.slots[index as usize].generation,
+        };
         self.dense.push(id);
         id
     }
@@ -226,14 +236,24 @@ mod tests {
         fn spawn(&mut self, what: &'static str) -> EntityId {
             let id = self.slots.insert();
             self.payload.push(what);
-            assert_eq!(self.slots.len(), self.payload.len(), "the pairing contract broke");
+            assert_eq!(
+                self.slots.len(),
+                self.payload.len(),
+                "the pairing contract broke"
+            );
             id
         }
 
         fn despawn(&mut self, id: EntityId) -> bool {
-            let Some(dense) = self.slots.remove(id) else { return false };
+            let Some(dense) = self.slots.remove(id) else {
+                return false;
+            };
             self.payload.swap_remove(dense);
-            assert_eq!(self.slots.len(), self.payload.len(), "the pairing contract broke");
+            assert_eq!(
+                self.slots.len(),
+                self.payload.len(),
+                "the pairing contract broke"
+            );
             true
         }
 
@@ -269,7 +289,11 @@ mod tests {
         assert!(store.despawn(b));
 
         assert_eq!(store.get(a), Some("a"));
-        assert_eq!(store.get(c), Some("c"), "the swapped body's id followed its data");
+        assert_eq!(
+            store.get(c),
+            Some("c"),
+            "the swapped body's id followed its data"
+        );
         assert_eq!(store.get(b), None, "a despawned id must not resolve");
     }
 
@@ -284,10 +308,17 @@ mod tests {
 
         let new = store.spawn("new");
 
-        assert_eq!(new.index, old.index, "the slot should be reused, or this proves nothing");
+        assert_eq!(
+            new.index, old.index,
+            "the slot should be reused, or this proves nothing"
+        );
         assert_ne!(new.generation, old.generation);
         assert_eq!(store.get(new), Some("new"));
-        assert_eq!(store.get(old), None, "a stale id resolved to its slot's new occupant");
+        assert_eq!(
+            store.get(old),
+            None,
+            "a stale id resolved to its slot's new occupant"
+        );
     }
 
     /// Despawning twice must be a no-op rather than corrupting the free list
@@ -308,7 +339,11 @@ mod tests {
         // The slot must be handed out exactly once despite the double despawn.
         let c = store.spawn("c");
         let d = store.spawn("d");
-        assert_ne!(store.slots.index(c), store.slots.index(d), "one slot, two live bodies");
+        assert_ne!(
+            store.slots.index(c),
+            store.slots.index(d),
+            "one slot, two live bodies"
+        );
     }
 
     /// A zeroed id — from a placeholder, or memory that was never written —
@@ -320,7 +355,13 @@ mod tests {
         let mut store = Store::default();
         store.spawn("a");
 
-        assert_eq!(store.get(EntityId { index: 0, generation: 0 }), None);
+        assert_eq!(
+            store.get(EntityId {
+                index: 0,
+                generation: 0
+            }),
+            None
+        );
     }
 
     /// An id from a different store must not resolve here just because the
@@ -329,7 +370,13 @@ mod tests {
     #[test]
     fn an_index_past_the_end_is_dead_rather_than_a_panic() {
         let store = Store::default();
-        assert_eq!(store.get(EntityId { index: 7, generation: 1 }), None);
+        assert_eq!(
+            store.get(EntityId {
+                index: 7,
+                generation: 1
+            }),
+            None
+        );
     }
 
     /// Churn: the pairing must survive an interleaving of spawns and despawns,
@@ -359,7 +406,11 @@ mod tests {
             live = kept;
 
             for (id, name) in &live {
-                assert_eq!(store.get(*id), Some(*name), "{id} lost its row in round {round}");
+                assert_eq!(
+                    store.get(*id),
+                    Some(*name),
+                    "{id} lost its row in round {round}"
+                );
             }
             assert_eq!(store.slots.len(), live.len());
         }
@@ -401,7 +452,11 @@ mod tests {
         recycled.remove(doomed);
         recycled.insert();
 
-        assert_eq!(fresh.len(), recycled.len(), "both hold one body, or this proves nothing");
+        assert_eq!(
+            fresh.len(),
+            recycled.len(),
+            "both hold one body, or this proves nothing"
+        );
 
         let hash = |s: &Slots| {
             let mut h = Fnv::default();

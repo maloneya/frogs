@@ -1,28 +1,28 @@
-// Walk east 30 ticks to (4.5,0), then Slam. Target 4.3m east enters
-// the final sample at tick 43; a target 4.3m north is hit equally despite facing east.
-// Eleven integrations before tick 55 move the hit target (72/6)*(1-.9^11).
+// Stationary at the origin, aim east and Slam. Both targets are 4.3m
+// away; the final radial sample reaches east and north on tick 13.
+// Eleven integrations before tick 25 move each target (72/6)*(1-.9^11).
 (
     description: "Slam remains radial when the player faces east.",
-    setup: (actions: [Place((8.8, 0.0)), Place((4.5, 4.3))]),
-    inputs: [(at: 0, ticks: 30, dir: (1.0, 0.0))],
-    attack_profiles: [(at: 0, profile: Slam)], attacks: [30],
-    budget: (ticks: 55),
-    expect: (player_pos: (x: 4.5, z: 0.0, tol: 0.001),
+    setup: (actions: [Place((4.3, 0.0)), Place((0.0, 4.3))]),
+    aims: [(at: 0, dir: (1.0, 0.0))],
+    attack_profiles: [(at: 0, profile: Slam)], attacks: [0],
+    budget: (ticks: 25),
+    expect: (player_pos: (x: 0.0, z: 0.0, tol: 0.001),
         facing: (value: 1.5708, tol: 0.0001), contacts: 0, crowd_contacts: 0,
         struck: 2, hitbox: false, bodies: [
-            (nth: 0, health: 1, pos: (x: 17.03427284692, z: 0.0, tol: 0.0001)),
-            (nth: 1, health: 1, pos: (x: 4.5, z: 12.53427284692, tol: 0.0001)),
+            (nth: 0, health: 1, pos: (x: 12.53427284692, z: 0.0, tol: 0.0001)),
+            (nth: 1, health: 1, pos: (x: 0.0, z: 12.53427284692, tol: 0.0001)),
         ], events: (
         kinds: [AttackProfileChanged, Swung, HitboxOpened, Hit, Impulsed, HitboxClosed],
         sequence: [
             (0, AttackProfileChanged(profile: Slam)),
-            (30, Swung),
-            (39, HitboxOpened),
-            (43, Hit(id: (1, 1), remaining: 1)),
-            (43, Impulsed(id: (1, 1), value: (72.0000,0.0000), source: Some((0, 1)), tolerance: 0.00005)),
-            (43, Hit(id: (2, 1), remaining: 1)),
-            (43, Impulsed(id: (2, 1), value: (0.0000,72.0000), source: Some((0, 1)), tolerance: 0.00005)),
-            (44, HitboxClosed),
+            (0, Swung),
+            (9, HitboxOpened),
+            (13, Hit(id: (1, 1), remaining: 1)),
+            (13, Impulsed(id: (1, 1), value: (72.0000,0.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (13, Hit(id: (2, 1), remaining: 1)),
+            (13, Impulsed(id: (2, 1), value: (0.0000,72.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            (14, HitboxClosed),
         ],
     )),
 )

@@ -1,16 +1,17 @@
-// Fixed pair order: AB share 6 -> (3,3,0), BC share 3 -> (3,1.5,1.5).
-// Damping afterwards yields (2.7,1.35,1.35), conserving momentum before drag.
+// Two touching contacts, rigid inside the slop, solved by one Gauss-Seidel
+// sweep per solve and relax phase over four substeps with warm starting.
+// The sweeps leave 1.7913421, 2.1043290, 2.1043290m/s: all 6kg m/s arrives,
+// the front bodies slightly ahead (no pulling contact). Then each damps by .9.
 (description: "A blow propagates through contacts to a third body.",
  setup: (actions: [Place((10.0, 0.0)), Place((10.5, 0.0)), Place((11.0, 0.0))]),
  impulses: [(at: 0, target: Placed(0), value: (6.0, 0.0))], budget: (ticks: 1),
  expect: (bodies: [
- (nth: 0, velocity: (x: 2.7, z: 0.0, tol: 0.00001)),
- (nth: 1, velocity: (x: 1.35, z: 0.0, tol: 0.00001)),
- (nth: 2, velocity: (x: 1.35, z: 0.0, tol: 0.00001))], events: (
-        kinds: [Impulsed, Crowded, Momentum],
+ (nth: 0, velocity: (x: 1.612207868, z: 0.0, tol: 0.00001)),
+ (nth: 1, velocity: (x: 1.893896066, z: 0.0, tol: 0.00001)),
+ (nth: 2, velocity: (x: 1.893896066, z: 0.0, tol: 0.00001))], events: (
+        kinds: [Impulsed, Momentum],
         sequence: [
             (0, Impulsed(id: (1, 1), value: (6.0000,0.0000), source: None, tolerance: 0.00005)),
-            (0, Crowded(count: 2)),
             (0, Momentum(pairs: 2)),
         ],
     )))

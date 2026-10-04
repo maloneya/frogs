@@ -1,5 +1,7 @@
-// 20 steps north would travel 3 m. The wall's near face is z=1.8;
-// the player radius is .3, so it stops at z=1.5. Enemy 0 stays shielded.
+// Nine accelerating steps north (each tick's change ramped over four
+// substeps) travel .54284451m. The wall's near face is z=1.8; the player's centre limit
+// is 1.5, where the motor's light load rests rigidly inside the contact slop.
+// Enemy 0 stays shielded.
 (
     description: "A wall stops walking and shields an enemy from Slam.",
     setup: (scenes: [(engine: (name: "Wall cover",
@@ -10,7 +12,7 @@
     attack_profiles: [(at: 0, profile: Slam)],
     attacks: [20],
     checkpoints: [
-        (at: 8, expect: (player_pos: (x: 0.0, z: 1.35, tol: 0.0001))),
+        (at: 8, expect: (player_pos: (x: 0.0, z: 0.5428445, tol: 0.0001))),
         (at: 19, expect: (player_pos: (x: 0.0, z: 1.5, tol: 0.0001))),
         (at: 29, expect: (struck: 0, bodies: [(nth: 0, health: 3)])),
     ],

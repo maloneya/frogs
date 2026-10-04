@@ -4,8 +4,8 @@ use arpg_core::AimDir;
 #[cfg(test)]
 use glam::Vec3;
 
-use crate::angle;
 use crate::Dt;
+use crate::angle;
 
 /// How fast the character turns, in radians per second.
 ///
@@ -18,8 +18,15 @@ const _: () = assert!(PLAYER_TURN_RATE > 0.0);
 
 /// Applies this tick's aim before attack resolution. New attacks snap to aim;
 /// continuing swings retain the direction they started with.
-pub(crate) fn aim(facing: &mut f32, attack: &super::attack::Attack, intent: arpg_core::Intent, dt: Dt) {
-    if attack.holds_facing() { return; }
+pub(crate) fn aim(
+    facing: &mut f32,
+    attack: &super::attack::Attack,
+    intent: arpg_core::Intent,
+    dt: Dt,
+) {
+    if attack.holds_facing() {
+        return;
+    }
     if intent.attack() || attack.channels(intent.attack_held()) {
         let dir = intent.aim().as_vec3();
         *facing = f32::atan2(dir.x, dir.z);
@@ -46,11 +53,14 @@ mod tests {
     use crate::Accumulator;
 
     fn one_tick() -> Dt {
-        Accumulator::default().pending(Dt::SECS).next().expect("one tick's worth buys one tick")
+        Accumulator::default()
+            .pending(Dt::SECS)
+            .next()
+            .expect("one tick's worth buys one tick")
     }
 
-    /// Predicted from `PLAYER_TURN_RATE`, for the reason spelled out in
-    /// `pass::walk`: a hard-coded rate is invisible to every determinism check.
+    /// Predict from `PLAYER_TURN_RATE`: an incorrect hard-coded rate still
+    /// replays identically, so determinism alone cannot verify it.
     ///
     /// Six ticks is 1.4 radians, short of the quarter turn toward +X, so this
     /// measures the rate rather than the arrival clamp.
@@ -62,8 +72,14 @@ mod tests {
         }
 
         let predicted = PLAYER_TURN_RATE * 6.0 * Dt::SECS;
-        assert!(predicted < core::f32::consts::FRAC_PI_2, "the prediction ran past its target");
-        assert!((facing - predicted).abs() < 1e-5, "turned {facing}, predicted {predicted}");
+        assert!(
+            predicted < core::f32::consts::FRAC_PI_2,
+            "the prediction ran past its target"
+        );
+        assert!(
+            (facing - predicted).abs() < 1e-5,
+            "turned {facing}, predicted {predicted}"
+        );
     }
 
     /// Without the clamp to the remaining arc, a coarse step overshoots and a
@@ -83,7 +99,11 @@ mod tests {
     #[test]
     fn aiming_at_the_current_facing_keeps_it() {
         let mut facing = 1.0;
-        face(&mut facing, AimDir::new(Vec3::new(1.0_f32.sin(), 0.0, 1.0_f32.cos())).unwrap(), one_tick());
+        face(
+            &mut facing,
+            AimDir::new(Vec3::new(1.0_f32.sin(), 0.0, 1.0_f32.cos())).unwrap(),
+            one_tick(),
+        );
         assert_eq!(facing, 1.0);
     }
 }

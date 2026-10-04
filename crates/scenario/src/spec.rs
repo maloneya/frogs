@@ -375,7 +375,7 @@ pub(crate) struct Approx {
     /// **For float accumulation, never for timing slop.** Under a fixed
     /// timestep the tick count is exact, so a tolerance wide enough to absorb a
     /// one-tick error is not a tolerance — it is the assertion being switched
-    /// off. One tick of walking is 0.15 world units.
+    /// off. Derive displacement from the body's current physical velocity.
     #[serde(deserialize_with = "tolerance")]
     pub(crate) tol: f32,
 }

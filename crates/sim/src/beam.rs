@@ -26,10 +26,10 @@ impl Beam {
             end_normal: None,
         }
     }
-    pub(crate) fn clipped(mut self, walls: &crate::wall::Walls) -> Self {
-        if let Some(hit) = walls.first_hit(self.start, self.end) {
-            self.end = hit.point;
-            self.end_normal = Some(hit.normal);
+    pub(crate) fn clipped(mut self, hit: Option<crate::WallHit>) -> Self {
+        if let Some(hit) = hit {
+            self.end = hit.point();
+            self.end_normal = Some(hit.normal());
         }
         self
     }
@@ -49,15 +49,24 @@ impl Beam {
         self.end_normal
     }
 
-    pub(crate) fn touches(self, centre: Vec2, radius: f32) -> bool {
+    /// Boundary point of a circular body reached by this capsule.
+    pub(crate) fn contact(self, centre: Vec2, radius: f32) -> Option<Vec2> {
         let axis = self.end - self.start;
         if axis.length_squared() == 0.0 {
-            return false;
+            return None;
         }
         let t = ((centre - self.start).dot(axis) / axis.length_squared()).clamp(0.0, 1.0);
-        centre.distance_squared(self.start + axis * t) <= (Self::RADIUS + radius).powi(2)
+        let nearest = self.start + axis * t;
+        if centre.distance_squared(nearest) > (Self::RADIUS + radius).powi(2) {
+            return None;
+        }
+        Some(centre + (nearest - centre).normalize_or(-axis.normalize()) * radius)
     }
 }
-const _: () = assert!(Beam::LENGTH > 0.0 && Beam::RADIUS > 0.0 && Beam::HIT_EVERY > 0 && Beam::KNOCKBACK > 0.0
+const _: () = assert!(
+    Beam::LENGTH > 0.0
+        && Beam::RADIUS > 0.0
+        && Beam::HIT_EVERY > 0
+        && Beam::KNOCKBACK > 0.0
         && Beam::KNOCKBACK.is_finite()
 );
