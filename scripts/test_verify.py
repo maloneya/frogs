@@ -474,6 +474,23 @@ class Workspace(unittest.TestCase):
             self.assertEqual(verify.main(["full", "--performance"]), 0)
             self.assertEqual([call.args[0] for call in run.call_args_list], list(verify.CHECKS))
 
+    def test_performance_failure_stops_remaining_checks_without_certifying_omissions(self):
+        def fake(name, *args, **kwargs):
+            return {"name": name, "cached": False, "exit_code": 2 if name == "performance-headless" else 0,
+                    "seconds": 0, "evidence": [{"path": "test.log"}]}
+        checkpoint = {"revision": "test", "commits_since_pass": {}, "due": list(verify.PERFORMANCE)}
+        with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+             patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
+             patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
+             patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(verify.main(["full", "--performance"]), 2)
+        self.assertNotIn("performance-live", [call.args[0] for call in run.call_args_list])
+        result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
+        self.assertEqual(result["omitted"], list(verify.PERFORMANCE))
+        self.assertFalse(result["complete"])
+        self.assertIn("Flag the user", output.getvalue())
+
     def test_automatic_runs_never_launch_live_and_keep_due_evidence_omitted(self):
         def fake(name, *args, **kwargs):
             return {"name": name, "cached": False, "exit_code": 0, "seconds": 0,

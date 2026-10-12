@@ -31,6 +31,14 @@ Run focused checks while editing, then `full --snapshot` for completion. Hooks u
 same runner; their presence does not prove execution. GPU tests require a real
 adapter; scenarios need no GPU/window. Rustdoc is separate from Clippy/tests.
 
+During a user-triggered performance investigation, use the direct
+[runner's workload selection](performance.md#repeatable-benchmark-suite) and
+focused correctness checks for each diagnostic variant. Do not rerun full
+correctness between measurements. Keep evidence for those variants explicitly
+partial; run full completion verification once the user-selected implementation
+is ready. Exact-input cache rules still apply; a previous source's correctness
+pass does not certify a later variant.
+
 Live measurements are a deliberate foreground session: close other game instances,
 keep the benchmark window visible and leave input alone. When ready, run
 `python3 scripts/verify.py --only performance-live`, or include it with `full --live`.
@@ -79,6 +87,12 @@ and other heavy work. Live benchmarks still require their explicit foreground fl
 
 ## Reuse and retry
 
+For feature work, a performance failure or concern triggers the
+[immediate stop and handoff](performance.md#feature-work-stop-and-handoff).
+Retry commands and diagnostic next steps below do not authorize an agent to
+investigate or optimize automatically. Further performance measurements belong
+to a user-triggered investigation; ordinary correctness retry rules still apply.
+
 Failed checks print a bounded diagnostic as soon as they finish and save it in
 the report's `failures` array. Each summary identifies the check, supported failure
 category, first useful diagnostic, affected paths when known, evidence location,
@@ -86,6 +100,13 @@ next step and retry command with its working directory. Compiler locations and
 scenario expected/actual values are extracted from the log; benchmark categories
 come from structured measurement evidence. Unknown failures stay `unclassified`.
 Full logs and existing pass/fail, cache and benchmark retry rules remain authoritative.
+
+Confirmed absolute or relative performance failures print first, even when
+other metrics or workloads are inconclusive. Aggregate exit/coverage semantics
+remain unchanged. A failed or inconclusive performance check ends the current
+verification sequence; later checks remain omitted. Performance retry commands
+are reproduction details for the user's chosen investigation, not instructions
+to automatically rerun or optimize.
 
 For source drift, `source_changes` lists changed inputs without their contents.
 Summaries show at most ten paths and 1,200 diagnostic characters; follow the

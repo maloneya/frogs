@@ -108,6 +108,26 @@ class FailureSummaries(unittest.TestCase):
         self.assertEqual(result['category'], 'performance-regression')
         self.assertIn('preserve the budget', result['next_step'])
 
+    def test_mixed_coverage_prioritizes_confirmed_failure_over_noise_and_reasons(self):
+        noise = dict(workload='sparse', metric='mean_step_ms', status='inconclusive', stability='inconclusive')
+        breach = dict(workload='combat', metric='frame_ms.p99', status='inconclusive',
+                      absolute='regression', relative='incompatible', current_ms=[29, 29, 29], budget_ms=25)
+        result = self.performance({'assessment': dict(status='inconclusive', metrics=[noise, breach],
+            reasons=['baseline missing', 'other workload unfocused'])})
+        self.assertEqual(result['category'], 'performance-regression')
+        self.assertTrue(result['diagnostic'].startswith('STOP: confirmed performance failure'))
+        self.assertLess(result['diagnostic'].index('combat/frame_ms.p99'), result['diagnostic'].index('sparse/mean_step_ms'))
+        self.assertIn("user's request", result['next_step'])
+        self.assertNotIn('Resolve the measurement uncertainty', result['next_step'])
+
+    def test_late_archive_failure_does_not_hide_measured_regression(self):
+        breach = dict(workload='combat', metric='frame_ms.p99', status='regression',
+                      absolute='regression', current_ms=[29, 29, 29], budget_ms=25)
+        result = self.performance({'failure': dict(kind='infrastructure', stage='archive', reason='store unavailable'),
+            'assessment': dict(status='inconclusive', metrics=[breach], reasons=[])})
+        self.assertEqual(result['category'], 'performance-regression')
+        self.assertIn('store unavailable', result['diagnostic'])
+
     def test_unknown_empty_missing_and_malformed_evidence_remain_readable(self):
         for text in ('', 'unknown failure\n' + 'x' * 5000):
             result = summary.failure(self.row(text), self.root)

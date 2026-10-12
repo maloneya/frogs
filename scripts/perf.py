@@ -25,12 +25,18 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "benchmarks/suite.json"
-# Schema 2 requires corpse telemetry; old observations cannot be reconstructed.
-SCHEMA = 2
+# Workload and asset identities are separate; old artifacts cannot establish both.
+SCHEMA = 3
 EVIDENCE = ROOT / "benchmarks/evidence"
 LOCAL_EVIDENCE = ROOT / "target/perf/evidence"
 METRICS = ("mean_step_ms", "presentation_ms.mean", "frame_ms.p99")
 EXIT = {"pass": 0, "regression": 1, "inconclusive": 2}
+CHARACTER_ASSETS = {"character": "assets/characters/basic-player/basic-player.glb",
+                    "horde": "assets/characters/basic-enemy/basic-enemy.glb"}
+
+
+class MeasurementStopped(ValueError):
+    """An intentional collection stop, preserving already completed workloads."""
 
 
 def command(args, **kwargs):
@@ -92,6 +98,27 @@ def merge_status(states):
     if "inconclusive" in states:
         return "inconclusive"
     return "regression" if "regression" in states else "pass"
+
+
+def confirmed_regressions(assessment):
+    """A failed gate stays actionable even when another gate lacks coverage."""
+    metrics = assessment.get("metrics", [])
+    return [row for row in metrics if isinstance(row, dict) and
+            any(row.get(key) == "regression" for key in ("absolute", "relative", "status"))] if isinstance(metrics, list) else []
+
+
+def asset_differences(current, baseline, declared=()):
+    actual = {path for path in current["asset_digests"].keys() | baseline["asset_digests"].keys()
+              if current["asset_digests"].get(path) != baseline["asset_digests"].get(path)}
+    if actual != set(declared) or len(declared) != len(set(declared)):
+        raise ValueError("asset differences must match declared changes exactly: " + ", ".join(sorted(actual)))
+    return {path: {"before": baseline["asset_digests"].get(path), "after": current["asset_digests"].get(path)}
+            for path in sorted(actual)}
+
+
+def comparison_settings(settings, declared):
+    return {key: {"active": value["active"]} if CHARACTER_ASSETS.get(key) in declared else value
+            for key, value in settings.items()}
 
 
 def environment(perf):
@@ -226,6 +253,12 @@ def validate_result(result):
     fingerprint(result["source"]["digest"], 64)
     fingerprint(result["binary_sha256"], 64)
     fingerprint(result["workload_digest"], 64)
+    if not isinstance(result["asset_digests"], dict):
+        raise ValueError("missing asset identities")
+    for path, identity in result["asset_digests"].items():
+        if not path.startswith("assets/") or not path.endswith(".glb") or ".." in Path(path).parts:
+            raise ValueError("invalid asset path")
+        fingerprint(identity, 64)
     if not isinstance(result["source"]["dirty"], bool):
         raise ValueError("missing source state")
     conditions = result["conditions"]
@@ -276,7 +309,7 @@ def selected(result, workload):
     return part
 
 
-def assess(current, baseline=None):
+def assess(current, baseline=None, asset_changes=()):
     """Revalidate raw evidence; absolute budgets survive missing relative evidence."""
     result = {"status": "inconclusive", "scope": "relative_and_absolute" if baseline else "absolute_only",
               "reasons": [], "metrics": [], "relative_status": "missing" if baseline is None else "pass",
@@ -285,7 +318,7 @@ def assess(current, baseline=None):
     try:
         workloads = current["suite"]["workloads"]
         names = [w["name"] for w in workloads]
-        if len(names) != len(set(names)) or set(names) != set(current["workloads"]):
+        if len(names) != len(set(names)) or not set(current["workloads"]).issubset(names):
             raise ValueError("missing or duplicate workloads")
         if not workloads:
             raise ValueError("missing workloads")
@@ -305,7 +338,9 @@ def assess(current, baseline=None):
             if baseline is not None:
                 try:
                     old_work = next(w for w in baseline["suite"]["workloads"] if w["name"] == label)
-                    if settings != validate_result(selected(baseline, old_work)):
+                    old_settings = validate_result(selected(baseline, old_work))
+                    asset_differences(current, baseline, asset_changes)
+                    if comparison_settings(settings, asset_changes) != comparison_settings(old_settings, asset_changes):
                         raise ValueError("presentation settings differ")
                     for key in ("conditions", "workload_digest"):
                         if current[key] != baseline[key]:
@@ -358,6 +393,8 @@ def assess(current, baseline=None):
                                                   (["inconclusive"] if invalid_workloads or len(result["metrics"]) == 0 else []))
     except (KeyError, TypeError, ValueError, IndexError) as error:
         result["reasons"].append(str(error))
+    result["confirmed_regressions"] = confirmed_regressions(result)
+    result["review_required"] = bool(result["confirmed_regressions"]) or result["status"] != "pass"
     return result
 
 
@@ -489,12 +526,65 @@ def prepare(args, result):
     build_args = ["cargo", "build", "--release", "-p", "scenario", "--bin", "perf-headless"] if headless else ["cargo", "build", "--release", "-p", "arpg"]
     result["conditions"]["build"] = " ".join(build_args)
     workload_files += [ROOT / "benchmarks/driver.rs"]
-    if not headless:
-        workload_files += sorted((ROOT / "assets").rglob("*.glb"))
     result["workload_digest"] = digest(json.dumps({str(p.relative_to(ROOT)): file_digest(p) for p in workload_files}, sort_keys=True).encode())
+    result["asset_digests"] = {} if headless else {
+        str(path.relative_to(ROOT)): file_digest(path) for path in sorted((ROOT / "assets").rglob("*.glb"))}
 
 
-def run(args, result):
+def live_ready(path, activate=False, timeout=5):
+    """One explicit activation; bounded observation never steals focus back."""
+    if activate:
+        request(path, "perf prepare")
+    deadline = time.monotonic() + timeout
+    while True:
+        observation = json.loads(request(path, "perf samples"))
+        frames = observation["frames"]
+        recent = [frames[str(i)] for i in range(max(0, len(frames) - 3), len(frames))]
+        if (observation["readiness"] == {"focused": True, "occluded": False, "surface": True} and
+                len(recent) == 3 and all(frame["presented"] and frame["focused"] and not frame["occluded"] for frame in recent)):
+            return
+        if time.monotonic() >= deadline:
+            raise MeasurementStopped("live window not ready: needs a focused, visible presenting window; "
+                                     "reserve the foreground session before requesting another measurement")
+        time.sleep(0.1)
+
+
+def completed_workload(result, workload, baseline):
+    verdict = assess(selected(result, workload), baseline)
+    if verdict["review_required"]:
+        state = "confirmed performance failure" if verdict["confirmed_regressions"] else "measurement uncertainty"
+        raise MeasurementStopped(workload["name"] + ": " + state + "; stop and hand off retained evidence")
+
+
+def collect_live(path, args, result, baseline):
+    live_ready(path, activate=True)
+    if request(path, "vsync " + args.vsync) != "vsync " + str(args.vsync == "on").lower():
+        raise MeasurementStopped("requested present mode unavailable")
+    request(path, "debug collision off")
+    for workload in result["suite"]["workloads"]:
+        name = workload["name"]
+        trials = result["workloads"][name] = []
+        answer = request(path, "scene start " + str(ROOT / workload["scene"]))
+        if not answer.startswith("ready "):
+            raise MeasurementStopped("scene did not become ready: " + answer)
+        for repetition in range(result["suite"]["repetitions"]):
+            live_ready(path)
+            print(f"{name}: trial {repetition + 1}/{result['suite']['repetitions']} (warm-up + measurement)", flush=True)
+            text = f"perf trial {workload['warmup_ticks']} {workload['sample_ticks']} {workload['input']}"
+            trial = json.loads(request(path, text, timeout=180))
+            trials.append(trial)
+            try:
+                validate_trial(trial, workload)
+                if outcome(trial) != outcome(trials[0]):
+                    raise ValueError("repeated inputs produced different outcomes")
+                if environment(trial["perf"]) != environment(trials[0]["perf"]):
+                    raise ValueError("presentation settings changed between trials")
+            except (KeyError, TypeError, ValueError, IndexError) as error:
+                raise MeasurementStopped(f"{name}: trial {repetition + 1} invalid: {error}") from error
+        completed_workload(result, workload, baseline)
+
+
+def run(args, result, baseline=None):
     """Collect into the caller-owned result so later failures cannot erase it."""
     suite = result["suite"]
     headless = args.mode == "headless"
@@ -531,28 +621,28 @@ def run(args, result):
                     trial = json.loads(command([str(binary), workload["scene"], str(workload["warmup_ticks"]),
                                                str(workload["sample_ticks"]), workload["input"]]))
                     trials.append(trial)
+                    try:
+                        validate_trial(trial, workload)
+                        if outcome(trial) != outcome(trials[0]):
+                            raise ValueError("repeated inputs produced different outcomes")
+                    except (KeyError, TypeError, ValueError, IndexError) as error:
+                        raise MeasurementStopped(f"{workload['name']}: trial {repetition + 1} invalid: {error}") from error
+                completed_workload(result, workload, baseline)
             if source_identity(outputs) != before or file_digest(binary) != result["binary_sha256"]:
                 raise ValueError("source or executable changed during measurement")
             return result
         with app(binary, args.output) as path:
-            if request(path, "vsync " + args.vsync) != "vsync " + str(args.vsync == "on").lower():
-                raise ValueError("requested present mode unavailable")
-            request(path, "debug collision off")
-            for workload in suite["workloads"]:
-                name = workload["name"]
-                result["workloads"][name] = []
-                answer = request(path, "scene start " + str(ROOT / workload["scene"]))
-                if not answer.startswith("ready "):
-                    raise ValueError("scene did not become ready: " + answer)
-                for repetition in range(suite["repetitions"]):
-                    print(f"{name}: trial {repetition + 1}/{suite['repetitions']} (warm-up + measurement)", flush=True)
-                    text = f"perf trial {workload['warmup_ticks']} {workload['sample_ticks']} {workload['input']}"
-                    trial = json.loads(request(path, text, timeout=180))
-                    result["workloads"][name].append(trial)
+            collect_live(path, args, result, baseline)
         if other_games():
             raise ValueError("another game started during measurement")
         if source_identity(outputs) != before or file_digest(binary) != result["binary_sha256"]:
             raise ValueError("source or executable changed during measurement")
+    except MeasurementStopped as error:
+        if source_identity(outputs) != before or file_digest(binary) != result["binary_sha256"]:
+            result["errors"].append("source or executable changed during measurement")
+        if other_games():
+            result["errors"].append("another game started during measurement")
+        result["measurement_stop"] = str(error)
     except (OSError, ValueError, KeyError, TypeError, IndexError, StopIteration, subprocess.SubprocessError) as error:
         result["errors"].append(str(error))
         result["failure"] = {"kind": "infrastructure" if stage == "build" else "measurement",
@@ -576,6 +666,7 @@ def archive_result(result, directory=None):
         stream.write(gzip.compress(raw, mtime=0))
     manifest = {"schema_version": SCHEMA, "artifact": artifact.name, "sha256": identity, "source": result["source"],
                 "conditions": result["conditions"], "workload_digest": result["workload_digest"],
+                "asset_digests": result["asset_digests"],
                 "created_utc": result.get("created_utc", ""), "suite": result["suite"]}
     save(directory / (identity + ".json"), manifest)
     return artifact
@@ -585,7 +676,7 @@ def eligible(current, offered, automatic=True):
     """Metadata-only filter; never parse trials from an unrelated benchmark."""
     if automatic and offered["source"]["dirty"] and offered["source"]["digest"] != current["source"]["digest"]:
         return False
-    if any(current[key] != offered[key] for key in ("conditions", "workload_digest")):
+    if any(current[key] != offered[key] for key in ("conditions", "workload_digest", "asset_digests")):
         return False
     wanted = {w["name"]: w for w in current["suite"]["workloads"]}
     available = {w["name"]: w for w in offered["suite"]["workloads"]}
@@ -625,7 +716,7 @@ def discover(current, directory=None, exclusions=None):
         if digest(raw) != manifest["sha256"]:
             raise ValueError("corrupt archived evidence: " + str(manifest_path))
         result = json.loads(raw)
-        for key in ("schema_version", "source", "conditions", "workload_digest", "suite"):
+        for key in ("schema_version", "source", "conditions", "workload_digest", "asset_digests", "suite"):
             if manifest[key] != result[key]:
                 raise ValueError("manifest contradicts raw evidence: " + key)
         validate_result(result)
@@ -653,6 +744,8 @@ def main():
     compare.add_argument("baseline", type=Path)
     compare.add_argument("candidate", type=Path)
     compare.add_argument("--output", type=Path, required=True)
+    compare.add_argument("--asset-change", action="append", default=[], metavar="ASSETS/PATH.glb",
+                         help="explicit feature comparison; declare every changed asset (not eligible as a baseline)")
     publish = sub.add_parser("archive", help="check in immutable raw evidence and its provenance manifest")
     publish.add_argument("result", type=Path)
     args = parser.parse_args()
@@ -667,6 +760,8 @@ def main():
         if args.workload:
             parser.error("choose --rerun or --workload")
         previous = load(args.rerun)
+        if confirmed_regressions(assess(previous)):
+            parser.error("previous evidence contains a confirmed failure; hand it off before selecting further measurements")
         args.workload = assess(previous)["rerun_workloads"]
         if not args.workload:
             parser.error("no uncertain workloads to rerun")
@@ -701,13 +796,22 @@ def main():
                 print(f"Retired {len(result['baseline_exclusions'])} incompatible evidence manifests (schema {SCHEMA} required).", flush=True)
             result["baseline"] = baseline_path
             stage = "measurement"
-            run(args, result)
+            run(args, result, baseline)
             stage = "assessment"
             verdict = assess(result, baseline)
             result["assessment"] = verdict
             result["baseline"] = baseline_path
         else:
-            result = verdict = assess(load(args.candidate), baseline)
+            candidate = load(args.candidate)
+            if args.asset_change:
+                validate_result(candidate)
+                differences = asset_differences(candidate, baseline, args.asset_change)
+            result = verdict = assess(candidate, baseline, args.asset_change)
+            if args.asset_change:
+                result.update(comparison_kind="feature_assets", asset_changes=differences,
+                              baseline_eligible=False, candidate_source=candidate["source"],
+                              candidate_binary_sha256=candidate["binary_sha256"],
+                              attribution_limit="Asset differences and conditions are checked; unrelated source edits can still confound attribution.")
             result["baseline"] = str(args.baseline.resolve())
             result["candidate"] = str(args.candidate.resolve())
         if baseline is not None:
@@ -736,7 +840,12 @@ def main():
         except OSError:
             pass  # Never overwrite an existing result, including after a race.
         return 2
+    if verdict["review_required"]:
+        print("STOP: confirmed performance failure" if verdict["confirmed_regressions"] else "STOP: performance evidence needs review", flush=True)
+        print("Preserve evidence and flag the user; further investigation requires their direction.", flush=True)
     print(verdict["status"] + ": " + verdict["scope"], flush=True)
+    if result.get("measurement_stop"):
+        print("  " + result["measurement_stop"])
     for reason in verdict["reasons"]:
         print("  " + reason)
     for row in verdict["metrics"]:

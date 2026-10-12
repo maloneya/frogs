@@ -505,10 +505,14 @@ impl ApplicationHandler for App {
                 log::debug!("focus: {focused}");
                 if !focused {
                     self.input.release_all();
+                    if let Some(trial) = &mut self.trial { trial.invalidate("window lost focus during trial"); }
                 }
             }
 
-            WindowEvent::Occluded(occluded) => { self.occluded = occluded; }
+            WindowEvent::Occluded(occluded) => {
+                self.occluded = occluded;
+                if occluded && let Some(trial) = &mut self.trial { trial.invalidate("window occluded during trial"); }
+            }
 
             WindowEvent::CursorMoved { position, .. } => {
                 let _ = self.input.on_cursor(Vec2::new(position.x as f32, position.y as f32));

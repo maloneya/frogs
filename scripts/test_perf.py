@@ -44,6 +44,7 @@ def fixture():
     return {"schema_version": perf.SCHEMA, "errors": [],
             "source": {"revision": "a" * 40, "digest": "b" * 64, "dirty": False},
             "binary_sha256": "c" * 64, "workload_digest": "d" * 64,
+            "asset_digests": {path: "e" * 64 for path in perf.CHARACTER_ASSETS.values()},
             "conditions": {"machine": "test", "cpu": "test", "memory_bytes": "1024", "os": "test",
                            "rustc": "test", "build": "cargo build --release -p arpg", "build_environment": {}},
             "suite": {"version": 1, "repetitions": 3, "relative_tolerance": 0.1,
@@ -55,6 +56,14 @@ def set_step_ms(trial, milliseconds):
     trial["perf"]["mean_step_ms"] = milliseconds
     for frame in trial["perf"]["frames"].values():
         frame["game_step_ms"] = milliseconds * frame["ticks"]
+
+
+def set_frame_ms(trial, milliseconds):
+    trial["perf"]["frame_ms"]["p99"] = milliseconds
+    frames = trial["perf"]["frames"]
+    trial["perf"]["window_ms"] = milliseconds * len(frames)
+    for frame in frames.values():
+        frame["frame_ms"] = milliseconds
 
 
 class EvidenceTests(unittest.TestCase):
@@ -217,7 +226,7 @@ class EvidenceTests(unittest.TestCase):
             store = Path(directory)
             current = fixture()
             manifest = {key: current[key] for key in
-                        ("schema_version", "source", "conditions", "suite", "workload_digest")}
+                        ("schema_version", "source", "conditions", "suite", "workload_digest", "asset_digests")}
             manifest.update(artifact="missing.json.gz", sha256="a" * 64)
             retired = {**manifest, "schema_version": 1}
             perf.save(store / "retired.json", retired)
@@ -269,7 +278,7 @@ class EvidenceTests(unittest.TestCase):
                 def prepare(args, result):
                     result.update(copy.deepcopy(current))
                     result["workloads"] = {}
-                def measure(args, result):
+                def measure(args, result, baseline=None):
                     result["workloads"] = copy.deepcopy(current["workloads"])
                 with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]), \
                      patch.object(perf, "prepare", side_effect=prepare), \
@@ -359,6 +368,119 @@ class EvidenceTests(unittest.TestCase):
         verdict = perf.assess(result)
         self.assertEqual(verdict["absolute_status"], "inconclusive")
         self.assertTrue(any(r["workload"] == "other" for r in verdict["metrics"]))
+
+    def test_confirmed_failure_survives_another_metrics_uncertainty(self):
+        result = fixture()
+        for trial in result["workloads"]["sparse"]:
+            set_frame_ms(trial, 30)
+        set_step_ms(result["workloads"]["sparse"][1], 20)
+        verdict = perf.assess(result)
+        self.assertEqual(verdict["status"], "inconclusive")
+        self.assertTrue(verdict["review_required"])
+        self.assertEqual([m["metric"] for m in verdict["confirmed_regressions"]], ["frame_ms.p99"])
+
+    def test_feature_asset_comparison_requires_exact_declared_changes_and_same_conditions(self):
+        baseline, candidate = fixture(), fixture()
+        path = perf.CHARACTER_ASSETS["horde"]
+        candidate["asset_digests"][path] = "f" * 64
+        for trial in candidate["workloads"]["sparse"]:
+            trial["perf"]["horde"]["vertices"] = 900
+        self.assertEqual(perf.assess(candidate, baseline)["relative_status"], "inconclusive")
+        self.assertFalse(perf.eligible(candidate, baseline, automatic=False))
+        self.assertEqual(perf.assess(candidate, baseline, [path])["status"], "pass")
+        with self.assertRaises(ValueError):
+            perf.asset_differences(candidate, baseline, [path, perf.CHARACTER_ASSETS["character"]])
+        for trial in candidate["workloads"]["sparse"]:
+            trial["perf"]["width"] = 1920
+        self.assertEqual(perf.assess(candidate, baseline, [path])["relative_status"], "inconclusive")
+
+    def test_changed_assets_do_not_erase_absolute_failure(self):
+        baseline, candidate = fixture(), fixture()
+        candidate["asset_digests"][perf.CHARACTER_ASSETS["horde"]] = "f" * 64
+        for trial in candidate["workloads"]["sparse"]:
+            set_frame_ms(trial, 30)
+        verdict = perf.assess(candidate, baseline)
+        self.assertEqual(verdict["relative_status"], "inconclusive")
+        self.assertEqual(verdict["confirmed_regressions"][0]["absolute"], "regression")
+
+    def test_feature_comparison_cli_records_provenance_and_cannot_enter_baseline_store(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            baseline, candidate = fixture(), fixture()
+            asset = perf.CHARACTER_ASSETS["horde"]
+            candidate["asset_digests"][asset] = "f" * 64
+            for trial in candidate["workloads"]["sparse"]:
+                trial["perf"]["horde"]["vertices"] = 900
+            base, current, output = [directory / name for name in ["base.json", "current.json", "comparison.json"]]
+            perf.save(base, baseline)
+            perf.save(current, candidate)
+            with patch.object(sys, "argv", ["perf", "compare", str(base), str(current), "--asset-change", asset, "--output", str(output)]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(perf.main(), 0)
+            report = perf.load(output)
+            self.assertEqual(report["comparison_kind"], "feature_assets")
+            self.assertFalse(report["baseline_eligible"])
+            self.assertEqual(report["asset_changes"][asset], {"before": "e" * 64, "after": "f" * 64})
+            self.assertEqual(report["candidate_source"], candidate["source"])
+            with self.assertRaises((KeyError, ValueError)):
+                perf.archive(output, directory / "store")
+
+    def test_undeclared_asset_changes_preserve_raw_absolute_observations(self):
+        baseline, candidate = fixture(), fixture()
+        candidate["asset_digests"][perf.CHARACTER_ASSETS["character"]] = "f" * 64
+        verdict = perf.assess(candidate, baseline, [perf.CHARACTER_ASSETS["horde"]])
+        self.assertEqual(verdict["absolute_status"], "pass")
+        self.assertEqual(verdict["relative_status"], "inconclusive")
+
+    def test_live_readiness_observes_three_valid_frames_and_activates_once(self):
+        observation = copy.deepcopy(fixture()["workloads"]["sparse"][0]["perf"])
+        observation["readiness"] = dict(focused=True, occluded=False, surface=True)
+        observation["frames"]["0"]["focused"] = False
+        with patch.object(perf, "request", side_effect=["ok", json.dumps(observation)]) as request:
+            perf.live_ready("socket", activate=True)
+        self.assertEqual(request.call_args_list[0].args, ("socket", "perf prepare"))
+        observation["readiness"]["focused"] = False
+        with patch.object(perf, "request", return_value=json.dumps(observation)) as request:
+            with self.assertRaisesRegex(perf.MeasurementStopped, "not ready"):
+                perf.live_ready("socket", timeout=0)
+        self.assertEqual(request.call_count, 1)
+        observation["readiness"]["focused"] = True
+        observation["frames"]["59"]["focused"] = False
+        with patch.object(perf, "request", return_value=json.dumps(observation)):
+            with self.assertRaises(perf.MeasurementStopped):
+                perf.live_ready("socket", timeout=0)
+
+    def test_live_collection_stops_after_invalid_trial_and_retains_it(self):
+        result = fixture()
+        trial = result["workloads"]["sparse"][0]
+        trial["perf"]["unfocused_frames"] = 1
+        result["workloads"] = {}
+        with patch.object(perf, "live_ready"), \
+             patch.object(perf, "request", side_effect=["vsync true", "ok", "ready tick=0", json.dumps(trial)]) as request, \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(perf.MeasurementStopped, "unfocused_frames"):
+                perf.collect_live("socket", argparse.Namespace(vsync="on"), result, None)
+        self.assertEqual(len(result["workloads"]["sparse"]), 1)
+        self.assertEqual(request.call_count, 4)
+
+    def test_live_collection_stops_before_next_workload_after_confirmed_regression(self):
+        result = fixture()
+        workload = copy.deepcopy(result["suite"]["workloads"][0])
+        workload["name"] = "never-started"
+        result["suite"]["workloads"].append(workload)
+        trials = result["workloads"]["sparse"]
+        for trial in trials:
+            set_frame_ms(trial, 30)
+        result["workloads"] = {}
+        with patch.object(perf, "live_ready"), \
+             patch.object(perf, "request", side_effect=["vsync true", "ok", "ready tick=0", *map(json.dumps, trials)]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(perf.MeasurementStopped, "confirmed performance failure"):
+                perf.collect_live("socket", argparse.Namespace(vsync="on"), result, None)
+        self.assertNotIn("never-started", result["workloads"])
+        verdict = perf.assess(result)
+        self.assertEqual(verdict["status"], "inconclusive")
+        self.assertTrue(verdict["confirmed_regressions"])
 
     def test_changed_gameplay_preserves_absolute_evidence(self):
         result = fixture()

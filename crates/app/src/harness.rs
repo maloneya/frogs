@@ -57,6 +57,8 @@ pub(crate) enum Command {
     Perf { samples: bool },
     /// Discard the timing window without changing playable state.
     ResetPerf,
+    /// Request foreground focus once, without restarting or changing Game.
+    PreparePerf,
     /// Restart the selected scene and reply after a bounded tick-scheduled trial.
     PerfTrial(crate::trial::Spec),
     /// Every trace event from this tick onward.
@@ -178,11 +180,12 @@ fn parse(line: &str) -> Result<Command, String> {
                 None => Command::Perf { samples: false },
                 Some("samples") => Command::Perf { samples: true },
                 Some("reset") => Command::ResetPerf,
+                Some("prepare") => Command::PreparePerf,
                 Some("trial") => return crate::trial::Spec::parse(it)
                     .map(Command::PerfTrial),
-                _ => return Err("expected: perf [samples|reset]".into()),
+                _ => return Err("expected: perf [samples|reset|prepare|trial]".into()),
             };
-            if it.next().is_some() { return Err("expected: perf [samples|reset]".into()); }
+            if it.next().is_some() { return Err("expected: perf [samples|reset|prepare|trial]".into()); }
             command
         }
         // `trace since <tick>` rather than `trace <tick>`, so the reply cannot
@@ -358,9 +361,10 @@ mod tests {
         assert!(matches!(super::parse("perf"), Ok(super::Command::Perf { samples: false })));
         assert!(matches!(super::parse("perf samples"), Ok(super::Command::Perf { samples: true })));
         assert!(matches!(super::parse("perf reset"), Ok(super::Command::ResetPerf)));
+        assert!(matches!(super::parse("perf prepare"), Ok(super::Command::PreparePerf)));
         assert!(matches!(super::parse("perf trial 120 180 idle"), Ok(super::Command::PerfTrial(_))));
         assert!(matches!(super::parse("perf\ttrial 120 180 combat"), Ok(super::Command::PerfTrial(_))));
-        for bad in ["perf start", "perf reset extra", "perf samples extra", "perf 2000", "perf trial 0 60 idle", "perf trial 1 60 idle extra"] {
+        for bad in ["perf start", "perf prepare extra", "perf reset extra", "perf samples extra", "perf 2000", "perf trial 0 60 idle", "perf trial 1 60 idle extra"] {
             assert!(super::parse(bad).is_err(), "{bad}");
         }
     }

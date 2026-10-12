@@ -407,6 +407,15 @@ fn performance_trial_refusal_preserves_game_and_pending_work() {
     assert_eq!(response.try_recv().unwrap(), "error: no renderer yet");
     assert_eq!(app.game.hash(), before);
     assert!(app.trial.is_none());
+    let (reply, response) = std::sync::mpsc::channel();
+    tx.send(Request { command: Command::PreparePerf, reply }).unwrap();
+    app.drain_harness();
+    assert_eq!(response.try_recv().unwrap(), "error: no window yet");
+    assert_eq!(app.game.hash(), before);
+    assert_eq!(app.performance_readiness(), Err("no window yet"));
+    let observation: serde_json::Value = serde_json::from_str(&app.report_perf(false)).unwrap();
+    assert_eq!(observation["readiness"]["focused"], false);
+    assert_eq!(observation["readiness"]["surface"], false);
 
     let (reply, pending) = std::sync::mpsc::channel();
     app.trial = Some(crate::trial::Trial::new(spec, reply, app.game.enemy_count()));

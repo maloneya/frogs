@@ -40,7 +40,7 @@ keeps stepping between commands.
 |---|---|
 | Input | `press`, `release`, `tap`, `hold <key> <ms>`, `cursor <x> <y>` |
 | Observe | `state`, `trace since <tick>`, `wait <ms>`, `shot <path>` |
-| Performance | `perf`, `perf samples`, `perf reset` |
+| Performance | `perf`, `perf samples`, `perf reset`, `perf prepare`, `perf trial <warmup ticks> <sample ticks> idle\|combat` |
 | Place or push | `spawn (pos: (<x>, <z>), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))`, `impulse <player\|#id> <x> <z>` |
 | Sources | `source (pos: (<x>, <z>), every: <ticks>)`, `source remove\|enable\|disable <id>` |
 | Scenes | `scene start <path>`, `scene restart`, `scene add <path>`, `scene evict <id>`, `scene list` |
@@ -92,11 +92,17 @@ assess pacing. Smoothed FPS and renderer CPU time do not establish GPU duration.
 The [performance guide](../../../docs/performance.md) owns timing boundaries and
 interpretation; use its benchmark runner for regression comparisons:
 
+`perf prepare` requests focus once. Inspect `readiness` and recent raw frame rows
+before a trial; focus/occlusion changes invalidate it even during warm-up. Use the
+runner's bounded readiness check instead of desktop activation scripts.
+
 ```sh
 python3 scripts/perf.py run --mode live --output target/perf/new-run.json
 ```
 
 Exit 2 is inconclusive, never a pass. Preserve gates and baseline evidence.
+During feature work, follow the [performance stop rule](../../../docs/performance.md#feature-work-stop-and-handoff)
+on a failure or concern; do not automatically optimize or retry measurements.
 For camera/animation changes use core's elapsed-time half-life helpers and
 compare frame rates; fixed per-frame fractions change behaviour with FPS.
 

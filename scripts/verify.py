@@ -343,6 +343,9 @@ def main(argv=None):
                 verify_summary.display(summary)
             if row.get("reason"):
                 break
+            if name in PERFORMANCE and row["exit_code"] != 0:
+                print("Performance collection stopped; remaining checks are omitted. Flag the user before further investigation.", flush=True)
+                break
         result["coverage"] = [row["name"] for row in result["checks"] if row["exit_code"] == 0]
         result["omitted"] = [name for name in required if name not in result["coverage"]]
         codes = [row["exit_code"] for row in result["checks"]]

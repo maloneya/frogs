@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import shlex
 
+import perf
+
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 LOCATION = re.compile(r"(?:-->\s+|panicked at |^)([^\s]+\.(?:rs|swift|py)):(\d+)(?::\d+)?")
 LIMIT = 1200
@@ -98,10 +100,10 @@ def failure(row, cwd, checked_root=None):
             pass
         infrastructure = row.get("infrastructure_failure") or data.get("failure", {})
         assessment = data.get("assessment", {})
-        if isinstance(infrastructure, dict) and infrastructure.get("kind") == "infrastructure":
+        regressions = perf.confirmed_regressions(assessment) if isinstance(assessment, dict) else []
+        if isinstance(infrastructure, dict) and infrastructure.get("kind") == "infrastructure" and not regressions:
             category = "infrastructure"
             diagnostic = clipped(str(infrastructure.get("stage", "benchmark")) + ": " + str(infrastructure.get("reason", "unknown infrastructure failure")))
-            action = "Repair the reported infrastructure problem before explicitly retrying this mode."
             if infrastructure.get("stage") == "build":
                 build_log = next((path for path in evidence if path.endswith(".build.log")), None)
                 if build_log:
@@ -111,18 +113,24 @@ def failure(row, cwd, checked_root=None):
         elif isinstance(assessment, dict) and assessment:
             raw_metrics = assessment.get("metrics", [])
             metrics = [m for m in raw_metrics if isinstance(m, dict) and m.get("status") in ("regression", "inconclusive")] if isinstance(raw_metrics, list) else []
-            category = "performance-regression" if assessment.get("status") == "regression" else "performance-inconclusive"
+            category = "performance-regression" if regressions or assessment.get("status") == "regression" else "performance-inconclusive"
             if category != "performance-regression" and any(m.get("stability") == "inconclusive" for m in metrics):
                 category = "timing-noise"
             reasons = assessment.get("reasons", [])
-            details = reasons[:3] if isinstance(reasons, list) else []
-            details += [f"{m.get('workload')}/{m.get('metric')}: {m.get('status')}; trials_ms={m.get('current_ms')}; budget_ms={m.get('budget_ms')}" for m in metrics[:3]]
+            ordered = regressions + [m for m in metrics if m not in regressions]
+            details = ["STOP: confirmed performance failure; incomplete coverage remains uncertified."] if category == "performance-regression" else []
+            if data.get("measurement_stop"):
+                details.append(data["measurement_stop"])
+            details += [f"{m.get('workload')}/{m.get('metric')}: {m.get('status')}; absolute={m.get('absolute')}; relative={m.get('relative')}; trials_ms={m.get('current_ms')}; budget_ms={m.get('budget_ms')}" for m in ordered[:3]]
+            details += reasons[:3] if isinstance(reasons, list) else []
+            if isinstance(infrastructure, dict) and infrastructure.get("kind") == "infrastructure":
+                details.append(str(infrastructure.get("stage")) + ": " + str(infrastructure.get("reason")))
             diagnostic = clipped("\n".join(map(str, details)) or "Benchmark assessment: " + str(assessment.get("status", "unknown")))
-            action = "Investigate the measured regression; preserve the budget." if category == "performance-regression" else "Resolve the measurement uncertainty and rerun this mode with no competing heavy work."
         if not evidence or not evidence[0].endswith(".build.log"):
             line = None
+        action = "Stop feature work and flag the user; preserve the budget and evidence. Investigation starts only at the user's request."
         if name == "performance-live":
-            action += " Reserve an uninterrupted foreground session for the retry."
+            action += " A user-requested retry needs a reserved foreground session."
     if checked_root is not None:
         paths = [str(Path(path).relative_to(checked_root)) if Path(path).is_absolute() and Path(path).is_relative_to(checked_root)
                  else path for path in paths]

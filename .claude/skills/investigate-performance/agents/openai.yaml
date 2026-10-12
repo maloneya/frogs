@@ -1,0 +1,6 @@
+interface:
+  display_name: "Investigate performance"
+  short_description: "Evidence and options before performance fixes"
+  default_prompt: "Use $investigate-performance to assess this arpg performance alert, research published approaches, and present options for my decision before implementing fixes."
+policy:
+  allow_implicit_invocation: false

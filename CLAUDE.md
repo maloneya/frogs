@@ -30,6 +30,11 @@ Start with [README](README.md) for build, play and controls.
 - Behaviour changes need predicted outcomes through Game, including relevant
   intermediate ticks, interactions, refusals and stale IDs. Tests and benchmarks
   own their setups; never load playable `scenes/` files as test fixtures.
+- On a performance regression or credible performance concern, stop feature
+  work and flag it immediately. Preserve changes and evidence; do not optimize,
+  retry toward a pass or expand scope. Follow the [stop and handoff policy](docs/performance.md#feature-work-stop-and-handoff).
+  Investigation starts only when the user requests it; implementation waits for
+  the user's choice of approach.
 - Search [traps](docs/traps.md) when diagnosing. Record symptom, cause and check
   after a misleading failure costs ten minutes; replace recurring advice with checks.
 - No compatibility shims, aliases, legacy readers or migration fallbacks without
@@ -60,6 +65,7 @@ Read only what the task needs:
 - [Create a scene](.claude/skills/create-scene/SKILL.md), [editor](docs/scene-editor.md), [headless API](docs/scene-authoring.md), [scene lifetime](docs/scene-playtests.md)
 - [Write scenarios](.claude/skills/scenario/SKILL.md), [live playtests](.claude/skills/playtest/SKILL.md)
 - [Add/change a sim pass](.claude/skills/add-sim-pass/SKILL.md)
+- [Investigate performance](.claude/skills/investigate-performance/SKILL.md): user-triggered evidence, published approaches and a decision brief
 - [Blender assets](.claude/skills/author-blender-asset/SKILL.md), [asset contract](docs/character-assets-authoring.md)
 - [Encounters](docs/encounters.md), [interaction](docs/interaction.md), [source enablement](docs/source-enablement.md)
 - [Collision debug](docs/collision-debug.md), [attack effects](docs/attack-effects.md)

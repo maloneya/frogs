@@ -140,10 +140,11 @@ impl App {
                         "error: performance trials require default tuning".into()
                     } else if self.renderer.is_none() {
                         "error: no renderer yet".into()
+                    } else if let Err(error) = self.performance_readiness() {
+                        format!("error: {error}")
                     } else if let Err(error) = self.restart_playtest() {
                         format!("error: {error}")
                     } else {
-                        self.window.as_ref().expect("renderer has a window").focus_window();
                         self.trial = Some(crate::trial::Trial::new(spec, reply, self.game.enemy_count()));
                         continue;
                     }
@@ -152,6 +153,14 @@ impl App {
                 Command::ResetPerf => {
                     self.perf.reset();
                     "ok".to_string()
+                }
+                Command::PreparePerf => {
+                    if let Some(window) = &self.window {
+                        window.focus_window();
+                        "ok".into()
+                    } else {
+                        "error: no window yet".into()
+                    }
                 }
                 Command::Impulse { target, value } => match self.game.body_named(&target) {
                     Some(id) if self.game.apply_impulse(id, value) => {
@@ -206,6 +215,15 @@ impl App {
         quit
     }
 
+    pub(super) fn performance_readiness(&self) -> Result<(), &'static str> {
+        let window = self.window.as_ref().ok_or("no window yet")?;
+        if !window.has_focus() { return Err("performance window is not focused"); }
+        if self.occluded { return Err("performance window is occluded"); }
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 { return Err("performance surface has zero size"); }
+        Ok(())
+    }
+
     /// Compact observations: never invoke Game::report or Game::hash here.
     pub(super) fn report_perf(&self, samples: bool) -> String {
         let mut out = Report::default();
@@ -223,6 +241,14 @@ impl App {
         out.bool("vsync", self.renderer.as_ref().is_some_and(Renderer::vsync));
         out.text("selected_scene", self.game.selected_scene_name().unwrap_or(""));
         out.bool("collision_debug", self.collision_debug.enabled());
+        out.object("readiness", |out| {
+            out.bool("focused", self.window.as_ref().is_some_and(|window| window.has_focus()));
+            out.bool("occluded", self.occluded);
+            out.bool("surface", self.renderer.is_some() && self.window.as_ref().is_some_and(|window| {
+                let size = window.inner_size();
+                size.width > 0 && size.height > 0
+            }));
+        });
         if let Some(camera) = &self.camera { out.num("view_height", camera.view_height()); }
         if let Some(window) = &self.window {
             let size = window.inner_size();
