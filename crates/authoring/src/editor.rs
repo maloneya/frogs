@@ -209,6 +209,11 @@ fn set(scene: &mut SceneDocument, target: Target, field: &str, raw: Number) -> R
 
 fn lighting(scene: &mut SceneDocument, field: &str, value: f32) -> Result<(), String> {
     if !value.is_finite() { return Err("Value must be finite.".into()); }
+    if field == "storm" {
+        if value != 0.0 && value != 1.0 { return Err("Storm must be off or on.".into()); }
+        scene.scene.environment = scene.scene.environment.with_storm(value == 1.0);
+        return Ok(());
+    }
     let light = scene.scene.environment.light();
     let (mut ambient, mut directional) = (light.ambient_intensity(), light.directional_intensity());
     let direction = light.direction().normalize();
@@ -227,7 +232,7 @@ fn lighting(scene: &mut SceneDocument, field: &str, value: f32) -> Result<(), St
     let direction = if field == "azimuth" || field == "elevation" {
         Vec3::new(elevation.cos() * azimuth.sin(), elevation.sin(), elevation.cos() * azimuth.cos())
     } else { light.direction() };
-    scene.scene.environment = EnvironmentSpec::new(EnvironmentLight::try_new(light.ambient_colour(), ambient, light.directional_colour(), directional, direction)?);
+    scene.scene.environment = EnvironmentSpec::new(EnvironmentLight::try_new(light.ambient_colour(), ambient, light.directional_colour(), directional, direction)?).with_storm(scene.scene.environment.storm());
     Ok(())
 }
 
@@ -253,7 +258,7 @@ pub fn edit(mut scene: SceneDocument, edit: Edit) -> Result<(SceneDocument, Opti
                 _ => return Err("Unknown lighting colour.".into()),
             };
             *target = LinearRgb::try_new(colour.0, colour.1, colour.2)?;
-            scene.scene.environment = EnvironmentSpec::new(EnvironmentLight::try_new(ambient, light.ambient_intensity(), directional, light.directional_intensity(), light.direction())?);
+            scene.scene.environment = EnvironmentSpec::new(EnvironmentLight::try_new(ambient, light.ambient_intensity(), directional, light.directional_intensity(), light.direction())?).with_storm(scene.scene.environment.storm());
         }
         Edit::Rename { name } => {
             if name.trim().is_empty() || name.len() > 128 { return Err("Scene name must contain 1–128 bytes.".into()); }
@@ -433,7 +438,8 @@ pub(crate) fn document(scene: &SceneDocument, selected: Option<Target>, path: Op
     let selected = selected.map(target_id);
     let light = scene.scene.environment.light();
     let direction = light.direction().normalize();
-    let lighting = vec![colour_field("ambient_colour", "Ambient colour", light.ambient_colour()),
+    let lighting = vec![field("storm", "Rain and lightning", "bool", u8::from(scene.scene.environment.storm()) as f32, 1.0),
+        colour_field("ambient_colour", "Ambient colour", light.ambient_colour()),
         field("ambient_intensity", "Ambient brightness", "", light.ambient_intensity(), 0.05),
         colour_field("directional_colour", "Sun / moon colour", light.directional_colour()),
         field("directional_intensity", "Sun / moon brightness", "", light.directional_intensity(), 0.05),
@@ -534,10 +540,16 @@ mod tests {
 
     #[test]
     fn environment_edits_are_validated_and_independent_of_campfires() {
-        let (scene, _) = edit(SceneDocument::default(), Edit::Lighting { field: "ambient_intensity".into(), value: 0.1 }).unwrap();
+        let (scene, _) = edit(SceneDocument::default(), Edit::Lighting { field: "storm".into(), value: 1.0 }).unwrap();
+        let (scene, _) = edit(scene, Edit::Lighting { field: "ambient_intensity".into(), value: 0.1 }).unwrap();
         let (scene, _) = edit(scene, Edit::LightingColour { field: "ambient_colour".into(), colour: (0.1, 0.2, 0.8) }).unwrap();
         let (scene, _) = edit(scene, Edit::Lighting { field: "azimuth".into(), value: 90.0 }).unwrap();
         let (scene, _) = edit(scene, Edit::Lighting { field: "elevation".into(), value: 45.0 }).unwrap();
+        assert!(scene.scene.environment.storm());
+        let view = document(&scene, None, None, None).unwrap();
+        assert_eq!(view["lighting"][0]["key"], "storm");
+        assert_eq!(view["lighting"][0]["unit"], "bool");
+        assert!(edit(scene.clone(), Edit::Lighting { field: "storm".into(), value: 0.5 }).is_err());
         let expected = scene.scene.environment.light();
         assert_eq!(expected.ambient_colour().to_array(), [0.1, 0.2, 0.8]);
         for field in ["ambient_colour", "directional_colour"] {

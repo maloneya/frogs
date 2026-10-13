@@ -1,0 +1,14 @@
+Human Base Meshes: Asset Bundle v1.4.1
+Blender Studio and community contributions
+
+The bundle README states:
+"All provided assets are public domain under the CC0 license."
+
+CC0 1.0 Universal Public Domain Dedication
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Official source and licence listing:
+https://www.blender.org/download/demo-files/#assets
+
+Retained assets: GEO-body_male_realistic and its two eye meshes.
+The full bundle README is also retained in realistic-male.blend.

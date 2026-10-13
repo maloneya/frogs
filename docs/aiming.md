@@ -20,14 +20,18 @@ stationary. Explicit `aims` commands select independent directions instead;
 see [the retreating attack scenario](../scenarios/retreating_attacks_keep_their_aim.ron).
 The live harness supplies cursor coordinates with `cursor <x> <y>`.
 
-The whole model faces the authoritative simulation direction. App blends
+Character placement follows the authoritative simulation direction. App blends
 forward/backward and sideways movement clips using displacement relative to
-that facing, then layers the attack onto the upper body. The asset sampler
-owns validated masks and local-pose blending; gfx receives the finished skin
+that facing. The authored strafes turn the hips and feet toward travel while the
+chest stays nearer aim and the head follows it. Both arms counter-swing with the
+stride. Moving attacks and beams align their upper-body layer above the turning
+hips, preserving the ability's orientation. The asset sampler owns validated
+masks, local blending and parent-aligned layers; gfx receives the finished skin
 matrices. Animation never changes hitboxes or knockback. See the
 [asset contract](character-assets-authoring.md) for clips and required joints.
 
 The preview report includes `locomotion_base`, `locomotion_overlay` and the
 latter's weight. Its existing `clip` is the role's timing reference, not the
-complete blended pose. The initial rig still has rigid legs; torso aiming
-independent of hips and more articulated footwork are deferred.
+complete blended pose. All four movement cycles share phase so diagonal blends
+keep the same supporting leg. Backward travel uses backpedalling rather than
+turning the torso through 180 degrees.

@@ -1,0 +1,351 @@
+{
+  "checked_on": "2026-10-12",
+  "scope": "Reference catalog only; no runtime integration",
+  "sources": [
+    {
+      "id": "blender-human-base",
+      "title": "Human Base Meshes v1.4.1 \u2014 realistic male/female and stylized male",
+      "author": "Blender Studio and community contributors",
+      "url": "https://www.blender.org/download/demo-files/#assets",
+      "license": "CC0-1.0",
+      "character": "player",
+      "coverage": [
+        "model"
+      ],
+      "assessment": "Human anatomy comparison: realistic male/female and a stylized adult male surface. These body references have no animation rig.",
+      "provenance": "Existing retained extraction; official bundle SHA-256 811f43accbb31a88266d932f8f5563b2d13586fca0ba2693aad1f5fe582b3515. Full upstream bundle includes other bodies. Added female/stylized male extractions retain base surfaces and eyes without multires cache; no proportion changes.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "assets/characters/basic-player/reference/realistic-male.blend",
+          "sha256": "574d06727d1e6306eda670738978e9d8e35e5987a2f6ee152f5f70a6879fa520",
+          "bytes": 642918
+        },
+        {
+          "path": "assets/characters/basic-player/reference/ANATOMY-LICENSE.txt",
+          "sha256": "c30f6c86e339c92618ab6b7082bd50bb733b428550f39205bf487314fc3c5bd9",
+          "bytes": 488
+        },
+        {
+          "path": "experimental/character-references/sources/blender-human-base/realistic-female.blend",
+          "sha256": "20c863ffd9b46815bb399d1f19e70920d5b6310cd7995fe01cc97260b14af6c1",
+          "bytes": 642527
+        },
+        {
+          "path": "experimental/character-references/sources/blender-human-base/stylized-male.blend",
+          "sha256": "19b68a6515d2217100111c17dc3b9f6f93cc5d8390695fb700c006f3bb230d4c",
+          "bytes": 674008
+        }
+      ]
+    },
+    {
+      "id": "quaternius-ual1",
+      "title": "Universal Animation Library \u2014 free Standard",
+      "author": "Quaternius / Gonzalo Furnier",
+      "url": "https://quaternius.itch.io/universal-animation-library",
+      "license": "CC0-1.0",
+      "character": "player",
+      "coverage": [
+        "model",
+        "walk",
+        "cleave-alternative"
+      ],
+      "assessment": "Ordinary and formal walking plus a single sword attack on the supplied mannequin. Study stride, support and arm counter-swing; retargeting still needs visual review.",
+      "provenance": "Extracted without resampling from the previously downloaded Standard GLB, SHA-256 69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997. Exact clips: Walk_Loop, Walk_Formal_Loop, Sword_Idle, Sword_Attack. Uses assets/characters/basic-player/reference/extract_clips.py.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "experimental/character-references/sources/quaternius/player-walk.glb",
+          "sha256": "928553543eca3cf0037aa61e2d71e546b01fc61eb39feeab505be74c96204843",
+          "bytes": 1254352
+        },
+        {
+          "path": "experimental/character-references/sources/quaternius/LICENSE.txt",
+          "sha256": "6d01f55c6e4c49a2c9963e147e561945ae2c83958c8ca667d90a6bffdbfac061",
+          "bytes": 332
+        }
+      ]
+    },
+    {
+      "id": "quaternius-ual2",
+      "title": "Universal Animation Library 2 \u2014 free Standard",
+      "author": "Quaternius / Gonzalo Furnier",
+      "url": "https://quaternius.itch.io/universal-animation-library-2",
+      "license": "CC0-1.0",
+      "character": "player",
+      "coverage": [
+        "model",
+        "cleave"
+      ],
+      "assessment": "Preferred existing Cleave reference: Sword_Regular_B plus Sword_Regular_B_Rec. Full-body compression, release and moving recovery. The preview shows original timing and an unarmed source mannequin.",
+      "provenance": "Existing retained original skin/rig/curves from the free Standard GLB, SHA-256 8cee20ab1bc55130092447e810e26df22dd2803eccc54f52137a7d54d7ab88a8. Also retains A and A recovery. Source Blender controls are a paid tier; free exported curves are locally available.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "assets/characters/basic-player/reference/cleave-source.glb",
+          "sha256": "7f0612ce1ae2776c62b2be632c4feb1e7fb7e40975fc9614a25301a307dafd13",
+          "bytes": 1032584
+        },
+        {
+          "path": "assets/characters/basic-player/reference/LICENSE.txt",
+          "sha256": "6d01f55c6e4c49a2c9963e147e561945ae2c83958c8ca667d90a6bffdbfac061",
+          "bytes": 332
+        }
+      ]
+    },
+    {
+      "id": "kaykit-adventurers",
+      "title": "KayKit Adventurers Character Pack 1.0",
+      "author": "Kay Lousberg",
+      "url": "https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0",
+      "license": "CC0-1.0",
+      "character": "player",
+      "coverage": [
+        "model",
+        "walk",
+        "cleave"
+      ],
+      "assessment": "Stylized equipped Knight alternative with 76 named clips (including T-pose) and a 41-joint rig. Exaggerated head/body proportions limit anatomy use.",
+      "provenance": "Unmodified author-hosted GLBs from pinned Git commit 672074b73ba276876a19e8816ecdc5241817ab47. Textures are embedded; unused weapons hidden only in previews.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "experimental/character-references/sources/kaykit/Knight.glb",
+          "sha256": "60428e3abc09ba83e595d256e3af8c5c976b46cdae599f0802fc82b4a3445168",
+          "bytes": 3659532
+        },
+        {
+          "path": "experimental/character-references/sources/kaykit/LICENSE.txt",
+          "sha256": "ae322141814056dda0deea7540d74c41d87aee1da319977cd1bd84ee5a923629",
+          "bytes": 891
+        }
+      ]
+    },
+    {
+      "id": "tomek-wolf",
+      "title": "3D wolf animation for game",
+      "author": "tomek",
+      "url": "https://opengameart.org/content/3d-wolf-animation-for-game",
+      "license": "CC0-1.0 (selected from CC0 / GPL-2.0 / GPL-3.0 options)",
+      "character": "wolf",
+      "coverage": [
+        "model",
+        "walk",
+        "run",
+        "bite-candidate",
+        "leap-parts"
+      ],
+      "assessment": "Wolf-specific complete starting set, with a simple stylized body. Attack contains a forward lunge and jaw articulation. Takeoff, airborne and landing are separate one-second actions, without a complete traveling attack arc.",
+      "provenance": "Unmodified download https://opengameart.org/sites/default/files/wolf_1.blend. No in-file license text; original listing retained as license evidence. Preview selects wolf_female; the other body is also preserved.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "experimental/character-references/sources/tomek-wolf/wolf.blend",
+          "sha256": "98cb707d20ba11da8f6a215177ebe7fa731db60083bed90a416fa27ff8499161",
+          "bytes": 2197528
+        },
+        {
+          "path": "experimental/character-references/sources/tomek-wolf/source-page.html",
+          "sha256": "2b160496fa58fc1e35fc609d4fc5b6c9bf99df27043f6db402099043f6503bce",
+          "bytes": 19987
+        }
+      ]
+    },
+    {
+      "id": "micket-wolf",
+      "title": "Wolf \u2014 low-poly Eurasian base",
+      "author": "Micket",
+      "url": "https://opengameart.org/content/wolf-1",
+      "license": "CC0-1.0",
+      "character": "wolf",
+      "coverage": [
+        "model"
+      ],
+      "assessment": "Wolf anatomy and silhouette alternative with an editable rig, useful beside the cartoon wolf. Untextured; no actions are included in this file.",
+      "provenance": "Original wolf.blend from author-hosted wolf.zip (archive SHA-256 ec20c49aa127b40e532b9ff5c09d8c021779dec7423e3d7b54709232e5a17129). Source listing retained as license evidence.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "experimental/character-references/sources/micket-wolf/wolf.blend",
+          "sha256": "0a8c5be20ee8010eb15286a4f2f5f08950bbf4d7c79dd941c6cfcf4ba4b9a956",
+          "bytes": 625544
+        },
+        {
+          "path": "experimental/character-references/sources/micket-wolf/source-page.html",
+          "sha256": "5cac4f755b73df5096937e17c10abab14a9e5ee1cf33dc5065ae612d92822230",
+          "bytes": 29009
+        }
+      ]
+    },
+    {
+      "id": "mesh2motion-fox",
+      "title": "Mesh2Motion fox rig and motions",
+      "author": "Scott Petrovic / Mesh2Motion contributors",
+      "url": "https://github.com/Mesh2Motion/mesh2motion-assets",
+      "license": "CC0-1.0",
+      "character": "wolf",
+      "coverage": [
+        "quadruped-model",
+        "walk",
+        "run",
+        "bite",
+        "jump"
+      ],
+      "assessment": "Useful second quadruped motion set with editable controls. Fox proportions differ from a wolf. Jump contains takeoff and landing, but is a high jump, not a forward attack leap.",
+      "provenance": "Unmodified files from pinned Git commit c5b0b6c821dbf2fa1dfe49590a6f431fd9f707ce. Animation files use an author-machine absolute rig path; the preview renderer reconnects the retained rig in memory, preserving original files.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "experimental/character-references/sources/mesh2motion/3d-models/model-fox.blend",
+          "sha256": "76277d67b0ebd20d5738c3d9f66bd75fc55c7cdcaae65ef17dd0f941c0c95a1c",
+          "bytes": 689422
+        },
+        {
+          "path": "experimental/character-references/sources/mesh2motion/LICENSE",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+          "bytes": 7048
+        },
+        {
+          "path": "experimental/character-references/sources/mesh2motion/README.md",
+          "sha256": "9b202f6725c6059d5f6d5744ba75f2b50d7059c4a45ff4a2be31c17e867000e3",
+          "bytes": 2059
+        },
+        {
+          "path": "experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-bite.blend",
+          "sha256": "db7f9356899917232cea76d44d9bb1b3513a6c95c332d767ba2f7d151bb5589c",
+          "bytes": 740904
+        },
+        {
+          "path": "experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-jump.blend",
+          "sha256": "b43ada4043206370e6b9f044c425ebf60e3b0e46e71edff2f1da6957e80baab9",
+          "bytes": 771464
+        },
+        {
+          "path": "experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-run.blend",
+          "sha256": "32a324a86901a2223d58c8efe2863d4a75bed278620829f365b0c70cd2274dc7",
+          "bytes": 983341
+        },
+        {
+          "path": "experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-walk.blend",
+          "sha256": "fb47666afe52bcc98c5713ca4d3d96b0b64d948b24fb7316c2c906fef922d971",
+          "bytes": 881723
+        },
+        {
+          "path": "experimental/character-references/sources/mesh2motion/rigs/rig-fox.blend",
+          "sha256": "3d01049479a20b41f62e2af74ec2e025f9c984210d7fd63447246a977ffb745e",
+          "bytes": 1051541
+        }
+      ]
+    },
+    {
+      "id": "thehumbug-human",
+      "title": "Human basemeshes \u2014 rigged male and female",
+      "author": "thehumbug",
+      "url": "https://opengameart.org/content/human-basaemeshes",
+      "license": "CC-BY-3.0",
+      "character": "player",
+      "coverage": [
+        "model",
+        "rig"
+      ],
+      "assessment": "Adult male/female low-poly bodies retopologized from MakeHuman exports, with editable 84-bone rigs. Shoulder shape and deformation remain provisional. No motion actions in these files.",
+      "provenance": "Original male.blend and female.blend downloads retained unchanged. Attribution: Human basemeshes by thehumbug, CC-BY 3.0; include source link and identify adaptations. Original listing retained as license evidence.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "experimental/character-references/sources/thehumbug-human/female.blend",
+          "sha256": "6d1a99757013659a63b226c0a4b19242bf178853291afb31707483ac1e646fac",
+          "bytes": 1548796
+        },
+        {
+          "path": "experimental/character-references/sources/thehumbug-human/male.blend",
+          "sha256": "6610d97a96f485a1e70b7f2f9d24a84b407c1817cd4f8a8036026e513cf943e5",
+          "bytes": 1572844
+        },
+        {
+          "path": "experimental/character-references/sources/thehumbug-human/source-page.html",
+          "sha256": "c2a46305ebf14c23905903049a5a7a1a77ad7e6dda0b43972c5ecb83b489cefa",
+          "bytes": 35154
+        }
+      ]
+    },
+    {
+      "id": "gdquest-mannequiny",
+      "title": "Mannequiny v0.4.0",
+      "author": "GDQuest, Luciano Mu\u00f1oz and contributors",
+      "url": "https://github.com/gdquest-demos/godot-3d-mannequin/releases/tag/v0.4.0",
+      "license": "CC-BY-4.0",
+      "character": "player",
+      "coverage": [
+        "model",
+        "walk",
+        "run"
+      ],
+      "assessment": "Stylized adult mannequin with a 45-bone export rig and 12 baked actions. Useful independent walk/run reference; rounded forms are not detailed anatomical surfaces.",
+      "provenance": "Unmodified official release asset mannequiny-0.4.0.blend. Attribution: Mannequiny CC-By 4.0 GDQuest, Luciano Mu\u00f1oz, and contributors. Rig-free release means baked deformation skeleton with no authoring control rig, not absence of bones.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "experimental/character-references/sources/gdquest-mannequiny/mannequiny-0.4.0.blend",
+          "sha256": "1a1ed14c176e5e60e69f52f517c88627554e517b4548aab504d92a67c6e9ce0c",
+          "bytes": 13620300
+        },
+        {
+          "path": "experimental/character-references/sources/gdquest-mannequiny/source-page.html",
+          "sha256": "25ce63b3e6c720b7f5121e9f137d424486ae5d479727dd1c276980c37dbb08f0",
+          "bytes": 197006
+        }
+      ]
+    },
+    {
+      "id": "gres-sword",
+      "title": "Humanoid SoulsLike \u2014 straight-sword library",
+      "author": "Gres",
+      "url": "https://opengameart.org/content/humanoid-soulslike-animations",
+      "license": "CC0-1.0",
+      "character": "player",
+      "coverage": [
+        "model",
+        "walk",
+        "sword-light",
+        "sword-heavy",
+        "sword-two-handed"
+      ],
+      "assessment": "Independent straight-sword choreography with eight-direction movement, main/off-hand, two-handed and dual-wield variations. Clips are available; pose quality and suitability remain provisional.",
+      "provenance": "Original playerstraightswordanimations.blend from the author listing, retained unchanged. Native scene is 60 fps. Its Smooth by Angle asset node group is loaded with the file despite retaining an external library path; no linked data is missing. Previews use the original rig, body, sword constraints and curves. Autoexec remains disabled. Separate FBX exports were inspected and rejected for cross-file pairing because their control-bone bind matrices differ.",
+      "checked_on": "2026-10-12",
+      "files": [
+        {
+          "path": "experimental/character-references/sources/gres-sword/playerstraightswordanimations.blend",
+          "sha256": "97a77e46a868d2be1ecba4b8a95c44fea940c6a73ec511695f94f0a99de55aeb",
+          "bytes": 2413282
+        },
+        {
+          "path": "experimental/character-references/sources/gres-sword/source-page.html",
+          "sha256": "7162dc0f065858724b34ebd439794d3466d9c9f567e36967af0379bb28d1f7e5",
+          "bytes": 26402
+        }
+      ]
+    }
+  ],
+  "additional_leads": [
+    {
+      "title": "Quaternius Ultimate Animated Animal Pack",
+      "url": "https://quaternius.com/packs/ultimateanimatedanimals.html",
+      "license": "CC0-1.0",
+      "status": "Official listing checked; files not downloaded. Inspect wolf-specific clip inventory before relying on coverage."
+    },
+    {
+      "title": "LPC Wolf Animation",
+      "url": "https://opengameart.org/content/lpc-wolf-animation",
+      "license": "CC-BY-4.0 option (other options also listed)",
+      "status": "2D supplementary timing/silhouette reference; listing explicitly includes walk, run and bite. No 3D rig or leap. Credit Stephen Redshrike Challener and William.Thompsonj."
+    },
+    {
+      "title": "Human Basemeshes \u2014 pistachio",
+      "url": "https://opengameart.org/content/human-basemeshes",
+      "license": "CC0-1.0",
+      "status": "Download inspected but excluded from retained catalog: Blender 5.2.1 refused the file during opening due to an invalid legacy shape-key from pointer. No compatibility workaround added."
+    }
+  ]
+}

@@ -9,6 +9,8 @@ mod effect;
 mod frame;
 mod material;
 mod lighting;
+mod shadow;
+mod visibility;
 mod mesh;
 mod overlay;
 mod quad;
@@ -59,6 +61,7 @@ pub struct Renderer {
     static_meshes: MeshPipeline,
     debug: debug::DebugPipeline,
     effects: effect::EffectPipeline,
+    weather: effect::EffectPipeline,
     character_preview: CharacterPipeline,
     /// The rasterised font, and the pipeline that draws what it lays out.
     ///
@@ -209,6 +212,7 @@ impl Renderer {
             config.format,
             DEPTH_FORMAT,
         );
+        let weather = effect::EffectPipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
         let effects = effect::EffectPipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
         let debug = debug::DebugPipeline::new(&device, &camera.layout, config.format, DEPTH_FORMAT);
         let font = text::Font::new(&device, &queue);
@@ -227,6 +231,7 @@ impl Renderer {
             static_meshes,
             debug,
             effects,
+            weather,
             character_preview,
             font,
             overlay,
@@ -322,7 +327,7 @@ impl Renderer {
         capture_path: Option<&std::path::Path>,
     ) -> FrameOutcome {
         let RenderFrame {
-            camera, lights, environment, meshes, character, horde, overlay, debug_outlines, effects,
+            camera, lights, environment, meshes, character, horde, overlay, debug_outlines, effects, weather,
         } = input;
 
         // Acquiring a swapchain image can fail in several recoverable ways —
@@ -379,14 +384,31 @@ impl Renderer {
             });
 
         self.camera.upload(&self.queue, camera);
-        self.camera.upload_lights(&self.queue, lights, environment);
+        self.camera.upload_lights(&self.queue, lights, environment, !weather.is_empty());
         self.static_meshes.upload(&self.queue, meshes);
+        let weather_count = self.weather.upload(&self.queue, weather);
         let effect_count = self.effects.upload(&self.queue, effects);
         let debug_count = self.debug.upload(&self.queue, debug_outlines);
-        let character_draws = self.character_preview.upload(&self.queue, character, horde);
+        self.camera.shadows.update(&self.queue, camera, environment, lights);
+        let mut views=[visibility::Frustum::new(camera.view_proj()); 3];
+        let mut count=1;
+        for matrix in self.camera.shadows.matrices() { views[count]=visibility::Frustum::new(matrix); count+=1; }
+        let character_draws = self.character_preview.upload(&self.queue, character, horde, &views[..count]);
         let quads =
             self.overlay
                 .upload(&self.queue, overlay, self.config.width, self.config.height);
+
+        // Store only shadow depth: the surface pass still discards its depth.
+        for (view, binding) in self.camera.shadows.views() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene caster shadows"), color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None,
+                }), timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+            });
+            self.static_meshes.draw_depth(&mut pass, binding, meshes);
+            self.character_preview.draw_depth(&mut pass, binding, character, horde, &character_draws);
+        }
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -423,6 +445,7 @@ impl Renderer {
             });
 
             self.static_meshes.draw_batches(&mut pass, &self.camera, meshes);
+            self.character_preview.draw_shadows(&mut pass, &self.camera, &character_draws);
             if let Some(horde) = horde {
                 self.character_preview.draw_horde(
                     &mut pass,
@@ -444,6 +467,7 @@ impl Renderer {
             // reads nor writes depth, so joining the pass costs nothing and
             // saves storing and reloading the whole frame between two of them.
             self.effects.draw(&mut pass, &self.camera, effect_count);
+            self.weather.draw(&mut pass, &self.camera, weather_count);
             self.debug.draw(&mut pass, &self.camera, debug_count);
             self.overlay.draw(&mut pass, quads);
         }
@@ -509,7 +533,7 @@ mod tests {
         let binding = CameraBinding::new(device);
         binding.upload_lights(queue, &[PointLight::new(
             Vec3::new(40.0, 100.0, 30.0), LinearRgb::WHITE, 12_000.0, 1_000.0,
-        )], arpg_core::EnvironmentLight::try_new(LinearRgb::WHITE, 0.0, LinearRgb::WHITE, 0.0, Vec3::Y).unwrap());
+        )], arpg_core::EnvironmentLight::try_new(LinearRgb::WHITE, 0.0, LinearRgb::WHITE, 0.0, Vec3::Y).unwrap(), false);
         binding
     }
 
@@ -978,19 +1002,26 @@ mod tests {
     /// upload and WGSL skinning. A missing palette upload collapses these vertices
     /// to the origin, while a layout disagreement reaches the validation scope.
     fn render_character_bucket(bytes: &[u8], white_mix: f32, player: bool, seconds: f32) -> Vec<u8> {
+        render_character_bucket_with_shadow(bytes, white_mix, player, seconds, None)
+    }
+
+    fn render_character_bucket_with_shadow(bytes: &[u8], white_mix: f32, player: bool, seconds: f32, shadow: Option<&[u8]>) -> Vec<u8> {
         const N: u32 = 256;
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let camera_binding = lit_camera_binding(&device, &queue);
-        let pipeline = CharacterPipeline::new(
+        let mut pipeline = CharacterPipeline::new(
             &device,
             &camera_binding.layout,
             MaterialLayout::new(&device),
             TEST_FORMAT,
             DEPTH_FORMAT,
         );
-        let cpu = arpg_assets::import_character_glb(bytes)
+        let mut cpu = arpg_assets::import_character_glb(bytes)
         .expect("fixture crosses the character import boundary");
+        if let Some(shadow) = shadow {
+            cpu.attach_shadow(arpg_assets::import_character_glb(shadow).unwrap()).unwrap();
+        }
         let gpu = pipeline
             .upload_character(&device, &queue, &cpu)
             .expect("character fixture uploads");
@@ -1026,9 +1057,9 @@ mod tests {
         let horde = CharacterHorde::new(&gpu, buckets);
         let character = CharacterPreview::new(&gpu, &pose, instances[0]);
         let draws = if player {
-            pipeline.upload(&queue, Some(character), None)
+            pipeline.upload(&queue, Some(character), None, &[visibility::Frustum::new(camera.view_proj())])
         } else {
-            pipeline.upload(&queue, None, Some(horde))
+            pipeline.upload(&queue, None, Some(horde), &[visibility::Frustum::new(camera.view_proj())])
         };
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1097,6 +1128,16 @@ mod tests {
             "expected a 1.9m upright sampled pose, got {width}x{height} from {bounds:?}"
         );
         rgba
+    }
+
+    #[test]
+    fn coarse_caster_keeps_the_visible_character_pixels_identical() {
+        let enemy = include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.glb");
+        let shadow = include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.shadow.glb");
+        for seconds in [0.0, 0.5] {
+            assert_eq!(render_character_bucket(enemy, 0.0, false, seconds),
+                render_character_bucket_with_shadow(enemy, 0.0, false, seconds, Some(shadow)));
+        }
     }
 
     #[test]

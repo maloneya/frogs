@@ -88,7 +88,7 @@ file, and do not affect gameplay; clear a name to restore its generated label.
 Names label choices; bindings still use authored indices, which the shared edits
 remap on deletion. Manual file reordering must preserve those references.
 
-**Scene lighting** controls ambient fill and sun/moon colour, brightness,
+**Scene lighting** includes a **Rain and lightning** toggle and controls ambient fill and sun/moon colour, brightness,
 direction and elevation. Colours are stored as linear RGB. Adding a campfire
 does not change the environment; **Save & play** applies the authored lighting.
 
@@ -144,3 +144,10 @@ see [scene handoff](../.claude/skills/create-scene/SKILL.md#verify-and-hand-off)
 
 See the [authoring API](scene-authoring.md) for offline agent edits and
 [capture and checks](companion.md#checks-and-capture) for native view inspection.
+
+The storm option follows the active scene's environment through additive loads,
+eviction and restart. Rain, wet highlights, fire flicker and lightning change
+presentation only. The directional light and nearest campfire cast shadows from
+static and posed geometry; additional fires still illuminate surfaces. Try
+[`storm_watch.ron`](../scenes/storm_watch.ron) for a dark clearing with one fire
+and approaching monsters. Fire is a visual refuge rather than a gameplay ward.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Character Workflow"
+  short_description: "Reference-driven characters and combat animation"
+  default_prompt: "Use $character-workflow to take this arpg character or motion from a concrete visual reference to an accepted in-game checkpoint."

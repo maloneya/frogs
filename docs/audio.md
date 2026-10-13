@@ -33,7 +33,11 @@ Excess playback is refused and counted. Mixing stays on Kira's audio thread.
 The cue bank and tuning live in `crates/app/src/audio.rs`; device and voice
 lifetime live in `audio/playback.rs`.
 
-`state.audio` reports device availability, startup failure, per-run one-shot
+Harness launches mute the final mix by default; interactive launches have sound.
+`audio on` / `audio off` enables or mutes harness playback without stopping voices
+or changing cue observations. Muting survives scene replacement and restart.
+
+`state.audio` reports mute state, device availability, startup failure, per-run one-shot
 cue counts, accepted/refused playback requests, active one-shots and loop
 handles. Cue counts are presentation decisions even without a device;
 `started` counts Kira-accepted playback. Loop flags describe owned playback

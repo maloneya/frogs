@@ -1,0 +1,366 @@
+[
+  {
+    "id": "player-anatomy",
+    "title": "Blender Human Base Meshes \u2022 realistic male",
+    "path": "assets/characters/basic-player/reference/realistic-male.blend",
+    "source": "blender-human-base",
+    "library_objects": [
+      "GEO-body_male_realistic",
+      "GEO-body_male_realistic.eye.L",
+      "GEO-body_male_realistic.eye.R"
+    ]
+  },
+  {
+    "id": "player-anatomy-female",
+    "title": "Blender \u2022 realistic female body",
+    "path": "experimental/character-references/sources/blender-human-base/realistic-female.blend",
+    "library_objects": [
+      "GEO-body_female_realistic",
+      "GEO-body_female_realistic.eye.L",
+      "GEO-body_female_realistic.eye.R"
+    ],
+    "source": "blender-human-base",
+    "view": "front",
+    "note": "Connected realistic female surface for anatomy and proportion comparison. No rig or animation; source proportions retained."
+  },
+  {
+    "id": "player-anatomy-stylized",
+    "title": "Blender \u2022 stylized adult male body",
+    "path": "experimental/character-references/sources/blender-human-base/stylized-male.blend",
+    "library_objects": [
+      "GEO-body_male_stylized",
+      "GEO-body_male_stylized.eye.L",
+      "GEO-body_male_stylized.eye.R"
+    ],
+    "source": "blender-human-base",
+    "view": "front",
+    "note": "Stylized adult male anatomy, with authored exaggeration in torso and limb forms. No rig or animation."
+  },
+  {
+    "id": "humbug-male",
+    "title": "thehumbug \u2022 rigged male basemesh",
+    "path": "experimental/character-references/sources/thehumbug-human/male.blend",
+    "source": "thehumbug-human",
+    "view": "front",
+    "note": "Low-poly adult surface and editable rig. No clips. Inspect shoulder shape and joint deformation before using as a body foundation."
+  },
+  {
+    "id": "humbug-female",
+    "title": "thehumbug \u2022 rigged female basemesh",
+    "path": "experimental/character-references/sources/thehumbug-human/female.blend",
+    "source": "thehumbug-human",
+    "view": "front",
+    "note": "Female companion to the rigged male body. No clips. Compare torso, pelvis and arm separation; surface quality remains provisional."
+  },
+  {
+    "id": "mannequiny-body",
+    "title": "Mannequiny \u2022 body and baked rig",
+    "path": "experimental/character-references/sources/gdquest-mannequiny/mannequiny-0.4.0.blend",
+    "source": "gdquest-mannequiny",
+    "view": "front",
+    "note": "Stylized adult mannequin with a baked deformation skeleton. Useful neutral body/motion pairing; attribution required."
+  },
+  {
+    "id": "player-walk",
+    "title": "Player \u2022 ordinary walk",
+    "path": "experimental/character-references/sources/quaternius/player-walk.glb",
+    "actions": [
+      "Walk_Loop"
+    ],
+    "source": "quaternius-ual1",
+    "meshes": [
+      "Mannequin"
+    ]
+  },
+  {
+    "id": "player-cleave",
+    "title": "Player \u2022 descending Cleave and recovery",
+    "path": "assets/characters/basic-player/reference/cleave-source.glb",
+    "actions": [
+      "Sword_Regular_B",
+      "Sword_Regular_B_Rec"
+    ],
+    "source": "quaternius-ual2",
+    "meshes": [
+      "Mannequin"
+    ]
+  },
+  {
+    "id": "kaykit-knight",
+    "title": "KayKit Knight \u2022 body and equipment",
+    "path": "experimental/character-references/sources/kaykit/Knight.glb",
+    "source": "kaykit-adventurers",
+    "meshes": [
+      "Knight_ArmLeft",
+      "Knight_ArmRight",
+      "Knight_Body",
+      "Knight_Head",
+      "Knight_LegLeft",
+      "Knight_LegRight",
+      "Knight_Cape",
+      "Knight_Helmet"
+    ],
+    "note": "Original Knight body, helmet and cape. Unused weapons and shields are hidden for the anatomy preview."
+  },
+  {
+    "id": "mannequiny-walk",
+    "title": "Mannequiny \u2022 walk",
+    "path": "experimental/character-references/sources/gdquest-mannequiny/mannequiny-0.4.0.blend",
+    "source": "gdquest-mannequiny",
+    "actions": [
+      "walk"
+    ],
+    "note": "Independent authored walk: compare foot support, body sway and arm counter-swing with the Quaternius cycle."
+  },
+  {
+    "id": "player-walk-formal",
+    "title": "Quaternius \u2022 formal walk",
+    "path": "experimental/character-references/sources/quaternius/player-walk.glb",
+    "source": "quaternius-ual1",
+    "meshes": [
+      "Mannequin"
+    ],
+    "actions": [
+      "Walk_Formal_Loop"
+    ],
+    "note": "A more restrained walking style on the supplied mannequin. Compare stance and upper-body behavior with the ordinary walk."
+  },
+  {
+    "id": "player-sword-attack",
+    "title": "Quaternius \u2022 single sword attack",
+    "path": "experimental/character-references/sources/quaternius/player-walk.glb",
+    "source": "quaternius-ual1",
+    "meshes": [
+      "Mannequin"
+    ],
+    "actions": [
+      "Sword_Attack"
+    ],
+    "note": "Single authored sword motion from Library 1. The original source mannequin is shown without a weapon."
+  },
+  {
+    "id": "player-sword-a",
+    "title": "Quaternius \u2022 regular slash A and recovery",
+    "path": "assets/characters/basic-player/reference/cleave-source.glb",
+    "source": "quaternius-ual2",
+    "meshes": [
+      "Mannequin"
+    ],
+    "actions": [
+      "Sword_Regular_A",
+      "Sword_Regular_A_Rec"
+    ],
+    "note": "Different slash/recovery choreography from regular B. Study cross-body rotation and recovery before choosing a Cleave direction."
+  },
+  {
+    "id": "gres-walk-forward",
+    "title": "Gres \u2022 forward combat walk",
+    "path": "experimental/character-references/sources/gres-sword/playerstraightswordanimations.blend",
+    "source": "gres-sword",
+    "actions": [
+      "Walk_F"
+    ],
+    "note": "Forward combat walk on the original body, at the Blender source cadence. Compare the short cycle with the ordinary human walks.",
+    "meshes": [
+      "HumanModel",
+      "Longsword"
+    ]
+  },
+  {
+    "id": "gres-walk-left",
+    "title": "Gres \u2022 left strafe walk",
+    "path": "experimental/character-references/sources/gres-sword/playerstraightswordanimations.blend",
+    "source": "gres-sword",
+    "actions": [
+      "Walk_L"
+    ],
+    "note": "Left strafe on the original body and rig. Study support and leg recovery during sideways movement.",
+    "meshes": [
+      "HumanModel",
+      "Longsword"
+    ]
+  },
+  {
+    "id": "gres-sword-light",
+    "title": "Gres \u2022 one-handed light attack",
+    "path": "experimental/character-references/sources/gres-sword/playerstraightswordanimations.blend",
+    "source": "gres-sword",
+    "actions": [
+      "SS_Main_Light_Attack_01"
+    ],
+    "note": "Original one-handed sword attack: compare preparation, blade arc, torso participation and recovery.",
+    "meshes": [
+      "HumanModel",
+      "Longsword"
+    ]
+  },
+  {
+    "id": "gres-sword-heavy",
+    "title": "Gres \u2022 charged heavy release",
+    "path": "experimental/character-references/sources/gres-sword/playerstraightswordanimations.blend",
+    "source": "gres-sword",
+    "actions": [
+      "SS_Main_Charge02_Heavy"
+    ],
+    "note": "Original charged heavy release. Separate start/charge phases are retained in the source; this card shows only the release segment.",
+    "meshes": [
+      "HumanModel",
+      "Longsword"
+    ]
+  },
+  {
+    "id": "gres-sword-twohand",
+    "title": "Gres \u2022 two-handed light attack",
+    "path": "experimental/character-references/sources/gres-sword/playerstraightswordanimations.blend",
+    "source": "gres-sword",
+    "actions": [
+      "SS_TH_Light_Attack_01"
+    ],
+    "note": "Original two-handed sword attack. Compare grip, shoulder participation and follow-through with the one-handed attack.",
+    "meshes": [
+      "HumanModel",
+      "Longsword"
+    ]
+  },
+  {
+    "id": "wolf-walk",
+    "title": "Wolf \u2022 walk",
+    "path": "experimental/character-references/sources/tomek-wolf/wolf.blend",
+    "mesh": "wolf_female",
+    "actions": [
+      "wolf_walk"
+    ],
+    "source": "tomek-wolf",
+    "note": "Alternating foot support on a simple cartoon wolf. Compare foot order and shoulder/hip movement with the fox walk."
+  },
+  {
+    "id": "wolf-run",
+    "title": "Wolf \u2022 run",
+    "path": "experimental/character-references/sources/tomek-wolf/wolf.blend",
+    "mesh": "wolf_female",
+    "actions": [
+      "wolf_run"
+    ],
+    "source": "tomek-wolf",
+    "note": "Gather and extension poses for a wolf run. Compare suspension and leg recovery with the fox; natural gait quality remains provisional."
+  },
+  {
+    "id": "wolf-bite",
+    "title": "Wolf \u2022 attack / bite candidate",
+    "path": "experimental/character-references/sources/tomek-wolf/wolf.blend",
+    "mesh": "wolf_female",
+    "actions": [
+      "wolf_attack01"
+    ],
+    "view": "side",
+    "source": "tomek-wolf",
+    "note": "Authored attack with a forward lunge and jaw motion. Bite is our interpretation; inspect the head/body timing and jaw curves before adapting contact."
+  },
+  {
+    "id": "wolf-jump",
+    "title": "Wolf \u2022 takeoff",
+    "path": "experimental/character-references/sources/tomek-wolf/wolf.blend",
+    "mesh": "wolf_female",
+    "actions": [
+      "wolf_jump"
+    ],
+    "source": "tomek-wolf",
+    "note": "Takeoff poses from the wolf set. This action alone does not supply a traveling leap or landing."
+  },
+  {
+    "id": "wolf-airborne",
+    "title": "Wolf \u2022 airborne pose",
+    "path": "experimental/character-references/sources/tomek-wolf/wolf.blend",
+    "mesh": "wolf_female",
+    "actions": [
+      "wolf_fly"
+    ],
+    "source": "tomek-wolf",
+    "note": "Airborne shape from the wolf set. Use with the separate takeoff and landing references; a trajectory has not been authored here."
+  },
+  {
+    "id": "wolf-land",
+    "title": "Wolf \u2022 landing",
+    "path": "experimental/character-references/sources/tomek-wolf/wolf.blend",
+    "mesh": "wolf_female",
+    "actions": [
+      "wolf_land"
+    ],
+    "source": "tomek-wolf",
+    "note": "Landing and settling from the wolf set. Study front-leg support and body compression."
+  },
+  {
+    "id": "micket-wolf",
+    "title": "Micket \u2022 wolf anatomy alternative",
+    "path": "experimental/character-references/sources/micket-wolf/wolf.blend",
+    "source": "micket-wolf"
+  },
+  {
+    "id": "m2m-walk",
+    "title": "Mesh2Motion fox \u2022 walk",
+    "path": "experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-walk.blend",
+    "actions": [
+      "Walk"
+    ],
+    "source": "mesh2motion-fox",
+    "meshes": [
+      "Fox-Mesh.001"
+    ],
+    "view": "side",
+    "linked_libraries": {
+      "rig-fox-v2.blend": "experimental/character-references/sources/mesh2motion/rigs/rig-fox.blend"
+    },
+    "note": "Fox gait comparison with editable control rig. Study the order of foot support; wolf proportions need a separate anatomy decision."
+  },
+  {
+    "id": "m2m-run",
+    "title": "Mesh2Motion fox \u2022 run",
+    "path": "experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-run.blend",
+    "actions": [
+      "Run"
+    ],
+    "source": "mesh2motion-fox",
+    "meshes": [
+      "Fox-Mesh.001"
+    ],
+    "view": "side",
+    "linked_libraries": {
+      "rig-fox-v2.blend": "experimental/character-references/sources/mesh2motion/rigs/rig-fox.blend"
+    },
+    "note": "Fast fox run with gather, extension and suspension. This is a quadruped reference; it has not been retargeted to the wolf."
+  },
+  {
+    "id": "m2m-bite",
+    "title": "Mesh2Motion fox \u2022 bite",
+    "path": "experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-bite.blend",
+    "actions": [
+      "Bite"
+    ],
+    "source": "mesh2motion-fox",
+    "meshes": [
+      "Fox-Mesh.001"
+    ],
+    "view": "side",
+    "linked_libraries": {
+      "rig-fox-v2.blend": "experimental/character-references/sources/mesh2motion/rigs/rig-fox.blend"
+    },
+    "note": "Short authored fox bite. Compare jaw/head reach and recovery against the wolf attack."
+  },
+  {
+    "id": "m2m-jump",
+    "title": "Mesh2Motion fox \u2022 complete jump",
+    "path": "experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-jump.blend",
+    "actions": [
+      "Jump"
+    ],
+    "source": "mesh2motion-fox",
+    "meshes": [
+      "Fox-Mesh.001"
+    ],
+    "view": "side",
+    "linked_libraries": {
+      "rig-fox-v2.blend": "experimental/character-references/sources/mesh2motion/rigs/rig-fox.blend"
+    },
+    "note": "Complete high jump with takeoff and landing. Useful airborne and landing reference; a forward attack leap remains unselected."
+  }
+]

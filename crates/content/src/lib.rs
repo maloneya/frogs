@@ -108,6 +108,7 @@ mod tests {
     #[test]
     fn environment_files_validate_and_round_trip_at_the_owner() {
         let scene = parse_scene(r#"(engine: (name: "dusk"), environment: (
+            storm: true,
             ambient_colour: (0.1, 0.2, 0.3), ambient_intensity: 0.25,
             directional_colour: (0.9, 0.8, 0.7), directional_intensity: 0.75,
             direction: (-1.0, 2.0, 3.0),
@@ -115,6 +116,7 @@ mod tests {
         let encoded = ron::ser::to_string(&scene).unwrap();
         let decoded = parse_scene(&encoded).unwrap();
         assert_eq!(scene.environment, decoded.environment);
+        assert!(decoded.environment.storm());
         for (colour, intensity, direction) in [
             ("(1.1, 0.0, 0.0)", "1.0", "(0.0, 1.0, 0.0)"),
             ("(1.0, 1.0, 1.0)", "-0.1", "(0.0, 1.0, 0.0)"),

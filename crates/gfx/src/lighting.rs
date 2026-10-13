@@ -12,6 +12,11 @@ pub(crate) struct LightUniform {
 }
 
 impl LightUniform {
+    pub(crate) fn with_wet_surfaces(mut self, wet: bool) -> Self {
+        self.direction[3] = u8::from(wet) as f32;
+        self
+    }
+
     pub(crate) fn new(lights: &[PointLight], environment: EnvironmentLight) -> Self {
         assert!(lights.len() <= MAX_POINT_LIGHTS, "too many point lights");
         let mut uniform = Self {

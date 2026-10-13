@@ -94,3 +94,31 @@ establish cost for a packed two-dimensional crowd.
 see the [audit](physics-scalability-audit.md) for measurements. If a solver
 change regresses cost, profile it (see [performance](performance.md#detailed-physics-investigation))
 before loosening anything; increasing performance budgets is not a substitute.
+
+## Retargeted motion leans backward or silently keeps its old facing
+
+**Cause:** confusing handedness with facing can turn the reference's forward
+weight transfer into an arch away from contact. Also, setting an imported
+object's Euler angle has no visible effect while its rotation mode remains
+quaternion. Valid rotation data alone does not identify the intended action.
+**Check:** inspect a loaded pose in the real forward convention. Check the
+sword-side shoulder and head position relative to the pelvis, then the blade
+through the active phase. The Cleave compiler asserts the mapped sword arm's
+bind side; Game-level tests require forward torso lead, visible compression and
+a front-facing strike. Use explicit matrix normalization, or explicitly set the
+object rotation mode before assigning Euler angles.
+
+## Reference exports with matching bone names can still change the bind pose
+
+**Symptom:** pairing a reference body's T-pose FBX with a motion FBX refuses the
+bind check or deforms the same named skeleton differently. Gres's straight-sword
+exports differed at `LegPoleIK.L` during catalog inspection (2026-10-12).
+**Cause:** matching names do not establish matching parent/rest matrices, including
+control bones. A source's external asset-library path can also remain recorded
+while its node-group data is already loaded; path existence alone is not a
+complete-data check.
+**Check:** compare names, parents and bind matrices before pairing exports.
+Prefer the complete native body/rig/curves when available. For Blender library
+admission, check linked IDs' `is_missing` state after resolving declared links.
+The [reference catalog](../experimental/character-references/README.md) retains
+the original native sword source and records rejected candidates.

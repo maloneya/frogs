@@ -140,11 +140,12 @@ fn environment_belongs_to_scenes_and_survives_torch_changes_and_restart() {
     let dark = EnvironmentLight::try_new(LinearRgb::WHITE, 0.0, LinearRgb::WHITE, 0.0, Vec3::Y).unwrap();
     let blue = EnvironmentLight::try_new(LinearRgb::new(0.0, 0.0, 1.0), 0.15, LinearRgb::WHITE, 0.1, Vec3::new(-1.0, 2.0, 0.0)).unwrap();
     let mut authored = scene(1, 0.0);
-    authored.environment = EnvironmentSpec::new(dark);
+    authored.environment = EnvironmentSpec::new(dark).with_storm(true);
     let mut game = Game::from_scene(&authored).unwrap();
     let first = game.scene_instances().next().unwrap().0;
     let fresh = observed(&game);
     assert_eq!(game.environment_light(), dark);
+    assert!(game.storm());
     step(&mut game);
     assert_eq!(game.environment_light(), dark, "ticks never change scene illumination");
     // A newly loaded scene selects its explicit environment even without lights.
@@ -152,6 +153,7 @@ fn environment_belongs_to_scenes_and_survives_torch_changes_and_restart() {
     let second = game.load_scene(&next).unwrap();
     assert_eq!(game.torch_count(), 1);
     assert_eq!(game.environment_light(), blue);
+    assert!(!game.storm());
     assert!(observed(&game).1.contains(&format!("\"scene\":\"{second}\"")));
     let before = observed(&game);
     let mut invalid = scene(MAX_POINT_LIGHTS, 10.0);
@@ -159,13 +161,16 @@ fn environment_belongs_to_scenes_and_survives_torch_changes_and_restart() {
     assert!(game.load_scene(&invalid).is_err());
     assert_eq!(observed(&game), before, "failed admission cannot select an environment");
     assert!(game.evict_scene(second));
+    assert!(game.storm());
     assert_eq!(game.environment_light(), dark, "eviction reveals the prior live environment");
     assert!(!game.evict_scene(second));
     assert_eq!(game.environment_light(), dark, "stale scene identities have no effect");
     assert!(game.evict_scene(first));
+    assert!(!game.storm());
     assert_eq!(game.environment_light(), EnvironmentLight::default());
     game.restart().unwrap();
     assert_eq!(observed(&game), fresh, "restart restores complete authored lighting");
+    assert!(game.storm());
     let newer = game.load_scene(&next).unwrap();
     let older = game.scene_instances().next().unwrap().0;
     assert!(game.evict_scene(older));
@@ -195,4 +200,19 @@ fn every_environment_component_affects_game_hash_without_changing_physics() {
         changed.restart().unwrap();
         assert_eq!(changed.environment_light(), light);
     }
+}
+
+#[test]
+fn storm_choice_is_hashed_but_never_changes_physics_at_intermediate_ticks() {
+    let dry = GameScene::default();
+    let storm = GameScene { environment: dry.environment.with_storm(true), ..dry.clone() };
+    let mut a = Game::from_scene(&dry).unwrap();
+    let mut b = Game::from_scene(&storm).unwrap();
+    assert_ne!(a.hash(), b.hash());
+    for _ in 0..300 {
+        step(&mut a); step(&mut b);
+        assert_eq!(a.engine_hash(), b.engine_hash());
+        assert!(b.storm());
+    }
+    assert!(observed(&b).1.contains("\"storm\":true"));
 }

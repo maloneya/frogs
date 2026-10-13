@@ -20,7 +20,11 @@ ARPG_HARNESS=/tmp/arpg.sock ARPG_COMPANION_SOCKET=/tmp/arpg-tools.sock ARPG_TUNI
 
 Run the last command in the background with your execution tool. Choose unused
 paths for each session; never remove another instance's socket. Wait with a bounded
-timeout and inspect startup output on failure. Harness sessions start empty and
+timeout and inspect startup output on failure. Harness launches mute the audio mix
+and place the full-size window near the top-left instead of the centre. Playback,
+cue counts and loop handles still run; use `audio on` only for listening checks,
+then `audio off` when finished. Keep the window visible for captures and frontmost
+for performance measurements. Harness sessions start empty and
 skip the interactive scene preference, so load content explicitly:
 
 ```sh
@@ -46,7 +50,7 @@ keeps stepping between commands.
 | Scenes | `scene start <path>`, `scene restart`, `scene add <path>`, `scene evict <id>`, `scene list` |
 | Assets | `character\|horde show <path.glb>`, `character\|horde clear` |
 | Tuning | `tuning set <key> <value>`, `tuning save\|revert\|defaults\|restart` |
-| Presentation | `vsync on\|off`, `debug collision on\|off` |
+| Presentation | `vsync on\|off`, `debug collision on\|off`, `audio on\|off` |
 | Exit | `quit` |
 
 [Harness](../../../crates/app/src/harness.rs) owns command syntax; game owns complete RON

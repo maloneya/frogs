@@ -22,6 +22,15 @@ The [scene editor guide](docs/scene-editor.md) covers placement, duplication,
 camera-aligned coordinates, lighting, saving and complete encounter authoring.
 Agents use the [same headless API](docs/scene-authoring.md); editing works with the game closed.
 
+For the storm-night visual study, open **Storm watch — the last fire**
+(`scenes/storm_watch.ron`) in Scenes. Fight near the fire and watch lightning
+reveal the approaching crowd. **Scene lighting → Rain and lightning** toggles
+the weather.
+
+For the character/combat study, open **Combat feel — poses and impact**
+(`scenes/combat_feel.ron`). Compare Cleave and Slam while standing and moving,
+then hit the front targets again to see deaths. Restart restores the targets.
+
 ## Controls
 
 | Input | Action |

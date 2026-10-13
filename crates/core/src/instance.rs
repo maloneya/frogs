@@ -111,6 +111,10 @@ impl Instance {
         Vec3::from(self.pos)
     }
 
+    /// Authored mesh scale, shared by drawing and conservative visibility bounds.
+    #[must_use]
+    pub fn scale(&self) -> Vec3 { Vec3::from(self.scale) }
+
     /// Which way this instance is turned, in radians. See [`Instance::with_yaw`]
     /// for the convention.
     #[must_use]

@@ -308,7 +308,10 @@ impl Game {
     /// Solid trees in scene-installation and authored order.
     pub fn trees(&self) -> impl Iterator<Item = TreeSpec> + '_ { self.trees.iter() }
 
-    /// Illumination from the most recently loaded live scene, or neutral daylight.
+    /// Presentation weather from the most recently loaded live scene.
+    pub fn storm(&self) -> bool { self.environments.storm() }
+
+    /// Authored scene-wide illumination before presentation effects.
     pub fn environment_light(&self) -> arpg_core::EnvironmentLight { self.environments.active() }
 
     /// Stationary torches in stable scene-installation and authored order.

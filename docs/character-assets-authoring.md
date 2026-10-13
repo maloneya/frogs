@@ -17,8 +17,8 @@ accepted and baked once at import.
 The material must be opaque and have **Backface Culling** enabled. Use one UV
 map and the default repeat-wrapped Image Texture node connected to Principled
 BSDF Base Color. Scalar Metallic and Roughness values are accepted but
-deliberately normalized away: the renderer uses lit base colour, not
-PBR surface response. Normal, occlusion, emissive and metallic-roughness
+deliberately normalized away: the renderer uses lit base colour and a shared
+wet sheen in storm scenes rather than authored PBR surface response. Normal, occlusion, emissive and metallic-roughness
 textures remain unsupported and are rejected.
 
 Export as glTF 2.0 with:
@@ -100,10 +100,16 @@ The player presentation contract resolves `Idle`, `Run`, `RunBackward`,
 The player also requires a `BeamOrigin` joint at the sword tip. Presentation
 reads its sampled transform to attach the beam without changing collision geometry.
 Locomotion clips share a normalized gait phase and blend according to actual
-displacement relative to facing. The attack layer replaces local transforms
-for `Spine`, `Head`, `LeftArm`, `RightArm` and `Weapon`; those joints are required
-by the player presentation contract. Root and legs retain locomotion.
-The mask is validated before replacing a live character. Attack actions reserve consecutive authored
+displacement relative to facing. The attack layer validates the articulated chest, shoulder, arm, hand and weapon
+chain at load; its exact mask is owned by `player_upper_mask` in
+[`presentation.rs`](../crates/app/src/presentation.rs). Moving melee retains
+pelvis and leg locomotion; stationary melee uses the complete bracing pose.
+Moving ability layers align their top masked joint to the source parent's
+rotation, so turning strafe hips cannot turn a committed swing or beam off aim.
+The validated, allocation-free `blend_parent_aligned` operation belongs to the
+asset pose owner; ordinary locomotion still blends local transforms.
+The mask is validated before replacing a live character; only articulated body
+and weapon joints are required. Attack actions reserve consecutive authored
 segments for wind-up, contact and recovery; app maps those segments to the
 committed simulation phase lengths. Recovery tuning therefore cannot move the
 visible contact interval. These names and segment boundaries are
@@ -115,13 +121,21 @@ neutral again. Runtime maps startup to normalized `0.0..0.4`, active to
 `0.4..0.6`, and recovery to `0.6..1.0`; tests sample the exported weapon motion
 at those edges so moving a key pose into the wrong phase fails visibly.
 
-The basic player sword is part of its single mesh and is rigidly
+The swordsman player uses a 26-joint rig fitted to the accepted CC0 authored
+human surface, with close-fitting clothing and a rigid sword,
+and a Cleave retargeted from approved authored motion, including weight transfer
+and an articulated wrist. [Motion acceptance](character-motion.md) records the
+visual principles. Authoring exports ordinary transform clips; runtime uses the
+same importer and pose sampler.
+
+The player sword is part of its single mesh and is rigidly
 weighted to its `Weapon` bone. This preserves the full sampled transform through
 the existing skinning path. The importer requires named nodes, but a generic
 character GLB is not required to contain a joint called `Weapon`.
 
 The ordinary-horde contract is a smaller view of the same interchange format:
-it requires only `Idle` and `Run`. `horde show <path.glb>` selects one shared
+it requires `Idle`, `Run`, `Hit` and `Death`. Three fixed hit poses share the
+recoil stages, and one frozen death pose supports a tick-derived fall. `horde show <path.glb>` selects one shared
 character, including all its parts and materials, then groups live enemies into
 bounded [gait/phase buckets](crowd-collision.md#movement-and-pushing). Phase comes
 from stable entity identity, not authored or stored randomness. Startup loads `assets/characters/basic-player/basic-player.glb`
@@ -130,6 +144,18 @@ using the existing role scales and tints. Asset paths
 are resolved from the build-time repository location, independently of the launch
 directory. Missing or invalid defaults fail startup explicitly. `character clear`
 and `horde clear` restore their respective default assets; there is no character cube fallback.
+
+An ordinary horde asset may have a neighboring `<stem>.shadow.glb` file. Both
+the harness and companion load the complete pair before replacing the accepted
+horde. A present but unreadable, invalid or mismatched caster refuses the load;
+an asset without a caster uses its visible geometry for shadows. The asset owner
+requires fewer caster triangles and the same ordered joint names, joint parents,
+local/global bind transforms and inverse binds. The renderer uses only its
+geometry with the visible asset's palette; proxy clips/materials are not uploaded.
+Visible geometry, materials and animation are unchanged. The horde report's
+`shadow_mesh` object identifies which geometry is active. Scene restart clears
+placements and poses through the existing horde lifetime; changing assets replaces
+the complete GPU resources, including the caster.
 
 The checked-in `assets/fixtures/blender-bind-pose.glb` exercises this contract
 with a four-bone, asymmetric training dummy and basic animation clips.

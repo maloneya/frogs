@@ -73,6 +73,6 @@ fn vs_main(in: VsIn) -> VsOut {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let texel = textureSample(base_color_texture, base_color_sampler, in.uv);
-    let linear = texel.rgb * material.base_color_factor.rgb * in.tint * illumination(in.world_pos, in.normal);
+    let linear = surface_colour(texel.rgb * material.base_color_factor.rgb * in.tint, in.world_pos, in.normal);
     return vec4<f32>(mix(linear, vec3<f32>(1.0), in.white_mix), 1.0);
 }

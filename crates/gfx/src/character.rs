@@ -2,7 +2,7 @@
 
 use std::{num::NonZeroU64, ops::Range};
 
-use arpg_core::{Instance, MAX_INSTANCES};
+use arpg_core::{Instance, InstanceBuffer, MAX_INSTANCES};
 use wgpu::util::DeviceExt as _;
 
 use crate::camera::CameraBinding;
@@ -15,6 +15,35 @@ mod tests {
     use arpg_core::LinearRgb;
     use super::*;
     use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn posed_bounds_keep_geometry_and_upload_keeps_offscreen_shadow_casters() {
+        let asset=arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.glb")).unwrap();
+        let (device,queue)=crate::tests::headless_device();
+        let binding=CameraBinding::new(&device);
+        let mesh=CharacterMesh::new(&device,&queue,&MaterialLayout::new(&device),&asset).unwrap();
+        let mut pose=asset.bind_pose();
+        for seconds in [0.0,0.125,0.25,0.375] {
+            asset.sample(asset.clip_named("Run").unwrap(),seconds,&mut pose);
+            let bounds=mesh.bounds(pose.joint_matrices());
+            for vertex in asset.vertices() {
+                let point=vertex.joints().into_iter().zip(vertex.weights()).fold(glam::Vec3::ZERO, |sum,(joint,weight)|
+                    sum+pose.joint_matrices()[usize::from(joint)].matrix().transform_point3(vertex.position())*weight);
+                assert!(bounds.contains_point(point),"animated vertex escaped its conservative bound");
+            }
+        }
+        let mut pipeline=CharacterPipeline::new(&device,&binding.layout,MaterialLayout::new(&device),
+            wgpu::TextureFormat::Bgra8UnormSrgb,crate::DEPTH_FORMAT);
+        let placements=[Instance::new(glam::Vec3::new(10.0,0.0,0.5),glam::Vec3::ONE,LinearRgb::WHITE)];
+        let empty=CharacterBucket::new(&pose,&[]);
+        let mut buckets=[empty;MAX_HORDE_POSE_BUCKETS];buckets[0]=CharacterBucket::new(&pose,&placements);
+        let horde=CharacterHorde::new(&mesh,buckets);
+        let main=crate::visibility::Frustum::new(glam::Mat4::IDENTITY);
+        let caster=crate::visibility::Frustum::new(glam::Mat4::from_translation(glam::Vec3::new(-10.0,0.0,0.0)));
+        assert_eq!(pipeline.upload(&queue,None,Some(horde),&[main]).horde[0],0..0);
+        assert_eq!(pipeline.upload(&queue,None,Some(horde),&[main,caster]).horde[0],0..1);
+        assert_eq!(pipeline.upload(&queue,None,None,&[main]).horde[0],0..0,"removal cannot leave a stale draw");
+    }
 
     #[test]
     fn draw_descriptions_reject_foreign_poses_before_upload() {
@@ -56,16 +85,24 @@ mod tests {
 /// This is a renderer budget rather than gameplay content. The app decides
 /// which clip/phase each bucket represents, while this bound fixes GPU buffer
 /// sizes at initialization.
-pub const MAX_HORDE_POSE_BUCKETS: usize = 9;
+pub const MAX_HORDE_POSE_BUCKETS: usize = 12;
 const PALETTE_SLOTS: usize = 1 + MAX_HORDE_POSE_BUCKETS;
 
 /// One uploaded character with shared geometry buffers and per-part materials.
 pub struct CharacterMesh {
     asset_id: arpg_assets::CharacterAssetId,
+    joint_bounds: Vec<Option<crate::visibility::Bounds>>,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     parts: Vec<(Range<u32>, usize)>,
     materials: Vec<Material>,
+    shadow: Option<ShadowGeometry>,
+}
+
+struct ShadowGeometry {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    index_count: u32,
 }
 
 impl CharacterMesh {
@@ -98,8 +135,29 @@ impl CharacterMesh {
             Material::new(device, material_layout, &textures[material.image_index()],
                 material.base_color_factor(), "character material")
         }).collect();
+        let mut joint_bounds = vec![None; character.joint_count()];
+        let shadow = character.shadow_mesh().map(|proxy| ShadowGeometry {
+            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("coarse character caster vertices"),
+                contents: bytemuck::cast_slice(proxy.vertices()), usage: wgpu::BufferUsages::VERTEX,
+            }),
+            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("coarse character caster indices"),
+                contents: bytemuck::cast_slice(proxy.indices()), usage: wgpu::BufferUsages::INDEX,
+            }),
+            index_count: proxy.indices().len() as u32,
+        });
+        // Either representation may extend beyond the other's silhouette.
+        for vertex in character.vertices().iter().chain(character.shadow_mesh().into_iter().flat_map(|proxy| proxy.vertices())) {
+            for (joint, weight) in vertex.joints().into_iter().zip(vertex.weights()) {
+                if weight <= 0.0 { continue; }
+                let bounds: &mut Option<crate::visibility::Bounds> = &mut joint_bounds[usize::from(joint)];
+                if let Some(bounds) = bounds { bounds.include(vertex.position()); }
+                else { *bounds=Some(crate::visibility::Bounds::point(vertex.position())); }
+            }
+        }
         let uploaded = Self {
-            asset_id: character.asset_id(), vertices, indices, materials,
+            asset_id: character.asset_id(), joint_bounds, vertices, indices, materials, shadow,
             parts: character.parts().iter().map(|part| (part.indices(), part.material_index())).collect(),
         };
         let mut failure = None;
@@ -109,6 +167,21 @@ impl CharacterMesh {
             }
         }
         failure.map_or(Ok(uploaded), |error| Err(MeshUploadError(error)))
+    }
+    fn bounds(&self, joints: &[arpg_assets::JointMatrix]) -> crate::visibility::Bounds {
+        // Every skinned vertex is a convex combination of transformed joint
+        // influences. Their union bounds the full pose, including blended limbs.
+        let mut combined: Option<crate::visibility::Bounds> = None;
+        for (bounds, matrix) in self.joint_bounds.iter().zip(joints) {
+            if let Some(bounds) = bounds {
+                for point in bounds.corners() {
+                    let point=matrix.matrix().transform_point3(point);
+                    if let Some(bounds) = &mut combined { bounds.include(point); }
+                    else { combined=Some(crate::visibility::Bounds::point(point)); }
+                }
+            }
+        }
+        combined.expect("validated character contains weighted geometry")
     }
 }
 
@@ -207,7 +280,10 @@ impl Default for CharacterDraws {
 
 pub(crate) struct CharacterPipeline {
     pipeline: wgpu::RenderPipeline,
+    depth_pipeline: wgpu::RenderPipeline,
+    shadows: wgpu::RenderPipeline,
     instance: wgpu::Buffer,
+    staging: InstanceBuffer,
     joints: wgpu::Buffer,
     joint_bind_group: wgpu::BindGroup,
     material_layout: MaterialLayout,
@@ -268,14 +344,7 @@ impl CharacterPipeline {
             ],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("character pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[
+        let buffers = [
                     Some(wgpu::VertexBufferLayout {
                         array_stride: size_of::<arpg_assets::CharacterVertex>()
                             as wgpu::BufferAddress,
@@ -289,7 +358,16 @@ impl CharacterPipeline {
                         ],
                     }),
                     Some(instance_layout()),
-                ],
+                ];
+        let depth_pipeline = crate::shadow::pipeline(device, &shader, &[material_layout.raw(), &joint_layout], &buffers);
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("character pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &buffers,
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -312,6 +390,24 @@ impl CharacterPipeline {
             multiview_mask: None,
             cache: None,
         });
+        let shadow_shader = crate::lighting::shader(device, include_str!("shadow.wgsl"));
+        let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("contact shadow layout"), bind_group_layouts: &[Some(camera_layout)], immediate_size: 0,
+        });
+        let shadows = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("soft character grounding"), layout: Some(&shadow_layout),
+            vertex: wgpu::VertexState { module: &shadow_shader, entry_point: Some("vs_main"),
+                compilation_options: Default::default(), buffers: &[Some(instance_layout())] },
+            fragment: Some(wgpu::FragmentState { module: &shadow_shader, entry_point: Some("fs_main"),
+                compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL,
+                })] }),
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState { format: depth_format,
+                depth_write_enabled: Some(false), depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(), bias: Default::default() }),
+            multisample: Default::default(), multiview_mask: None, cache: None,
+        });
         let instance = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("character instances"),
             size: (MAX_INSTANCES * size_of::<Instance>()) as wgpu::BufferAddress,
@@ -320,7 +416,10 @@ impl CharacterPipeline {
         });
         Self {
             pipeline,
+            depth_pipeline,
+            shadows,
             instance,
+            staging: InstanceBuffer::default(),
             joints,
             joint_bind_group,
             material_layout,
@@ -337,11 +436,13 @@ impl CharacterPipeline {
     }
 
     pub(crate) fn upload(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         player: Option<CharacterPreview<'_>>,
         horde: Option<CharacterHorde<'_>>,
+        views: &[crate::visibility::Frustum],
     ) -> CharacterDraws {
+        assert!(!views.is_empty(), "character upload requires a render view");
         let instance_bytes = size_of::<Instance>() as u64;
         let palette_bytes =
             (arpg_assets::MAX_JOINTS * size_of::<arpg_assets::JointMatrix>()) as u64;
@@ -362,15 +463,15 @@ impl CharacterPipeline {
                 let joints = bucket.pose.joint_matrices();
                 debug_assert!(!joints.is_empty());
                 debug_assert!(joints.len() <= arpg_assets::MAX_JOINTS);
-                let count = bucket.instances.len().min(MAX_INSTANCES - next_instance);
-                if count == 0 {
-                    continue;
+                let bounds=horde.mesh.bounds(joints);
+                let mut sink = self.staging.sink();
+                for instance in bucket.instances.iter().copied()
+                    .filter(|&instance| bounds.visible(instance,views)).take(MAX_INSTANCES-next_instance) {
+                    sink.push(instance);
                 }
-                queue.write_buffer(
-                    &self.instance,
-                    next_instance as u64 * instance_bytes,
-                    bytemuck::cast_slice(&bucket.instances[..count]),
-                );
+                let count=self.staging.as_slice().len();
+                if count == 0 { continue; }
+                queue.write_buffer(&self.instance,next_instance as u64*instance_bytes,bytemuck::cast_slice(self.staging.as_slice()));
                 queue.write_buffer(
                     &self.joints,
                     (index as u64 + 1) * palette_bytes,
@@ -383,10 +484,45 @@ impl CharacterPipeline {
         draws
     }
 
+    pub(crate) fn draw_shadows(&self, pass: &mut wgpu::RenderPass<'_>, camera: &CameraBinding, draws: &CharacterDraws) {
+        let end = draws.horde.iter().map(|range| range.end).max().unwrap_or(0).max(draws.player.end);
+        if end == 0 { return; }
+        pass.set_pipeline(&self.shadows);
+        pass.set_bind_group(0, &camera.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.instance.slice(..));
+        pass.draw(0..6, 0..end);
+    }
+
+    pub(crate) fn draw_depth(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup,
+        player: Option<CharacterPreview<'_>>, horde: Option<CharacterHorde<'_>>, draws: &CharacterDraws) {
+        if let Some(player) = player { self.draw_caster(pass, camera, player.mesh(), 0, draws.player.clone()); }
+        if let Some(horde) = horde {
+            for (i, instances) in draws.horde.iter().enumerate() { self.draw_caster(pass, camera, horde.mesh(), i+1, instances.clone()); }
+        }
+    }
+
+    fn draw_caster(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup,
+        mesh: &CharacterMesh, palette: usize, instances: Range<u32>) {
+        let Some(shadow) = &mesh.shadow else {
+            self.draw(pass, (camera, &self.depth_pipeline), mesh, palette, instances);
+            return;
+        };
+        if instances.is_empty() { return; }
+        let palette_bytes = (arpg_assets::MAX_JOINTS * size_of::<arpg_assets::JointMatrix>()) as u32;
+        pass.set_pipeline(&self.depth_pipeline);
+        pass.set_bind_group(0, camera, &[]);
+        pass.set_bind_group(1, mesh.materials[0].bind_group(), &[]);
+        pass.set_bind_group(2, &self.joint_bind_group, &[palette as u32 * palette_bytes]);
+        pass.set_vertex_buffer(0, shadow.vertices.slice(..));
+        pass.set_vertex_buffer(1, self.instance.slice(..));
+        pass.set_index_buffer(shadow.indices.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..shadow.index_count, 0, instances);
+    }
+
     fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        camera: &CameraBinding,
+        view: (&wgpu::BindGroup, &wgpu::RenderPipeline),
         mesh: &CharacterMesh,
         palette: usize,
         instances: Range<u32>,
@@ -396,8 +532,8 @@ impl CharacterPipeline {
         }
         let palette_bytes =
             (arpg_assets::MAX_JOINTS * size_of::<arpg_assets::JointMatrix>()) as u32;
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &camera.bind_group, &[]);
+        pass.set_pipeline(view.1);
+        pass.set_bind_group(0, view.0, &[]);
         pass.set_bind_group(2, &self.joint_bind_group, &[palette as u32 * palette_bytes]);
         pass.set_vertex_buffer(0, mesh.vertices.slice(..));
         pass.set_vertex_buffer(1, self.instance.slice(..));
@@ -415,7 +551,7 @@ impl CharacterPipeline {
         mesh: &CharacterMesh,
         instances: Range<u32>,
     ) {
-        self.draw(pass, camera, mesh, 0, instances);
+        self.draw(pass, (&camera.bind_group, &self.pipeline), mesh, 0, instances);
     }
 
     pub(crate) fn draw_horde(
@@ -426,7 +562,7 @@ impl CharacterPipeline {
         instances: &[Range<u32>; MAX_HORDE_POSE_BUCKETS],
     ) {
         for (index, instances) in instances.iter().enumerate() {
-            self.draw(pass, camera, mesh, index + 1, instances.clone());
+            self.draw(pass, (&camera.bind_group, &self.pipeline), mesh, index + 1, instances.clone());
         }
     }
 }

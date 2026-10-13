@@ -32,7 +32,17 @@ All live scenes share core's `MAX_POINT_LIGHTS` budget. Torches have no collider
 `state.sim.torches` reports settings/ownership; `state.world_assets.torch_instances`
 counts campfire meshes. Flames share the render effect counts with attack effects.
 
-[The shader](../crates/gfx/src/lighting.wgsl) adds ambient, directional and point
-illumination in linear space before display encoding. There are no shadows,
-bounced light, flicker or bloom; walls and characters do not block light. Flames,
-attack effects and UI are unlit and do not illuminate surfaces.
+[The shader](../crates/gfx/src/lighting.wgsl) adds sky fill, directional and point
+illumination in linear space before display encoding. Directional light and the
+nearest campfire cast moving shadows from world meshes and animated characters.
+The directional map locks its texel grid to the world so camera easing does not
+make stationary edges shimmer. Fire shadow edges soften with distance; a small
+world-space receiver offset keeps shadows close to their casters.
+The horde can use a smaller [shadow mesh](character-assets-authoring.md) with the
+same sampled pose. Campfire light flickers; translucent flame tongues and rising
+embers are rebuilt from presentation time. Only the point light illuminates
+surfaces; the flame geometry, attack effects and UI are unlit.
+
+**Rain and lightning** (`environment.storm`) adds varied wind-driven rain streaks and brief ground impact rings, periodic
+lightning that reveals the scene and its shadows, and wet surface highlights.
+These effects never change gameplay. There is no bounced light or bloom.

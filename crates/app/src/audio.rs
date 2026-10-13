@@ -103,12 +103,14 @@ pub(crate) struct Audio {
     observations: Observations,
     cues: [u64; Cue::ALL.len()],
     error: Option<String>,
+    muted: bool,
 }
 
 impl Audio {
     /// Device failure is visible in logs and harness state, and cannot stop gameplay.
-    pub(crate) fn initialize(&mut self, game: &Game) {
-        match Playback::open() {
+    pub(crate) fn initialize(&mut self, game: &Game, muted: bool) {
+        self.muted = muted;
+        match Playback::open(muted) {
             Ok(playback) => self.playback = Some(playback),
             Err(error) => {
                 log::warn!("audio unavailable: {error}");
@@ -116,6 +118,12 @@ impl Audio {
             }
         }
         self.reset(game);
+    }
+
+    /// Mute the final mix while voices and tick observations continue normally.
+    pub(crate) fn set_muted(&mut self, muted: bool) {
+        self.muted = muted;
+        if let Some(playback) = &mut self.playback { playback.set_muted(muted); }
     }
 
     /// Called only after a successful scene replacement. Rejected loads keep audio intact.
@@ -127,7 +135,7 @@ impl Audio {
     }
 
     pub(crate) fn observe(&mut self, game: &Game, intent: Intent) {
-        let Self { playback, observations, cues, error: _ } = self;
+        let Self { playback, observations, cues, .. } = self;
         observations.observe(game, intent, |cue| {
             cues[cue as usize] += 1;
             if let Some(playback) = playback { playback.one_shot(cue); }
@@ -144,6 +152,7 @@ impl Audio {
 
     pub(crate) fn report(&self, out: &mut Report) {
         out.bool("available", self.playback.is_some());
+        out.bool("muted", self.muted);
         if let Some(error) = &self.error { out.text("error", error); }
         out.object("cues", |out| {
             for cue in [Cue::Cleave, Cue::Slam, Cue::Impact, Cue::Footstep, Cue::Hurt] {

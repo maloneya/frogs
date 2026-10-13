@@ -6,3 +6,6 @@ For playable content, use the [shared scene authoring tools](../docs/scene-autho
 
 - [levelgen](levelgen/README.md): ASCII map generation, limited-view navigation
   playtests, and bounded recipe research with optional agent proposals.
+
+- [character-references](character-references/README.md): openly licensed player
+  and wolf bodies/motions, retained source files, provenance and source previews.

@@ -151,6 +151,7 @@ impl OrthoCamera {
 
 /// Per-view GPU bindings: the camera matrix and the scene's bounded light list.
 pub(crate) struct CameraBinding {
+    pub(crate) shadows: crate::shadow::ShadowMaps,
     buffer: wgpu::Buffer,
     light: wgpu::Buffer,
     pub(crate) layout: wgpu::BindGroupLayout,
@@ -159,6 +160,7 @@ pub(crate) struct CameraBinding {
 
 impl CameraBinding {
     pub(crate) fn new(device: &wgpu::Device) -> Self {
+        let shadows = crate::shadow::ShadowMaps::new(device);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera uniform"),
             size: 64, // one mat4x4<f32>
@@ -185,13 +187,24 @@ impl CameraBinding {
                 count: None,
             }, wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: wgpu::BufferSize::new(size_of::<crate::lighting::LightUniform>() as u64),
                 },
                 count: None,
+            }, wgpu::BindGroupLayoutEntry {
+                binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false, min_binding_size: None }, count: None,
+            }, wgpu::BindGroupLayoutEntry {
+                binding: 3, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2Array, multisampled: false }, count: None,
+            }, wgpu::BindGroupLayoutEntry {
+                binding: 4, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison), count: None,
             }],
         });
 
@@ -204,14 +217,16 @@ impl CameraBinding {
             }, wgpu::BindGroupEntry {
                 binding: 1,
                 resource: light.as_entire_binding(),
-            }],
+            }, wgpu::BindGroupEntry { binding: 2, resource: shadows.uniform.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&shadows.view) },
+            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&shadows.sampler) }],
         });
 
-        Self { buffer, light, layout, bind_group }
+        Self { shadows, buffer, light, layout, bind_group }
     }
 
-    pub(crate) fn upload_lights(&self, queue: &wgpu::Queue, lights: &[crate::PointLight], environment: arpg_core::EnvironmentLight) {
-        queue.write_buffer(&self.light, 0, bytemuck::bytes_of(&crate::lighting::LightUniform::new(lights, environment)));
+    pub(crate) fn upload_lights(&self, queue: &wgpu::Queue, lights: &[crate::PointLight], environment: arpg_core::EnvironmentLight, wet: bool) {
+        queue.write_buffer(&self.light, 0, bytemuck::bytes_of(&crate::lighting::LightUniform::new(lights, environment).with_wet_surfaces(wet)));
     }
 
     /// Uploads the camera matrix for this view.

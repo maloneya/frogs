@@ -1,24 +1,33 @@
 # Attack effects
 
-Cleave leaves a blue crescent; Slam produces an amber expanding ring. Both use
-committed active hitbox samples from `Game::attack_discs`. Changing the selected
-attack mid-swing does not change the effect. Cleave's trail stays in world space;
-Slam follows its live hitbox, then leaves a fading final ring. Fading never extends
-the damage window. Start/restart clears history.
+Cleave leaves a blue crescent from committed active hitbox samples. Slam makes a
+compact ground impact at the end of its committed contact phase: a brief pale
+flash, broken dark splinters, kicked-up chips and low, fading dust. The impact
+locks 1.6 m ahead of the player when the blade finishes descending, then remains
+in world space for 24 ticks while the player recovers or moves away. It does not
+outline the expanding damage radius. The same impact appears on empty ground.
+Changing the selected attack mid-swing does not change the committed effect.
+Fading never extends the damage window. Start/restart clears history.
 
 [App effect code](../crates/app/src/attack_effects.rs) owns geometry, interpolation and visual tuning.
 The renderer draws blended triangles after opaque geometry, with depth testing
 but no depth writes. Visual interpolation does not become collision geometry.
 
-`state.attack_effects` reports observed tick, active state, retained samples,
-committed profile/centre/radius and vertex count. `state.render.effect_vertices`
+`state.attack_effects` reports observed tick, active state, retained Cleave/beam
+samples, their profile/centre/radius and vertex count. `slam_impact`, `slam_centre` and `slam_tick` identify the
+separately retained ground burst. `state.render.effect_vertices`
 and `effect_draws` report rendering workload.
 
 ## Contact flash
 
 Surviving enemies flash white when their observed health drops. Feedback begins
 when damage can first be rendered; catch-up ticks collapse to the latest health.
-Repeated redraws do not refresh it. Defeated enemies leave no flash image.
+Repeated redraws do not refresh it. Damage observations also select three shared flinch stages for 0.3 seconds,
+without interrupting gameplay movement or attacks. Recoil faces against observed
+displacement, falling back to the player direction for stationary targets; this
+is presentation inference. Melee contact bursts include survivors and lethal
+outcomes. Defeated characters fall over 15 ticks into one shared bent-limb corpse
+pose; scene replacement and eviction use the existing corpse lifetime.
 [Enemy feedback](../crates/app/src/enemy_feedback.rs) owns timing and history;
 `state.horde_preview.flashing_instances` reports prepared flashing instances.
 

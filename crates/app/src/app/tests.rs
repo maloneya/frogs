@@ -18,6 +18,65 @@ use super::*;
 use crate::harness::Command;
 
 #[test]
+fn maximum_admitted_lights_survive_weather_and_flicker_without_changing_game() {
+    use glam::Vec3;
+    let environment = arpg_core::EnvironmentLight::try_new(
+        arpg_core::LinearRgb::WHITE, 1_000_000.0,
+        arpg_core::LinearRgb::WHITE, 1_000_000.0, Vec3::Y,
+    ).unwrap();
+    let torch = arpg_game::TorchSpec::new(arpg_core::PointLight::new(
+        Vec3::new(0.0, 1.4, 0.0), arpg_core::LinearRgb::WHITE, 1_000_000.0, 11.0,
+    )).unwrap();
+    let game = Game::from_scene(&arpg_game::GameScene {
+        environment: arpg_game::EnvironmentSpec::new(environment).with_storm(true),
+        torches: vec![torch],
+        ..Default::default()
+    }).unwrap();
+    let hash = game.hash();
+    let mut flames = crate::torch::Torches::default();
+    for seconds in [0.08, 4.0, 4.22] {
+        let lit = crate::atmosphere::illumination(game.environment_light(), game.storm(), seconds);
+        assert_eq!(lit.ambient_intensity(), environment.ambient_intensity());
+        assert_eq!(lit.directional_intensity(), environment.directional_intensity());
+        flames.rebuild(game.torches(), &[], seconds);
+        assert!(flames.lights()[0].intensity() <= torch.light().intensity());
+        assert_eq!(game.hash(), hash);
+    }
+}
+
+#[test]
+fn weather_report_tracks_rebuilt_geometry_without_affecting_gameplay() {
+    let mut app = App::default();
+    let camera = OrthoCamera::new(1280, 720);
+    let before = app.game.hash();
+    for enabled in [true, false] {
+        app.atmosphere.rebuild(enabled, 2.0, &camera, &[]);
+        let state: serde_json::Value = serde_json::from_str(&app.report_state()).unwrap();
+        assert_eq!(state["render"]["weather_vertices"], app.atmosphere.vertices().len());
+        assert_eq!(state["render"]["weather_draws"], usize::from(enabled));
+        assert_eq!(app.game.hash(), before);
+    }
+}
+
+#[test]
+fn harness_audio_toggle_survives_scene_changes_without_touching_gameplay() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = App { harness: Some(rx), ..Default::default() };
+    for enabled in [false, true] {
+        let before = app.game.hash();
+        let (reply, response) = std::sync::mpsc::channel();
+        tx.send(Request { command: Command::SetAudioEnabled(enabled), reply }).unwrap();
+        assert!(!app.drain_harness());
+        assert_eq!(response.try_recv().unwrap(), if enabled { "audio on" } else { "audio off" });
+        assert_eq!(app.game.hash(), before);
+        app.start_playtest(pair()).unwrap();
+        app.restart_playtest().unwrap();
+        let state: serde_json::Value = serde_json::from_str(&app.report_state()).unwrap();
+        assert_eq!(state["audio"]["muted"], !enabled);
+    }
+}
+
+#[test]
 fn invalid_harness_sources_preserve_pending_work() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut app = App { game: Game::empty(), harness: Some(rx), ..Default::default() };
@@ -454,7 +513,7 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
         app.game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
         app.game.step(dt, Intent::new(MoveDir::NONE, arpg_core::AimDir::FORWARD, false)
             .with_attack_held(true));
-        app.enemy_feedback.observe(&app.game);
+        app.enemy_feedback.observe(&app.game, |_, _| {});
         let id = app.game.character_presentations(Alpha::ZERO).next().unwrap().id();
         assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 1.0);
         id
@@ -469,7 +528,7 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
     let id = hit(&mut app);
     let owner = app.game.scene_instances().next().unwrap().0;
     assert!(app.game.evict_scene(owner));
-    app.enemy_feedback.observe(&app.game);
+    app.enemy_feedback.observe(&app.game, |_, _| {});
     assert_eq!(app.enemy_feedback.flash(id, app.game.tick(), Alpha::ZERO), 0.0);
 }
 

@@ -66,6 +66,7 @@ Read only what the task needs:
 - [Write scenarios](.claude/skills/scenario/SKILL.md), [live playtests](.claude/skills/playtest/SKILL.md)
 - [Add/change a sim pass](.claude/skills/add-sim-pass/SKILL.md)
 - [Investigate performance](.claude/skills/investigate-performance/SKILL.md): user-triggered evidence, published approaches and a decision brief
+- [Character workflow](.claude/skills/character-workflow/SKILL.md): references, visual development and review
 - [Blender assets](.claude/skills/author-blender-asset/SKILL.md), [asset contract](docs/character-assets-authoring.md)
 - [Encounters](docs/encounters.md), [interaction](docs/interaction.md), [source enablement](docs/source-enablement.md)
 - [Collision debug](docs/collision-debug.md), [attack effects](docs/attack-effects.md)

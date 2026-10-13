@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use arpg_core::Report;
-use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Tween, backend::Backend,
+use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Tween, backend::Backend,
     sound::{PlaybackState, static_sound::{StaticSoundData, StaticSoundHandle}},
     track::MainTrackBuilder};
 
@@ -44,21 +44,29 @@ pub(super) struct Playback<B: Backend = DefaultBackend> {
 }
 
 impl Playback {
-    pub(super) fn open() -> Result<Self, String> {
+    pub(super) fn open(muted: bool) -> Result<Self, String> {
         let clips = bank()?;
-        let manager = AudioManager::<DefaultBackend>::new(settings()).map_err(|error| error.to_string())?;
+        let manager = AudioManager::<DefaultBackend>::new(settings(muted)).map_err(|error| error.to_string())?;
         Ok(Self::new(manager, clips))
     }
 }
 
-fn settings<B: Backend>() -> AudioManagerSettings<B> where B::Settings: Default {
+fn mix_volume(muted: bool) -> Decibels {
+    if muted { Decibels::SILENCE } else { Decibels(-6.0) }
+}
+
+fn settings<B: Backend>(muted: bool) -> AudioManagerSettings<B> where B::Settings: Default {
     AudioManagerSettings {
-        main_track_builder: MainTrackBuilder::new().sound_capacity(VOICES).volume(-6.0),
+        main_track_builder: MainTrackBuilder::new().sound_capacity(VOICES).volume(mix_volume(muted)),
         ..Default::default()
     }
 }
 
 impl<B: Backend> Playback<B> {
+    pub(super) fn set_muted(&mut self, muted: bool) {
+        self.manager.main_track().set_volume(mix_volume(muted), fade(20));
+    }
+
     fn new(manager: AudioManager<B>, clips: [StaticSoundData; Cue::ALL.len()]) -> Self {
         Self { manager, clips, shots: Vec::with_capacity(ONE_SHOTS), beam: None,
             ambience: None, started: 0, refused: 0 }
@@ -110,8 +118,58 @@ mod tests {
     use super::*;
     use kira::backend::mock::{MockBackend, MockBackendSettings};
 
+    struct OutputBackend(Option<kira::backend::Renderer>);
+
+    impl Backend for OutputBackend {
+        type Settings = ();
+        type Error = ();
+
+        fn setup((): (), _: usize) -> Result<(Self, u32), ()> {
+            Ok((Self(None), 24_000))
+        }
+
+        fn start(&mut self, renderer: kira::backend::Renderer) -> Result<(), ()> {
+            self.0 = Some(renderer);
+            Ok(())
+        }
+    }
+
+    impl OutputBackend {
+        fn energy(&mut self, blocks: usize) -> f32 {
+            let renderer = self.0.as_mut().unwrap();
+            let mut samples = [0.0; 256];
+            let mut energy = 0.0;
+            for _ in 0..blocks {
+                renderer.on_start_processing();
+                renderer.process(&mut samples, 2);
+                energy += samples.iter().map(|sample| sample.abs()).sum::<f32>();
+            }
+            energy
+        }
+    }
+
+    #[test]
+    fn muted_mix_is_silent_but_voices_advance_and_unmute_without_restarting() {
+        let manager = AudioManager::<OutputBackend>::new(settings(true)).unwrap();
+        let mut player = Playback::new(manager, bank().unwrap());
+        player.one_shot(Cue::Footstep);
+        player.loops(true, true);
+        assert_eq!(player.manager.backend_mut().energy(250), 0.0);
+        assert_eq!(player.shots[0].state(), PlaybackState::Stopped);
+        assert_eq!(player.beam.as_ref().unwrap().state(), PlaybackState::Playing);
+        assert_eq!(player.ambience.as_ref().unwrap().state(), PlaybackState::Playing);
+        player.set_muted(false);
+        assert!(player.manager.backend_mut().energy(30) > 0.0);
+        assert_eq!(player.started, 3);
+        player.set_muted(true);
+        player.manager.backend_mut().energy(30); // Finish the volume fade.
+        assert_eq!(player.manager.backend_mut().energy(30), 0.0);
+        assert_eq!(player.started, 3);
+        assert_eq!(player.refused, 0);
+    }
+
     fn player() -> Playback<MockBackend> {
-        let mut settings = settings::<MockBackend>();
+        let mut settings = settings::<MockBackend>(false);
         settings.backend_settings = MockBackendSettings { sample_rate: 24_000 };
         Playback::new(AudioManager::new(settings).unwrap(), bank().unwrap())
     }

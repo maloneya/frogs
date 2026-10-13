@@ -24,6 +24,8 @@ pub struct RenderFrame<'a> {
     pub overlay: &'a [Quad],
     /// Always-visible world-space diagnostic outlines.
     pub debug_outlines: &'a [DebugOutline],
-    /// Depth-tested translucent world-space triangles.
+    /// A separate bounded stream of depth-tested translucent weather triangles.
+    pub weather: &'a [EffectVertex],
+    /// Combat and fire geometry, independent of weather capacity.
     pub effects: &'a [EffectVertex],
 }

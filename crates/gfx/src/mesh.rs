@@ -98,6 +98,7 @@ impl<'a> MeshBatch<'a> {
 
 pub(crate) struct MeshPipeline {
     pipeline: wgpu::RenderPipeline,
+    depth_pipeline: wgpu::RenderPipeline,
     instance: wgpu::Buffer,
     material_layout: MaterialLayout,
 }
@@ -116,6 +117,15 @@ impl MeshPipeline {
             bind_group_layouts: &[Some(camera_layout), Some(material_layout.raw())],
             immediate_size: 0,
         });
+        let buffers = [
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: size_of::<arpg_assets::Vertex>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 5 => Float32x2],
+                    }),
+                    Some(instance_layout()),
+                ];
+        let depth_pipeline = crate::shadow::pipeline(device, &shader, &[material_layout.raw()], &buffers);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("static mesh pipeline"),
             layout: Some(&layout),
@@ -123,14 +133,7 @@ impl MeshPipeline {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[
-                    Some(wgpu::VertexBufferLayout {
-                        array_stride: size_of::<arpg_assets::Vertex>() as wgpu::BufferAddress,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 5 => Float32x2],
-                    }),
-                    Some(instance_layout()),
-                ],
+                buffers: &buffers,
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -161,6 +164,7 @@ impl MeshPipeline {
         });
         Self {
             pipeline,
+            depth_pipeline,
             instance,
             material_layout,
         }
@@ -207,6 +211,15 @@ impl MeshPipeline {
         }
     }
 
+    pub(crate) fn draw_depth(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup, batches: &[MeshBatch<'_>]) {
+        let mut first=0;
+        for batch in batches {
+            let end=first+batch.instances.len() as u32;
+            self.draw_view(pass,(camera,&self.depth_pipeline),batch.mesh,first..end);
+            first=end;
+        }
+    }
+
     pub(crate) fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -214,11 +227,16 @@ impl MeshPipeline {
         mesh: &MeshAsset,
         instances: std::ops::Range<u32>,
     ) {
+        self.draw_view(pass, (&camera.bind_group, &self.pipeline), mesh, instances);
+    }
+
+    fn draw_view(&self, pass: &mut wgpu::RenderPass<'_>, view: (&wgpu::BindGroup, &wgpu::RenderPipeline),
+        mesh: &MeshAsset, instances: std::ops::Range<u32>) {
         if instances.is_empty() {
             return;
         }
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &camera.bind_group, &[]);
+        pass.set_pipeline(view.1);
+        pass.set_bind_group(0, view.0, &[]);
         pass.set_bind_group(1, mesh.material.bind_group(), &[]);
         pass.set_vertex_buffer(0, mesh.vertices.slice(..));
         pass.set_vertex_buffer(1, self.instance.slice(..));

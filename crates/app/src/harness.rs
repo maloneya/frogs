@@ -93,6 +93,8 @@ pub(crate) enum Command {
     /// Toggle read-only collision-disc outlines.
     SetCollisionDebug(bool),
     SetVsync(bool),
+    /// Enable or mute the final audio mix without stopping playback.
+    SetAudioEnabled(bool),
     Quit,
 }
 
@@ -238,6 +240,15 @@ fn parse(line: &str) -> Result<Command, String> {
             Command::SetCollisionDebug(enabled)
         }
         "vsync" => Command::SetVsync(matches!(arg, Some("on") | Some("1"))),
+        "audio" => {
+            let enabled = match arg {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err("expected: audio on|off".into()),
+            };
+            if it.next().is_some() { return Err("expected: audio on|off".into()); }
+            Command::SetAudioEnabled(enabled)
+        }
         "quit" => Command::Quit,
         "" => return Err("empty command".into()),
         other => return Err(format!("unknown command {other:?}")),
@@ -356,6 +367,15 @@ fn serve(stream: UnixStream, tx: &Sender<Request>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn audio_commands_require_an_explicit_toggle() {
+        assert!(matches!(super::parse("audio on"), Ok(super::Command::SetAudioEnabled(true))));
+        assert!(matches!(super::parse("audio off"), Ok(super::Command::SetAudioEnabled(false))));
+        for bad in ["audio", "audio mute", "audio 1", "audio on extra", "audio off extra"] {
+            assert!(super::parse(bad).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn performance_commands_reject_unknown_operations_and_extra_arguments() {
         assert!(matches!(super::parse("perf"), Ok(super::Command::Perf { samples: false })));

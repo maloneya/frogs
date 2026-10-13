@@ -49,8 +49,8 @@ fn environment_and_torches_contribute_independently_in_linear_colour() {
     });
     let view = colour.create_view(&Default::default());
     let depth = crate::create_depth(&device, N, N);
-    let render = |lights: &[PointLight], environment: EnvironmentLight| {
-        binding.upload_lights(&queue, lights, environment);
+    let render_surface = |lights: &[PointLight], environment: EnvironmentLight, wet: bool| {
+        binding.upload_lights(&queue, lights, environment, wet);
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -83,6 +83,7 @@ fn environment_and_torches_contribute_independently_in_linear_colour() {
         queue.submit(Some(encoder.finish()));
         readback.to_rgba(&device).unwrap()
     };
+    let render = |lights: &[PointLight], environment: EnvironmentLight| render_surface(lights, environment, false);
     let sample = |rgba: &[u8], position: Vec3| {
         let clip = camera.view_proj() * position.extend(1.0);
         let x = ((clip.x / clip.w * 0.5 + 0.5) * N as f32) as usize;
@@ -160,7 +161,7 @@ fn environment_and_torches_contribute_independently_in_linear_colour() {
     assert!(centre[0] > 50 && centre[0] < 230, "readable floor: {centre:?}");
     assert_eq!(sample(&neutral_frame, Vec3::X * 9.0), centre);
 
-    // Ambient fill is independent of surface facing. Directional colour lands
+    // Sky fill is independent of directional-light facing. Directional colour lands
     // only on surfaces facing the light, and adds before sRGB output encoding.
     let ambient = EnvironmentLight::try_new(LinearRgb::new(1.0, 0.0, 0.0), 0.12, LinearRgb::new(0.0, 0.0, 1.0), 0.25, Vec3::Y).unwrap();
     let opposite = EnvironmentLight::try_new(LinearRgb::new(1.0, 0.0, 0.0), 0.12, LinearRgb::new(0.0, 0.0, 1.0), 0.25, -Vec3::Y).unwrap();
@@ -171,7 +172,17 @@ fn environment_and_torches_contribute_independently_in_linear_colour() {
     let combined = sample(&render(&[red], opposite), Vec3::ZERO);
     assert!((linear(combined[0]) - linear(fill[0]) - linear(red_pixel[0])).abs() < 0.006,
         "point and ambient illumination must add in linear colour");
-
+    // Fire opposite the viewing direction reflects toward the camera on this
+    // floor. Wetness adds that warm highlight and clearing it restores dry pixels.
+    let reflected = [PointLight::new(Vec3::new(-2.0, 2.0, -2.0), warm, 12.0, 8.0)];
+    let dry = render(&reflected, darkness);
+    let wet = render_surface(&reflected, darkness, true);
+    let dry_pixel = sample(&dry, Vec3::ZERO);
+    let wet_pixel = sample(&wet, Vec3::ZERO);
+    assert!(wet_pixel[0] > dry_pixel[0].saturating_add(5), "wet highlight: {dry_pixel:?} to {wet_pixel:?}");
+    assert!(wet_pixel[0] > wet_pixel[1] && wet_pixel[1] > wet_pixel[2], "wet highlight retains the fire's colour");
+    assert_eq!(render(&reflected, darkness), dry, "clearing weather restores dry shading");
+    assert_eq!(render_surface(&[], darkness, true), render(&[], darkness), "wetness cannot emit light");
 }
 
 #[test]

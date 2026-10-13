@@ -428,12 +428,15 @@ impl<T> LoadedCharacter<T> {
             // Melee keeps its committed contact timing when replacing a channel.
             self.channel_weight = 0.0;
             self.asset.sample(clip, clip_seconds, &mut self.scratch);
-            self.asset.blend(&mut self.pose, &self.scratch, &self.upper_mask, 1.0);
+            // Stationary strikes can brace through hips and knees; walking keeps
+            // its actual displacement and gait underneath the articulated arms.
+            let mask = if movement.length_squared() > 1.0e-8 { &self.upper_mask } else { &self.full_mask };
+            self.asset.blend_parent_aligned(&mut self.pose, &self.scratch, mask, 1.0);
         } else if self.channel_weight > 0.0 {
             let channel_clip = self.clips.attack(AttackProfile::Disintegrate);
             let duration = self.asset.clip(channel_clip).expect("resolved channel").duration_seconds();
             self.asset.sample(channel_clip, duration * 0.5, &mut self.scratch);
-            self.asset.blend(&mut self.pose, &self.scratch, &self.upper_mask, self.channel_weight);
+            self.asset.blend_parent_aligned(&mut self.pose, &self.scratch, &self.upper_mask, self.channel_weight);
         }
         self.sampled_role = role;
         self.sampled_seconds = clip_seconds;
@@ -482,9 +485,11 @@ fn attack_clip_time(
 
 const HORDE_ROLES: [HordeRole; 4] = [HordeRole::Idle, HordeRole::Walk, HordeRole::Run, HordeRole::Sprint];
 const CORPSE_BUCKET: usize = MAX_HORDE_POSE_BUCKETS - 1;
-const HORDE_PHASES_PER_ROLE: usize = CORPSE_BUCKET / HORDE_ROLES.len();
-const HORDE_SCALE: f32 = 0.42;
-const _: () = assert!(MAX_HORDE_POSE_BUCKETS > 0 && CORPSE_BUCKET.is_multiple_of(HORDE_ROLES.len()));
+const HORDE_PHASES_PER_ROLE: usize = 2;
+const RECOIL_START: usize = HORDE_ROLES.len() * HORDE_PHASES_PER_ROLE;
+const RECOIL_BUCKETS: usize = crate::enemy_feedback::Recoil::POSE_PHASES.len();
+const HORDE_SCALE: f32 = 0.95;
+const _: () = assert!(RECOIL_START + RECOIL_BUCKETS == CORPSE_BUCKET);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HordeRole {
@@ -521,6 +526,8 @@ impl HordeRole {
 
 #[derive(Clone, Copy)]
 struct HordeClips {
+    hit: arpg_assets::ClipId,
+    death: arpg_assets::ClipId,
     idle: arpg_assets::ClipId,
     run: arpg_assets::ClipId,
 }
@@ -535,6 +542,8 @@ impl HordeClips {
         Ok(Self {
             idle: clip("Idle")?,
             run: clip("Run")?,
+            hit: clip("Hit")?,
+            death: clip("Death")?,
         })
     }
 
@@ -563,6 +572,8 @@ pub(super) struct LoadedHorde<T> {
     asset: arpg_assets::CharacterAsset,
     clips: HordeClips,
     buckets: [HordeBucket; MAX_HORDE_POSE_BUCKETS],
+    corpse_min_height: f32,
+    corpse_front: f32,
     headings: std::collections::HashMap<arpg_sim::EntityId, RememberedHeading>,
     rebuild_id: u64,
     gpu: T,
@@ -605,13 +616,35 @@ impl<T> LoadedHorde<T> {
             instances: Vec::new(),
         });
         // This pose stays frozen for the lifetime of the loaded asset.
-        let sampled = asset.sample(clips.for_role(HordeRole::Idle), 0.0, &mut buckets[CORPSE_BUCKET].pose);
-        debug_assert!(sampled, "resolved idle clip remains live");
+        let death_duration = asset.clip(clips.death).expect("resolved death").duration_seconds();
+        let sampled = asset.sample(clips.death, death_duration, &mut buckets[CORPSE_BUCKET].pose);
+        // The larger corpse needs its frozen skin's support extent. Compute it
+        // once, rather than clipping its head into the floor or skinning each
+        // corpse again on the CPU every frame.
+        let palette = buckets[CORPSE_BUCKET].pose.joint_matrices();
+        let mut corpse_min_height = f32::INFINITY;
+        let mut corpse_front = f32::NEG_INFINITY;
+        for vertex in asset.vertices() {
+            let point = vertex.joints().into_iter().zip(vertex.weights())
+                .fold(Vec3::ZERO, |sum, (joint, weight)| sum
+                    + palette[usize::from(joint)].matrix().transform_point3(vertex.position()) * weight);
+            corpse_min_height = corpse_min_height.min(point.y * HORDE_SCALE);
+            corpse_front = corpse_front.max(point.z * HORDE_SCALE);
+        }
+        // Three fixed stages articulate every struck enemy without sampling
+        // a separate skeleton per body or increasing cost with hit age variety.
+        let hit_duration = asset.clip(clips.hit).expect("resolved hit").duration_seconds();
+        for (index, phase) in crate::enemy_feedback::Recoil::POSE_PHASES.into_iter().enumerate() {
+            asset.sample(clips.hit, phase * hit_duration, &mut buckets[RECOIL_START + index].pose);
+        }
+        debug_assert!(sampled, "resolved death clip remains live");
         Self {
             path,
             asset,
             clips,
             buckets,
+            corpse_min_height,
+            corpse_front,
             headings: std::collections::HashMap::new(),
             rebuild_id: 0,
             gpu,
@@ -642,6 +675,7 @@ impl<T> LoadedHorde<T> {
         enemies: impl Iterator<Item = CharacterPresentation>,
         presentation_seconds: f64,
         flash: impl Fn(arpg_sim::EntityId) -> f32,
+        recoil: impl Fn(arpg_sim::EntityId) -> Option<crate::enemy_feedback::Recoil>,
         attacks: impl Iterator<Item = arpg_game::ActionStatus>,
         alpha: Alpha,
     ) {
@@ -653,7 +687,7 @@ impl<T> LoadedHorde<T> {
         let attacks: [Option<arpg_game::ActionStatus>; crate::attack_effects::MAX_VISIBLE_ACTIONS] = std::array::from_fn(|_| committed.next());
         self.rebuild_id = self.rebuild_id.wrapping_add(1);
         for enemy in enemies {
-            let (bucket, key) = Self::bucket(enemy);
+            let (mut bucket, key) = Self::bucket(enemy);
             let displacement = enemy.displacement();
             let heading = self
                 .headings
@@ -690,7 +724,12 @@ impl<T> LoadedHorde<T> {
                     };
                 }
             }
-            let yaw = heading.yaw;
+            let mut yaw = heading.yaw;
+            if let Some(recoil) = recoil(enemy.id()) {
+                bucket = RECOIL_START + recoil.stage();
+                yaw = recoil.yaw();
+                pitch += -0.12 * recoil.strength();
+            }
             let shade = 0.72 + ((key >> 8) & 0xff) as f32 / 255.0 * 0.28;
             self.buckets[bucket].instances.push(
                 Instance::new(
@@ -706,7 +745,7 @@ impl<T> LoadedHorde<T> {
         self.headings
             .retain(|_, heading| heading.seen_in_rebuild == self.rebuild_id);
 
-        for (index, bucket) in self.buckets[..CORPSE_BUCKET].iter_mut().enumerate() {
+        for (index, bucket) in self.buckets[..RECOIL_START].iter_mut().enumerate() {
             if bucket.instances.is_empty() {
                 continue;
             }
@@ -722,18 +761,23 @@ impl<T> LoadedHorde<T> {
         }
     }
 
-    /// A single frozen idle pose supports all nonphysical remains.
-    pub(super) fn rebuild_corpses(&mut self, corpses: &[arpg_game::Corpse]) {
+    /// One bent-limb death pose supports tick-derived falls and settled remains.
+    pub(super) fn rebuild_corpses(&mut self, corpses: &[arpg_game::Corpse], alpha: Alpha) {
         let bucket = &mut self.buckets[CORPSE_BUCKET];
         bucket.instances.clear();
         for corpse in corpses {
             let key = Self::phase_key(corpse.id());
             let yaw = (key & 0xffff) as f32 / 65535.0 * std::f32::consts::TAU;
             let position = corpse.position();
+            let age = (arpg_game::CORPSE_LIFETIME_TICKS - corpse.remaining_ticks()) as f32 + alpha.get();
+            let fall = (age / 15.0).clamp(0.0, 1.0);
+            let fall = fall * fall * (3.0 - 2.0 * fall);
+            let pitch = std::f32::consts::FRAC_PI_2 * fall;
+            let height = (self.corpse_front * pitch.sin() - self.corpse_min_height * pitch.cos()).max(0.0);
             bucket.instances.push(Instance::new(
-                Vec3::new(position.x, 0.24, position.y),
+                Vec3::new(position.x, height, position.y),
                 Vec3::splat(HORDE_SCALE), LinearRgb::splat(0.6),
-            ).with_yaw(yaw).with_pitch(std::f32::consts::FRAC_PI_2));
+            ).with_yaw(yaw).with_pitch(pitch));
         }
     }
 
@@ -801,6 +845,14 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         preview.map(|preview| (preview.path.as_path(), &preview.asset)),
         out,
     );
+    out.object("shadow_mesh", |out| {
+        let proxy = preview.and_then(|horde| horde.asset.shadow_mesh());
+        out.bool("coarse", proxy.is_some());
+        out.text("path", &preview.filter(|_| proxy.is_some()).map_or_else(String::new,
+            |horde| horde.path.with_extension("shadow.glb").to_string_lossy().into_owned()));
+        out.int("vertices", preview.map_or(0, |horde| proxy.map_or(horde.asset.vertex_count(), |p| p.vertices().len())) as u64);
+        out.int("indices", preview.map_or(0, |horde| proxy.map_or(horde.asset.index_count(), |p| p.indices().len())) as u64);
+    });
     if let Some(preview) = preview {
         out.text(
             "idle_clip",
@@ -822,6 +874,9 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("occupied_buckets", preview.occupied_buckets() as u64);
         out.int("instances", preview.instance_count() as u64);
         out.int("corpse_instances", preview.buckets[CORPSE_BUCKET].instances.len() as u64);
+        out.num("corpse_settled_height", preview.corpse_front);
+        out.int("recoiling_instances", preview.buckets[RECOIL_START..CORPSE_BUCKET].iter()
+            .map(|bucket| bucket.instances.len() as u64).sum());
         out.int("flashing_instances", preview.buckets.iter()
             .flat_map(|bucket| &bucket.instances)
             .filter(|instance| instance.white_mix() > 0.0).count() as u64);
@@ -834,7 +889,7 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         );
         out.int(
             "run_instances",
-            preview.buckets[HORDE_PHASES_PER_ROLE..CORPSE_BUCKET]
+            preview.buckets[HORDE_PHASES_PER_ROLE..RECOIL_START]
                 .iter()
                 .map(|bucket| bucket.instances.len() as u64)
                 .sum(),
@@ -846,6 +901,8 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("occupied_buckets", 0);
         out.int("instances", 0);
         out.int("corpse_instances", 0);
+        out.num("corpse_settled_height", 0.0);
+        out.int("recoiling_instances", 0);
         out.int("flashing_instances", 0);
         out.int("idle_instances", 0);
         out.int("run_instances", 0);
@@ -912,10 +969,17 @@ fn report_character_asset(
 }
 
 fn read_glb(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("{}: open GLB: {error}", path.display()))?;
+    read_glb_file(path, file)
+}
+
+fn read_glb_file(path: &std::path::Path, file: std::fs::File) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
     if path.extension() != Some(std::ffi::OsStr::new("glb")) {
         return Err(format!("{}: expected a .glb file", path.display()));
     }
-    let metadata = std::fs::metadata(path)
+    let metadata = file.metadata()
         .map_err(|error| format!("{}: read metadata: {error}", path.display()))?;
     let bytes = usize::try_from(metadata.len())
         .map_err(|_| format!("{}: file size cannot fit this process", path.display()))?;
@@ -925,7 +989,15 @@ fn read_glb(path: &std::path::Path) -> Result<Vec<u8>, String> {
             path.display()
         ));
     }
-    std::fs::read(path).map_err(|error| format!("{}: read GLB: {error}", path.display()))
+    let mut source = Vec::with_capacity(bytes);
+    file.take(arpg_assets::MAX_GLB_BYTES as u64 + 1).read_to_end(&mut source)
+        .map_err(|error| format!("{}: read GLB: {error}", path.display()))?;
+    // The opened file may grow after metadata was read. Bound the read as well
+    // as admission, so external writes cannot create an unbounded allocation.
+    if source.len() > arpg_assets::MAX_GLB_BYTES {
+        return Err(format!("{}: GLB exceeds asset capacity: file bytes", path.display()));
+    }
+    Ok(source)
 }
 
 fn load_static<T>(
@@ -964,7 +1036,10 @@ pub(super) fn default_horde_path() -> std::path::PathBuf {
 
 /// Character roles stay here, outside the generic asset importer.
 fn player_upper_mask(asset: &arpg_assets::CharacterAsset) -> Result<arpg_assets::PoseMask, String> {
-    asset.pose_mask(&[("Spine", 1.0), ("Head", 1.0), ("LeftArm", 1.0), ("RightArm", 1.0), ("Weapon", 1.0)])
+    asset.pose_mask_parent_aligned(&[("Spine", 1.0), ("Chest", 1.0), ("Neck", 1.0), ("Head", 1.0),
+        ("LeftShoulder", 1.0), ("RightShoulder", 1.0), ("LeftArm", 1.0), ("RightArm", 1.0),
+        ("LeftForearm", 1.0), ("RightForearm", 1.0), ("LeftHand", 1.0), ("RightHand", 1.0),
+        ("LeftFingers", 1.0), ("RightFingers", 1.0), ("LeftThumb", 1.0), ("RightThumb", 1.0), ("Weapon", 1.0)])
         .map_err(str::to_owned)
 }
 
@@ -1015,6 +1090,17 @@ pub(super) fn replace_horde<T>(
         .map_err(|error| format!("{}: {error}", path.display()))?;
     let clips =
         HordeClips::resolve(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut asset = asset;
+    let shadow_path = path.with_extension("shadow.glb");
+    match std::fs::File::open(&shadow_path) {
+        Ok(file) => {
+            let proxy = arpg_assets::import_character_glb(&read_glb_file(&shadow_path, file)?)
+                .map_err(|error| format!("{}: {error}", shadow_path.display()))?;
+            asset.attach_shadow(proxy).map_err(|error| format!("{}: {error}", shadow_path.display()))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("{}: {error}", shadow_path.display())),
+    }
     let gpu = upload(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
     *slot = Some(LoadedHorde::new(path, asset, clips, gpu));
     Ok(())

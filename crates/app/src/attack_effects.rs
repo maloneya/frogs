@@ -17,10 +17,17 @@ const THROAT_SEGMENTS: usize = 4;
 const TAIL_SEGMENTS: usize = 8;
 const MAX_MARKERS: usize = 128;
 const MARKER_LIFE: f32 = 6.0;
+const SLAM_LIFE: u64 = 24;
+const SLAM_PLUMES: usize = 10;
+const DUST_SEGMENTS: usize = 8;
+const SLAM_CHIPS: usize = 12;
+const SLAM_RAYS: usize = 5;
+const SLAM_CRACKS: usize = 9;
+const SLAM_VERTICES: usize = SLAM_PLUMES * DUST_SEGMENTS * 3 + (SLAM_CHIPS + SLAM_RAYS + SLAM_CRACKS) * 6;
 // Four telegraphs fit alongside player trails, hit sparks and all torch flames
 // in the shared effect buffer. Gameplay admission does not size renderer memory.
 pub(crate) const MAX_VISIBLE_ACTIONS: usize = 4;
-pub(crate) const MAX_ATTACK_VERTICES: usize = CAPACITY * 8 * 12 + RING_SEGMENTS * 18 + MAX_MARKERS * 24 + MAX_VISIBLE_ACTIONS * RING_SEGMENTS * 9;
+pub(crate) const MAX_ATTACK_VERTICES: usize = CAPACITY * 8 * 12 + SLAM_VERTICES + MAX_MARKERS * 24 + MAX_VISIBLE_ACTIONS * RING_SEGMENTS * 9;
 const _: () = assert!(MAX_ATTACK_VERTICES <= MAX_EFFECT_VERTICES);
 // Three bands: blade glow, throat, body and tapered tail; each band segment is 12 vertices.
 const _: () = assert!(
@@ -39,8 +46,23 @@ struct Sample {
     centre: Vec3,
     origin: Vec3,
     radius: f32,
-    profile: AttackProfile,
+    kind: SampleKind,
     end_normal: Option<Vec3>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SampleKind {
+    Cleave,
+    Beam,
+}
+
+impl SampleKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Cleave => AttackProfile::Cleave.label(),
+            Self::Beam => AttackProfile::Disintegrate.label(),
+        }
+    }
 }
 
 /// Sampled sword attachment: both position and blade axis come from the drawn pose.
@@ -56,7 +78,15 @@ struct HitMarker {
     side: Vec3,
 }
 
+#[derive(Clone, Copy)]
+struct SlamImpact {
+    tick: u64,
+    centre: Vec3,
+    forward: Vec3,
+}
+
 pub(crate) struct AttackEffects {
+    slam: Option<SlamImpact>,
     markers: VecDeque<HitMarker>,
     samples: VecDeque<Sample>,
     vertices: Vec<EffectVertex>,
@@ -67,6 +97,7 @@ pub(crate) struct AttackEffects {
 impl Default for AttackEffects {
     fn default() -> Self {
         Self {
+            slam: None,
             markers: VecDeque::with_capacity(MAX_MARKERS),
             samples: VecDeque::with_capacity(CAPACITY),
             vertices: Vec::with_capacity(MAX_EFFECT_VERTICES),
@@ -77,7 +108,13 @@ impl Default for AttackEffects {
 }
 
 impl AttackEffects {
+    pub(crate) fn contact(&mut self, tick: u64, centre: Vec3, side: Vec3) {
+        if self.markers.len() == MAX_MARKERS { self.markers.pop_front(); }
+        self.markers.push_back(HitMarker { tick, centre, side });
+    }
+
     pub(crate) fn clear(&mut self) {
+        self.slam = None;
         self.markers.clear();
         self.samples.clear();
         self.vertices.clear();
@@ -95,6 +132,9 @@ impl AttackEffects {
             self.clear();
         }
         self.observed = Some(tick);
+        if self.slam.is_some_and(|impact| tick.saturating_sub(impact.tick) >= SLAM_LIFE) {
+            self.slam = None;
+        }
         while self.markers.front().is_some_and(|m| tick.saturating_sub(m.tick) > MARKER_LIFE as u64) {
             self.markers.pop_front();
         }
@@ -103,29 +143,47 @@ impl AttackEffects {
         if let Some(beam) = beam {
             let direction = (beam.end() - beam.start()).normalize_or_zero();
             for point in game.beam_hits() {
-                if self.markers.len() == MAX_MARKERS { self.markers.pop_front(); }
-                self.markers.push_back(HitMarker {
-                    tick, centre: Vec3::new(point.x, 1.1, point.y),
-                    side: Vec3::new(direction.y, 0.0, -direction.x),
-                });
+                self.contact(tick, Vec3::new(point.x, 1.1, point.y),
+                    Vec3::new(direction.y, 0.0, -direction.x));
             }
         }
         let status = game.attack_status();
+        if !status.channeling {
+            let facing = game.player_presentation(Alpha::ONE).facing();
+            let side = Vec3::new(facing.cos(), 0.0, -facing.sin());
+            for defeat in game.defeats() {
+                self.contact(tick, Vec3::new(defeat.position.x, 0.9, defeat.position.y), side);
+            }
+        }
         self.active = status.phase == AttackPhase::Active;
+        if self.active && status.swing_profile == Some(AttackProfile::Slam) {
+            let resolved = status.swing_resolved.expect("active slam has committed timing");
+            // The blade reaches the floor at the end of contact. Earlier damage
+            // samples still run; this single visual burst cannot drive gameplay.
+            if status.elapsed == resolved.startup() + resolved.active() - 1 {
+                let facing = game.player_presentation(Alpha::ONE).facing();
+                let forward = Vec3::new(facing.sin(), 0.0, facing.cos());
+                self.slam = Some(SlamImpact {
+                    tick,
+                    centre: game.player_pos() * Vec3::new(1.0, 0.0, 1.0) + forward * 1.6,
+                    forward,
+                });
+            }
+        }
         if let Some(beam) = beam {
-            if self.samples.back().is_some_and(|s| s.profile != AttackProfile::Disintegrate) { self.samples.clear(); }
-            if self.samples.len() == CAPACITY { self.samples.pop_front(); }
+            // A beam uses the current endpoint; only Cleave needs trail history.
+            self.samples.clear();
             self.samples.push_back(Sample {
                 tick,
                 centre: Vec3::new(beam.end().x, 0.0, beam.end().y),
                 origin: Vec3::new(beam.start().x, 0.0, beam.start().y),
                 radius: arpg_sim::Beam::RADIUS,
-                profile: AttackProfile::Disintegrate,
+                kind: SampleKind::Beam,
                 end_normal: beam.end_normal().map(|n| Vec3::new(n.x, 0.0, n.y)),
             });
             return;
         }
-        if self.samples.back().is_some_and(|s| s.profile == AttackProfile::Disintegrate) { self.samples.clear(); }
+        if self.samples.back().is_some_and(|s| s.kind == SampleKind::Beam) { self.samples.clear(); }
         if status.phase == AttackPhase::Startup && status.elapsed == 0 {
             self.samples.clear();
         }
@@ -136,7 +194,7 @@ impl AttackEffects {
         {
             self.samples.pop_front();
         }
-        if self.active {
+        if self.active && status.swing_profile == Some(AttackProfile::Cleave) {
             let disc = game
                 .attack_discs()
                 .next()
@@ -150,9 +208,7 @@ impl AttackEffects {
                 origin: game.player_pos() * Vec3::new(1.0, 0.0, 1.0),
                 radius: disc.radius(),
                 end_normal: None,
-                profile: status
-                    .swing_profile
-                    .expect("active attack has a committed profile"),
+                kind: SampleKind::Cleave,
             });
         }
     }
@@ -162,6 +218,10 @@ impl AttackEffects {
         let tick = game.tick();
         self.vertices.clear();
         for attack in visible_actions(game.action_statuses()) { action_telegraph(&mut self.vertices, attack, alpha); }
+        let now = tick as f64 - 1.0 + f64::from(alpha.get());
+        if let Some(impact) = self.slam {
+            slam_geometry(&mut self.vertices, impact, (now - impact.tick as f64) as f32);
+        }
         for marker in &self.markers {
             let age = tick.saturating_sub(marker.tick) as f32 + alpha.get();
             let opacity = (1.0 - age / MARKER_LIFE).clamp(0.0, 1.0);
@@ -185,16 +245,13 @@ impl AttackEffects {
         };
         // Match body interpolation: the newest segment is revealed gradually
         // between the previous and current completed tick, never extrapolated.
-        let now = tick as f64 - 1.0 + f64::from(alpha.get());
-        match last.profile {
-            AttackProfile::Disintegrate => {
-                if
-                let Some(emitter) = beam_emitter  { beam_geometry(&mut self.vertices,
-                        game, last, emitter, now);
-
+        match last.kind {
+            SampleKind::Beam => {
+                if let Some(emitter) = beam_emitter {
+                    beam_geometry(&mut self.vertices, game, last, emitter, now);
                 }
             }
-            AttackProfile::Cleave => {
+            SampleKind::Cleave => {
                 for i in 0..self.samples.len() {
                     let end = self.samples[i];
                     let age = (now - end.tick as f64).max(0.0) as f32;
@@ -238,41 +295,6 @@ impl AttackEffects {
                     }
                 }
             }
-            AttackProfile::Slam => {
-                let mut ring = last;
-                if last.tick == tick && self.samples.len() > 1 {
-                    let prev = self.samples[self.samples.len() - 2];
-                    ring.centre = prev.centre.lerp(last.centre, alpha.get());
-                    ring.radius = prev.radius + (last.radius - prev.radius) * alpha.get();
-                }
-                let age = (now - last.tick as f64).max(0.0) as f32;
-                let opacity = (1.0 - age / LIFE).clamp(0.0, 1.0);
-                if opacity == 0.0 {
-                    return;
-                }
-                let colour = LinearRgb::new(1.0, 0.4, 0.08);
-                let centre = ring.centre + Vec3::Y * 0.035;
-                for i in 0..RING_SEGMENTS {
-                    let section = |index: usize| {
-                        let angle = index as f32 * std::f32::consts::TAU / RING_SEGMENTS as f32;
-                        let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
-                        [
-                            centre + radial * (ring.radius - 0.32).max(0.0),
-                            centre + radial * (ring.radius - 0.07).max(0.0),
-                            centre + radial * ring.radius,
-                        ]
-                    };
-                    let a = section(i);
-                    let b = section(i + 1);
-                    band(&mut self.vertices, a, b, colour, [opacity * 0.85; 2]);
-                    // Subtle interior wash distinguishes a damaging disc from a hollow ring.
-                    triangle(
-                        &mut self.vertices,
-                        [centre, a[0], b[0]],
-                        [colour.with_alpha(opacity * 0.055); 3],
-                    );
-                }
-            }
         }
     }
 
@@ -285,14 +307,92 @@ impl AttackEffects {
         out.int("sample_count", self.samples.len() as u64);
         out.int("vertex_count", self.vertices.len() as u64);
         out.bool("active", self.active);
+        out.bool("slam_impact", self.slam.is_some());
+        if let Some(impact) = self.slam {
+            out.vec3("slam_centre", impact.centre);
+            out.int("slam_tick", impact.tick);
+        }
         if let Some(tick) = self.observed {
             out.int("observed_tick", tick);
         }
         if let Some(sample) = self.samples.back() {
-            out.text("profile", sample.profile.label());
+            out.text("profile", sample.kind.label());
             out.vec3("centre", sample.centre);
             out.num("radius", sample.radius);
             out.int("last_sample_tick", sample.tick);
+        }
+    }
+}
+
+fn slam_geometry(out: &mut Vec<EffectVertex>, impact: SlamImpact, age: f32) {
+    if !(0.0..SLAM_LIFE as f32).contains(&age) { return; }
+    let progress = age / SLAM_LIFE as f32;
+    let fade = (1.0 - progress).powi(2);
+    let side = Vec3::new(impact.forward.z, 0.0, -impact.forward.x);
+    let radial = |i: usize, count: usize| {
+        let angle = i as f32 * std::f32::consts::TAU / count as f32;
+        side * angle.cos() + impact.forward * angle.sin()
+    };
+    // Broken, unequal ground splinters mark the impact without tracing reach.
+    for i in 0..SLAM_CRACKS {
+        let axis = radial(i, SLAM_CRACKS);
+        let across = Vec3::new(-axis.z, 0.0, axis.x);
+        let length = 0.55 + (i * 5 % 7) as f32 * 0.11;
+        let start = impact.centre + axis * 0.12 + Vec3::Y * 0.018;
+        let bend = start + axis * length * 0.55 + across * (0.04 * (i % 3) as f32 - 0.04);
+        let end = start + axis * length;
+        let colour = LinearRgb::new(0.035, 0.026, 0.018).with_alpha(fade * 0.75);
+        triangle(out, [start - across * 0.025, bend, start + across * 0.025], [colour; 3]);
+        triangle(out, [bend - across * 0.014, end, bend + across * 0.014], [colour; 3]);
+    }
+    let eye = arpg_core::isometric_eye_direction();
+    let right = Vec3::new(eye.z, 0.0, -eye.x).normalize();
+    let up = eye.cross(right).normalize();
+    for i in 0..SLAM_PLUMES {
+        let axis = radial(i, SLAM_PLUMES);
+        let reach = 0.65 + (i * 3 % 5) as f32 * 0.17;
+        let centre = impact.centre + axis * (0.15 + reach * progress.sqrt())
+            + Vec3::Y * (0.10 + progress * (0.25 + (i % 3) as f32 * 0.12));
+        let width = 0.16 + progress * (0.40 + (i % 4) as f32 * 0.07);
+        let colour = LinearRgb::new(0.34, 0.29, 0.23);
+        let opacity = fade * 0.48;
+        for j in 0..DUST_SEGMENTS {
+            let edge = |n: usize| {
+                let angle = n as f32 * std::f32::consts::TAU / DUST_SEGMENTS as f32;
+                let mut point = centre + right * angle.cos() * width + up * angle.sin() * width * 0.65;
+                point.y = point.y.max(0.025);
+                point
+            };
+            triangle(out, [centre, edge(j), edge(j + 1)],
+                [colour.with_alpha(opacity), colour.with_alpha(0.0), colour.with_alpha(0.0)]);
+        }
+    }
+    // Chips follow short baked ballistic arcs; there are no simulated particles.
+    for i in 0..SLAM_CHIPS {
+        let axis = radial(i, SLAM_CHIPS);
+        let flight = (0.42 + (i * 7 % 5) as f32 * 0.10).min(1.0);
+        let t = (progress / flight).min(1.0);
+        let centre = impact.centre + axis * (0.15 + t * (0.7 + (i % 4) as f32 * 0.25))
+            + Vec3::Y * (0.035 + 4.0 * t * (1.0 - t) * (0.22 + (i % 3) as f32 * 0.16));
+        let across = Vec3::new(-axis.z, 0.0, axis.x) * (0.035 + (i % 3) as f32 * 0.01);
+        let colour = LinearRgb::new(0.105, 0.078, 0.05).with_alpha(fade * 0.85);
+        let a = centre - across; let b = centre + across;
+        let top = centre + axis * 0.06 + Vec3::Y * 0.05;
+        triangle(out, [a, top, b], [colour; 3]);
+        triangle(out, [a, b, centre - axis * 0.045], [colour; 3]);
+    }
+    if age < 3.0 {
+        let flash = (1.0 - age / 3.0).powi(2);
+        for i in 0..SLAM_RAYS {
+            let axis = (radial(i, SLAM_RAYS) + Vec3::Y * (0.4 + (i % 3) as f32 * 0.3)).normalize();
+            let across = right * 0.018;
+            let start = impact.centre + axis * 0.06 + Vec3::Y * 0.055;
+            let middle = start + axis * 0.14;
+            let end = start + axis * (0.28 + (i % 3) as f32 * 0.12 + age * 0.08);
+            let bright = LinearRgb::new(0.9, 0.88, 0.80).with_alpha(flash * 0.85);
+            let clear = LinearRgba::new(0.9, 0.88, 0.80, 0.0);
+            triangle(out, [middle - across, start, middle + across], [bright, clear, bright]);
+            triangle(out, [middle - across, end, middle + across], [bright, clear, bright]);
         }
     }
 }
@@ -488,7 +588,7 @@ mod tests {
     use arpg_sim::{Accumulator, Dt};
 
     #[test]
-    fn both_effects_observe_every_active_tick_and_expire_without_changing_simulation() {
+    fn melee_effects_observe_consumed_samples_and_expire_without_changing_simulation() {
         for profile in AttackProfile::ALL {
             let mut game = Game::empty();
             game.set_attack_profile(profile);
@@ -496,7 +596,7 @@ mod tests {
             let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
             let Some(resolved) = profile.resolve(arpg_sim::Tuning::default()) else { continue };
             let close = resolved.startup() + resolved.active();
-            for elapsed in 0..close + 12 {
+            for elapsed in 0..close + SLAM_LIFE as u32 + 2 {
                 game.step(dt, Intent::new(MoveDir::new(Vec3::X), arpg_core::AimDir::new(Vec3::X).unwrap(), elapsed == 0));
                 // Changing the next move must not change the effect already in flight.
                 if elapsed == 1 {
@@ -507,12 +607,14 @@ mod tests {
                 let count = effects.samples.len();
                 effects.observe(&game);
                 assert_eq!(count, effects.samples.len(), "same tick cannot emit twice");
-                if elapsed < resolved.startup() {
+                if profile == AttackProfile::Slam {
+                    assert!(effects.samples.is_empty(), "Slam has no trail history");
+                } else if elapsed < resolved.startup() {
                     assert!(effects.samples.is_empty(), "no swoosh during wind-up");
                 } else if elapsed < close {
                     let live = game.attack_discs().next().unwrap();
                     let sample = effects.samples.back().unwrap();
-                    assert_eq!(sample.profile, profile);
+                    assert!(sample.kind == SampleKind::Cleave);
                     assert_eq!(sample.centre, live.centre());
                     assert_eq!(
                         sample.origin.y, 0.0,
@@ -529,7 +631,8 @@ mod tests {
                 if elapsed % 3 == 0 || elapsed == close {
                     effects.rebuild(
                         &game, Alpha::ZERO, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
-                    if elapsed >= resolved.startup() && elapsed < close + 5 {
+                    let begins = if profile == AttackProfile::Slam { close - 1 } else { resolved.startup() };
+                    if elapsed >= begins && elapsed < close + 5 {
                         assert!(!effects.vertices().is_empty());
                     }
                 }
@@ -544,6 +647,68 @@ mod tests {
             assert!(effects.samples.is_empty());
             assert!(effects.vertices().is_empty());
         }
+    }
+
+    #[test]
+    fn slam_impact_waits_for_the_floor_strike_stays_in_world_space_and_expires() {
+        let mut game = Game::empty();
+        game.set_attack_profile(AttackProfile::Slam);
+        let mut effects = AttackEffects::default();
+        let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+        let mut captured = None;
+        let mut interpolation = Accumulator::default();
+        assert_eq!(interpolation.pending(Dt::SECS * 0.5).count(), 0);
+        for elapsed in 0..40 {
+            game.step(dt, Intent::new(MoveDir::new(Vec3::X), arpg_core::AimDir::FORWARD, elapsed == 0));
+            // Selection cannot rewrite the committed Slam or refresh its burst.
+            if elapsed == 1 { game.set_attack_profile(AttackProfile::Cleave); }
+            let hash = game.hash();
+            effects.observe(&game);
+            effects.observe(&game);
+            assert!(effects.samples.is_empty(), "Slam must never record an unused disc trail");
+            let mut report = Report::default();
+            effects.report(&mut report);
+            let report: serde_json::Value = serde_json::from_str(&report.finish()).unwrap();
+            assert_eq!(report["sample_count"], 0);
+            assert!(report.get("profile").is_none());
+            if elapsed < 13 {
+                assert!(effects.slam.is_none());
+                effects.rebuild(&game, Alpha::ONE, None);
+                assert!(effects.vertices().is_empty(), "no reach ring or dust before the floor strike");
+            } else if elapsed < 37 {
+                let impact = effects.slam.unwrap();
+                if elapsed == 13 {
+                    assert_eq!(impact.tick, game.tick());
+                    assert!(impact.centre.abs_diff_eq(game.player_pos() * Vec3::new(1.0, 0.0, 1.0) + Vec3::Z * 1.6, 1e-5));
+                    captured = Some((impact.tick, impact.centre));
+                }
+                assert_eq!(Some((impact.tick, impact.centre)), captured);
+                for alpha in [Alpha::ZERO, interpolation.alpha(), Alpha::ONE] {
+                    effects.rebuild(&game, alpha, None);
+                    assert!(effects.vertices().len() <= SLAM_VERTICES);
+                    assert!(effects.vertices().iter().all(|v| v.position().is_finite()
+                        && v.position().y >= 0.0 && v.position().xz().distance(impact.centre.xz()) < 2.8));
+                }
+                if elapsed > 13 { assert!(!effects.vertices().is_empty()); }
+            } else {
+                assert!(effects.slam.is_none());
+                effects.rebuild(&game, Alpha::ONE, None);
+                assert!(effects.vertices().is_empty());
+            }
+            assert_eq!(game.hash(), hash);
+        }
+        // A restart during the burst must also discard its independent lifetime.
+        game.set_attack_profile(AttackProfile::Slam);
+        for elapsed in 0..14 {
+            game.step(dt, Intent::new(MoveDir::NONE, arpg_core::AimDir::FORWARD, elapsed == 0));
+            effects.observe(&game);
+        }
+        assert!(effects.slam.is_some());
+        effects.clear();
+        assert!(effects.slam.is_none());
+        effects.observe(&Game::empty());
+        effects.rebuild(&Game::empty(), Alpha::ONE, None);
+        assert!(effects.vertices().is_empty());
     }
 
     #[test]
@@ -578,7 +743,7 @@ mod tests {
             centre: Vec3::new(-1.8, 0.0, 1.2),
             origin: Vec3::ZERO,
             radius: 1.1,
-            profile: AttackProfile::Cleave,
+            kind: SampleKind::Cleave,
             end_normal: None,
         };
         let end = Sample {
@@ -646,7 +811,7 @@ mod beam_tests {
             effects.rebuild(
                 &game, Alpha::ONE, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
             assert_eq!(game.hash(), hash);
-            assert!(effects.samples.len() <= CAPACITY);
+            assert_eq!(effects.samples.len(), 1, "beam keeps only its current endpoint");
             assert_eq!(effects.vertices().len(), 504);
             let end = effects.samples.back().unwrap().centre;
             assert!(end.abs_diff_eq(aim.as_vec3() * arpg_sim::Beam::LENGTH, 0.00001));

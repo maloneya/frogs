@@ -156,6 +156,8 @@ add_action("Idle", [(1, 0, 0, 0), (16, 0, 4, 0), (31, 0, 0, 0)])
 add_action("Run", [(1, -8, -7, 0), (8, -8, 7, 0), (16, -8, -7, 0)])
 add_action("AttackCleave", [(1, 0, 0, -130), (14, 0, 0, 130), (31, 0, 0, 0)])
 add_action("AttackSlam", [(1, 18, 0, 0), (16, -22, 0, 0), (31, 0, 0, 0)])
+add_action("Hit", [(1, 0, 0, 0), (3, -25, 12, 0), (5, -25, 12, 0), (10, 0, 0, 0)])
+add_action("Death", [(1, -25, 12, 0), (13, 20, -10, 0)])
 bpy.context.scene.frame_set(1)
 
 bpy.context.scene.render.image_settings.file_format = "PNG"

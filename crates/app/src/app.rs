@@ -57,6 +57,7 @@ pub(crate) struct App {
     game: Game,
     collision_debug: crate::collision_debug::CollisionDebug,
     attack_effects: crate::attack_effects::AttackEffects,
+    atmosphere: crate::atmosphere::Atmosphere,
     enemy_feedback: crate::enemy_feedback::EnemyFeedback,
     audio: crate::audio::Audio,
     /// Game ids and ticks are scoped to this playtest generation.
@@ -239,8 +240,9 @@ impl App {
         }
         if let Some(world) = &mut self.world_assets {
             world.rebuild(self.game.prop_presentations(Alpha::ZERO), |id| self.game.chest_state_for_body(id));
-            world.torches.rebuild(self.game.torches(), &[]);
+            world.torches.rebuild(self.game.torches(), &[], 0.0);
         }
+        self.atmosphere = crate::atmosphere::Atmosphere::default();
         self.collision_debug.rebuild(&self.game);
         self.quads.sink();
         // Exclude file reading, construction, and the old run's frame remainder.
@@ -339,12 +341,14 @@ impl App {
         );
         camera.follow(player.ground_position(), facing, frame);
 
-        self.enemy_feedback.observe(&self.game);
+        self.enemy_feedback.observe(&self.game, |point, side|
+            self.attack_effects.contact(self.game.tick(), point, side));
         if let Some(horde) = &mut self.horde_preview {
             horde.rebuild(self.game.character_presentations(alpha), presentation_seconds,
                 |id| self.enemy_feedback.flash(id, self.game.tick(), alpha),
+                |id| self.enemy_feedback.recoil(id, self.game.tick(), alpha),
                 self.game.action_statuses(), alpha);
-            horde.rebuild_corpses(self.game.corpses());
+            horde.rebuild_corpses(self.game.corpses(), alpha);
         }
         if let Some(character) = &mut self.character_preview {
             character.sample(player, alpha, presentation_seconds);
@@ -357,7 +361,8 @@ impl App {
         world_assets.rebuild_walls(self.game.visible_walls());
         world_assets.rebuild_panels(self.game.panel_presentations(alpha));
         world_assets.rebuild(self.game.prop_presentations(alpha), |id| self.game.chest_state_for_body(id));
-        world_assets.torches.rebuild(self.game.torches(), self.attack_effects.vertices());
+        world_assets.torches.rebuild(self.game.torches(), self.attack_effects.vertices(), presentation_seconds);
+        self.atmosphere.rebuild(self.game.storm(), presentation_seconds, camera, world_assets.torches.lights());
         self.collision_debug.rebuild(&self.game);
 
         // The overlay is built here rather than inside `render` for the same
@@ -394,13 +399,14 @@ impl App {
             RenderFrame {
                 camera,
                 lights: world_assets.torches.lights(),
-                environment: self.game.environment_light(),
+                environment: crate::atmosphere::illumination(self.game.environment_light(), self.game.storm(), presentation_seconds),
                 meshes: &meshes,
                 character,
                 horde,
                 overlay: self.quads.as_slice(),
                 debug_outlines: self.collision_debug.drawings(),
                 effects: world_assets.torches.effects(),
+                weather: self.atmosphere.vertices(),
             },
             self.capture.path(),
         ) {
@@ -448,9 +454,13 @@ impl ApplicationHandler for App {
             return; // Can fire more than once; only build GPU state the first time.
         }
 
-        let attrs = Window::default_attributes()
+        let harness_launch = std::env::var_os("ARPG_HARNESS").is_some();
+        let mut attrs = Window::default_attributes()
             .with_title("arpg")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
+        if harness_launch {
+            attrs = attrs.with_position(winit::dpi::LogicalPosition::new(32.0, 64.0));
+        }
 
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let display_handle = event_loop.owned_display_handle();
@@ -472,7 +482,7 @@ impl ApplicationHandler for App {
             .expect("load default player character");
         self.show_horde(default_horde_path())
             .expect("load default horde character");
-        self.audio.initialize(&self.game);
+        self.audio.initialize(&self.game, harness_launch);
         let size = window.inner_size();
 
         // Start framed on the character without a camera fly-in.

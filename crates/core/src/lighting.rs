@@ -5,6 +5,7 @@ use crate::LinearRgb;
 
 /// Maximum live point lights, enforced at scene admission and GPU upload.
 pub const MAX_POINT_LIGHTS: usize = 8;
+const MAX_INTENSITY: f32 = 1_000_000.0;
 
 /// A finite point light in world metres. Colours are linear, not sRGB.
 /// Environment illumination is supplied separately; there is no visibility test.
@@ -60,6 +61,14 @@ impl PointLight {
         self.intensity
     }
 
+    /// Scales presentation brightness, saturating at the shared emission limit.
+    /// The authored light is unchanged; the factor must be finite and nonnegative.
+    #[must_use]
+    pub fn with_scaled_intensity(self, factor: f32) -> Self {
+        assert!(factor.is_finite() && factor >= 0.0, "invalid light modulation");
+        Self { intensity: (self.intensity * factor).min(MAX_INTENSITY), ..self }
+    }
+
     /// Distance beyond which illumination is exactly zero.
     pub fn range(self) -> f32 {
         self.position_range[3]
@@ -102,6 +111,19 @@ impl EnvironmentLight {
     pub fn directional_intensity(self) -> f32 { self.directional_intensity }
     /// Authored direction toward the light, normalized at GPU upload.
     pub fn direction(self) -> Vec3 { self.direction }
+
+    /// Adds presentation brightness without exceeding the shared emission limit.
+    /// Both boosts must be finite and nonnegative; authored settings are unchanged.
+    #[must_use]
+    pub fn with_added_intensity(self, ambient: f32, directional: f32) -> Self {
+        assert!(ambient.is_finite() && ambient >= 0.0
+            && directional.is_finite() && directional >= 0.0, "invalid light modulation");
+        Self {
+            ambient_intensity: (self.ambient_intensity + ambient).min(MAX_INTENSITY),
+            directional_intensity: (self.directional_intensity + directional).min(MAX_INTENSITY),
+            ..self
+        }
+    }
 }
 
 impl Default for EnvironmentLight {
@@ -116,7 +138,7 @@ fn validate_emission(colour: LinearRgb, intensity: f32) -> Result<(), &'static s
     if colour.to_vec3().max_element() > 1.0 {
         return Err("light colour components must not exceed one; use intensity for brightness");
     }
-    if !intensity.is_finite() || !(0.0..=1_000_000.0).contains(&intensity) {
+    if !intensity.is_finite() || !(0.0..=MAX_INTENSITY).contains(&intensity) {
         return Err("light intensity must be finite and between zero and one million");
     }
     Ok(())
@@ -125,6 +147,23 @@ fn validate_emission(colour: LinearRgb, intensity: f32) -> Result<(), &'static s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presentation_modulation_preserves_admitted_bounds_and_authored_lights() {
+        let point = PointLight::new(Vec3::Y, LinearRgb::WHITE, MAX_INTENSITY, 10.0);
+        assert_eq!(point.with_scaled_intensity(1.1), point);
+        assert_eq!(point.with_scaled_intensity(f32::MAX), point);
+        assert_eq!(point.with_scaled_intensity(0.5).intensity(), MAX_INTENSITY * 0.5);
+        let environment = EnvironmentLight::try_new(LinearRgb::WHITE, MAX_INTENSITY,
+            LinearRgb::WHITE, MAX_INTENSITY, Vec3::Y).unwrap();
+        assert_eq!(environment.with_added_intensity(0.32, 1.7), environment);
+        assert_eq!(environment.with_added_intensity(f32::MAX, f32::MAX), environment);
+        for invalid in [f32::NAN, f32::INFINITY, -1.0] {
+            assert!(std::panic::catch_unwind(|| point.with_scaled_intensity(invalid)).is_err());
+            assert!(std::panic::catch_unwind(|| environment.with_added_intensity(invalid, 0.0)).is_err());
+            assert!(std::panic::catch_unwind(|| environment.with_added_intensity(0.0, invalid)).is_err());
+        }
+    }
 
     #[test]
     fn environment_rejects_nonfinite_brightness_and_unusable_direction() {

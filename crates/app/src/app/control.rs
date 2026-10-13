@@ -204,6 +204,10 @@ impl App {
                     format!("debug collision {}", if on { "on" } else { "off" })
                 }
                 Command::SetVsync(on) => self.set_vsync(on).unwrap_or_else(|error| format!("error: {error}")),
+                Command::SetAudioEnabled(on) => {
+                    self.audio.set_muted(!on);
+                    format!("audio {}", if on { "on" } else { "off" })
+                }
                 Command::Quit => {
                     if let Some(trial) = self.trial.take() { trial.finish("error: cancelled by quit".into()); }
                     quit = true;
@@ -321,6 +325,8 @@ impl App {
                 .map_or(0, |world| world.torches.effects().len());
             r.int("effect_vertices", effect_vertices as u64);
             r.int("effect_draws", u64::from(effect_vertices > 0));
+            r.int("weather_vertices", self.atmosphere.vertices().len() as u64);
+            r.int("weather_draws", u64::from(!self.atmosphere.vertices().is_empty()));
             r.int(
                 "debug_outline_instances",
                 self.collision_debug.drawings().len() as u64,

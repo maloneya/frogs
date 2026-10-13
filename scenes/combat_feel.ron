@@ -1,0 +1,166 @@
+// Compare character scale, stationary and moving Cleave/Slam, survivor flinches
+// and deaths. Front targets take two melee hits; the right pack exposes crowd
+// readability. Restart restores every target. Left walkers show articulated gait.
+(
+    scene: (
+        environment: (
+            storm: false,
+            ambient_colour: (1.0, 1.0, 1.0),
+            ambient_intensity: 0.32,
+            directional_colour: (1.0, 1.0, 1.0),
+            directional_intensity: 0.55,
+            direction: (0.4, 1.0, 0.3),
+        ),
+        engine: (
+            name: "Combat feel — poses and impact",
+            bodies: [
+                (
+                    pos: (-1.6, 1.4),
+                    what: (
+                        physical: (
+                            fixed: false,
+                            mass: 1.0,
+                            interactable: false,
+                            health: Some(3),
+                            character: true,
+                        ),
+                        role: Hostile,
+                        actions: [],
+                        behavior: Idle,
+                    ),
+                ),
+                (
+                    pos: (0.0, 1.4),
+                    what: (
+                        physical: (
+                            fixed: false,
+                            mass: 1.0,
+                            interactable: false,
+                            health: Some(3),
+                            character: true,
+                        ),
+                        role: Hostile,
+                        actions: [],
+                        behavior: Idle,
+                    ),
+                ),
+                (
+                    pos: (1.6, 1.4),
+                    what: (
+                        physical: (
+                            fixed: false,
+                            mass: 1.0,
+                            interactable: false,
+                            health: Some(3),
+                            character: true,
+                        ),
+                        role: Hostile,
+                        actions: [],
+                        behavior: Idle,
+                    ),
+                ),
+                (
+                    pos: (-5.5, 1.0),
+                    what: (
+                        physical: (
+                            fixed: false,
+                            mass: 1.0,
+                            interactable: false,
+                            health: Some(9),
+                            character: true,
+                        ),
+                        role: Hostile,
+                        actions: [
+                            Move((
+                                destination: Point((-5.5, 8.0)),
+                                speed: 1.8,
+                                acceleration: 30.0,
+                                stop_distance: 0.3,
+                            )),
+                        ],
+                        behavior: Action(0),
+                    ),
+                ),
+                (
+                    pos: (-7.0, 1.0),
+                    what: (
+                        physical: (
+                            fixed: false,
+                            mass: 1.0,
+                            interactable: false,
+                            health: Some(9),
+                            character: true,
+                        ),
+                        role: Hostile,
+                        actions: [
+                            Move((
+                                destination: Point((-7.0, 8.0)),
+                                speed: 3.5,
+                                acceleration: 30.0,
+                                stop_distance: 0.3,
+                            )),
+                        ],
+                        behavior: Action(0),
+                    ),
+                ),
+            ],
+            grids: [
+                (
+                    origin: (6.0, 3.0),
+                    columns: 4,
+                    rows: 3,
+                    spacing: 1.1,
+                    what: (
+                        physical: (
+                            fixed: false,
+                            mass: 1.0,
+                            interactable: false,
+                            health: Some(3),
+                            character: true,
+                        ),
+                        role: Hostile,
+                        actions: [],
+                        behavior: Idle,
+                    ),
+                ),
+            ],
+            sources: [],
+            walls: [],
+        ),
+        torches: [],
+        trees: [],
+        doors: [],
+        chests: [],
+        encounters: [],
+    ),
+    labels: [
+        (
+            target: (
+                kind: body,
+                index: 0,
+            ),
+            name: "Cleave left target",
+        ),
+        (
+            target: (
+                kind: body,
+                index: 1,
+            ),
+            name: "Slam centre target",
+        ),
+        (
+            target: (
+                kind: body,
+                index: 2,
+            ),
+            name: "Cleave right target",
+        ),
+        (
+            target: (
+                kind: grid,
+                index: 0,
+            ),
+            name: "Crowd readability pack",
+        ),
+    ],
+)

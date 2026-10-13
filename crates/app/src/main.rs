@@ -18,6 +18,7 @@ mod input;
 mod local_socket;
 mod presentation;
 mod torch;
+mod atmosphere;
 mod time;
 mod perf;
 mod trial;

@@ -15,14 +15,27 @@ const FADE_SECONDS: f32 = 0.5;
 const WIDTH: f32 = 32.0;
 const HEIGHT: f32 = 5.0;
 /// Above the ordinary enemy's head, in world metres.
-const ANCHOR_HEIGHT: f32 = 1.35;
+const ANCHOR_HEIGHT: f32 = 1.95;
 /// Leave room for gameplay HUD in the shared quad buffer.
 const MAX_VISIBLE: usize = 1024;
 const _: () = assert!(MAX_VISIBLE * 2 + 2048 <= arpg_gfx::MAX_QUADS);
 
+/// Valid stages and finite headings are produced only by damage observation.
+#[derive(Clone, Copy)]
+pub(crate) struct Recoil { stage: usize, yaw: f32, strength: f32 }
+impl Recoil {
+    pub(crate) const POSE_PHASES: [f32; 3] = [2.0 / 9.0, 5.0 / 9.0, 8.0 / 9.0];
+    const STAGE_TICKS: f32 = 6.0;
+    const DURATION_TICKS: f32 = Self::STAGE_TICKS * Self::POSE_PHASES.len() as f32;
+    pub(crate) fn stage(self) -> usize { self.stage }
+    pub(crate) fn yaw(self) -> f32 { self.yaw }
+    pub(crate) fn strength(self) -> f32 { self.strength }
+}
+
 struct Remembered {
     health: u8,
     damaged_at: u64,
+    yaw: f32,
 }
 
 #[derive(Default)]
@@ -43,16 +56,33 @@ impl EnemyFeedback {
     /// here, so a skipped redraw cannot consume the entire flash. Repeated
     /// observations of unchanged health never refresh it. Removal/eviction retires
     /// history; App clears it when a run replaces IDs.
-    pub(crate) fn observe(&mut self, game: &Game) {
+    pub(crate) fn observe(&mut self, game: &Game, mut contact: impl FnMut(Vec3, Vec3)) {
         self.damaged.retain(|id, _| game.health(*id).zip(game.max_health(*id)).is_some_and(|(hp, max)| hp < max));
         for enemy in game.character_presentations(Alpha::ONE) {
             let Some((hp, max)) = game.health(enemy.id()).zip(game.max_health(enemy.id())) else { continue; };
             if hp == max { continue; }
-            let remembered = self.damaged.entry(enemy.id()).or_insert(Remembered {
-                health: hp, damaged_at: game.tick(),
+            let entry = self.damaged.entry(enemy.id());
+            let fresh = matches!(entry, std::collections::hash_map::Entry::Vacant(_));
+            let remembered = entry.or_insert(Remembered {
+                health: hp, damaged_at: game.tick(), yaw: 0.0,
             });
-            if hp < remembered.health {
+            if fresh || hp < remembered.health {
+                let displacement = enemy.displacement();
+                let away = enemy.ground_position() - game.player_pos();
+                // Face into observed displacement so the authored backward
+                // recoil follows physical knockback. Stationary targets face
+                // the player; this is visual inference, not a damage producer.
+                let direction = if displacement.length_squared() > 1.0e-8 {
+                    -displacement
+                } else { -Vec2::new(away.x, away.z) };
+                let yaw = direction.x.atan2(direction.y);
                 remembered.damaged_at = game.tick();
+                remembered.yaw = yaw;
+                let status = game.attack_status();
+                if !status.channeling {
+                    contact(enemy.ground_position() + Vec3::Y * 0.9,
+                        Vec3::new(yaw.cos(), 0.0, -yaw.sin()));
+                }
             }
             remembered.health = hp;
         }
@@ -64,6 +94,13 @@ impl EnemyFeedback {
                 / TICK_HZ as f32;
             (1.0 - age / FLASH_SECONDS).clamp(0.0, 1.0)
         })
+    }
+
+    pub(crate) fn recoil(&self, id: EntityId, tick: u64, alpha: Alpha) -> Option<Recoil> {
+        let remembered = self.damaged.get(&id)?;
+        let age = tick.saturating_sub(remembered.damaged_at) as f32 + alpha.get();
+        (age < Recoil::DURATION_TICKS).then_some(Recoil { stage: (age / Recoil::STAGE_TICKS) as usize,
+            yaw: remembered.yaw, strength: 1.0 - age / Recoil::DURATION_TICKS })
     }
 
     pub(crate) fn draw(
@@ -123,8 +160,8 @@ mod tests {
         for step in 1..=13 {
             game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, step == 1));
             let hash = game.hash();
-            feedback.observe(&game);
-            feedback.observe(&game);
+            feedback.observe(&game, |_, _| {});
+            feedback.observe(&game, |_, _| {});
             let expected = if step < 7 { 0.0 } else { (13 - step) as f32 / 6.0 };
             assert!((feedback.flash(target, game.tick(), Alpha::ZERO) - expected).abs() < 1e-6);
             assert_eq!(feedback.flash(missed, game.tick(), Alpha::ZERO), 0.0);
@@ -136,7 +173,7 @@ mod tests {
         }
         assert!(game.despawn_body(target));
         let replacement = game.place(Vec2::new(-1.8, 1.2), arpg_game::ActorDefinition::passive_hostile()).unwrap();
-        feedback.observe(&game);
+        feedback.observe(&game, |_, _| {});
         assert_eq!(feedback.flash(target, game.tick(), Alpha::ZERO), 0.0);
         assert_eq!(feedback.flash(replacement, game.tick(), Alpha::ZERO), 0.0);
     }
@@ -151,7 +188,7 @@ mod tests {
         // Beam pulses on ticks 0, 12 and 24; there is no push to move the target.
         for tick in 0..=24 {
             game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));
-            feedback.observe(&game);
+            feedback.observe(&game, |_, _| {});
             match tick {
                 0 | 12 => assert_eq!(feedback.flash(id, game.tick(), Alpha::ZERO), 1.0),
                 6 | 18 | 24 => assert_eq!(feedback.flash(id, game.tick(), Alpha::ZERO), 0.0),
@@ -170,7 +207,7 @@ mod tests {
         let mut buffer = QuadBuffer::default();
         let camera = OrthoCamera::new(1280, 720);
         let viewport = Vec2::new(1280.0, 720.0);
-        bars.observe(&game);
+        bars.observe(&game, |_, _| {});
         bars.draw(&game, Alpha::ZERO, &camera, viewport, &mut buffer.sink());
         assert!(buffer.as_slice().is_empty(), "full health is invisible");
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
@@ -180,27 +217,27 @@ mod tests {
         }
         assert_eq!(game.health(id), Some(1));
         let hash = game.hash();
-        bars.observe(&game);
+        bars.observe(&game, |_, _| {});
         bars.draw(&game, Alpha::ZERO, &camera, viewport, &mut buffer.sink());
         assert_eq!(game.hash(), hash, "presentation cannot change the simulation");
         assert_eq!(buffer.as_slice().len(), 2);
         assert_eq!(buffer.as_slice()[1].rect().z, 10.0);
         let first = buffer.as_slice()[0].rect();
         for _ in 0..30 { game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); }
-        bars.observe(&game);
+        bars.observe(&game, |_, _| {});
         bars.draw(&game, Alpha::ONE, &camera, viewport, &mut buffer.sink());
         assert_ne!(buffer.as_slice()[0].rect(), first, "bar follows knockback");
         for _ in 0..120 { game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); }
-        bars.observe(&game);
+        bars.observe(&game, |_, _| {});
         bars.draw(&game, Alpha::ZERO, &camera, viewport, &mut buffer.sink());
         assert!(buffer.as_slice().is_empty(), "expired damage stays hidden");
-        bars.observe(&game);
+        bars.observe(&game, |_, _| {});
         bars.draw(&game, Alpha::ONE, &camera, viewport, &mut buffer.sink());
         assert!(buffer.as_slice().is_empty());
         assert!(game.despawn_body(id));
         let replacement = game.place(Vec2::new(-1.8, 1.2), arpg_game::ActorDefinition::passive_hostile()).unwrap();
         assert_ne!(id, replacement);
-        bars.observe(&game);
+        bars.observe(&game, |_, _| {});
         bars.draw(&game, Alpha::ZERO, &camera, viewport, &mut buffer.sink());
         assert!(bars.damaged.is_empty());
         assert!(buffer.as_slice().is_empty());
@@ -215,8 +252,8 @@ mod tests {
         assert_eq!(game.max_health(civilian), None);
         let hash = game.hash();
         let mut feedback = EnemyFeedback::default();
-        feedback.observe(&game);
-        feedback.observe(&game);
+        feedback.observe(&game, |_, _| {});
+        feedback.observe(&game, |_, _| {});
         assert!(feedback.damaged.is_empty());
         assert_eq!(game.hash(), hash);
     }
@@ -246,7 +283,7 @@ mod tests {
             game.step(dt, Intent::new(movement, AimDir::FORWARD, false)
                 .with_attack_held(matches!(tick, 630 | 810 | 840)));
             camera.snap_to(game.player_pos());
-            bars.observe(&game);
+            bars.observe(&game, |_, _| {});
             bars.draw(&game, Alpha::ZERO, &camera, Vec2::new(1280.0, 720.0), &mut buffer.sink());
             match tick {
                 650 => {

@@ -192,6 +192,7 @@ pub struct CharacterPose {
 pub struct PoseMask {
     asset_id: CharacterAssetId,
     weights: Vec<f32>,
+    parent_alignment: bool,
 }
 
 /// Identity of one imported character, retained by its poses and uploaded mesh.
@@ -320,9 +321,61 @@ pub struct CharacterAsset {
     joints: Vec<SkinJoint>,
     hierarchy_order: Vec<u16>,
     clips: Vec<AnimationClip>,
+    shadow: Option<CharacterShadow>,
+}
+
+/// Coarse caster validated to consume this character's existing joint palette.
+#[derive(Debug)]
+pub struct CharacterShadow {
+    vertices: Vec<CharacterVertex>,
+    indices: Vec<u32>,
+}
+
+impl CharacterShadow {
+    /// Same vertex layout and joint order as the visible character.
+    pub fn vertices(&self) -> &[CharacterVertex] { &self.vertices }
+    /// Triangle indices into the caster geometry.
+    pub fn indices(&self) -> &[u32] { &self.indices }
 }
 
 impl CharacterAsset {
+    /// Optional depth-only geometry; never replaces visible parts or animation.
+    pub fn shadow_mesh(&self) -> Option<&CharacterShadow> { self.shadow.as_ref() }
+
+    /// Installs a smaller caster only after its complete rig matches this asset.
+    /// Refusal preserves both the visible asset and any accepted caster.
+    pub fn attach_shadow(&mut self, proxy: Self) -> Result<(), ImportError> {
+        if proxy.indices.len() >= self.indices.len() {
+            return Err(ImportError::Invalid("shadow mesh must have fewer triangles than the visible mesh"));
+        }
+        if proxy.joints.len() != self.joints.len() {
+            return Err(ImportError::Invalid("shadow mesh must use the visible joint palette"));
+        }
+        let parent_joint = |asset: &Self, joint: &SkinJoint| {
+            let mut parent = asset.nodes[joint.node()].parent;
+            while let Some(node) = parent {
+                if let Some(index) = asset.joints.iter().position(|joint| joint.node() == usize::from(node)) {
+                    return Some(index);
+                }
+                parent = asset.nodes[usize::from(node)].parent;
+            }
+            None
+        };
+        let visible_bind = self.bind_pose();
+        let proxy_bind = proxy.bind_pose();
+        for (a, b) in self.joints.iter().zip(&proxy.joints) {
+            if self.nodes[a.node()].name != proxy.nodes[b.node()].name
+                || parent_joint(self, a) != parent_joint(&proxy, b)
+                || !a.inverse_bind.abs_diff_eq(b.inverse_bind, 0.00001)
+                || !visible_bind.globals[a.node()].abs_diff_eq(proxy_bind.globals[b.node()], 0.00001)
+                || !self.nodes[a.node()].bind_pose.matrix().abs_diff_eq(proxy.nodes[b.node()].bind_pose.matrix(), 0.00001)
+            {
+                return Err(ImportError::Invalid("shadow mesh joint order, hierarchy and bind space must match"));
+            }
+        }
+        self.shadow = Some(CharacterShadow { vertices: proxy.vertices, indices: proxy.indices });
+        Ok(())
+    }
     /// Retains this import's identity for resources derived from it.
     #[must_use]
     pub fn asset_id(&self) -> CharacterAssetId {
@@ -448,7 +501,7 @@ impl CharacterAsset {
 
     /// A mask blending every node, for locomotion transitions.
     pub fn full_mask(&self) -> PoseMask {
-        PoseMask { asset_id: self.asset_id.clone(), weights: vec![1.0; self.nodes.len()] }
+        PoseMask { asset_id: self.asset_id.clone(), weights: vec![1.0; self.nodes.len()], parent_alignment: true }
     }
 
     /// Builds a sparse mask from unique joint names and finite weights in [0, 1].
@@ -465,20 +518,63 @@ impl CharacterAsset {
             seen[node] = true;
             weights[node] = weight;
         }
-        Ok(PoseMask { asset_id: self.asset_id.clone(), weights })
+        // Alignment reads unmasked parents from the base pose. Reject a layer
+        // that re-enters below an unmasked gap in another selected subtree,
+        // since that parent's final rotation would differ from the base.
+        let parent_alignment = self.nodes.iter().enumerate().all(|(index, node)| {
+            if weights[index] == 0.0 || node.parent.is_some_and(|p| weights[usize::from(p)] > 0.0) { return true; }
+            let mut parent = node.parent;
+            while let Some(index) = parent.map(usize::from) {
+                if weights[index] > 0.0 { return false; }
+                parent = self.nodes[index].parent;
+            }
+            true
+        });
+        Ok(PoseMask { asset_id: self.asset_id.clone(), weights, parent_alignment })
+    }
+
+    /// Builds a layer mask whose selected subtrees have no unmasked gaps.
+    /// Validate this when admitting assets that require parent-aligned layers.
+    pub fn pose_mask_parent_aligned(&self, joints: &[(&str, f32)]) -> Result<PoseMask, &'static str> {
+        let mask = self.pose_mask(joints)?;
+        if !mask.parent_alignment { return Err("mask re-enters below an unmasked parent"); }
+        Ok(mask)
     }
 
     /// Blends local transforms, then rebuilds the hierarchy and skin matrices.
     /// Rejects mismatched assets and invalid weights before changing the target.
     /// No allocation occurs during blending.
     pub fn blend(&self, target: &mut CharacterPose, source: &CharacterPose, mask: &PoseMask, amount: f32) -> bool {
+        self.blend_locals(target, source, mask, amount, false)
+    }
+
+    /// Blends a layer while preserving its orientation above unmasked parents.
+    /// A turning pelvis can retain locomotion while the chest/arms keep the
+    /// overlay's asset-space aim. Translations remain relative to the base body.
+    /// Rejects masks re-entering a selected subtree below an unmasked gap.
+    /// Refusal preserves the complete target, as with [`Self::blend`].
+    pub fn blend_parent_aligned(&self, target: &mut CharacterPose, source: &CharacterPose, mask: &PoseMask, amount: f32) -> bool {
+        self.blend_locals(target, source, mask, amount, true)
+    }
+
+    fn blend_locals(&self, target: &mut CharacterPose, source: &CharacterPose, mask: &PoseMask, amount: f32, align_parents: bool) -> bool {
         if !self.asset_id.owns(target) || !self.asset_id.owns(source)
             || !Arc::ptr_eq(&self.asset_id.0, &mask.asset_id.0)
+            || (align_parents && !mask.parent_alignment)
             || !amount.is_finite() || !(0.0..=1.0).contains(&amount) { return false; }
-        for ((base, overlay), weight) in target.locals.iter_mut().zip(&source.locals).zip(&mask.weights) {
+        for (index, ((base, overlay), weight)) in target.locals.iter_mut().zip(&source.locals).zip(&mask.weights).enumerate() {
+            let mut overlay = *overlay;
+            if align_parents && *weight > 0.0
+                && let Some(parent) = self.nodes[index].parent.map(usize::from)
+                && mask.weights[parent] == 0.0
+            {
+                let base_parent = target.globals[parent].to_scale_rotation_translation().1;
+                let source_parent = source.globals[parent].to_scale_rotation_translation().1;
+                overlay.rotation = (base_parent.inverse() * source_parent * overlay.rotation).normalize();
+            }
             let weight = weight * amount;
             if weight == 0.0 { continue; }
-            if weight == 1.0 { *base = *overlay; continue; }
+            if weight == 1.0 { *base = overlay; continue; }
             base.translation = base.translation.lerp(overlay.translation, weight);
             base.rotation = base.rotation.slerp(overlay.rotation, weight).normalize();
             base.scale = base.scale.lerp(overlay.scale, weight);
@@ -1098,7 +1194,7 @@ pub fn import_character_glb(bytes: &[u8]) -> Result<CharacterAsset, ImportError>
     }
     Ok(CharacterAsset {
         asset_id: CharacterAssetId(Arc::new(())), vertices, indices, parts, materials, images,
-        nodes, joints, hierarchy_order, clips,
+        nodes, joints, hierarchy_order, clips, shadow: None,
     })
 }
 
@@ -1327,6 +1423,30 @@ mod tests {
     const STATIC_FIXTURE: &[u8] = include_bytes!("../../../assets/fixtures/static-preview.glb");
 
     #[test]
+    fn refused_shadow_preserves_the_accepted_caster_and_visible_asset() {
+        const ENEMY: &[u8] = include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.glb");
+        const SHADOW: &[u8] = include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.shadow.glb");
+        let mut owner = import_character_glb(ENEMY).unwrap();
+        owner.attach_shadow(import_character_glb(SHADOW).unwrap()).unwrap();
+        let before = bytemuck::cast_slice::<_, u8>(owner.shadow_mesh().unwrap().vertices()).to_vec();
+        let visible = bytemuck::cast_slice::<_, u8>(owner.vertices()).to_vec();
+        for fault in 0..4 {
+            let mut proxy = import_character_glb(SHADOW).unwrap();
+            match fault {
+                0 => proxy.joints.swap(0, 1),
+                1 => proxy.joints[0].inverse_bind = Mat4::from_translation(Vec3::X),
+                2 => { let node = proxy.joints[1].node(); proxy.nodes[node].name = "OtherJoint".into(); }
+                3 => proxy.indices.resize(owner.index_count(), 0),
+                _ => unreachable!(),
+            }
+            assert!(owner.attach_shadow(proxy).is_err());
+            assert_eq!(before, bytemuck::cast_slice::<_, u8>(owner.shadow_mesh().unwrap().vertices()));
+            assert_eq!(visible, bytemuck::cast_slice::<_, u8>(owner.vertices()));
+        }
+        assert!(owner.attach_shadow(import_character_glb(FIXTURE).unwrap()).is_err());
+    }
+
+    #[test]
     fn foreign_pose_is_rejected_even_with_identical_skeleton_dimensions() {
         let owner = import_character_glb(FIXTURE).unwrap();
         let other = import_character_glb(FIXTURE).unwrap();
@@ -1347,7 +1467,7 @@ mod tests {
     }
 
     #[test]
-    fn demo_sword_is_rigid_geometry_extending_from_its_grip() {
+    fn swordsman_blade_and_two_hand_handle_share_one_rigid_attachment() {
         let character = import_character_glb(include_bytes!(
             "../../../assets/characters/basic-player/basic-player.glb"
         ))
@@ -1375,8 +1495,11 @@ mod tests {
             count += 1;
         }
         assert!(count >= 24, "Weapon must carry geometry, not just a named bone");
-        assert!(near.abs() < 0.1, "the sword grip must meet its joint origin");
-        assert!(far - near > 0.8, "the authored sword must extend along local +Y");
+        assert!((-0.31..=-0.20).contains(&near), "the pommel must extend behind both grips: {near}");
+        assert!(far > 1.3, "the authored blade must extend along local +Y");
+        let socket = character.joint_named("BeamOrigin").unwrap();
+        let tip = to_joint.transform_point3(character.joint_transform(&bind, socket).unwrap().transform_point3(Vec3::ZERO));
+        assert!((tip.y - far).abs() < 1e-5, "the attachment must meet the actual blade tip");
     }
 
     #[test]
@@ -1417,7 +1540,7 @@ mod tests {
                 .iter()
                 .all(|matrix| { matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-5) })
         );
-        assert_eq!(character.clip_count(), 4);
+        assert_eq!(character.clip_count(), 6);
         let idle = character.clip_named("Idle").unwrap();
         let clip = character.clip(idle).unwrap();
         assert_eq!(clip.name(), "Idle");

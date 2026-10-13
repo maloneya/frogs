@@ -5,9 +5,9 @@ description: Create, revise, regenerate, or diagnose Blender-authored assets for
 
 # Author Blender assets for arpg
 
-Treat Blender as a deterministic asset compiler. Python source and the engine's
-import contract are authoritative; a live Blender session is optional and its
-state is never the only copy of accepted work.
+Treat Blender as a deterministic asset compiler. Versioned Python and authored
+source assets feed the engine's import contract; a live Blender session is
+optional and its state is never the only copy of accepted work.
 
 ## Establish the asset contract
 
@@ -28,23 +28,32 @@ clip requirements, and visual acceptance target before authoring. Preserve the
 shared convention: metres, Blender Z-up, and Blender `-Y` facing unless the
 owning contract explicitly changes.
 
+## Establish motion quality
+
+For new characters or visible model/motion work, use
+[character-workflow](../character-workflow/SKILL.md) for references, visual
+development and review. Reuse already established targets and accepted passes.
+This skill owns the technical compilation and export path. Structural validity
+and additional joints do not certify visual quality.
+
 ## Keep durable source
 
 Create or edit a narrowly scoped `bpy` generator beside the asset. Follow the
 existing generators instead of building a second framework. The script should:
 
 1. Start from known empty state rather than depend on the open file.
-2. Create named geometry, transforms, materials, packed textures, rigs,
-   weights, and actions explicitly.
+2. Create or import named geometry, transforms, materials, packed textures,
+   rigs, weights and actions from explicit versioned inputs.
 3. Apply transforms at the boundary required by the importer.
 4. Save the editable `.blend` and export the runtime `.glb`.
 5. Use explicit exporter options and assert required Blender operators return
    `{'FINISHED'}`.
 
-Do not hand-edit generated `.blend` or `.glb` files. If interactive Blender is
-useful for exploration, reproduce every accepted change in the generator before
-calling the asset complete. Do not add MCP merely to run work that the Blender
-CLI and `bpy` already support.
+Do not hand-edit generated `.blend` or `.glb` files. Interactive sculpting,
+weight painting and posing can be retained in a distinct versioned source
+`.blend` that the generator imports. Capture accepted changes in those source
+inputs or Python before regenerating both outputs. Do not add MCP merely to run
+work that the Blender CLI and `bpy` already support.
 
 Prefer Blender's data API where practical. `bpy.ops` is context-sensitive, so
 set selection, active object, mode, and frame deliberately before an operator
