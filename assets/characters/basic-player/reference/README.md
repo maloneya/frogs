@@ -12,7 +12,7 @@ The user approved the descending slash as the visual baseline on 2026-10-12.
 `Sword_Regular_B` and `Sword_Regular_B_Rec` drive the player compiler.
 `Sword_Regular_A` and its recovery remain for comparison. This is authoring input;
 its 65-joint rig and creator clip names do not satisfy the runtime player contract.
-The compiler retargets into the 26-joint player and eight app roles.
+The compiler retargets into the 54-joint player and eight app roles.
 
 Production timing and handedness normalization belong to
 [`authored_cleave.py`](../authored_cleave.py). The source's anatomical sword hand
@@ -77,6 +77,20 @@ original meshes, skin and chosen animation bytes without resampling.
 arm swing with KayKit's backward/sideways support. Forward motion uses the
 humanoid jog throughout. It mirrors handedness, retargets bind axes, grounds the
 feet, moderates torso lean, keeps chest twist within 12 degrees and head yaw on
-aim, and carries the sword through a fixed wrist attachment. All four cycles
+aim, and carries the sword through the shared palm grasp. All four cycles
 retain the existing half-second gait duration and common supporting-leg phase.
 These adaptations are authoring decisions, distinct from native source playback.
+
+## Relaxed idle source
+
+`idle-source.glb` retains Quaternius / Gonzalo Furnier's CC0 `Sword_Idle` from
+Universal Animation Library Standard, without resampling. Its SHA-256 is
+`e93dbd054a509529ad4d02aff39533d66817972444bef5e0ca5beadfabd526bf`.
+The original UAL1 hash and licence are recorded above. Extraction used the
+retained `experimental/character-references/sources/quaternius/player-walk.glb`
+and `extract_clips.py` with the exact `Sword_Idle` clip.
+
+`authored_idle.py` retains its relative pelvis, torso, shoulder and wrist motion,
+moderates the travel, retimes the 1.667-second source to 3.2 seconds, lowers both
+arms into the player's resting guard and plants the feet. This adaptation is a
+provisional visual checkpoint, distinct from native source playback.

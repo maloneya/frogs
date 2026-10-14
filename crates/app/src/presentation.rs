@@ -1036,13 +1036,74 @@ pub(super) fn default_horde_path() -> std::path::PathBuf {
         .join("../../assets/characters/basic-enemy/basic-enemy.glb")
 }
 
+const PLAYER_DIGITS: [&str; 5] = ["Little", "Ring", "Middle", "Index", "Thumb"];
+
+fn player_digit_joints(side: &str, digit: &str) -> [String; 3] {
+    [1, 2, 3].map(|segment| format!("{side}{digit}{segment}"))
+}
+
 /// Character roles stay here, outside the generic asset importer.
 fn player_upper_mask(asset: &arpg_assets::CharacterAsset) -> Result<arpg_assets::PoseMask, String> {
-    asset.pose_mask_parent_aligned(&[("Spine", 1.0), ("Chest", 1.0), ("Neck", 1.0), ("Head", 1.0),
+    let mut joints = vec![("Spine", 1.0), ("Chest", 1.0), ("Neck", 1.0), ("Head", 1.0),
         ("LeftShoulder", 1.0), ("RightShoulder", 1.0), ("LeftArm", 1.0), ("RightArm", 1.0),
         ("LeftForearm", 1.0), ("RightForearm", 1.0), ("LeftHand", 1.0), ("RightHand", 1.0),
-        ("LeftFingers", 1.0), ("RightFingers", 1.0), ("LeftThumb", 1.0), ("RightThumb", 1.0), ("Weapon", 1.0)])
+        ("LeftGrip", 1.0), ("RightGrip", 1.0), ("Weapon", 1.0)];
+    let fingers: Vec<_> = ["Left", "Right"].into_iter().flat_map(|side|
+        PLAYER_DIGITS.into_iter().flat_map(move |digit| player_digit_joints(side, digit))).collect();
+    joints.extend(fingers.iter().map(|name| (name.as_str(), 1.0)));
+    asset.pose_mask_parent_aligned(&joints)
         .map_err(str::to_owned)
+}
+
+fn validate_player_grasp(asset: &arpg_assets::CharacterAsset, idle: arpg_assets::ClipId) -> Result<(), String> {
+    asset.validate_rigid_attachment("RightHand", "RightGrip", idle).map_err(str::to_owned)?;
+    asset.validate_rigid_attachment("RightGrip", "Weapon", idle).map_err(str::to_owned)?;
+    for digit in PLAYER_DIGITS {
+        let names = player_digit_joints("Right", digit);
+        for (index, name) in names.iter().enumerate() {
+            let parent = if index == 0 { "RightHand" } else { &names[index-1] };
+            asset.validate_rigid_attachment(parent, name, idle).map_err(str::to_owned)?;
+        }
+    }
+    let mut pose = asset.bind_pose();
+    asset.sample(idle, 0.0, &mut pose);
+    validate_player_grasp_at(asset, &pose)
+}
+
+fn validate_player_grasp_at(asset: &arpg_assets::CharacterAsset, pose: &arpg_assets::CharacterPose) -> Result<(), String> {
+    let transform = |name| asset.joint_transform(pose, asset.joint_named(name).expect("validated grasp joint"))
+        .expect("owned grasp pose");
+    let origin = transform("RightGrip").transform_point3(Vec3::ZERO);
+    let axis = transform("Weapon").transform_vector3(Vec3::Y).normalize();
+    if origin.distance(transform("RightHand").transform_point3(Vec3::ZERO)) < 0.035 {
+        return Err("player palm grasp must be distinct from the wrist".into());
+    }
+    let skin = |vertex: &arpg_assets::CharacterVertex| vertex.joints().into_iter().zip(vertex.weights())
+        .fold(Vec3::ZERO, |sum, (joint, weight)| sum + pose.joint_matrices()[usize::from(joint)]
+            .matrix().transform_point3(vertex.position()) * weight);
+    let radial = |point: Vec3| { let delta = point - origin; (delta - axis * delta.dot(axis)).length() };
+    let weapon = asset.joint_named("Weapon").expect("validated weapon");
+    let weapon_lane = asset.joint_index(weapon).expect("owned weapon joint");
+    let owns = |vertex: &arpg_assets::CharacterVertex, lanes: &[usize]| vertex.joints().into_iter().zip(vertex.weights())
+        .filter_map(|(joint, weight)| lanes.contains(&usize::from(joint)).then_some(weight)).sum::<f32>() > 0.5;
+    let radius = asset.vertices().iter().filter(|vertex| owns(vertex, &[weapon_lane])).filter_map(|vertex| {
+        let point = skin(vertex); let along = (point-origin).dot(axis);
+        (-0.20..0.035).contains(&along).then(|| radial(point))
+    }).fold(0.0_f32, f32::max);
+    if !(0.01..0.04).contains(&radius) { return Err("invalid player handle radius".into()); }
+    for digit in PLAYER_DIGITS {
+        let names = player_digit_joints("Right", digit);
+        let lanes: Vec<_> = names.iter().map(|name| asset.joint_index(asset.joint_named(name).expect("validated finger"))
+            .expect("owned finger joint")).collect();
+        let (minimum_gap, closest_contact) = asset.vertices().iter().filter(|vertex| owns(vertex, &lanes))
+            .map(|vertex| radial(skin(vertex)) - radius)
+            .fold((f32::INFINITY, f32::INFINITY), |(minimum, closest), gap|
+                (minimum.min(gap), closest.min(gap.abs())));
+        if minimum_gap < -0.006 || closest_contact > 0.006 {
+            return Err(format!("player {digit} does not enclose the handle without penetration"));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn replace_character<T>(
@@ -1057,6 +1118,7 @@ pub(super) fn replace_character<T>(
         CharacterClips::resolve(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
     let beam_origin = asset.joint_named("BeamOrigin").ok_or("missing player sword-tip attachment BeamOrigin")?;
     let upper_mask = player_upper_mask(&asset)?;
+    validate_player_grasp(&asset, clips.idle)?;
     let full_mask = asset.full_mask();
     let scratch = asset.bind_pose();
     let gpu = upload(&asset).map_err(|error| format!("{}: {error}", path.display()))?;

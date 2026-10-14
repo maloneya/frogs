@@ -459,6 +459,43 @@ impl CharacterAsset {
             .map(|index| JointId(index as u16))
     }
 
+    /// Skin palette lane for an in-range joint handle.
+    #[must_use]
+    pub fn joint_index(&self, joint: JointId) -> Option<usize> {
+        let index = usize::from(joint.0);
+        (index < self.joints.len()).then_some(index)
+    }
+
+    /// Requires a direct joint attachment whose local transform is fixed in
+    /// every clip. Fixed locals remain fixed through sampling and pose blends.
+    pub fn validate_rigid_attachment(&self, parent: &str, child: &str, reference: ClipId) -> Result<(), &'static str> {
+        let parent = self.joint_named(parent).ok_or("missing attachment parent")?;
+        let child = self.joint_named(child).ok_or("missing attachment joint")?;
+        let parent = self.joints[usize::from(parent.0)].node;
+        let child = self.joints[usize::from(child.0)].node;
+        let node = &self.nodes[usize::from(child)];
+        if node.parent != Some(parent) { return Err("attachment is not a direct child of its owner"); }
+        let clip = self.clip(reference).ok_or("missing attachment reference clip")?;
+        let mut locals: Vec<_> = self.nodes.iter().map(|node| node.bind_pose).collect();
+        Self::sample_locals(&self.nodes, clip, 0.0, &mut locals);
+        let expected = locals[usize::from(child)];
+        for clip in &self.clips {
+            Self::sample_locals(&self.nodes, clip, 0.0, &mut locals);
+            if !locals[usize::from(child)].matrix().abs_diff_eq(expected.matrix(), 1e-5) {
+                return Err("attachment differs between clips");
+            }
+        }
+        for channel in self.clips.iter().flat_map(|clip| &clip.channels).filter(|channel| channel.node == child) {
+            let fixed = match &channel.values {
+                ChannelValues::Translations(values) => values.iter().all(|value| value.abs_diff_eq(expected.translation, 1e-5)),
+                ChannelValues::Scales(values) => values.iter().all(|value| value.abs_diff_eq(expected.scale, 1e-5)),
+                ChannelValues::Rotations(values) => values.iter().all(|value| value.dot(expected.rotation).abs() > 1.0 - 1e-6),
+            };
+            if !fixed { return Err("attachment local transform is animated"); }
+        }
+        Ok(())
+    }
+
     /// Sampled asset-local transform of one joint.
     #[must_use]
     pub fn joint_transform(&self, pose: &CharacterPose, joint: JointId) -> Option<Mat4> {
@@ -1467,6 +1504,37 @@ mod tests {
     }
 
     #[test]
+    fn rigid_attachment_checks_hierarchy_all_keys_and_missing_clip_channels() {
+        let source = include_bytes!("../../../assets/characters/basic-player/basic-player.glb");
+        for fault in 0..3 {
+            let mut asset = import_character_glb(source).unwrap();
+            let idle = asset.clip_named("Idle").unwrap();
+            let joint = asset.joint_named("RightIndex1").unwrap();
+            let node = asset.joints[usize::from(joint.0)].node;
+            assert!(asset.validate_rigid_attachment("RightHand", "RightIndex1", idle).is_ok());
+            match fault {
+                0 => asset.nodes[usize::from(node)].parent = None,
+                1 => {
+                    let clip = asset.clip_named("Run").unwrap();
+                    let channel = asset.clips[usize::from(clip.0)].channels.iter_mut()
+                        .find(|channel| channel.node == node && matches!(channel.values, ChannelValues::Rotations(_))).unwrap();
+                    if let ChannelValues::Rotations(values) = &mut channel.values {
+                        let index = values.len() / 2;
+                        values[index] = (Quat::from_rotation_x(0.2) * values[index]).normalize();
+                    }
+                }
+                2 => {
+                    let clip = asset.clip_named("Run").unwrap();
+                    asset.clips[usize::from(clip.0)].channels.retain(|channel|
+                        channel.node != node || !matches!(channel.values, ChannelValues::Rotations(_)));
+                }
+                _ => unreachable!(),
+            }
+            assert!(asset.validate_rigid_attachment("RightHand", "RightIndex1", idle).is_err(), "fault {fault}");
+        }
+    }
+
+    #[test]
     fn swordsman_blade_and_two_hand_handle_share_one_rigid_attachment() {
         let character = import_character_glb(include_bytes!(
             "../../../assets/characters/basic-player/basic-player.glb"
@@ -1496,7 +1564,7 @@ mod tests {
         }
         assert!(count >= 24, "Weapon must carry geometry, not just a named bone");
         assert!((-0.31..=-0.20).contains(&near), "the pommel must extend behind both grips: {near}");
-        assert!(far > 1.3, "the authored blade must extend along local +Y");
+        assert!((1.20..1.25).contains(&far), "the longsword tip must extend along local +Y: {far}");
         let socket = character.joint_named("BeamOrigin").unwrap();
         let tip = to_joint.transform_point3(character.joint_transform(&bind, socket).unwrap().transform_point3(Vec3::ZERO));
         assert!((tip.y - far).abs() < 1e-5, "the attachment must meet the actual blade tip");

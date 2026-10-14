@@ -121,17 +121,24 @@ neutral again. Runtime maps startup to normalized `0.0..0.4`, active to
 `0.4..0.6`, and recovery to `0.6..1.0`; tests sample the exported weapon motion
 at those edges so moving a key pose into the wrong phase fails visibly.
 
-The swordsman player uses a 26-joint rig fitted to the accepted CC0 authored
-human surface, with close-fitting clothing and a rigid sword,
+The swordsman player uses a 54-joint rig fitted to the accepted CC0 authored
+human surface, with a separate fitted hooded cloak and a rigid sword,
 and a Cleave retargeted from approved authored motion, including weight transfer
 and an articulated wrist. [Motion acceptance](character-motion.md) records the
 visual principles. Authoring exports ordinary transform clips; runtime uses the
 same importer and pose sampler.
 
-The player sword is part of its single mesh and is rigidly
-weighted to its `Weapon` bone. This preserves the full sampled transform through
-the existing skinning path. The importer requires named nodes, but a generic
-character GLB is not required to contain a joint called `Weapon`.
+The player sword is rigidly weighted to `Weapon`, a fixed child of the palm
+socket `RightGrip` below `RightHand`. Anatomical finger joints and grip alignment
+are compiled by [the grasp owner](../assets/characters/basic-player/grasp.py).
+The player role refuses a wrist-coincident grasp, animated attachment or finger
+pose, and failed skinned finger/handle contact before upload; rejected selection
+preserves the accepted asset. Generic characters retain the ordinary transform
+contract. The asset owner's `validate_rigid_attachment` checks direct ancestry,
+every channel key and missing channels across clips. Fixed locals stay fixed
+through ordinary and parent-aligned blends. This admission proves the cylindrical
+player grip contract; the compiler additionally checks intermediate hand contact
+and forearm clearance. Visual review still covers clothing and the whole pose.
 
 The ordinary-horde contract is a smaller view of the same interchange format:
 it requires `Idle`, `Run`, `Hit` and `Death`. Three fixed hit poses share the

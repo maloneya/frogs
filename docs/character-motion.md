@@ -8,7 +8,7 @@ retains additional bodies and motions for future work.
 
 Review neck, waist and arm/torso negative space before equipment. Fit joints
 inside the anatomy and inspect shoulder, hip and knee deformation under the
-actual motion. Shoulder weights and the open sword grip remain refinement work;
+actual motion. Shoulder weights remain refinement work;
 valid source data does not certify finished deformation.
 
 ## Principles to carry into other motions
@@ -58,7 +58,7 @@ valid source data does not certify finished deformation.
 
 The current compiler lives in
 [`authored_cleave.py`](../assets/characters/basic-player/authored_cleave.py).
-It retargets the approved CC0 descending slash into the existing 26-joint player,
+It retargets the approved CC0 descending slash into the existing 54-joint player,
 keeps the reference recovery moving, and preserves the 6/6/10 gameplay schedule.
 Stationary attacks use the whole bracing pose; moving attacks retain directional
 leg locomotion under the attack's articulated upper body. The shared importer,
@@ -82,3 +82,11 @@ ability layers compensate at the top masked joint for the locomotion parent's
 rotation: hip articulation must not rotate committed attacks away from aim.
 See [`authored_locomotion.py`](../assets/characters/basic-player/authored_locomotion.py)
 and the [preview commands](../assets/characters/basic-player/README.md#review-motion).
+
+The relaxed idle adapts the retained Quaternius `Sword_Idle` into a 3.2-second
+loop on the same rig. Both arms rest lower with soft elbows; relative torso,
+pelvis and wrist motion supplies a small weight shift while the feet stay planted.
+Melee recovery meets its opening pose. The long blade rests slightly above
+horizontal to preserve the Cleave wrist release; locomotion carries it higher
+for stride clearance. This is a visual checkpoint awaiting user judgement of feel,
+with compilation, grip/support and in-game presentation checked separately.

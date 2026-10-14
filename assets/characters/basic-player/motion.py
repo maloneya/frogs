@@ -8,7 +8,7 @@ QUATERNIUS_MAP = {'Pelvis': 'pelvis', 'Spine': 'spine_02', 'Chest': 'spine_03',
 for target, source in [('Left', 'l'), ('Right', 'r')]:
     QUATERNIUS_MAP.update({target + name: joint + '_' + source for name, joint in
         [('Shoulder', 'clavicle'), ('Arm', 'upperarm'), ('Forearm', 'lowerarm'),
-         ('Hand', 'hand'), ('Fingers', 'index_01'), ('Thumb', 'thumb_01'),
+         ('Hand', 'hand'),
          ('Leg', 'thigh'), ('Shin', 'calf'), ('Foot', 'foot')]})
 
 

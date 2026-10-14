@@ -13,10 +13,11 @@ fn basic_player_satisfies_the_player_presentation_contract() {
     assert!(character.index_count() > 500);
     assert_eq!(character.images()[0].width(), 256);
     assert_eq!(character.images()[0].height(), 256);
-    assert_eq!(character.parts().len(), 1);
-    assert_eq!(character.materials().len(), 1);
-    assert_eq!(character.images().len(), 1);
-    assert_eq!(character.joint_count(), 26);
+    assert_eq!(character.parts().len(), 2);
+    assert_eq!(character.materials().len(), 2);
+    assert_eq!(character.images().len(), 2);
+    assert!(character.parts().iter().any(|part| part.node_name() == "HoodedCloak"));
+    assert_eq!(character.joint_count(), 54);
     assert_eq!(character.clip_count(), 8);
     assert!(character.joint_named("Weapon").is_some());
     assert!(character.joint_named("BeamOrigin").is_some());
@@ -36,6 +37,33 @@ fn basic_player_satisfies_the_player_presentation_contract() {
 }
 
 #[test]
+fn longsword_fits_human_scale_and_keeps_the_beam_socket_on_its_tip() {
+    let asset = import_character_glb(BASIC_PLAYER).unwrap();
+    let weapon = asset.joint_named("Weapon").unwrap();
+    let bind = asset.bind_pose();
+    let grip = asset.joint_transform(&bind, weapon).unwrap().transform_point3(glam::Vec3::ZERO);
+    let socket = asset.joint_named("BeamOrigin").unwrap();
+    let tip = asset.joint_transform(&bind, socket).unwrap().transform_point3(glam::Vec3::ZERO);
+    let axis = (tip - grip).normalize();
+    let weapon_index = asset.joint_index(weapon).unwrap();
+    let sword: Vec<_> = asset.vertices().iter().filter(|vertex| {
+        vertex.joints().into_iter().zip(vertex.weights())
+            .any(|(joint, weight)| usize::from(joint) == weapon_index && weight > 0.99)
+    }).map(|vertex| vertex.position()).collect();
+    assert!(!sword.is_empty());
+    let along = |point: glam::Vec3| (point - grip).dot(axis);
+    let front = sword.iter().copied().map(along).fold(f32::NEG_INFINITY, f32::max);
+    let back = sword.iter().copied().map(along).fold(f32::INFINITY, f32::min);
+    assert!((1.2..1.5).contains(&(front - back)), "longsword is out of proportion to the two-metre body");
+    let radial = |point: glam::Vec3| { let d = point - grip; (d - axis * d.dot(axis)).length() };
+    assert!(sword.iter().all(|point| along(*point) < 0.15 || radial(*point) < 0.035),
+        "blade is too broad for the character");
+    assert!(sword.iter().all(|point| radial(*point) < 0.15), "guard is oversized");
+    assert!(sword.iter().any(|point| point.distance(tip) < 1e-4), "beam socket left the physical tip");
+    assert!((front - grip.distance(tip)).abs() < 1e-4, "geometry extends beyond the beam socket");
+}
+
+#[test]
 fn accepted_body_keeps_human_scale_and_a_narrow_shoulder_span() {
     let asset = import_character_glb(BASIC_PLAYER).unwrap();
     let bind = asset.bind_pose();
@@ -43,17 +71,38 @@ fn accepted_body_keeps_human_scale_and_a_narrow_shoulder_span() {
         .unwrap().transform_point3(glam::Vec3::ZERO);
     let shoulders = point("LeftArm").distance(point("RightArm"));
     assert!((0.43..0.48).contains(&shoulders), "bind rig regained the oversized shoulders: {shoulders}");
-    let top = asset.vertices().iter().map(|v| v.position().y).fold(f32::NEG_INFINITY, f32::max);
-    let bottom = asset.vertices().iter().map(|v| v.position().y).fold(f32::INFINITY, f32::min);
+    let body = asset.parts().iter().find(|part| part.node_name() == "Swordsman").unwrap();
+    let body_vertices = &asset.vertices()[body.vertices()];
+    let top = body_vertices.iter().map(|v| v.position().y).fold(f32::NEG_INFINITY, f32::max);
+    let bottom = body_vertices.iter().map(|v| v.position().y).fold(f32::INFINITY, f32::min);
     assert!((top - bottom - 2.0).abs() < 1e-4, "body lost its uniform two-metre scale");
-    let glb = gltf::Gltf::from_slice(BASIC_PLAYER).unwrap();
-    let chest = glb.skins().next().unwrap().joints()
-        .position(|node| node.name() == Some("Chest")).unwrap() as u16;
-    let rib_cage: Vec<_> = asset.vertices().iter().filter(|v| {
-        v.joints().into_iter().zip(v.weights()).any(|(joint, weight)| joint == chest && weight > 0.9)
+    let chest = asset.joint_index(asset.joint_named("Chest").unwrap()).unwrap();
+    let rib_cage: Vec<_> = body_vertices.iter().filter(|v| {
+        v.joints().into_iter().zip(v.weights()).any(|(joint, weight)| usize::from(joint) == chest && weight > 0.9)
     }).collect();
     assert!(rib_cage.len() > 50);
     assert!(rib_cage.iter().all(|v| v.position().x.abs() < 0.25), "chest surface regained the oversized barrel shape");
+}
+
+#[test]
+fn cloak_has_a_raised_open_hood_and_a_separate_draped_hem() {
+    let asset = import_character_glb(BASIC_PLAYER).unwrap();
+    let part = asset.parts().iter().find(|part| part.node_name() == "HoodedCloak").unwrap();
+    let cloth = &asset.vertices()[part.vertices()];
+    let head = asset.joint_index(asset.joint_named("Head").unwrap()).unwrap();
+    let hood: Vec<_> = cloth.iter().filter(|v| {
+        v.joints().into_iter().zip(v.weights()).any(|(joint, weight)| usize::from(joint) == head && weight > 0.99)
+    }).map(|v| v.position()).collect();
+    assert!(hood.len() > 100, "raised hood geometry is absent");
+    assert!(hood.iter().any(|p| p.y > 2.04), "hood must cover the crown");
+    assert!(hood.iter().any(|p| p.y > 1.8 && p.z < -0.1), "hood must cover the back of the head");
+    assert!(!hood.iter().any(|p| (1.8..1.9).contains(&p.y) && p.x.abs() < 0.10 && p.z > 0.15),
+        "hood closed the face opening");
+    let hem: Vec<_> = cloth.iter().filter(|v| (0.2..0.3).contains(&v.position().y))
+        .map(|v| v.position()).collect();
+    assert!(hem.iter().any(|p| p.x > 0.40) && hem.iter().any(|p| p.x < -0.40),
+        "cloak lost its full draped hem");
+    assert!(hem.iter().any(|p| p.z < -0.25), "cloak no longer hangs behind the legs");
 }
 
 #[test]
@@ -66,7 +115,7 @@ fn masked_attacks_keep_running_legs_and_refuse_foreign_state_atomically() {
     asset.sample(asset.clip_named("AttackCleave").unwrap(), 0.4, &mut attack);
     let legs = ["LeftLeg", "RightLeg"].map(|name| asset.joint_named(name).unwrap());
     let before = legs.map(|joint| asset.joint_transform(&pose, joint).unwrap());
-    let mask = asset.pose_mask(&[("Spine", 1.0), ("Chest", 1.0), ("Neck", 1.0), ("Head", 1.0), ("LeftShoulder", 1.0), ("RightShoulder", 1.0), ("LeftArm", 1.0), ("RightArm", 1.0), ("LeftForearm", 1.0), ("RightForearm", 1.0), ("LeftHand", 1.0), ("RightHand", 1.0), ("LeftFingers", 1.0), ("RightFingers", 1.0), ("LeftThumb", 1.0), ("RightThumb", 1.0), ("Weapon", 1.0)]).unwrap();
+    let mask = asset.pose_mask(&[("Spine", 1.0), ("Chest", 1.0), ("Neck", 1.0), ("Head", 1.0), ("LeftShoulder", 1.0), ("RightShoulder", 1.0), ("LeftArm", 1.0), ("RightArm", 1.0), ("LeftForearm", 1.0), ("RightForearm", 1.0), ("LeftHand", 1.0), ("RightHand", 1.0), ("LeftIndex1", 1.0), ("RightIndex1", 1.0), ("LeftThumb1", 1.0), ("RightThumb1", 1.0), ("RightGrip", 1.0), ("LeftGrip", 1.0), ("Weapon", 1.0)]).unwrap();
     assert!(asset.blend(&mut pose, &attack, &mask, 1.0));
     for (joint, before) in legs.into_iter().zip(before) {
         assert_eq!(asset.joint_transform(&pose, joint).unwrap(), before);
@@ -91,7 +140,7 @@ fn parent_aligned_layers_preserve_aim_and_reject_foreign_poses_without_mutation(
     let asset = import_character_glb(BASIC_PLAYER).unwrap();
     let foreign = import_character_glb(BASIC_PLAYER).unwrap();
     let names = ["Spine", "Chest", "Neck", "Head", "LeftShoulder", "LeftArm", "LeftForearm", "LeftHand",
-        "LeftFingers", "LeftThumb", "RightShoulder", "RightArm", "RightForearm", "RightHand", "RightFingers", "RightThumb", "Weapon", "BeamOrigin"];
+        "LeftIndex1", "LeftThumb1", "RightShoulder", "RightArm", "RightForearm", "RightHand", "RightIndex1", "RightThumb1", "RightGrip", "LeftGrip", "Weapon", "BeamOrigin"];
     let mask = asset.pose_mask_parent_aligned(&names.map(|name| (name, 1.0))).unwrap();
     let mut base = asset.bind_pose();
     let mut overlay = asset.bind_pose();
@@ -207,12 +256,12 @@ fn cleave_has_independent_arm_arcs_and_a_pivot_at_the_sword_wrist() {
     // the torso or a rigid continuation of the forearm.
     let glb = gltf::Gltf::from_slice(BASIC_PLAYER).unwrap();
     let sword_hand = glb.nodes().find(|node| node.name() == Some("RightHand")).unwrap();
-    assert!(sword_hand.children().any(|node| node.name() == Some("Weapon")));
+    assert!(sword_hand.children().any(|node| node.name() == Some("RightGrip")));
     for sample in 0..=120 {
         asset.sample(clip, sample as f32 / 120.0, &mut pose);
-        let wrist = position(&pose, "RightHand");
+        let wrist = position(&pose, "RightGrip");
         let grip = position(&pose, "Weapon");
-        assert!(grip.distance(wrist) < 0.001, "sword hinge left its wrist at {sample}");
+        assert!(grip.distance(wrist) < 0.001, "sword left its palm grasp at {sample}");
 
     }
     asset.sample(clip, 0.0, &mut pose);
@@ -247,7 +296,9 @@ fn cleave_has_independent_arm_arcs_and_a_pivot_at_the_sword_wrist() {
 #[test]
 fn swordsman_atlas_preserves_the_linear_steel_colour_through_srgb_decode() {
     let asset = import_character_glb(BASIC_PLAYER).unwrap();
-    let rgba = asset.images()[0].rgba8();
+    let body = asset.parts().iter().find(|part| part.node_name() == "Swordsman").unwrap();
+    let image = asset.materials()[body.material_index()].image_index();
+    let rgba = asset.images()[image].rgba8();
     let pixel = &rgba[(224 * 256 + 224) * 4..][..4];
     let linear = arpg_core::Srgb::from_rgb8([pixel[0], pixel[1], pixel[2]]).to_linear().to_array();
     let intended = glam::Vec3::new(0.13, 0.17, 0.19);

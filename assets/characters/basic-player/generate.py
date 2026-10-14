@@ -1,7 +1,7 @@
 """Compile the accepted authored human body and articulated combat rig.
 
-Blender metres, Z up, -Y forward. One opaque material, packed colour atlas,
-one articulated skin and the eight app-owned clips. No runtime IK is required.
+Blender metres, Z up, -Y forward. Body/sword and fitted clothing have separate
+opaque atlases, one articulated skin and eight app-owned clips. No runtime IK.
 """
 from pathlib import Path
 import math
@@ -16,11 +16,13 @@ from authored_cleave import bake
 from motion import set_linear_keys
 import authored_slam
 import authored_locomotion
+import authored_idle
+import grasp
 
 OUTPUT_DIRECTORY = Path('assets/characters/basic-player')
 ATLAS_SIZE = 256
 COLOURS = {
-    'skin': (.40, .235, .15), 'cloth': (.105, .012, .018),
+    'skin': (.40, .235, .15), 'cloth': (.018, .023, .025),
     'leather': (.055, .026, .013), 'steel': (.13, .17, .19),
     'edge': (.36, .40, .42), 'gold': (.44, .25, .065),
     'hair': (.022, .012, .008), 'dark': (.006, .009, .011),
@@ -134,10 +136,6 @@ def oval(name, centre, size, bone, material, tile, segments=12, bands=6):
     return tube(name, rings, material, tile, segments)
 
 
-def patch(name, points, bone, material, tile):
-    return mesh_part(name, points, [tuple(range(len(points)))], [[(bone, 1)]] * len(points), material, tile, False)
-
-
 def build_mesh(objects, material, rig):
     body = objects[0]
     vertices = [tuple(v.co) for v in body.data.vertices]
@@ -162,7 +160,8 @@ def build_mesh(objects, material, rig):
         if obj != body:
             obj.vertex_groups.new(name='Head').add(list(range(len(obj.data.vertices))), 1, 'REPLACE')
         PARTS.append(obj)
-    build_sword(material, rig.data.bones['Weapon'].head_local)
+    weapon = rig.data.bones['Weapon']
+    build_sword(material, weapon.head_local, (weapon.tail_local - weapon.head_local).normalized())
     bpy.ops.object.select_all(action='DESELECT')
     for part in PARTS: part.select_set(True)
     bpy.context.view_layer.objects.active = body
@@ -175,39 +174,74 @@ def build_mesh(objects, material, rig):
     modifier = body.modifiers.new('SwordsmanSkin', 'ARMATURE')
     modifier.object = rig
     body.parent = rig
+    source = Path(__file__).resolve().parent / 'clothing-source.blend'
+    with bpy.data.libraries.load(str(source), link=False) as (_, clothing):
+        clothing.objects = ['HoodedCloak']
+    cloak = clothing.objects[0]
+    assert cloak is not None, 'clothing source must contain HoodedCloak'
+    bpy.context.collection.objects.link(cloak)
+    modifier = cloak.modifiers.new('CloakSkin', 'ARMATURE')
+    modifier.object = rig
+    cloak.parent = rig
     return body
 
 
-BLADE_TIP = 1.38
+BLADE_TIP = 1.22
 
 
-def build_sword(material, grip):
+def build_sword(material, grip, axis):
+    parts_start = len(PARTS)
     def along(distance): return grip + Vector((0, -distance, 0))
-    tube('SwordGrip', [(along(-.22), .032, .032, [('Weapon', 1)]),
-        (along(.055), .032, .032, [('Weapon', 1)])], material, 'wrap', 10)
-    oval('Pommel', along(-.25), (.055, .045, .055), 'Weapon', material, 'gold', 10, 4)
-    tube('Crossguard', [(grip+Vector((-.22, -.08, -.015)), .025, .025, [('Weapon', 1)]),
-        (grip+Vector((-.12, -.10, 0)), .035, .035, [('Weapon', 1)]),
-        (grip+Vector((0, -.10, .015)), .035, .035, [('Weapon', 1)]),
-        (grip+Vector((.12, -.10, 0)), .035, .035, [('Weapon', 1)]),
-        (grip+Vector((.22, -.08, -.015)), .025, .025, [('Weapon', 1)])], material, 'gold', 8)
+    weight = [('Weapon', 1)]
+    radius = grasp.HANDLE_RADIUS
+    # Keep the lower grip at the slam's supporting-hand position, 15 cm
+    # behind the primary palm grasp. The hilt fits the accepted human hand scale.
+    tube('SwordGrip', [(along(-.215), radius * 19/21, radius * 16/21, weight),
+        (along(-.19), radius, radius * 17/21, weight),
+        (along(.035), radius * 18/21, radius * 15/21, weight),
+        (along(.05), radius * 18/21, radius * 15/21, weight)], material, 'wrap', 10)
+    for name, start, end in [('PommelCollar', -.225, -.21), ('GuardCollar', .04, .065)]:
+        tube(name, [(along(start), .022, .018, weight),
+            (along(end), .022, .018, weight)], material, 'gold', 10)
+    oval('Pommel', along(-.245), (.037, .016, .037), 'Weapon', material, 'steel', 12, 6)
+    tube('Crossguard', [(grip+Vector((-.135, -.09, -.008)), .010, .010, weight),
+        (grip+Vector((-.11, -.075, 0)), .012, .012, weight),
+        (grip+Vector((0, -.075, 0)), .017, .014, weight),
+        (grip+Vector((.11, -.075, 0)), .012, .012, weight),
+        (grip+Vector((.135, -.09, -.008)), .010, .010, weight)], material, 'steel', 8)
     vertices = []
-    for distance, width in [(.12, .105), (.34, .095), (1.16, .078), (BLADE_TIP, .0)]:
+    # A recessed fuller on both faces is part of the closed blade, rather
+    # than a floating one-sided patch. Distal taper keeps its edge thin.
+    sections = [(.085, .028, .0045), (.16, .027, .0045),
+                (.78, .022, .0035), (1.04, .017, .0025), (1.16, .007, .0015)]
+    for distance, width, depth in sections:
         p = along(distance)
-        vertices.extend([p+Vector((-width,0,0)), p+Vector((0,0,.026)),
-                         p+Vector((width,0,0)), p+Vector((0,0,-.026))])
-    faces = [(3,2,1,0)]
-    for ring in range(3):
-        for side in range(4):
-            a,b=ring*4+side,ring*4+(side+1)%4
-            faces.append((a,b,b+4,a+4))
-    faces.append((12,13,14,15))
-    mesh_part('SwordBlade', vertices, faces, [[('Weapon',1)]]*16, material, 'blade', False)
-    patch('BladeFuller', [grip+Vector((-.014,-.22,.027)), grip+Vector((-.012,-1.14,.027)),
-        grip+Vector((.012,-1.14,.027)), grip+Vector((.014,-.22,.027))], 'Weapon', material, 'steel')
+        vertices.extend(p + Vector((x * width, 0, z * depth)) for x, z in [
+            (-1, 0), (-.65, 1), (-.18, 1), (0, .55), (.18, 1), (.65, 1),
+            (1, 0), (.65, -1), (.18, -1), (0, -.55), (-.18, -1), (-.65, -1)])
+    sides = 12
+    faces = [tuple(range(sides))]
+    for ring in range(len(sections) - 1):
+        for side in range(sides):
+            a, b = ring * sides + side, ring * sides + (side + 1) % sides
+            faces.append((b, a, a + sides, b + sides))
+    tip = len(vertices)
+    vertices.append(along(BLADE_TIP))
+    for side in range(sides):
+        faces.append(((len(sections) - 1) * sides + (side + 1) % sides,
+                      (len(sections) - 1) * sides + side, tip))
+    blade = mesh_part('SwordBlade', vertices, faces, [weight] * len(vertices), material, 'blade', False)
+    for face in blade.data.polygons[1:]:
+        tile = 'steel' if (face.index - 1) % sides in {2, 3, 8, 9} else 'blade'
+        u, v = TILES[tile]
+        for i, loop in enumerate(face.loop_indices):
+            blade.data.uv_layers.active.data[loop].uv = (u + (i % 2) * .226, v + (i // 2 % 2) * .226)
+    rotation = Vector((0,-1,0)).rotation_difference(axis)
+    for part in PARTS[parts_start:]:
+        for vertex in part.data.vertices: vertex.co = grip + rotation @ (vertex.co - grip)
 
 
-def build_armature(scale, low):
+def build_armature(scale, low, hands):
     data = bpy.data.armatures.new('SwordsmanRig')
     rig = bpy.data.objects.new('SwordsmanRig', data)
     bpy.context.collection.objects.link(rig)
@@ -235,15 +269,13 @@ def build_armature(scale, low):
         arm = bone(side + 'Arm', (sign * .19, 0, 1.30), (sign * .30, -.005, 1.073), shoulder)
         fore = bone(side + 'Forearm', (sign * .30, -.005, 1.073), (sign * .384, -.068, .865), arm)
         hand = bone(side + 'Hand', (sign * .384, -.068, .865), (sign * .413, -.095, .79), fore)
-        bone(side + 'Fingers', (sign * .413, -.095, .79), (sign * .431, -.107, .728), hand)
-        bone(side + 'Thumb', (sign * .367, -.11, .85), (sign * .37, -.167, .815), hand)
         leg = bone(side + 'Leg', (sign * .095, .015, .855), (sign * .13, -.02, .457), pelvis)
         shin = bone(side + 'Shin', (sign * .13, -.02, .457), (sign * .183, .017, .065), leg)
         bone(side + 'Foot', (sign * .183, .017, .065), (sign * .235, -.115, .017), shin)
-        if side == 'Right':
-            grip = hand.head.copy()
-            weapon = bone('Weapon', grip, grip + Vector((0, -1, 0)), hand, False)
-            bone('BeamOrigin', grip + Vector((0, -BLADE_TIP, 0)), grip + Vector((0, -BLADE_TIP - .1, 0)), weapon, False)
+    weapon = grasp.add_bones(rig, hands, bone)
+    grip = weapon.head.copy()
+    axis = (weapon.tail - weapon.head).normalized()
+    bone('BeamOrigin', grip + axis * BLADE_TIP, grip + axis * (BLADE_TIP + .1), weapon, False)
     assert bpy.ops.object.mode_set(mode='OBJECT') == {'FINISHED'}
     rig.show_in_front = True
     return rig
@@ -286,12 +318,12 @@ def pose(rig, settings):
     bpy.context.view_layer.update()
     wrist=Vector(settings['hand'])
     blade=Vector(settings['blade']).normalized()
-    chain(rig,'RightArm','RightForearm',wrist,(.88,-.04,1.40))
-    # Each arm has its own reach and elbow plane. Hand flex and the Weapon
-    # child at the wrist remain separate from the shoulder/forearm swing.
+    chain(rig,'RightArm','RightForearm',wrist,(.52,.06,1.25))
+    # Each arm supplies reach and an elbow plane. The final grasp pass derives
+    # wrist orientation and finger closure from the requested blade direction.
     rotate_global(rig,'RightHand',(.25,-.12,-1))
     rotate_global(rig,'Weapon',blade)
-    chain(rig,'LeftArm','LeftForearm',(-.49,-.12,1.10),(-.83,.08,1.33))
+    chain(rig,'LeftArm','LeftForearm',(-.34,-.08,1.02),(-.48,.10,1.24))
     rotate_global(rig,'LeftHand',(-.15,-.10,-1))
     for side, sign in [('Left',-1),('Right',1)]:
         goal=(sign*.27, -.06 if sign<0 else .10, .14)
@@ -333,12 +365,13 @@ def mix(a,b,amount):
 def build_actions(rig):
     bpy.context.scene.render.fps=30
     rig.animation_data_create()
-    ready={'hand':(.50,-.32,1.24),'blade':(.40,-.83,.39),
-           'rotations':{'Spine':(6,0,0),'Chest':(-3,8,0),'Neck':(-3,-8,0),
-                        'RightShoulder':(0,-5,-6),'LeftShoulder':(0,3,4)}}
-    breathe=mix(ready,{**ready,'rotations':{**ready['rotations'],'Chest':(-1,10,0)}},.5)
-    idle=action(rig,'Idle',[(1,ready),(16,breathe),(31,ready)])
-    authored_locomotion.bake(rig, lambda: pose(rig, ready))
+    ready={'hand':(.40,-.24,1.06),'blade':(.38,-.90,.14),
+           'rotations':{'Spine':(2,0,0),'Chest':(-1,3,0),'Neck':(-1,-3,0),
+                        'RightShoulder':(0,-2,-2),'LeftShoulder':(0,1,1)}}
+    idle=authored_idle.bake(rig, lambda: pose(rig, ready), chain, rotate_global)
+    # Moving carry keeps the blade elevated for clearance during the stride.
+    traveling_guard={**ready,'blade':(.40,-.83,.39)}
+    authored_locomotion.bake(rig, lambda: pose(rig, traveling_guard))
     bake(rig,lambda:pose(rig,ready))
     authored_slam.bake(rig, lambda: pose(rig, ready), chain, rotate_global)
     channel={**ready,'hand':(.32,-.64,1.48),'blade':(0,-1,0)}
@@ -352,9 +385,15 @@ def main():
     out=Path(arguments[0]) if arguments else OUTPUT_DIRECTORY
     clear_scene()
     objects, scale, low = anatomy.import_body()
-    rig = build_armature(scale, low)
-    build_mesh(objects, make_material(), rig)
+    hands = grasp.calibrate(objects[0])
+    rig = build_armature(scale, low, hands)
+    body = build_mesh(objects, make_material(), rig)
     build_actions(rig)
+    grasp.bake(rig, hands, chain)
+    grasp.validate_motion(rig, body)
+    rig.animation_data.action = bpy.data.actions['Idle']
+    rig.animation_data.action_slot = rig.animation_data.action.slots[0]
+    bpy.context.scene.frame_set(1)
     out.mkdir(parents=True,exist_ok=True)
     assert bpy.ops.wm.save_as_mainfile(filepath=str((out/'basic-player.blend').resolve()))=={'FINISHED'}
     bpy.ops.object.select_all(action='SELECT')

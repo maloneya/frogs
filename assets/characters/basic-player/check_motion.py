@@ -1,8 +1,11 @@
-"""Check intermediate Slam and locomotion poses in a generated Blender asset."""
+"""Check intermediate idle, Slam and locomotion poses in a generated Blender asset."""
 from pathlib import Path
 import sys
 
 import bpy
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import grasp
 
 
 def select_action(rig, name):
@@ -30,11 +33,11 @@ def check_slam(rig):
         set_frame(frame)
         hand = rig.pose.bones['RightHand']
         weapon = rig.pose.bones['Weapon']
-        assert (hand.head - weapon.head).length < .001
+        assert (rig.pose.bones['RightGrip'].head - weapon.head).length < .001
         grips.append(hand.matrix.inverted() @ weapon.matrix)
         if 10 <= frame <= 26:
-            goal = hand.head - (weapon.tail - weapon.head).normalized() * .15
-            gap = (rig.pose.bones['LeftHand'].head - goal).length
+            goal = weapon.head - (weapon.tail - weapon.head).normalized() * .15
+            gap = (rig.pose.bones['LeftGrip'].head - goal).length
             gaps.append(gap)
             assert gap < .03, (frame, 'support hand left grip', gap)
             feet.append([rig.pose.bones[side + 'Foot'].head.copy() for side in ['Left', 'Right']])
@@ -49,6 +52,34 @@ def check_slam(rig):
             assert (start - current).length < .001, ('planted foot drift', start, current)
     print('PASS Slam: phase edges, planted feet, supporting grip, rigid sword, '
           'moving recovery, ready seam; max support error', max(gaps))
+
+
+def check_idle(rig):
+    select_action(rig, 'Idle')
+    first, last = bpy.data.actions['Idle'].frame_range
+    positions = {name: [] for name in ['Pelvis', 'Chest', 'LeftHand', 'RightHand']}
+    grips, feet, ends = [], [], []
+    for index in range(385):
+        set_frame(first + (last - first) * index / 384)
+        for name, samples in positions.items():
+            samples.append(rig.pose.bones[name].head.copy())
+        for side in ['Left', 'Right']:
+            assert rig.pose.bones[side + 'Hand'].head.z < 1.18, 'raised idle arm'
+        assert rig.pose.bones['BeamOrigin'].head.z > .45, 'idle blade meets floor'
+        grips.append(rig.pose.bones['RightHand'].matrix.inverted() @ rig.pose.bones['Weapon'].matrix)
+        feet.append([rig.pose.bones[side + 'Foot'].matrix.copy() for side in ['Left', 'Right']])
+        if index in [0, 384]:
+            ends.append([bone.matrix.copy() for bone in rig.pose.bones])
+    check_grip(grips)
+    for a, b in zip(ends[0], ends[1]):
+        assert max(abs(x - y) for ra, rb in zip(a, b) for x, y in zip(ra, rb)) < .0001, 'idle seam'
+    for row in feet:
+        for a, b in zip(feet[0], row):
+            assert max(abs(x - y) for ra, rb in zip(a, b) for x, y in zip(ra, rb)) < .001, 'idle foot drift'
+    spans = {name: max((a - b).length for a in samples for b in samples)
+             for name, samples in positions.items()}
+    assert all(.015 < span < .10 for span in spans.values()), ('frozen or excessive idle motion', spans)
+    print('PASS Idle: relaxed arms, whole-body motion, planted feet, rigid sword, loop seam;', spans)
 
 
 def check_locomotion(rig):
@@ -78,8 +109,10 @@ def main():
     path = Path(sys.argv[sys.argv.index('--') + 1]).resolve()
     assert bpy.ops.wm.open_mainfile(filepath=str(path)) == {'FINISHED'}
     rig = bpy.data.objects['SwordsmanRig']
+    check_idle(rig)
     check_slam(rig)
     check_locomotion(rig)
+    grasp.validate_motion(rig, bpy.data.objects['Swordsman'])
 
 
 if __name__ == '__main__':

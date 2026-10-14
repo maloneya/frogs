@@ -10,6 +10,10 @@ CENTRAL_REGIONS = {18: 'Pelvis', 19: 'Spine'}
 LIMB_REGIONS = {20: 'Arm', 21: 'Arm', 11: 'Forearm', 12: 'Forearm',
                 9: 'Hand', 10: 'Hand', 15: 'Shin', 16: 'Shin',
                 23: 'Leg', 24: 'Leg', 13: 'Foot', 14: 'Foot'}
+DIGIT_REGIONS = {
+    'Right': {'Little': 64, 'Ring': 68, 'Middle': 72, 'Index': 76, 'Thumb': 80},
+    'Left': {'Little': 100, 'Ring': 96, 'Middle': 92, 'Index': 88, 'Thumb': 84},
+}
 
 
 def import_body():
@@ -40,10 +44,10 @@ def region_bone(region, centre):
         return side + LIMB_REGIONS[region]
     if 25 <= region <= 63:
         return side + 'Foot'
-    if 80 <= region <= 87:
-        return side + 'Thumb'
-    if region >= 64:
-        return side + 'Fingers'
+    for digits in DIGIT_REGIONS.values():
+        for digit, base in digits.items():
+            if base <= region < base + 4:
+                return side + digit + str(min(3, region - base + 1))
     if region == 1:
         if centre.z > 1.70: return 'Head'
         if centre.z > 1.58: return 'Neck'

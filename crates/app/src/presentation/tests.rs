@@ -125,11 +125,11 @@ fn character_replacement_is_atomic_across_import_and_upload_failure() {
     let current = slot.as_ref().unwrap();
     assert_eq!(
         (current.asset.vertex_count(), current.asset.index_count()),
-        (12324, 70722)
+        (22137, 127350)
     );
     assert_eq!(
         (current.asset.node_count(), current.asset.joint_count()),
-        (28, 26)
+        (57, 54)
     );
     assert_eq!(current.asset.clip_count(), 8);
     let current = slot.as_mut().unwrap();
@@ -160,9 +160,9 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview(Some(&preview), &mut active);
     assert_eq!(
         active.finish(),
-        r#"{"active":true,"path":"assets/character.glb","vertices":12324,"indices":70722,"part_count":1,"material_count":1,"image_count":1,"texture_bytes":349524,"parts":{"0":{"node":"Swordsman","primitive":0,"material":0,"vertices":12324,"indices":70722}},"materials":{"0":{"image":0}},"images":{"0":{"width":256,"height":256}},"nodes":28,"joints":26,"clips":8,"role":"idle","clip":"Idle","clip_duration":1.0000,"channels":52,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000,"channel_weight":0.0000}"#
+        r#"{"active":true,"path":"assets/character.glb","vertices":22137,"indices":127350,"part_count":2,"material_count":2,"image_count":2,"texture_bytes":699048,"parts":{"0":{"node":"HoodedCloak","primitive":0,"material":0,"vertices":9324,"indices":55824},"1":{"node":"Swordsman","primitive":0,"material":1,"vertices":12813,"indices":71526}},"materials":{"0":{"image":0},"1":{"image":1}},"images":{"0":{"width":256,"height":256},"1":{"width":256,"height":256}},"nodes":57,"joints":54,"clips":8,"role":"idle","clip":"Idle","clip_duration":3.2000,"channels":108,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000,"channel_weight":0.0000}"#
     );
-    assert_eq!(preview.draw_count(), 1);
+    assert_eq!(preview.draw_count(), 2);
 }
 
 #[test]
@@ -386,6 +386,43 @@ fn authoritative_player_facts_drive_direct_roles() {
     );
     let clip = character.clips.for_role(character.sampled_role);
     assert_eq!(character.asset.clip(clip).unwrap().name(), "AttackSlam");
+}
+
+#[test]
+fn idle_through_game_moves_the_relaxed_body_without_sliding_support_or_changing_gameplay() {
+    let game = Game::empty();
+    let hash = game.hash();
+    let mut player = loaded_character_from(default_character_path());
+    let duration = player.asset.clip(player.clips.idle).unwrap().duration_seconds();
+    let names = ["Pelvis", "Chest", "LeftHand", "RightHand", "LeftFoot", "RightFoot", "Weapon"];
+    let mut samples = Vec::new();
+    for fraction in [0.0, 0.125, 0.25, 0.5, 0.75, 0.999, 1.0] {
+        player.sample(game.player_presentation(Alpha::ONE), Alpha::ONE, f64::from(duration * fraction));
+        assert_eq!(player.sampled_role, PresentationRole::Idle);
+        let transforms = names.map(|name| player.asset.joint_transform(&player.pose,
+            player.asset.joint_named(name).unwrap()).unwrap());
+        for hand in &transforms[2..4] {
+            assert!(hand.transform_point3(Vec3::ZERO).y < 1.18, "idle arms stayed raised");
+        }
+        samples.push(transforms);
+        assert_eq!(game.hash(), hash);
+    }
+    let origin = |matrix: glam::Mat4| matrix.transform_point3(Vec3::ZERO);
+    for sample in &samples {
+        for index in [4, 5] {
+            assert!(sample[index].abs_diff_eq(samples[0][index], 1e-3), "idle support slid");
+        }
+        assert!((sample[3].inverse() * sample[6]).abs_diff_eq(
+            samples[0][3].inverse() * samples[0][6], 1e-4), "idle sword twisted in its grip");
+    }
+    for index in 0..4 {
+        let span = samples.iter().map(|sample| origin(sample[index]).distance(origin(samples[0][index])))
+            .fold(0.0, f32::max);
+        assert!((0.015..0.10).contains(&span), "idle joint {} froze or exaggerated motion: {span}", names[index]);
+    }
+    for (start, end) in samples[0].iter().zip(samples.last().unwrap()) {
+        assert!(start.abs_diff_eq(*end, 1e-5), "idle loop seam");
+    }
 }
 
 #[test]
@@ -760,6 +797,53 @@ fn missing_required_joint_refuses_replacement_before_upload() {
     assert!(result.unwrap_err().contains("missing mask joint"));
     assert!(!uploaded);
     assert_eq!(slot.unwrap().path, std::path::Path::new("current.glb"));
+}
+
+#[test]
+fn open_grasp_refuses_the_complete_player_before_upload() {
+    let source = std::fs::read(default_character_path()).unwrap();
+    let json_len = u32::from_le_bytes(source[12..16].try_into().unwrap()) as usize;
+    let document: serde_json::Value = serde_json::from_slice(&source[20..20 + json_len]).unwrap();
+    let nodes = document["nodes"].as_array().unwrap();
+    let mut candidate = source;
+    for digit in ["Little", "Ring", "Middle", "Index", "Thumb"] {
+        for segment in 1..=3 {
+            let name = format!("Right{digit}{segment}");
+            let node = nodes.iter().position(|node| node["name"] == name).unwrap();
+            let rest: [f32; 4] = std::array::from_fn(|lane| nodes[node]["rotation"][lane].as_f64()
+                .map_or(if lane == 3 { 1.0 } else { 0.0 }, |value| value as f32));
+            for animation in document["animations"].as_array().unwrap() {
+                for channel in animation["channels"].as_array().unwrap() {
+                    if channel["target"]["node"].as_u64() != Some(node as u64) || channel["target"]["path"] != "rotation" { continue; }
+                    let sampler = channel["sampler"].as_u64().unwrap() as usize;
+                    let accessor = animation["samplers"][sampler]["output"].as_u64().unwrap() as usize;
+                    let accessor = &document["accessors"][accessor];
+                    let view = &document["bufferViews"][accessor["bufferView"].as_u64().unwrap() as usize];
+                    let base = 20 + json_len + 8 + view["byteOffset"].as_u64().unwrap_or(0) as usize
+                        + accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
+                    for key in 0..accessor["count"].as_u64().unwrap() as usize {
+                        for (lane, value) in rest.iter().enumerate() {
+                            candidate[base + key * 16 + lane * 4..][..4].copy_from_slice(&value.to_le_bytes());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // The generic format is valid; its role-specific anatomical contact is not.
+    arpg_assets::import_character_glb(&candidate).unwrap();
+    let path = std::env::temp_dir().join(format!("arpg-open-grasp-{}.glb", std::process::id()));
+    std::fs::write(&path, candidate).unwrap();
+    let mut slot = Some(loaded_character("accepted.glb"));
+    let before: Vec<_> = slot.as_ref().unwrap().pose.joint_matrices().iter().map(|joint| joint.matrix()).collect();
+    let mut uploaded = false;
+    let result = replace_character(&mut slot, path.clone(), |_| { uploaded = true; Ok(()) });
+    std::fs::remove_file(path).unwrap();
+    assert!(result.unwrap_err().contains("does not enclose the handle"));
+    assert!(!uploaded);
+    let accepted = slot.unwrap();
+    assert_eq!(accepted.path, std::path::Path::new("accepted.glb"));
+    assert_eq!(before, accepted.pose.joint_matrices().iter().map(|joint| joint.matrix()).collect::<Vec<_>>());
 }
 
 #[test]
@@ -1169,9 +1253,10 @@ fn slam_loads_overhead_releases_low_and_keeps_the_sword_in_its_hand_through_game
             let hash = game.hash();
             for alpha in [Alpha::ZERO, interpolation.alpha(), Alpha::ONE] {
                 player.sample(game.player_presentation(alpha), alpha, presentation_seconds(game.tick(), alpha));
+                validate_player_grasp_at(&player.asset, &player.pose).unwrap();
                 let transform = |name| player.asset.joint_transform(&player.pose, player.asset.joint_named(name).unwrap()).unwrap();
                 let tip = transform("BeamOrigin").transform_point3(Vec3::ZERO);
-                let hand = transform("RightHand");
+                let hand = transform("RightGrip");
                 let weapon = transform("Weapon");
                 assert!(hand.transform_point3(Vec3::ZERO).distance(weapon.transform_point3(Vec3::ZERO)) < 0.001);
                 if (9..24).contains(&elapsed) {
@@ -1289,6 +1374,6 @@ fn cleave_arm_and_wrist_articulation_survives_game_phase_sampling() {
         "free arm has no follow-through after contact");
     for sample in samples {
         assert!(sample[3].transform_point3(Vec3::ZERO)
-            .distance(sample[5].transform_point3(Vec3::ZERO)) < 0.001);
+            .distance(sample[5].transform_point3(Vec3::ZERO)) > 0.035);
     }
 }

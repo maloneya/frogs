@@ -62,6 +62,22 @@ lighting and cadence. Before presenting progress, inspect the comparison yoursel
 and identify the improvement and remaining defect. Do not rely on the user to
 catch basic proportion or articulation failures.
 
+Inspect the complete equipped character, not just the requested change. Check
+hands enclosing grips, weapon/body clearance, clothing fit, joint deformation,
+foot support and motion transitions. Use contact close-ups as well as full-body
+views; inspect fractional samples and runtime blends where the interaction can
+break. An obvious floating, penetrating or unheld object blocks promotion even
+when structural tests pass. Do not label a broken interaction as cosmetic
+refinement or defer finding it to the user.
+
+When an interaction fails, trace the shared relationship and its validation.
+Prefer a derived constraint with one owner over independent offsets or poses
+per clip, item or consumer. Define anatomical and equipment landmarks once,
+solve their relationship, and verify the observable contact and clearance.
+A constant bone transform alone does not establish a physical grasp. Use the
+player's [grasp compiler](../../../assets/characters/basic-player/grasp.py) as
+the equipment owner; keep choreography in the authored motion producers.
+
 For motion reviews, provide a directly embedded normal-speed GIF, a slow GIF and
 key-pose strip when useful. Prefer these mobile-readable artifacts to requiring a
 localhost viewer. Label source playback, retimed asset previews and actual game

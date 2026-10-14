@@ -94,6 +94,11 @@ Validation has three distinct jobs; none substitutes for another:
    three-quarter views for geometry. For player attacks also inspect the
    authored phase edges—currently frames 1, 13, 19, and 31. Keep diagnostic
    renders temporary unless the user asks to retain them.
+   Include close-ups of equipment contact and inspect the complete character:
+   an attachment can be rigid and still pierce a limb or float outside its hand.
+   Validate the shared anatomical/equipment constraint across intermediate
+   samples and runtime blends. Fix its owner rather than adding per-view or
+   per-animation placement patches; see the character workflow's review gate.
 3. Use the [playtest skill](../playtest/SKILL.md) to load characters through
    `character show` or `horde show`. For static world assets, regenerate the
    corresponding [ground or prop asset](../../../assets/world/README.md), restart

@@ -53,11 +53,6 @@ def source_samples():
 
 
 def bake(rig, ready_pose, chain, rotate_global):
-    ready_pose()
-    hand = rig.pose.bones['RightHand']
-    weapon = rig.pose.bones['Weapon']
-    grip_rotation = hand.matrix.to_quaternion().inverted() @ weapon.matrix.to_quaternion()
-    grip_local = weapon.rotation_quaternion.copy()
 
     def support(rig, source):
         # The reference is an airborne, one-handed combo finisher. Preserve its
@@ -80,23 +75,8 @@ def bake(rig, ready_pose, chain, rotate_global):
         wrist.z = min(1.95, max(.65, wrist.z))
         blade = Vector((source['blade'].x * .2, source['blade'].y, source['blade'].z * (3.5 if source['blade'].z < 0 else 1))).normalized()
         weapon_rotation = source['blade'].rotation_difference(blade) @ weapon_rotation
-        hand_rotation = weapon_rotation @ grip_rotation.inverted()
-        # Fit the shared grip to both reach spheres before baking either arm.
-        # The shorter supporting reach otherwise separates near late recovery.
-        for _ in range(4):
-            for side, target_offset in [('Right', Vector()), ('Left', -blade * .15)]:
-                start = rig.pose.bones[side + 'Arm'].head
-                reach = rig.data.bones[side + 'Arm'].length + rig.data.bones[side + 'Forearm'].length - .01
-                delta = wrist + target_offset - start
-                if delta.length > reach:
-                    wrist -= delta.normalized() * (delta.length - reach)
         chain(rig, 'RightArm', 'RightForearm', wrist, (.85, -.1, 1.4))
-        world_rotation(rig, 'RightHand', hand_rotation)
-        # Use the guard's rigid attachment through the entire blend, so recovery
-        # rotates the wrist rather than turning the sword inside a fixed hand.
-        rig.pose.bones['Weapon'].rotation_quaternion = grip_local
-        bpy.context.view_layer.update()
-        wrist = rig.pose.bones['RightHand'].head.copy()
-        chain(rig, 'LeftArm', 'LeftForearm', wrist - blade * .15, (-.85, -.1, 1.4))
-        world_rotation(rig, 'LeftHand', hand_rotation)
+        # This producer supplies the blade goal. The shared grasp pass derives
+        # wrist orientation, both contact frames and supporting-arm reach.
+        world_rotation(rig, 'Weapon', weapon_rotation)
     return bake_samples(rig, ready_pose, 'AttackSlam', source_samples(), support, continuous_quaternions=True)
