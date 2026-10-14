@@ -88,9 +88,9 @@ high speed mid-tick therefore still finds the next body in its path within the
 tick; a slam at the default 72 kg m/s carries through a row without crossing it.
 
 Beyond eight passes, about 77 m/s, a continuous sweep slides bodies along walls
-and the arena edge and stops them at panels on their path; the next pass removes their normal
+and the arena edge and stops them at jointed boxes on their path; the next pass removes their normal
 speed. Body-to-body tunnelling is possible only at those speeds. Like Box2D's
-rotation limit, a panel's spin is capped so its corner never outruns one pass.
+rotation limit, a hinge's spin is capped so its corner never outruns one pass.
 
 ## Measuring and limits
 

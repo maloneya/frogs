@@ -20,7 +20,7 @@ fn scene() -> SceneDocument {
         pos: (i as f32 * 3.0, 8.0), radius: 0.0, every: 60,
         when: Condition::Always, what: arpg_game::ActorDefinition::passive_hostile(), enabled: false,
     }).collect();
-    scene.doors = vec![DoorSpec { body: 1, panel: arpg_sim::PanelConfig::default() }, DoorSpec { body: 2, panel: arpg_sim::PanelConfig::default() }];
+    scene.doors = vec![DoorSpec { body: 1, panel: arpg_game::DoorPanel::default() }, DoorSpec { body: 2, panel: arpg_game::DoorPanel::default() }];
     for door in &scene.doors { scene.engine.bodies[door.body].what.physical = arpg_sim::Template::BODY; }
     scene.chests = vec![ChestSpec { body: 3 }, ChestSpec { body: 4 }];
     scene.encounters = vec![EncounterSpec {

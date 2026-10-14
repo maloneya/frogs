@@ -53,7 +53,7 @@ fn scene() -> GameScene {
         },
     ];
     scene.engine.sources = vec![source((0.0, 4.0)), source((-50.0, 0.0))];
-    scene.doors = vec![DoorSpec { body: 2, panel: arpg_sim::PanelConfig::default() }, DoorSpec { body: 3, panel: arpg_sim::PanelConfig::default() }];
+    scene.doors = vec![DoorSpec { body: 2, panel: arpg_game::DoorPanel::default() }, DoorSpec { body: 3, panel: arpg_game::DoorPanel::default() }];
     for door in &scene.doors { scene.engine.bodies[door.body].what.physical = arpg_sim::Template::BODY; }
     scene.encounters = vec![trial("East", 0, 0, 0, 699), trial("West", 1, 1, 1, 697)];
     scene
@@ -327,13 +327,13 @@ fn unlocking_releases_the_latch_and_movement_opens_the_surviving_panel() {
     step(&mut game, 0, true);
     step(&mut game, 1, false);
     assert_eq!(game.door_state(id, 0), Some(DoorState::Released));
-    assert_eq!(game.panel(body).unwrap().angle(), 0.0, "release itself adds no motion");
+    assert_eq!(game.joint(body).unwrap().angle(), 0.0, "release itself adds no motion");
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
     for _ in 0..120 {
         game.step(dt, Intent::new(MoveDir::new(Vec3::Z), AimDir::FORWARD, false));
     }
     assert!(game.is_alive(body));
-    assert!(game.panel(body).unwrap().angle().abs() > 0.5);
+    assert!(game.joint(body).unwrap().angle().abs() > 0.5);
     assert!(game.player_pos().z > 3.0);
 }
 
@@ -350,6 +350,40 @@ fn live_capacity_rejection_preserves_instances_and_is_released_on_eviction() {
     assert_eq!(observed(&game), before);
     assert!(game.evict_scene(ids[0]));
     assert!(game.load_scene(&authored).is_ok());
+}
+
+#[test]
+fn a_hit_admitted_on_the_unlocking_tick_swings_the_released_panel() {
+    // Prediction: activation on tick 0 times the trial out on tick 10. A slam
+    // pressed on tick 1 lands on tick 10 too, after that tick's contact solve,
+    // so the held latch has not absorbed it when the timeout releases it.
+    // The released panel takes the admitted impulse as spin.
+    let mut authored = scene();
+    authored.engine.bodies[2].pos = (0.0, 1.2);
+    authored.doors[0].panel = arpg_game::DoorPanel::new(2.0, 0.2, 0.0, -1.55, 1.55, 100.0).unwrap();
+    let EncounterObjective::Defeat(objective) = &mut authored.encounters[0].objective;
+    objective.within_ticks = 10.try_into().unwrap();
+    authored.encounters[0].on_failure = vec![Action::UnlockDoor(0)];
+    let mut game = Game::from_scene(&authored).unwrap();
+    game.set_attack_profile(AttackProfile::Slam);
+    let id = game.scene_instances().next().unwrap().0;
+    let door = game.scene_bodies(id).unwrap()[2];
+    let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+    for tick in 0..10 {
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, tick == 1).with_interact(tick == 0));
+        assert_eq!(game.door_state(id, 0), Some(DoorState::Latched), "tick {tick}");
+    }
+    game.clear_trace();
+    step(&mut game, 10, false);
+    assert!(game.trace().iter().any(|(tick, event)| tick == 10
+        && event == arpg_sim::Event::Impulsed { id: door, source: Some(game.player_id()), impulse: arpg_sim::Impulse::try_from((0.0, 72.0)).unwrap() }));
+    assert_eq!(game.door_state(id, 0), Some(DoorState::Released));
+    let panel = game.joint(door).unwrap();
+    assert_eq!(panel.angle(), 0.0, "release and admission add no displacement");
+    // Positive angles turn the free edge toward -Z; the slam pushes it toward +Z.
+    assert!(panel.rate() < 0.0, "the admitted slam survives release as spin");
+    step(&mut game, 11, false);
+    assert!(game.joint(door).unwrap().angle() < 0.0);
 }
 
 #[test]

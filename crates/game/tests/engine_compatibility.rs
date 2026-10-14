@@ -10,7 +10,7 @@ use glam::{Vec2, Vec3};
 
 fn physical(scene:&Scene)->arpg_sim::Scene {
     arpg_sim::Scene {
-        panels: vec![],
+        joints: vec![],
         name:scene.name.clone(), walls:scene.walls.clone(),
         bodies:scene.bodies.iter().map(|b|arpg_sim::Placed{pos:b.pos,what:b.what.physical}).collect(),
         grids:scene.grids.iter().map(|g|arpg_sim::BodyGrid{origin:g.origin,columns:g.columns,rows:g.rows,spacing:g.spacing,what:g.what.physical}).collect(),
@@ -210,7 +210,7 @@ fn detailed_profile_counts_breach_and_fast_spin_work_without_changing_physics() 
     });
     scene.doors.push(arpg_game::DoorSpec {
         body: 0,
-        panel: arpg_sim::PanelConfig::new(2.0, 0.01, 0.0, -1.55, 1.55, 0.1).unwrap(),
+        panel: arpg_game::DoorPanel::new(2.0, 0.01, 0.0, -1.55, 1.55, 0.1).unwrap(),
     });
     let mut observed = Game::from_scene(&scene).unwrap();
     let mut plain = Game::from_scene(&scene).unwrap();
@@ -230,7 +230,7 @@ fn detailed_profile_counts_breach_and_fast_spin_work_without_changing_physics() 
         assert_eq!(observed.hash(), plain.hash());
         assert_eq!(observed.trace().render(), plain.trace().render());
     }
-    assert_eq!(observer.counts[PhysicsCounter::LatchBreaks as usize], 1);
+    assert_eq!(observer.counts[PhysicsCounter::LockBreaks as usize], 1);
     // The breached panel's corner outruns one pass's reach: the tick splits.
     assert!(observer.counts[PhysicsCounter::CollisionPasses as usize] > 4);
     assert!(observer.counts[PhysicsCounter::Substeps as usize] >= 16);

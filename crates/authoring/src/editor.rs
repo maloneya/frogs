@@ -392,7 +392,8 @@ pub(crate) fn document(scene: &SceneDocument, selected: Option<Target>, path: Op
                 fields.push(field(&format!("panel.{key}"), &key.replace('_', " "), unit,
                     if angle { value.to_degrees() } else { value }, if angle { 5.0 } else { 0.1 }));
             }
-            push(Kind::Body, i, role, body.pos, door.panel.width(), door.panel.thickness(), door.panel.closed_yaw(), 0.0, fields);
+            let hinge = door.panel.hinge();
+            push(Kind::Body, i, role, body.pos, hinge.width(), hinge.thickness(), hinge.closed_yaw(), 0.0, fields);
         } else {
             push(Kind::Body, i, role, body.pos, 0.0, 0.0, 0.0, arpg_sim::ENEMY_RADIUS, fields);
         }
@@ -425,8 +426,8 @@ pub(crate) fn document(scene: &SceneDocument, selected: Option<Target>, path: Op
     for (i, tree) in scene.scene.trees.iter().enumerate() {
         let mut kind = field("kind", "Variant", "choice", match tree.kind() { TreeKind::Pine => 0.0, TreeKind::Broadleaf => 1.0, TreeKind::Bare => 2.0 }, 1.0);
         kind["options"] = json!(["Pine", "Broadleaf", "Bare"]);
-        let collider = tree.collider();
-        push(Kind::Tree, i, "Tree", tree.position().into(), collider.size().x, collider.size().y, tree.yaw(), 1.2 * tree.scale(),
+        let width = tree.trunk().width();
+        push(Kind::Tree, i, "Tree", tree.position().into(), width, width, tree.yaw(), 1.2 * tree.scale(),
             vec![kind, field("scale", "Scale", "×", tree.scale(), 0.1), field("yaw", "Rotation", "°", tree.yaw().to_degrees(), 15.0)]);
     }
     for (i, torch) in scene.scene.torches.iter().enumerate() {

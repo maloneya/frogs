@@ -57,9 +57,8 @@ impl Wall {
             );
         }
         let yaw = crate::angle::wrap(yaw);
-        let (sin, cos) = yaw.sin_cos();
-        let x_axis = Vec2::new(cos, -sin);
-        let z_axis = Vec2::new(sin, cos);
+        let x_axis = crate::angle::axis(yaw);
+        let z_axis = x_axis.perp();
         let half = size * 0.5;
         let bounds = x_axis.abs() * half.x + z_axis.abs() * half.y;
         if (centre.abs() + bounds).max_element() > ARENA_HALF {
@@ -89,7 +88,7 @@ impl Wall {
     /// Rectangle/rectangle contact within `margin`: separating-axis normal from
     /// self to other, one support point or both ends of two overlapping edges,
     /// and signed overlap (negative when apart). Two points keep the lever arm
-    /// right when a flat panel starts to rotate onto a face.
+    /// right when a turning box starts to rotate onto a face.
     pub(crate) fn rectangle_contact(
         self,
         other: Self,
@@ -156,6 +155,11 @@ impl Wall {
     /// World-aligned half extents of the rotated rectangle.
     pub(crate) fn bounds(self) -> Vec2 {
         self.bounds
+    }
+    /// Whether the world-aligned bounds of two rectangles come within `margin`;
+    /// a cheap rejection before an exact contact test.
+    pub(crate) fn bounds_within(self, other: Self, margin: f32) -> bool {
+        ((self.centre - other.centre).abs() - self.bounds - other.bounds).max_element() <= margin
     }
     fn local(self, vector: Vec2) -> Vec2 {
         Vec2::new(vector.dot(self.x_axis), vector.dot(self.z_axis))

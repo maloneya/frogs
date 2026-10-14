@@ -70,9 +70,14 @@ pub enum Event {
         /// Momentum added in world X/Z.
         impulse: crate::Impulse,
     },
-    /// A panel's latch failed under load; the panel keeps its hinge.
-    LatchBroken {
-        /// The panel body's stable identity.
+    /// A joint's lock failed under load; the body keeps its joint.
+    LockBroken {
+        /// The jointed body's stable identity.
+        id: EntityId,
+    },
+    /// A toppling pole reached the ground and lies flat.
+    Toppled {
+        /// The jointed body's stable identity.
         id: EntityId,
     },
     /// Contact responses that exchanged momentum this tick, aggregated.
@@ -179,7 +184,7 @@ pub enum Event {
         /// Overlapping pairs.
         count: usize,
     },
-    /// Movable bodies and panels that exchanged momentum with a wall this tick.
+    /// Movable bodies and hinges that exchanged momentum with a wall this tick.
     WallContacts {
         /// Bodies pressed against a wall.
         count: usize,
@@ -210,8 +215,10 @@ pub enum EventKind {
     AttackProfileChanged,
     /// The `Impulsed` transition.
     Impulsed,
-    /// The `LatchBroken` transition.
-    LatchBroken,
+    /// The `LockBroken` transition.
+    LockBroken,
+    /// The `Toppled` transition.
+    Toppled,
     /// The `Momentum` transition.
     Momentum,
     /// The `Rested` transition.
@@ -265,7 +272,8 @@ impl Event {
             Self::AttackRecoveryChanged { .. } => EventKind::AttackRecoveryChanged,
             Self::AttackProfileChanged { .. } => EventKind::AttackProfileChanged,
             Self::Impulsed { .. } => EventKind::Impulsed,
-            Self::LatchBroken { .. } => EventKind::LatchBroken,
+            Self::LockBroken { .. } => EventKind::LockBroken,
+            Self::Toppled { .. } => EventKind::Toppled,
             Self::Momentum { .. } => EventKind::Momentum,
             Self::Rested { .. } => EventKind::Rested,
             Self::Placed { .. } => EventKind::Placed,
@@ -313,7 +321,8 @@ impl fmt::Display for Event {
                     None => write!(f, "external"),
                 }
             }
-            Self::LatchBroken { id } => write!(f, "latch broken id={id}"),
+            Self::LockBroken { id } => write!(f, "lock broken id={id}"),
+            Self::Toppled { id } => write!(f, "toppled id={id}"),
             Self::Momentum { pairs } => write!(f, "momentum pairs={pairs}"),
             Self::Rested { count } => write!(f, "rested count={count}"),
             Self::Placed { id } => write!(f, "placed id={id}"),

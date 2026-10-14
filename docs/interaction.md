@@ -17,8 +17,8 @@ also be interactable. Props share body capacity but are excluded from hostile
 population counts and source population gates.
 
 E activates the nearest Ready object in range after movement and collisions.
-Static walls and [physical door panels](physical-doors.md) block interaction
-through their current geometry. Releasing a door's latch does not clear that
+Static walls and every jointed body, such as [door panels](physical-doors.md)
+and [trunks](felled-trees.md), block interaction through their current geometry. Releasing a door's latch does not clear that
 obstruction; moving the panel aside does. A panel does not obstruct interaction
 with its own endpoint. Ties prefer the lower stable entity slot; facing is irrelevant. See
 [the interaction owner](../crates/sim/src/pass/interact.rs) for reach and selection.

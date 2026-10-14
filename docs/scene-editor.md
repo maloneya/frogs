@@ -50,7 +50,7 @@ placement supports move, duplicate, delete and undo/redo.
 | Source | Position, enablement, emitted template, cadence in ticks, spawn radius and condition |
 | Formation | Position, rows, columns, spacing and template; one compact `BodyGrid` |
 | Wall | Drag opposite corners, or click for a default rectangle; edit width, thickness and rotation |
-| Tree | Pine, broadleaf or bare; position, scale and rotation; solid trunk footprint |
+| Tree | Pine, broadleaf or bare; position, scale and rotation; a [fellable trunk](felled-trees.md) |
 | Campfire | Position, light colour, brightness, range and height; ring shows illumination range |
 
 Each body, source and formation exposes one [actor definition](behaviors.md).
@@ -66,7 +66,8 @@ into bodies on load; multi-body spacing must be at least a body diameter (0.5 m)
 all formations. The shared authoring API supports 4,096 placement entries,
 counting a formation as one entry, subject to the game's tighter per-kind and
 total-capacity limits. Campfires share the
-[eight-light budget](lighting.md); tree trunks share [wall capacity](walls.md).
+[eight-light budget](lighting.md); trees share the 128-trunk limit across live scenes.
+Leave room in a tree's fall line: a tree stopped by a wall stays leaning against it.
 
 The map uses the game camera's rotation and vertical compression: up on the map
 is up in the game view. The compass shows world X/Z; **P** is the fixed player

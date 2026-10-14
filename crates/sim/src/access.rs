@@ -41,7 +41,7 @@ impl ActorView<'_> {
     pub fn defeated(&self, id: EntityId) -> bool {
         self.health(id) == Some(0)
     }
-    /// Whether this live actor accepts powered motion. Hinged panels do not.
+    /// Whether this live actor accepts powered motion. Jointed bodies do not.
     pub fn movable(&self, id: EntityId) -> bool {
         self.can_act(id)
             && self
@@ -49,7 +49,7 @@ impl ActorView<'_> {
                 .physics
                 .get(id)
                 .is_some_and(|m| m.inverse_mass() > 0.0)
-            && self.bodies.physics.panels.index(id).is_none()
+            && !self.bodies.physics.articulated(id)
     }
     /// Stable identity of the persistent player body.
     pub fn player_id(&self) -> EntityId {
@@ -151,12 +151,12 @@ pub struct GameplayAccess<'a> {
 
 impl GameplayAccess<'_> {
     /// Current hinged physical state for a live body.
-    pub fn panel(&self, id: EntityId) -> Option<crate::PanelState> {
-        self.bodies.physics.panel(id)
+    pub fn joint(&self, id: EntityId) -> Option<crate::JointState> {
+        self.bodies.physics.joint(id)
     }
-    /// Release an intact latch without deleting or moving its panel.
-    pub fn release_latch(&mut self, id: EntityId) -> bool {
-        self.bodies.physics.panels.release(id)
+    /// Release a held lock without deleting or moving its body.
+    pub fn release_lock(&mut self, id: EntityId) -> bool {
+        self.bodies.physics.joints.release(id)
     }
 
     /// Observe a source without access to its spawn requests.

@@ -9,9 +9,10 @@ Open [the crowd breach scene](../scenes/door_breach.ron) in Scenes and **Save & 
 The player starts across a wall from two sources. Leave the gate intact and let
 the crowd build; restart to compare pushing, attacks and changes to physical tuning.
 
-[Panel configuration and state](../crates/sim/src/panel.rs) belong to simulation.
-[Door bindings](../crates/game/src/door.rs) connect authored scene entries to
-those bodies. The [shared solver](../crates/sim/src/solver.rs) resolves body
+A door is a body on a locked [hinge](joints.md). [Joint and lock
+mechanics](../crates/sim/src/joint.rs) belong to simulation; [doors](../crates/game/src/door.rs)
+own the authored panel format, convert it to a hinge and lock, and read the lock
+as the door's latch. The [shared solver](../crates/sim/src/solver.rs) resolves body
 contacts, rotating panels and their attachments together. The current assembly
 keeps its hinge after latch failure; it does not fracture into fragments.
 
@@ -69,10 +70,10 @@ room for the swing. Inspector angles use degrees; files use radians. Shared
 admission validates the body binding, dimensions, swing bounds and complete load
 before mutation. Mass belongs to the body; attachment tuning belongs to the panel.
 
-`Game::panel` exposes pose, angular velocity, latch state and the latest reaction.
-The engine trace records each breach as `LatchBroken` on the tick it happens;
+`Game::joint` exposes the hinge angle, rate, lock state and the latest reaction.
+The engine trace records each breach as `LockBroken` on the tick it happens;
 the encounter trace records `UnlockDoor` releases.
 `Game::door_state` reports Latched, Released, Broken or Missing. Reports include
-`state.sim.panels`; presentation consumes interpolated panel geometry without
+`state.sim.joints`; presentation consumes `Game::door_presentations` without
 changing the simulation. Movement, attack overlap, beam clipping and interaction
 cover use the same panel shape at its current pose.

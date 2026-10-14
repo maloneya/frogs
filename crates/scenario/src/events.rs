@@ -32,7 +32,8 @@ pub(crate) enum ExpectedEvent {
     Activated { id: (u32, u32) },
     Placed { id: (u32, u32) },
     Removed { id: (u32, u32) },
-    LatchBroken { id: (u32, u32) },
+    LockBroken { id: (u32, u32) },
+    Toppled { id: (u32, u32) },
     SourceAdded { id: String },
     SourceRemoved { id: String },
     SourceEnablementChanged { id: String, enabled: bool },
@@ -65,7 +66,8 @@ impl ExpectedEvent {
             Self::Activated { .. } => EventKind::Activated,
             Self::Placed { .. } => EventKind::Placed,
             Self::Removed { .. } => EventKind::Removed,
-            Self::LatchBroken { .. } => EventKind::LatchBroken,
+            Self::LockBroken { .. } => EventKind::LockBroken,
+            Self::Toppled { .. } => EventKind::Toppled,
             Self::SourceAdded { .. } => EventKind::SourceAdded,
             Self::SourceRemoved { .. } => EventKind::SourceRemoved,
             Self::SourceEnablementChanged { .. } => EventKind::SourceEnablementChanged,
@@ -104,7 +106,8 @@ impl ExpectedEvent {
             (Self::Activated { id }, Event::Activated { id: actual })
             | (Self::Placed { id }, Event::Placed { id: actual })
             | (Self::Removed { id }, Event::Removed { id: actual })
-            | (Self::LatchBroken { id }, Event::LatchBroken { id: actual }) => *id == actual.diagnostic_identity(),
+            | (Self::LockBroken { id }, Event::LockBroken { id: actual })
+            | (Self::Toppled { id }, Event::Toppled { id: actual }) => *id == actual.diagnostic_identity(),
             (Self::Damaged { actor, target, remaining }, Event::Damaged { actor: a, target: t, remaining: r }) => *actor == a.diagnostic_identity() && *target == t.diagnostic_identity() && *remaining == r,
             (Self::Hit { id, remaining }, Event::Hit { id: actual, remaining: value }) => *id == actual.diagnostic_identity() && *remaining == value,
             (Self::SourceAdded { id }, Event::SourceAdded { id: actual })

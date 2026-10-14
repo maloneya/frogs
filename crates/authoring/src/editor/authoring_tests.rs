@@ -235,7 +235,7 @@ fn panel_geometry_strength_and_mass_share_the_authoring_round_trip() {
     set_field(&mut scene, body, "interactable", 1.0);
     assert_eq!(scene.scene.engine.bodies[0].what.physical.mass().kilograms(), 30.0);
     let config = scene.scene.doors[0].panel;
-    assert!((config.closed_yaw() - 30.0_f32.to_radians()).abs() < 1e-6);
+    assert!((config.hinge().closed_yaw() - 30.0_f32.to_radians()).abs() < 1e-6);
     let projection = document(&scene, Some(body), None, None).unwrap();
     assert_eq!(projection["objects"][0]["width"], json!(2.4_f32));
     assert_eq!(projection["objects"][0]["depth"], json!(0.2_f32));

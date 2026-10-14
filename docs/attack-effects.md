@@ -51,7 +51,7 @@ clock and completed-tick `hit_positions`, including lethal hits. Melee-only
 Scenarios hold channels with `channels: [(at: 0, ticks: 24)]` (half-open interval).
 
 Presentation uses the [solid-clipped](walls.md#attacks) completed-tick pose. Its
-sword-to-beam path uses `Game::solid_hit` against walls and current panels, sharing
+sword-to-beam path uses `Game::solid_hit` against walls and current jointed boxes, sharing
 the beam's nearest-hit geometry so animation cannot draw through an obstruction
 missed by the damage ray. Release removes the beam
 immediately; pose easing and short-lived hit sparks are visual only.
@@ -67,7 +67,7 @@ The direction commits at windup, so sidestepping can avoid it. Each swipe can
 remove only one health, followed by 0.65 seconds of recovery before pursuit
 resumes. Each contacted body also receives its authored physical impulse,
 including neutral and healthless objects. Physical knockback still moves the
-attacker, and walls or panels can shield targets.
+attacker, and walls or jointed bodies can shield targets.
 The marker uses the strike radius; the player's collision radius also counts
 for overlap. The animation reuses the bounded crowd poses with an instance tilt.
 

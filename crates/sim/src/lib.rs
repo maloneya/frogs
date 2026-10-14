@@ -22,11 +22,14 @@ pub use action_execution::{
 };
 mod beam;
 mod contact_memory;
-mod panel;
+mod joint;
 mod solver;
 mod wall;
 pub use beam::Beam;
-pub use panel::{LatchState, MAX_PANELS, PanelConfig, PanelPresentation, PanelSpec, PanelState};
+pub use joint::{
+    HingeConfig, Impact, JointConfig, JointPresentation, JointSpec, JointState, LockState,
+    LockStrength, MAX_JOINTS, ToppleConfig,
+};
 pub use wall::{MAX_WALLS, Wall, WallHit};
 mod grid;
 mod hash;
@@ -996,8 +999,8 @@ impl World {
     }
 
     /// Read-only collision discs at the last completed simulation tick.
-    /// Includes the player, enemies and disc props; hinged panels have their own
-    /// geometry in [`World::panel_presentations`].
+    /// Includes the player, enemies and disc props; jointed bodies have their own
+    /// geometry in [`World::joint_presentations`].
     pub fn collision_discs(&self) -> impl Iterator<Item = CollisionDisc> + '_ {
         self.bodies
             .slots
@@ -1006,7 +1009,7 @@ impl World {
             .copied()
             .enumerate()
             .filter_map(|(row, id)| {
-                if self.bodies.physics.panel(id).is_some() {
+                if self.bodies.physics.articulated(id) {
                     return None;
                 }
                 Some(CollisionDisc::new(
@@ -1024,7 +1027,7 @@ impl World {
             .copied()
             .enumerate()
             .filter_map(move |(offset, id)| {
-                if self.bodies.characters.contains(id) || self.bodies.physics.panel(id).is_some() {
+                if self.bodies.characters.contains(id) || self.bodies.physics.articulated(id) {
                     return None;
                 }
                 let row = offset + 1;
@@ -1093,17 +1096,25 @@ impl World {
             .impulse_at(id, point, impulse, None, &mut self.trace.sink(self.tick))
     }
 
-    /// Current physical attachment and rotation state.
-    pub fn panel(&self, id: EntityId) -> Option<PanelState> {
-        self.bodies.physics.panel(id)
+    /// Current joint coordinate, lock and collider of a jointed body.
+    pub fn joint(&self, id: EntityId) -> Option<JointState> {
+        self.bodies.physics.joint(id)
     }
 
-    /// Interpolated hinged geometry, independent of ordinary disc props.
-    pub fn panel_presentations(
-        &self,
-        alpha: Alpha,
-    ) -> impl Iterator<Item = PanelPresentation> + '_ {
-        self.bodies.physics.panels.presentations(alpha)
+    /// Jointed bodies with interpolated poses, independent of disc props.
+    pub fn joint_presentations(&self, alpha: Alpha) -> impl Iterator<Item = JointPresentation> + '_ {
+        self.bodies.physics.joints.presentations(alpha)
+    }
+
+    /// One jointed body with an interpolated pose, or None for a stale identity.
+    pub fn joint_presentation(&self, id: EntityId, alpha: Alpha) -> Option<JointPresentation> {
+        self.bodies.physics.joint(id).map(|j| j.at(alpha))
+    }
+
+    /// Bodies met by moving jointed bodies in the latest tick, in order.
+    /// Replaced by the next step; damage is applied through [`ResolvedStep`].
+    pub fn impacts(&self) -> &[Impact] {
+        &self.bodies.physics.joints.impacts
     }
 
     /// Player pairs overlapping at the start of the last step's contacts.

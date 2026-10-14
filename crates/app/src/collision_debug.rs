@@ -6,6 +6,7 @@ use arpg_gfx::DebugOutline;
 use arpg_sim::{AttackDisc, AttackPhase, CollisionDisc};
 
 const MAX_OUTLINES: usize = arpg_sim::MAX_BODIES + 1 + AttackDisc::MAX_SAMPLES;
+// Joint boxes replace the discs of the bodies they belong to.
 const _: () = assert!(MAX_OUTLINES <= arpg_core::MAX_INSTANCES);
 
 #[derive(Default)]
@@ -15,7 +16,7 @@ pub(crate) struct CollisionDebug {
     snapshots: Vec<CollisionDisc>,
     drawings: Vec<DebugOutline>,
     attack: Vec<AttackDisc>,
-    panels: Vec<arpg_sim::PanelPresentation>,
+    joints: Vec<arpg_sim::JointPresentation>,
     attack_phase: Option<AttackPhase>,
 }
 
@@ -29,7 +30,7 @@ impl CollisionDebug {
         if enabled && self.drawings.capacity() == 0 {
             self.drawings.reserve_exact(MAX_OUTLINES);
             self.attack.reserve_exact(AttackDisc::MAX_SAMPLES);
-            self.panels.reserve_exact(arpg_sim::MAX_PANELS);
+            self.joints.reserve_exact(arpg_sim::MAX_JOINTS);
             self.snapshots.reserve_exact(arpg_sim::MAX_BODIES + 1);
         }
         self.rebuild(game);
@@ -39,7 +40,7 @@ impl CollisionDebug {
         self.snapshots.clear();
         self.drawings.clear();
         self.attack.clear();
-        self.panels.clear();
+        self.joints.clear();
         self.attack_phase = None;
         self.tick = game.tick();
         if !self.enabled {
@@ -55,15 +56,16 @@ impl CollisionDebug {
                 .push(DebugOutline::disc(disc.centre(), disc.radius(), colour));
             self.snapshots.push(disc);
         }
-        for panel in game.panel_presentations(arpg_sim::Alpha::ONE) {
-            let centre = panel.centre();
+        for joint in game.joint_presentations(arpg_sim::Alpha::ONE) {
+            let collider = joint.collider();
+            let centre = collider.centre();
             self.drawings.push(DebugOutline::rectangle(
                 glam::Vec3::new(centre.x, 0.0, centre.y),
-                panel.size(),
-                panel.yaw(),
+                collider.size(),
+                collider.yaw(),
                 LinearRgb::new(0.05, 0.8, 1.0),
             ));
-            self.panels.push(panel);
+            self.joints.push(joint);
         }
         let phase = game.attack_status().phase;
         self.attack_phase = Some(phase);
@@ -89,15 +91,16 @@ impl CollisionDebug {
         out.text("positions", "completed_tick");
         out.int("outline_count", self.drawings.len() as u64);
         out.int("body_disc_count", self.snapshots.len() as u64);
-        out.int("panel_count", self.panels.len() as u64);
-        out.object("panels", |out| {
-            for panel in &self.panels {
-                out.object(&panel.id().to_string(), |out| {
-                    let centre = panel.centre();
-                    out.vec3("centre", glam::Vec3::new(centre.x, 0.0, centre.y));
-                    out.num("width", panel.size().x);
-                    out.num("thickness", panel.size().y);
-                    out.num("yaw", panel.yaw());
+        out.int("joint_count", self.joints.len() as u64);
+        out.object("joints", |out| {
+            for joint in &self.joints {
+                out.object(&joint.id().to_string(), |out| {
+                    let collider = joint.collider();
+                    out.vec3("centre", glam::Vec3::new(collider.centre().x, 0.0, collider.centre().y));
+                    out.num("width", collider.size().x);
+                    out.num("length", collider.size().y);
+                    out.num("yaw", collider.yaw());
+                    out.text("lock", &format!("{:?}", joint.lock()));
                 });
             }
         });
@@ -213,7 +216,7 @@ mod tests {
             },
             doors: vec![arpg_game::DoorSpec {
                 body: 0,
-                panel: arpg_sim::PanelConfig::new(2.0, 0.2, 0.6, -1.0, 1.0, 12.0).unwrap(),
+                panel: arpg_game::DoorPanel::new(2.0, 0.2, 0.6, -1.0, 1.0, 12.0).unwrap(),
             }],
             ..Default::default()
         };
@@ -226,38 +229,38 @@ mod tests {
         assert_eq!(
             debug.drawings.len(),
             2,
-            "one player disc and one panel rectangle"
+            "one player disc and one joint rectangle"
         );
         assert_eq!(
             debug.snapshots.len(),
             1,
             "a panel must not retain a disc approximation"
         );
-        assert_eq!(debug.panels.len(), 1);
+        assert_eq!(debug.joints.len(), 1);
         let panel = game
-            .panel_presentations(arpg_sim::Alpha::ONE)
+            .joint_presentations(arpg_sim::Alpha::ONE)
             .next()
             .unwrap();
         assert_eq!(
             debug.drawings[1].centre(),
-            Vec3::new(panel.centre().x, 0.0, panel.centre().y)
+            Vec3::new(panel.collider().centre().x, 0.0, panel.collider().centre().y)
         );
         assert_eq!(
             debug.drawings[1].shape(),
             arpg_gfx::OutlineShape::Rectangle {
-                half_extents: panel.size() * 0.5,
-                yaw: panel.yaw()
+                half_extents: panel.collider().size() * 0.5,
+                yaw: panel.collider().yaw()
             }
         );
         let mut report = Report::default();
         debug.report(&mut report);
         let report = report.finish();
         assert!(report.contains("\"outline_count\":2"));
-        assert!(report.contains("\"panel_count\":1"));
+        assert!(report.contains("\"joint_count\":1"));
         assert!(game.evict_scene(owner));
         debug.rebuild(&game);
         assert_eq!(debug.drawings.len(), 1);
-        assert!(debug.panels.is_empty());
+        assert!(debug.joints.is_empty());
         debug.set_enabled(false, &game);
         assert!(debug.drawings.is_empty());
     }

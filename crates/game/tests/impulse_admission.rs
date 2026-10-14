@@ -1,8 +1,8 @@
 //! Impulse admission bounds resulting physical point speeds, independent of
 //! gameplay role. Refusal preserves momentum, trace and accepted births.
 use arpg_core::{AimDir, Intent, MoveDir, Report};
-use arpg_game::{ActorDefinition, DoorSpec, Game, GameScene, Placed};
-use arpg_sim::{Accumulator, Dt, EntityId, Impulse, LatchState, Mass, PanelConfig, Template};
+use arpg_game::{DoorPanel, ActorDefinition, DoorSpec, Game, GameScene, Placed, TreeKind, TreeSpec};
+use arpg_sim::{Accumulator, Dt, EntityId, Impulse, LockState, Mass, Template};
 use glam::Vec2;
 
 fn prop(mass: f32) -> ActorDefinition {
@@ -20,7 +20,7 @@ fn panel_game(thickness: f32) -> (Game, EntityId) {
     let mut scene = GameScene::default();
     scene.engine.bodies.push(Placed { pos: (0.0, 4.0), what: prop(2.0) });
     scene.doors.push(DoorSpec {
-        body: 0, panel: PanelConfig::new(2.0, thickness, 0.0, -1.0, 1.0, 0.1).unwrap(),
+        body: 0, panel: DoorPanel::new(2.0, thickness, 0.0, -1.0, 1.0, 0.1).unwrap(),
     });
     let game = Game::from_scene(&scene).unwrap();
     let owner = game.scene_instances().next().unwrap().0;
@@ -70,9 +70,30 @@ fn finite_extreme_panel_impulses_refuse_without_changing_accepted_work() {
     assert!(!game.apply_impulse_at(panel, Vec2::new(1.0, 4.0), impulse));
     assert_eq!(observed(&game), before);
     step(&mut game);
-    assert_eq!(game.panel(panel).unwrap().latch(), LatchState::Latched);
-    assert_eq!(game.panel(panel).unwrap().angle(), 0.0);
+    assert_eq!(game.joint(panel).unwrap().lock(), LockState::Held);
+    assert_eq!(game.joint(panel).unwrap().angle(), 0.0);
     assert!(game.spawn_outcomes().iter().any(|outcome| outcome.ticket == ticket && outcome.entity.is_some()));
+}
+
+#[test]
+fn a_standing_trunk_bounds_the_fall_any_admitted_impulse_could_start() {
+    // A standing pole has no fall direction until a load picks one, so its
+    // admission bounds the tip speed of the whole impulse. A unit pine's tip
+    // passes the envelope above roughly 4.4e8 kg m/s at its one-metre arm.
+    let mut scene = GameScene::default();
+    scene.trees.push(TreeSpec::new(TreeKind::Pine, Vec2::new(0.0, 5.0), 0.0, 1.0).unwrap());
+    let mut game = Game::from_scene(&scene).unwrap();
+    let owner = game.scene_instances().next().unwrap().0;
+    let trunk = game.tree_body(owner, 0).unwrap();
+    let base = game.joint(trunk).unwrap().anchor();
+    let before = observed(&game);
+    let extreme = Impulse::try_from((0.0, 1e9)).unwrap();
+    assert!(!game.apply_impulse(trunk, extreme));
+    assert!(!game.apply_impulse_at(trunk, base, extreme));
+    assert_eq!(observed(&game), before);
+    step(&mut game);
+    assert_eq!(game.joint(trunk).unwrap().lock(), LockState::Held);
+    assert!(game.apply_impulse_at(trunk, base, Impulse::try_from((0.0, 1e8)).unwrap()));
 }
 
 #[test]
@@ -82,12 +103,15 @@ fn angular_admission_uses_the_fastest_corner_and_accumulated_velocity() {
     // 700000 produces omega=420000; its fastest corner travels sqrt(5)*omega.
     let edge = Vec2::new(1.0, 4.0);
     assert!(game.apply_impulse_at(panel, edge, Impulse::try_from((0.0, -700_000.0)).unwrap()));
-    assert!((game.panel(panel).unwrap().angular_velocity() - 420_000.0).abs() < 0.1);
+    // A held lock queues the load for the next solve; the panel does not turn yet.
+    assert_eq!(game.joint(panel).unwrap().rate(), 0.0);
     let before = observed(&game);
     // Adding 100000 would give omega=480000. The far-edge midpoint still
     // travels only 960000m/s, but its corner exceeds 1000000m/s.
     assert!(!game.apply_impulse_at(panel, edge, Impulse::try_from((0.0, -100_000.0)).unwrap()));
     assert_eq!(observed(&game), before);
+    step(&mut game);
+    assert_eq!(game.joint(panel).unwrap().lock(), LockState::Broken);
 }
 
 #[test]
@@ -98,13 +122,13 @@ fn a_large_admitted_panel_impulse_reaches_its_stop_and_remains_finite() {
     // (0.16m per pass, eight passes): the swing takes a few ticks, not one.
     for _ in 0..3 {
         step(&mut game);
-        let state = game.panel(panel).unwrap();
-        assert_eq!(state.latch(), LatchState::Broken);
+        let state = game.joint(panel).unwrap();
+        assert_eq!(state.lock(), LockState::Broken);
         assert!(state.angle() <= 1.0 && game.all_positions_finite());
     }
     // Stopping the swing leaves f32 roundoff of about 1e-3 rad/s, which drag
     // then decays; the panel stays within 1e-4 rad of its stop.
-    let state = game.panel(panel).unwrap();
+    let state = game.joint(panel).unwrap();
     assert!((state.angle() - 1.0).abs() < 0.0001);
-    assert!(state.angular_velocity().abs() < 0.01);
+    assert!(state.rate().abs() < 0.01);
 }

@@ -1,8 +1,8 @@
 //! Contacts discovered by rotation must exchange momentum without tunnelling;
 //! public impulse admission must preserve the solver's finite-state invariant.
 use arpg_core::{AimDir, Intent, MoveDir, Report};
-use arpg_game::{ActorDefinition, DoorSpec, Game, GameScene, Placed};
-use arpg_sim::{Accumulator, Dt, Impulse, LatchState, Mass, PanelConfig, Template, Wall};
+use arpg_game::{DoorPanel, ActorDefinition, DoorSpec, Game, GameScene, Placed};
+use arpg_sim::{Accumulator, Dt, Impulse, LockState, Mass, Template, Wall};
 use glam::Vec2;
 
 fn scene(thickness: f32) -> GameScene {
@@ -13,7 +13,7 @@ fn scene(thickness: f32) -> GameScene {
     });
     setup.doors.push(DoorSpec {
         body: 0,
-        panel: PanelConfig::new(2.0, thickness, 0.0, -1.55, 1.55, 0.1).unwrap(),
+        panel: DoorPanel::new(2.0, thickness, 0.0, -1.55, 1.55, 0.1).unwrap(),
     });
     setup
 }
@@ -52,7 +52,7 @@ fn accepted_point_impulses_cannot_overflow_latch_reactions() {
     }
     step(&mut game);
     assert!(game.all_positions_finite());
-    assert_eq!(game.panel(panel).unwrap().reaction_impulse(), 0.0);
+    assert_eq!(game.joint(panel).unwrap().reaction_impulse(), 0.0);
 }
 #[test]
 fn rotation_into_a_separated_body_transfers_momentum_in_the_same_tick() {
@@ -71,10 +71,10 @@ fn rotation_into_a_separated_body_transfers_momentum_in_the_same_tick() {
         Impulse::try_from((0.0, -0.8)).unwrap()
     ));
     step(&mut game);
-    let panel = game.panel(ids[0]).unwrap();
+    let panel = game.joint(ids[0]).unwrap();
     let body = game.body_pos(ids[1]).unwrap();
-    let normal = Vec2::new(panel.yaw().sin(), panel.yaw().cos());
-    let distance = normal.dot(Vec2::new(body.x, body.z) - panel.centre()).abs();
+    let normal = Vec2::new(panel.collider().yaw().sin(), panel.collider().yaw().cos());
+    let distance = normal.dot(Vec2::new(body.x, body.z) - panel.collider().centre()).abs();
     assert!(
         distance >= 0.35 - 0.005,
         "panel overlapped the body beyond the soft contact bound: {distance}"
@@ -86,7 +86,7 @@ fn rotation_into_a_separated_body_transfers_momentum_in_the_same_tick() {
     // The fixed hinge can absorb linear momentum but cannot supply energy.
     let inertia = 2.0 * (2.0_f32.powi(2) / 3.0 + 0.2_f32.powi(2) / 12.0);
     let initial_energy = (2.0_f32 * 0.8).powi(2) / (2.0 * inertia);
-    let final_energy = 0.5 * inertia * panel.angular_velocity().powi(2)
+    let final_energy = 0.5 * inertia * panel.rate().powi(2)
         + game.motion(ids[1]).unwrap().velocity().length_squared();
     assert!(final_energy <= initial_energy + 1e-4,
         "contact created energy: {initial_energy} -> {final_energy}");
@@ -109,7 +109,7 @@ fn rotating_thin_panel_cannot_skip_a_thin_static_wall() {
     step(&mut game);
     // Free rotation is .06rad, with only .12m free-edge travel. It crosses the
     // wall's centre near .03076rad, so sampling by body radius would skip it.
-    let angle = game.panel(id).unwrap().angle();
+    let angle = game.joint(id).unwrap().angle();
     assert!(
         angle > 0.0 && angle < 0.03,
         "panel crossed the thin wall: {angle}"
@@ -120,7 +120,7 @@ fn rotating_thin_panel_cannot_skip_a_thin_static_wall() {
 #[test]
 fn a_fast_disc_cannot_cross_a_latched_panel_between_endpoint_samples() {
     let mut setup = scene(0.01);
-    setup.doors[0].panel = PanelConfig::new(2.0, 0.01, 0.0, -1.55, 1.55, 1e9).unwrap();
+    setup.doors[0].panel = DoorPanel::new(2.0, 0.01, 0.0, -1.55, 1.55, 1e9).unwrap();
     setup.engine.bodies.push(Placed {
         pos: (0.0, 3.0),
         what: ActorDefinition::passive_hostile(),
@@ -131,7 +131,7 @@ fn a_fast_disc_cannot_cross_a_latched_panel_between_endpoint_samples() {
     // ending entirely beyond the .01m panel. The continuous sweep stops it.
     assert!(game.apply_impulse(ids[1], Impulse::try_from((0.0, 1000.0)).unwrap()));
     step(&mut game);
-    assert_eq!(game.panel(ids[0]).unwrap().latch(), LatchState::Latched);
+    assert_eq!(game.joint(ids[0]).unwrap().lock(), LockState::Held);
     assert!(game.body_pos(ids[1]).unwrap().z <= 4.0 - 0.005 - arpg_sim::ENEMY_RADIUS + 1e-4,
         "swept body crossed the panel: {:?}", game.body_pos(ids[1]));
     assert!(game.motion(ids[1]).unwrap().velocity().y <= 1e-5);
@@ -141,7 +141,7 @@ fn a_fast_disc_cannot_cross_a_latched_panel_between_endpoint_samples() {
 #[test]
 fn a_fast_body_stops_at_a_latched_panel_surface_and_loads_the_latch() {
     let mut setup = scene(0.2);
-    setup.doors[0].panel = PanelConfig::new(2.0, 0.2, 0.0, -1.55, 1.55, 1e6).unwrap();
+    setup.doors[0].panel = DoorPanel::new(2.0, 0.2, 0.0, -1.55, 1.55, 1e6).unwrap();
     setup.engine.bodies.push(Placed {
         pos: (0.0, 3.4),
         what: ActorDefinition {
@@ -159,9 +159,9 @@ fn a_fast_body_stops_at_a_latched_panel_surface_and_loads_the_latch() {
     let z = game.body_pos(ids[1]).unwrap().z;
     assert!((z - surface).abs() < 0.001, "body stopped at {z}, surface at {surface}");
     assert!(game.motion(ids[1]).unwrap().velocity().y.abs() < 0.01);
-    let panel = game.panel(ids[0]).unwrap();
+    let panel = game.joint(ids[0]).unwrap();
     assert_eq!(panel.angle(), 0.0);
-    assert_eq!(panel.latch(), LatchState::Latched);
+    assert_eq!(panel.lock(), LockState::Held);
     // The latch absorbs all 18kg m/s at the panel's midpoint: half at the edge.
     assert!((panel.reaction_impulse() - 9.0).abs() < 0.05, "{}", panel.reaction_impulse());
 }

@@ -2,7 +2,7 @@
 //!
 //! Starting a fixed solver budget from last step's answer lets steady crowd
 //! pressure build across ticks instead of being recomputed from zero, which
-//! is what lets a deep crowd load a latch without iterating to a tolerance.
+//! is what lets a deep crowd load a lock without iterating to a tolerance.
 //! Forces rather than impulses are stored so a changed substep length
 //! rescales them correctly. This is physical state: it is hashed and reported.
 use crate::{EntityId, Fnv, SceneId};

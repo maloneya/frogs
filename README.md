@@ -59,5 +59,6 @@ to the companion releases gameplay input while simulation continues.
   see [ownership and working rules](CLAUDE.md).
 - [Actor behaviors](docs/behaviors.md): composable actions, NPCs and shared physical effects.
 - [Physical doors](docs/physical-doors.md): hinged panels, transmitted crowd pressure and breakable latches.
+- [Felled trees](docs/felled-trees.md): breakable roots, falls that strike what they come down on, and logs.
 - [Verification](docs/verification.md): checks, benchmark cadence and evidence.
 - [Experiments](experimental/README.md): independent research, outside the game.

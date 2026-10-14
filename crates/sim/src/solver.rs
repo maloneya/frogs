@@ -5,16 +5,21 @@
 //! once with soft overlap correction, integrates positions, and relaxes once
 //! without correction so push-out leaves no velocity behind. Work per contact
 //! is fixed: nothing iterates to a tolerance. Steady loads such as a crowd
-//! leaning on a latch converge across substeps and ticks through warm starting.
+//! leaning on a lock converge across substeps and ticks through warm starting.
 //!
 //! Contacts are speculative. A pair whose gap could close during a pass is
 //! constrained before it touches, so fast bodies stop at the surface instead
 //! of tunnelling. A pass shortens when anything moves fast enough to exceed
 //! that reach; bodies still beyond it are swept against solids afterwards.
+//!
+//! Jointed bodies collide through their current box. A hinge turns in this
+//! plane; a topple joint tips out of it (see `pass::topple`) and is immovable
+//! here. A held lock is immovable too: it absorbs what contacts deliver and
+//! fails once a tick's load exceeds its strength.
 use crate::contact_memory::{Contact, Key, Memory};
-use crate::panel::{lever, spin_velocity};
+use crate::joint::{JointConfig, Kind, lever};
 use crate::pass::motion::Physics;
-use crate::{ARENA_HALF, Dt, ENEMY_RADIUS, EntityId, Event, LatchState, PLAYER_RADIUS, TraceSink, body_radius};
+use crate::{ARENA_HALF, Dt, ENEMY_RADIUS, EntityId, Event, LockState, PLAYER_RADIUS, TraceSink, body_radius};
 use crate::{PhysicsCounter as Counter, PhysicsPhase as Phase, StepObserver};
 use glam::Vec2;
 
@@ -134,14 +139,14 @@ struct Solid {
 #[derive(Clone, Copy, PartialEq)]
 enum End {
     Body(u32),
-    Panel(u32),
+    Joint(u32),
     Solid,
 }
 
-/// Any contact involving a hinged panel. Anchors are relative to the body
-/// centre or the hinge at collision time.
+/// Any contact involving a jointed body. Anchors are relative to the body
+/// centre or the joint's pivot at collision time.
 #[derive(Clone, Copy)]
-struct Hinged {
+struct Jointed {
     a: End,
     b: End,
     normal: Vec2,
@@ -153,39 +158,95 @@ struct Hinged {
     total: f32,
 }
 
-/// Per-pass panel working state; hinges are fixed, so only the angle moves.
-#[derive(Clone, Copy, Default)]
-struct Hinge {
+/// Per-tick joint working state. Pivots are fixed, so only the coordinate
+/// moves, and only a hinge moves in this plane.
+#[derive(Clone, Copy)]
+struct Work {
+    config: JointConfig,
     omega: f32,
     inverse_inertia: f32,
     angle: f32,
     turned: f32,
     lower: f32,
     upper: f32,
-    /// Angular impulse the latch has absorbed this tick, and its strength.
-    spent: f32,
-    strength: f32,
-    latched: bool,
     min: f32,
     max: f32,
-    /// Distance from hinge to the farthest corner.
+    /// Distance from the pivot to the farthest corner that turns in this plane.
     corner: f32,
+    /// Load at the arm this tick: absorbed by a held lock or, once a pole's
+    /// lock has gone, the tipping load its base passes on.
+    spent: Vec2,
+    strength: f32,
+    held: bool,
+    /// Whether contacts and impulses add to `spent`.
+    absorbs: bool,
+    broke: bool,
+}
+impl Work {
+    fn inverse_mass(&self, r: Vec2, normal: Vec2) -> f32 {
+        if self.immovable() {
+            0.0
+        } else {
+            self.inverse_inertia * lever(r, normal).powi(2)
+        }
+    }
+    fn planar(&self) -> bool {
+        self.config.planar()
+    }
+    fn immovable(&self) -> bool {
+        self.held || !self.planar()
+    }
+    fn apply(&mut self, r: Vec2, impulse: Vec2) {
+        if !self.immovable() {
+            self.omega += self.inverse_inertia * lever(r, impulse);
+        } else if self.absorbs {
+            self.spent += self.config.at_arm(r, impulse);
+        }
+    }
+    fn velocity(&self, r: Vec2) -> Vec2 {
+        self.config.velocity_at(r, self.omega)
+    }
+    fn displacement(&self, r: Vec2) -> Vec2 {
+        if self.planar() {
+            rotate(r, self.turned) - r
+        } else {
+            Vec2::ZERO
+        }
+    }
+    /// A held lock fails once this tick's load exceeds its strength. It keeps
+    /// exactly its strength; the excess becomes a hinge's spin, or a pole's
+    /// tipping load, in the direction of the load.
+    fn fail(&mut self) -> Option<Vec2> {
+        if !self.held || self.spent.length() <= self.strength {
+            return None;
+        }
+        let direction = self.spent.normalize();
+        self.spent -= direction * self.strength;
+        self.held = false;
+        self.broke = true;
+        if self.planar() {
+            self.omega = self.config.rate_from(self.spent.x, self.inverse_inertia);
+            self.spent = Vec2::ZERO;
+            self.absorbs = false;
+        }
+        Some(direction)
+    }
 }
 
 /// Reused solve buffers and the hashed warm-start memory.
 #[derive(Default)]
 pub(crate) struct Solver {
     states: Vec<State>,
-    panel_of: Vec<u32>,
+    joint_of: Vec<u32>,
     start: Vec<Vec2>,
     pairs: Vec<Pair>,
     pair_keys: Vec<Key>,
     solids: Vec<Solid>,
     solid_keys: Vec<Key>,
-    hinged: Vec<Hinged>,
-    hinged_keys: Vec<Key>,
-    hinges: Vec<Hinge>,
-    panel_rows: Vec<usize>,
+    jointed: Vec<Jointed>,
+    jointed_keys: Vec<Key>,
+    joints: Vec<Work>,
+    joint_rows: Vec<usize>,
     /// Rows re-collided every pass; see `mark`.
     active: Vec<bool>,
     /// Each body's speed bound for the tick, computed once.
@@ -220,7 +281,7 @@ impl Solver {
         // Denser admitted geometry may grow it; this is never a contact limit.
         let contacts = bodies * 4;
         reserve_capacity(&mut self.states, bodies);
-        reserve_capacity(&mut self.panel_of, bodies);
+        reserve_capacity(&mut self.joint_of, bodies);
         reserve_capacity(&mut self.start, bodies);
         reserve_capacity(&mut self.touched, bodies);
         reserve_capacity(&mut self.active, bodies);
@@ -249,7 +310,7 @@ fn escape(tiebreak: usize) -> Vec2 {
     Vec2::new(angle.cos(), angle.sin())
 }
 fn rotate(r: Vec2, angle: f32) -> Vec2 {
-    // Panel yaw is clockwise on the ground plane; see `PanelState::centre`.
+    // Hinge yaw is clockwise on the ground plane; see `JointState::collider`.
     let (sin, cos) = angle.sin_cos();
     Vec2::new(cos * r.x + sin * r.y, -sin * r.x + cos * r.y)
 }
@@ -257,7 +318,7 @@ fn canonical(ids: &[EntityId], a: usize, b: usize, normal: Vec2) -> Vec2 {
     if ids[a] > ids[b] { -normal } else { normal }
 }
 
-/// Resolve contacts, stops and latches for one tick. Motor changes and
+/// Resolve contacts, stops and locks for one tick. Motor changes and
 /// impulses arrive from the caller once per tick; motors ramp in per substep.
 ///
 /// This generic function only marks observer phases and calls non-generic
@@ -275,16 +336,16 @@ pub(crate) fn solve<O: StepObserver>(
     let mut s = core::mem::take(&mut physics.solver);
     let ids = geometry.ids;
     load(&mut s, ids, physics);
-    observer.physics_count(Counter::LatchBreaks, latches(&mut s, physics, &mut trace));
+    observer.physics_count(Counter::LockBreaks, locks(&mut s, physics, &mut trace));
     s.touched.clear();
     s.touched.resize(ids.len(), 0);
 
     let tick = dt.secs();
     observer.physics_phase(Phase::Broadphase);
-    let panel_of = &s.panel_of;
-    grid.build(positions, |row| panel_of[row] == NONE);
+    let joint_of = &s.joint_of;
+    grid.build(positions, |row| joint_of[row] == NONE);
     let hot = mark(&mut s, positions, physics, grid, tick);
-    // Only a body or panel corner that could outrun speculative reach during
+    // Only a body or hinge corner that could outrun speculative reach during
     // the tick splits it; slow ticks take a single collision pass.
     let passes = if hot * tick > MAX_TRAVEL {
         ((hot * tick / MAX_TRAVEL).ceil() as usize).clamp(1, MAX_PASSES)
@@ -303,9 +364,9 @@ pub(crate) fn solve<O: StepObserver>(
         fixed: Soft::new(2.0 * hertz, material.damping_ratio(), h),
         joint: Soft::new(2.0 * hertz, JOINT_DAMPING, h),
     };
-    for hinge in &mut s.hinges {
-        hinge.lower *= h;
-        hinge.upper *= h;
+    for joint in &mut s.joints {
+        joint.lower *= h;
+        joint.upper *= h;
     }
 
     let mut work = crate::CrowdWork::default();
@@ -316,8 +377,8 @@ pub(crate) fn solve<O: StepObserver>(
         let margin = BASE_MARGIN + 2.0 * (speed * pass_time).min(MAX_TRAVEL);
         s.start.clear();
         s.start.extend_from_slice(positions);
-        for hinge in &mut s.hinges {
-            hinge.turned = 0.0;
+        for joint in &mut s.joints {
+            joint.turned = 0.0;
         }
         observer.physics_count(Counter::CollisionPasses, 1);
         let fresh = if pass == 0 {
@@ -339,19 +400,19 @@ pub(crate) fn solve<O: StepObserver>(
             transfers += retire(&mut s, ids, physics, h);
             let fresh = (s.pairs.len(), s.solids.len());
             observer.physics_phase(Phase::Broadphase);
-            let panel_of = &s.panel_of;
-            grid.build(positions, |row| panel_of[row] == NONE);
+            let joint_of = &s.joint_of;
+            grid.build(positions, |row| joint_of[row] == NONE);
             observer.physics_phase(Phase::CrowdContacts);
             active_pairs(&mut s, ids, positions, grid, margin);
             observer.physics_phase(Phase::SolidContacts);
             active_solids(&mut s, &geometry, positions, margin);
             fresh
         };
-        collide_panels(&mut s, &geometry, positions, physics, grid, margin);
+        collide_joints(&mut s, &geometry, positions, physics, grid, margin);
         observer.physics_count(Counter::BodyRows, (s.pairs.len() - fresh.0) as u64);
         observer.physics_count(
             Counter::SolidRows,
-            (s.solids.len() - fresh.1 + s.hinged.len()) as u64,
+            (s.solids.len() - fresh.1 + s.jointed.len()) as u64,
         );
         if O::PHYSICS_DETAILS {
             let speculative = s.pairs[fresh.0..]
@@ -362,7 +423,7 @@ pub(crate) fn solve<O: StepObserver>(
                     .iter()
                     .filter(|c| c.separation > 0.0)
                     .count()
-                + s.hinged.iter().filter(|c| c.separation > 0.0).count();
+                + s.jointed.iter().filter(|c| c.separation > 0.0).count();
             observer.physics_count(Counter::SpeculativeRows, speculative as u64);
         }
         observer.physics_phase(Phase::Prepare);
@@ -379,12 +440,14 @@ pub(crate) fn solve<O: StepObserver>(
             observer.physics_phase(Phase::Relax);
             iterate(&mut s, tuning, false);
             accumulate(&mut s);
-            observer.physics_count(Counter::LatchBreaks, latches(&mut s, physics, &mut trace));
+            observer.physics_count(Counter::LockBreaks, locks(&mut s, physics, &mut trace));
         }
         // Later passes and the continuous sweep collide against the current pose.
-        for (hinge, panel) in s.hinges.iter().zip(&mut physics.panels.rows) {
-            panel.omega = hinge.omega;
-            panel.angle = hinge.angle;
+        for (work, joint) in s.joints.iter().zip(&mut physics.joints.rows) {
+            if work.planar() {
+                joint.rate = work.omega;
+                joint.angle = work.angle;
+            }
         }
         if speed * pass_time > MAX_TRAVEL {
             observer.physics_phase(Phase::Continuous);
@@ -423,58 +486,67 @@ pub(crate) fn solve<O: StepObserver>(
     (work, player_contacts)
 }
 
-/// Dense per-row body state and per-panel hinge state for this tick.
+/// Dense per-row body state and per-joint working state for this tick.
 fn load(s: &mut Solver, ids: &[EntityId], physics: &mut Physics) {
     s.states.clear();
-    s.panel_of.clear();
+    s.joint_of.clear();
     for &id in ids {
         let motion = physics.get(id).expect("physical body");
-        let panel = physics.panels.index(id);
+        let joint = physics.joints.index(id);
         s.states.push(State {
             velocity: motion.velocity(),
             drive: physics.take_drive(id),
             moved: Vec2::ZERO,
-            inverse_mass: if panel.is_some() {
+            inverse_mass: if joint.is_some() {
                 0.0
             } else {
                 motion.inverse_mass()
             },
         });
-        s.panel_of.push(panel.map_or(NONE, |i| i as u32));
+        s.joint_of.push(joint.map_or(NONE, |i| i as u32));
     }
-    s.panel_rows.clear();
-    s.panel_rows.resize(physics.panels.rows.len(), 0);
-    for (row, &panel) in s.panel_of.iter().enumerate() {
-        if panel != NONE {
-            s.panel_rows[panel as usize] = row;
+    s.joint_rows.clear();
+    s.joint_rows.resize(physics.joints.rows.len(), 0);
+    for (row, &joint) in s.joint_of.iter().enumerate() {
+        if joint != NONE {
+            s.joint_rows[joint as usize] = row;
         }
     }
-    s.hinges.clear();
-    for p in &mut physics.panels.rows {
-        p.previous = p.angle;
-        p.reaction = 0.0;
-        let latched = p.latch == LatchState::Latched;
-        s.hinges.push(Hinge {
-            omega: p.omega,
-            inverse_inertia: p.inverse_inertia,
-            angle: p.angle,
+    s.joints.clear();
+    for j in &mut physics.joints.rows {
+        j.previous = j.angle;
+        let held = j.lock == LockState::Held;
+        let ((min, max), (lower, upper)) = match j.kind {
+            Kind::Hinge { config, lower, upper } => ((config.min_angle(), config.max_angle()), (lower, upper)),
+            Kind::Topple { .. } => ((0.0, 0.0), (0.0, 0.0)),
+        };
+        let planar = j.config().planar();
+        let absorbs = held || j.base_turns();
+        // Direct impulses since the last solve are this tick's first load.
+        // A held joint is immovable, and a pivot that no longer turns under
+        // base contact discards them.
+        s.joints.push(Work {
+            config: j.config(),
+            omega: if held || !planar { 0.0 } else { j.rate },
+            inverse_inertia: j.inverse_inertia,
+            angle: j.angle,
+            turned: 0.0,
             // Stop torques become impulses once the substep length is known.
-            lower: if latched { 0.0 } else { p.lower },
-            upper: if latched { 0.0 } else { p.upper },
-            strength: p.config.latch_impulse() * p.config.width(),
-            latched,
-            min: p.config.min_angle(),
-            max: p.config.max_angle(),
-            corner: p.config.reach(),
-            ..Hinge::default()
+            lower: if held { 0.0 } else { lower },
+            upper: if held { 0.0 } else { upper },
+            min,
+            max,
+            corner: if planar { j.point_speed(1.0) } else { 0.0 },
+            spent: if absorbs { j.pending } else { Vec2::ZERO },
+            strength: j.strength,
+            held,
+            absorbs,
+            broke: false,
         });
-    }
-    // A latched panel is immovable: any spin a direct impulse gave it this
-    // tick is load its latch must absorb.
-    for hinge in &mut s.hinges {
-        if hinge.latched {
-            hinge.spent = hinge.omega / hinge.inverse_inertia;
-            hinge.omega = 0.0;
+        j.pending = Vec2::ZERO;
+        j.reaction = 0.0;
+        if let Kind::Topple { load, .. } = &mut j.kind {
+            *load = Vec2::ZERO;
         }
     }
 }
@@ -488,7 +560,7 @@ struct Tuning {
     joint: Soft,
 }
 
-/// Fastest body or panel corner; bounds how far anything can move this pass.
+/// Fastest body or hinge corner; bounds how far anything can move this pass.
 fn top_speed(s: &Solver) -> f32 {
     let bodies = s
         .states
@@ -497,13 +569,13 @@ fn top_speed(s: &Solver) -> f32 {
         .map(|state| (state.velocity + state.drive).length_squared())
         .fold(0.0, f32::max)
         .sqrt();
-    s.hinges
+    s.joints
         .iter()
-        .map(|hinge| hinge.omega.abs() * hinge.corner)
+        .map(|joint| joint.omega.abs() * joint.corner)
         .fold(bodies, f32::max)
 }
 
-/// Bodies and panel corners fast enough to outrun speculative reach during the
+/// Bodies and hinge corners fast enough to outrun speculative reach during the
 /// tick are hot. They, and everything within two cells of their path, form the
 /// active region that is re-collided every collision pass: anything there can
 /// be struck to speed mid-tick. Everything else is collided once, with margins
@@ -523,7 +595,7 @@ fn mark(
     let mut hot = 0.0_f32;
     for (row, &position) in positions.iter().enumerate() {
         let state = s.states[row];
-        if s.panel_of[row] != NONE
+        if s.joint_of[row] != NONE
             || state.inverse_mass == 0.0
             || s.bounds[row] * tick <= MAX_TRAVEL
         {
@@ -541,15 +613,15 @@ fn mark(
         );
         s.active[row] = true;
     }
-    for (hinge, p) in s.hinges.iter().zip(&physics.panels.rows) {
-        let speed = hinge.omega.abs() * hinge.corner;
+    for (joint, p) in s.joints.iter().zip(&physics.joints.rows) {
+        let speed = joint.omega.abs() * joint.corner;
         if speed * tick <= MAX_TRAVEL {
             continue;
         }
         hot = hot.max(speed);
-        let swing = Vec2::splat(hinge.corner) + reach;
+        let swing = Vec2::splat(joint.corner) + reach;
         let active = &mut s.active;
-        grid.query(p.hinge - swing, p.hinge + swing, |other| {
+        grid.query(p.anchor - swing, p.anchor + swing, |other| {
             active[other] = true
         });
     }
@@ -710,7 +782,7 @@ fn quiet_solids(s: &mut Solver, geometry: &Geometry<'_>, positions: &[Vec2], rea
     s.solids.clear();
     s.solid_keys.clear();
     for (row, &position) in positions.iter().enumerate() {
-        if s.panel_of[row] != NONE || s.states[row].inverse_mass == 0.0 {
+        if s.joint_of[row] != NONE || s.states[row].inverse_mass == 0.0 {
             continue;
         }
         let margin = if s.active[row] {
@@ -767,10 +839,10 @@ fn retire(s: &mut Solver, ids: &[EntityId], physics: &Physics, h: f32) -> usize 
     }
     s.solids.truncate(kept);
     s.solid_keys.truncate(kept);
-    for i in 0..s.hinged.len() {
-        let (c, key) = (s.hinged[i], s.hinged_keys[i]);
-        transfers += tally_hinged(s, c, key);
-        let normal = hinged_normal(c, key, ids, physics);
+    for i in 0..s.jointed.len() {
+        let (c, key) = (s.jointed[i], s.jointed_keys[i]);
+        transfers += tally_jointed(s, c, key);
+        let normal = jointed_normal(c, key, ids, physics);
         s.carried.record_any(Contact {
             key,
             normal,
@@ -781,8 +853,8 @@ fn retire(s: &mut Solver, ids: &[EntityId], physics: &Physics, h: f32) -> usize 
     transfers
 }
 
-/// A panel row's normal in the memory's canonical orientation.
-fn hinged_normal(c: Hinged, key: Key, ids: &[EntityId], physics: &Physics) -> Vec2 {
+/// A jointed row's normal in the memory's canonical orientation.
+fn jointed_normal(c: Jointed, key: Key, ids: &[EntityId], physics: &Physics) -> Vec2 {
     match (c.a, key) {
         (End::Solid, _) | (_, Key::Wall(..) | Key::Arena(..)) => c.normal,
         (_, Key::Bodies(low, ..)) => {
@@ -807,7 +879,7 @@ fn active_pairs(
 ) {
     s.movers.clear();
     for row in 0..positions.len() {
-        if s.active[row] && s.panel_of[row] == NONE {
+        if s.active[row] && s.joint_of[row] == NONE {
             s.movers.push(row as u32);
         }
     }
@@ -847,7 +919,7 @@ fn accumulate(s: &mut Solver) {
     for c in &mut s.solids {
         c.total += c.impulse;
     }
-    for c in &mut s.hinged {
+    for c in &mut s.jointed {
         c.total += c.impulse;
     }
 }
@@ -857,7 +929,7 @@ fn accumulate(s: &mut Solver) {
 /// result so a braking body can come exactly to rest.
 fn finish(s: &Solver, ids: &[EntityId], physics: &mut Physics) {
     for (row, &id) in ids.iter().enumerate() {
-        if s.panel_of[row] == NONE {
+        if s.joint_of[row] == NONE {
             let state = s.states[row];
             let nominal = physics.get(id).expect("physical body").velocity() + state.drive;
             let velocity =
@@ -869,13 +941,25 @@ fn finish(s: &Solver, ids: &[EntityId], physics: &mut Physics) {
             physics.set_velocity(id, velocity);
         }
     }
-    for (hinge, panel) in s.hinges.iter().zip(&mut physics.panels.rows) {
-        panel.reaction = hinge.spent.abs() / panel.config.width();
+    for (work, joint) in s.joints.iter().zip(&mut physics.joints.rows) {
+        joint.reaction = if work.held {
+            work.spent.length()
+        } else if work.broke {
+            work.strength
+        } else {
+            0.0
+        };
+        if !work.held
+            && let Kind::Topple { load, .. } = &mut joint.kind
+        {
+            *load = work.spent;
+        }
     }
 }
 
-/// Panel rows are rebuilt every pass: panels are few and rotate.
-fn collide_panels(
+/// Joint rows are rebuilt every pass: joints are few, and their boxes turn or
+/// are replaced. Joints that cannot move in this plane skip static solids.
+fn collide_joints(
     s: &mut Solver,
     geometry: &Geometry<'_>,
     positions: &[Vec2],
@@ -884,31 +968,13 @@ fn collide_panels(
     margin: f32,
 ) {
     let ids = geometry.ids;
-    s.hinged.clear();
-    s.hinged_keys.clear();
-    for (i, p) in physics.panels.rows.iter().enumerate() {
-        let shape = p.shape();
-        let body = |s: &mut Solver, row: usize| {
-            let r = body_radius(row);
-            let (normal, separation) = shape.circle_gap(positions[row], r);
-            if separation <= margin {
-                let point = positions[row] - normal * (r + 0.5 * separation);
-                s.hinged.push(Hinged {
-                    a: End::Panel(i as u32),
-                    b: End::Body(row as u32),
-                    normal,
-                    ra: point - p.hinge,
-                    rb: Vec2::ZERO,
-                    separation: separation - s.states[row].moved.dot(normal),
-                    mass: 0.0,
-                    impulse: 0.0,
-                    total: 0.0,
-                });
-                s.hinged_keys.push(Key::bodies(p.id, ids[row]));
-            }
-        };
+    s.jointed.clear();
+    s.jointed_keys.clear();
+    let mut rows = core::mem::take(&mut s.movers_scratch);
+    for (i, p) in physics.joints.rows.iter().enumerate() {
+        let shape = p.collider();
+        let planar = s.joints[i].planar();
         let widen = Vec2::splat(PLAYER_RADIUS + margin);
-        let mut rows = core::mem::take(&mut s.movers_scratch);
         rows.clear();
         grid.query(
             shape.centre() - shape.bounds() - widen,
@@ -916,52 +982,73 @@ fn collide_panels(
             |row| rows.push(row as u32),
         );
         for &row in &rows {
-            body(s, row as usize);
-        }
-        s.movers_scratch = rows;
-        for (owner, index, wall) in geometry.walls.iter() {
-            let gap = (wall.centre() - shape.centre()).abs() - wall.bounds() - shape.bounds();
-            if gap.max_element() > margin {
-                continue;
+            let row = row as usize;
+            let r = body_radius(row);
+            let (normal, separation) = shape.circle_gap(positions[row], r);
+            if separation <= margin {
+                let point = positions[row] - normal * (r + 0.5 * separation);
+                s.jointed.push(Jointed {
+                    a: End::Joint(i as u32),
+                    b: End::Body(row as u32),
+                    normal,
+                    ra: point - p.anchor,
+                    rb: Vec2::ZERO,
+                    separation: separation - s.states[row].moved.dot(normal),
+                    mass: 0.0,
+                    impulse: 0.0,
+                    total: 0.0,
+                });
+                s.jointed_keys.push(Key::bodies(p.id, ids[row]));
             }
-            if let Some((normal, points, depth)) = wall.rectangle_contact(shape, margin) {
-                for (k, point) in points.into_iter().enumerate() {
-                    let Some(point) = point else { continue };
-                    s.hinged.push(Hinged {
-                        a: End::Solid,
-                        b: End::Panel(i as u32),
-                        normal,
-                        ra: Vec2::ZERO,
-                        rb: point - p.hinge,
-                        separation: -depth,
-                        mass: 0.0,
-                        impulse: 0.0,
-                        total: 0.0,
-                    });
-                    s.hinged_keys.push(Key::Wall(p.id, owner, index, k as u8));
+        }
+        if planar {
+            for (owner, index, wall) in geometry.walls.iter() {
+                if !wall.bounds_within(shape, margin) {
+                    continue;
+                }
+                if let Some((normal, points, depth)) = wall.rectangle_contact(shape, margin) {
+                    for (k, point) in points.into_iter().enumerate() {
+                        let Some(point) = point else { continue };
+                        s.jointed.push(Jointed {
+                            a: End::Solid,
+                            b: End::Joint(i as u32),
+                            normal,
+                            ra: Vec2::ZERO,
+                            rb: point - p.anchor,
+                            separation: -depth,
+                            mass: 0.0,
+                            impulse: 0.0,
+                            total: 0.0,
+                        });
+                        s.jointed_keys.push(Key::Wall(p.id, owner, index, k as u8));
+                    }
                 }
             }
         }
-        for (j, q) in physics.panels.rows[..i].iter().enumerate() {
-            if let Some((normal, points, depth)) = q.shape().rectangle_contact(shape, margin) {
+        for (j, q) in physics.joints.rows[..i].iter().enumerate() {
+            if !planar && !s.joints[j].planar() {
+                continue;
+            }
+            if let Some((normal, points, depth)) = q.collider().rectangle_contact(shape, margin) {
                 for (k, point) in points.into_iter().enumerate() {
                     let Some(point) = point else { continue };
-                    s.hinged.push(Hinged {
-                        a: End::Panel(j as u32),
-                        b: End::Panel(i as u32),
+                    s.jointed.push(Jointed {
+                        a: End::Joint(j as u32),
+                        b: End::Joint(i as u32),
                         normal,
-                        ra: point - q.hinge,
-                        rb: point - p.hinge,
+                        ra: point - q.anchor,
+                        rb: point - p.anchor,
                         separation: -depth,
                         mass: 0.0,
                         impulse: 0.0,
                         total: 0.0,
                     });
-                    s.hinged_keys.push(Key::bodies(q.id, p.id).point(k as u8));
+                    s.jointed_keys.push(Key::bodies(q.id, p.id).point(k as u8));
                 }
             }
         }
     }
+    s.movers_scratch = rows;
 }
 
 /// Effective masses and warm-start impulses for rows new this pass. Rows kept
@@ -974,7 +1061,7 @@ fn prepare(
     fresh: (usize, usize),
     later: bool,
 ) {
-    hinged_masses(s);
+    jointed_masses(s);
     // A later pass continues its own previous pass; otherwise last tick.
     let (memory, carried) = (&s.memory, &s.carried);
     let force = |key: Key, normal: Vec2| {
@@ -992,28 +1079,21 @@ fn prepare(
         c.mass = 1.0 / s.states[c.body as usize].inverse_mass;
         c.impulse = force(key, c.normal) * h;
     }
-    for (c, &key) in s.hinged.iter_mut().zip(&s.hinged_keys) {
+    for (c, &key) in s.jointed.iter_mut().zip(&s.jointed_keys) {
         c.impulse = if c.mass == 0.0 {
             0.0
         } else {
-            force(key, hinged_normal(*c, key, ids, physics)) * h
+            force(key, jointed_normal(*c, key, ids, physics)) * h
         };
     }
 }
 
-/// A latched panel takes no motion from contacts; its latch absorbs the load.
-fn hinged_masses(s: &mut Solver) {
-    for c in &mut s.hinged {
+/// A held lock or an out-of-plane joint takes no motion from contacts.
+fn jointed_masses(s: &mut Solver) {
+    for c in &mut s.jointed {
         let k = |end: End, r: Vec2| match end {
             End::Body(row) => s.states[row as usize].inverse_mass,
-            End::Panel(i) => {
-                let hinge = &s.hinges[i as usize];
-                if hinge.latched {
-                    0.0
-                } else {
-                    hinge.inverse_inertia * lever(r, c.normal).powi(2)
-                }
-            }
+            End::Joint(i) => s.joints[i as usize].inverse_mass(r, c.normal),
             End::Solid => 0.0,
         };
         let inverse = k(c.a, c.ra) + k(c.b, c.rb);
@@ -1021,71 +1101,61 @@ fn hinged_masses(s: &mut Solver) {
     }
 }
 
-fn immovable(states: &[State], hinges: &[Hinge], end: End) -> bool {
+fn immovable(states: &[State], joints: &[Work], end: End) -> bool {
     match end {
         End::Body(row) => states[row as usize].inverse_mass == 0.0,
-        End::Panel(i) => hinges[i as usize].latched,
+        End::Joint(i) => joints[i as usize].immovable(),
         End::Solid => true,
     }
 }
 
-/// A latch fails once this tick's absorbed load exceeds its strength. It
-/// keeps exactly its strength; the excess becomes the panel's spin, so the
-/// breach carries the momentum that caused it.
-fn latches(s: &mut Solver, physics: &mut Physics, trace: &mut TraceSink<'_>) -> u64 {
+/// Fail every lock whose load this tick exceeds its strength; see `Work::fail`.
+fn locks(s: &mut Solver, physics: &mut Physics, trace: &mut TraceSink<'_>) -> u64 {
     let mut broke = 0;
-    for (hinge, panel) in s.hinges.iter_mut().zip(&mut physics.panels.rows) {
-        if hinge.latched && hinge.spent.abs() > hinge.strength {
-            let kept = hinge.spent.clamp(-hinge.strength, hinge.strength);
-            hinge.omega = hinge.inverse_inertia * (hinge.spent - kept);
-            hinge.spent = kept;
-            hinge.latched = false;
-            panel.latch = LatchState::Broken;
-            trace.emit(Event::LatchBroken { id: panel.id() });
+    for (work, joint) in s.joints.iter_mut().zip(&mut physics.joints.rows) {
+        if let Some(direction) = work.fail() {
+            joint.lock = LockState::Broken;
+            if let Kind::Topple { direction: fall, .. } = &mut joint.kind {
+                *fall = direction;
+            }
+            trace.emit(Event::LockBroken { id: joint.id() });
             broke += 1;
         }
     }
     if broke > 0 {
-        hinged_masses(s);
+        jointed_masses(s);
     }
     broke
 }
 fn end_id(end: End, ids: &[EntityId], physics: &Physics) -> EntityId {
     match end {
         End::Body(row) => ids[row as usize],
-        End::Panel(i) => physics.panels.rows[i as usize].id,
+        End::Joint(i) => physics.joints.rows[i as usize].id,
         End::Solid => unreachable!("solids have no identity"),
     }
 }
 
-fn apply(states: &mut [State], hinges: &mut [Hinge], end: End, r: Vec2, impulse: Vec2) {
+fn apply(states: &mut [State], joints: &mut [Work], end: End, r: Vec2, impulse: Vec2) {
     match end {
         End::Body(row) => {
             let state = &mut states[row as usize];
             state.velocity += impulse * state.inverse_mass;
         }
-        End::Panel(i) => {
-            let hinge = &mut hinges[i as usize];
-            if hinge.latched {
-                hinge.spent += lever(r, impulse);
-            } else {
-                hinge.omega += hinge.inverse_inertia * lever(r, impulse);
-            }
-        }
+        End::Joint(i) => joints[i as usize].apply(r, impulse),
         End::Solid => {}
     }
 }
-fn point_velocity(states: &[State], hinges: &[Hinge], end: End, r: Vec2) -> Vec2 {
+fn point_velocity(states: &[State], joints: &[Work], end: End, r: Vec2) -> Vec2 {
     match end {
         End::Body(row) => states[row as usize].velocity,
-        End::Panel(i) => spin_velocity(r, hinges[i as usize].omega),
+        End::Joint(i) => joints[i as usize].velocity(r),
         End::Solid => Vec2::ZERO,
     }
 }
-fn displacement(states: &[State], hinges: &[Hinge], end: End, r: Vec2) -> Vec2 {
+fn displacement(states: &[State], joints: &[Work], end: End, r: Vec2) -> Vec2 {
     match end {
         End::Body(row) => states[row as usize].moved,
-        End::Panel(i) => rotate(r, hinges[i as usize].turned) - r,
+        End::Joint(i) => joints[i as usize].displacement(r),
         End::Solid => Vec2::ZERO,
     }
 }
@@ -1098,9 +1168,9 @@ fn accelerate(s: &mut Solver, substeps: f32) {
 }
 
 fn warm_start(s: &mut Solver) {
-    for hinge in &mut s.hinges {
-        if !hinge.latched {
-            hinge.omega += hinge.inverse_inertia * (hinge.lower - hinge.upper);
+    for joint in &mut s.joints {
+        if !joint.immovable() {
+            joint.omega += joint.inverse_inertia * (joint.lower - joint.upper);
         }
     }
     for c in &s.pairs {
@@ -1114,18 +1184,18 @@ fn warm_start(s: &mut Solver) {
         let b = &mut s.states[c.body as usize];
         b.velocity += c.normal * (c.impulse * b.inverse_mass);
     }
-    for c in &s.hinged {
+    for c in &s.jointed {
         let impulse = c.normal * c.impulse;
-        apply(&mut s.states, &mut s.hinges, c.a, c.ra, -impulse);
-        apply(&mut s.states, &mut s.hinges, c.b, c.rb, impulse);
+        apply(&mut s.states, &mut s.joints, c.a, c.ra, -impulse);
+        apply(&mut s.states, &mut s.joints, c.b, c.rb, impulse);
     }
 }
 
 /// One Gauss-Seidel sweep: soft and biased when `bias`, rigid relaxation otherwise.
 /// Angular stops come first, as in Box2D.
 fn iterate(s: &mut Solver, t: Tuning, bias: bool) {
-    for hinge in &mut s.hinges {
-        if hinge.latched {
+    for hinge in &mut s.joints {
+        if hinge.immovable() {
             continue;
         }
         let mass = 1.0 / hinge.inverse_inertia;
@@ -1180,14 +1250,14 @@ fn iterate(s: &mut Solver, t: Tuning, bias: bool) {
         state.velocity += c.normal * ((total - c.impulse) * state.inverse_mass);
         c.impulse = total;
     }
-    for c in &mut s.hinged {
+    for c in &mut s.jointed {
         if c.mass == 0.0 {
             continue;
         }
-        let moved = displacement(&s.states, &s.hinges, c.b, c.rb)
-            - displacement(&s.states, &s.hinges, c.a, c.ra);
+        let moved = displacement(&s.states, &s.joints, c.b, c.rb)
+            - displacement(&s.states, &s.joints, c.a, c.ra);
         let separation = c.separation + moved.dot(c.normal);
-        let soft = if immovable(&s.states, &s.hinges, c.a) || immovable(&s.states, &s.hinges, c.b) {
+        let soft = if immovable(&s.states, &s.joints, c.a) || immovable(&s.states, &s.joints, c.b) {
             t.fixed
         } else {
             t.contact
@@ -1197,15 +1267,15 @@ fn iterate(s: &mut Solver, t: Tuning, bias: bool) {
         else {
             continue;
         };
-        let vn = (point_velocity(&s.states, &s.hinges, c.b, c.rb)
-            - point_velocity(&s.states, &s.hinges, c.a, c.ra))
+        let vn = (point_velocity(&s.states, &s.joints, c.b, c.rb)
+            - point_velocity(&s.states, &s.joints, c.a, c.ra))
         .dot(c.normal);
         let impulse = -c.mass * mass_scale * (vn + velocity_bias) - impulse_scale * c.impulse;
         let total = (c.impulse + impulse).max(0.0);
         let impulse = c.normal * (total - c.impulse);
         c.impulse = total;
-        apply(&mut s.states, &mut s.hinges, c.a, c.ra, -impulse);
-        apply(&mut s.states, &mut s.hinges, c.b, c.rb, impulse);
+        apply(&mut s.states, &mut s.joints, c.a, c.ra, -impulse);
+        apply(&mut s.states, &mut s.joints, c.b, c.rb, impulse);
     }
 }
 
@@ -1223,27 +1293,28 @@ fn integrate(s: &mut Solver, positions: &mut [Vec2], physics: &Physics, h: f32, 
         state.moved += next - positions[row];
         positions[row] = next;
     }
-    for (i, (hinge, p)) in s.hinges.iter_mut().zip(&physics.panels.rows).enumerate() {
+    for (i, (hinge, p)) in s.joints.iter_mut().zip(&physics.joints.rows).enumerate() {
+        if !hinge.planar() {
+            continue;
+        }
         // Like Box2D's rotation limit: a corner may not outrun one pass's
         // speculative reach. Only spins far beyond gameplay impulses reach it.
         let spin = MAX_TRAVEL / (hinge.corner * pass_time);
         hinge.omega = hinge.omega.clamp(-spin, spin);
         let before = hinge.angle;
-        if hinge.latched {
-            hinge.angle = 0.0;
-        } else {
+        if !hinge.held {
             hinge.angle = (hinge.angle + hinge.omega * h).clamp(hinge.min, hinge.max);
         }
         hinge.turned += hinge.angle - before;
         let mut pose = *p;
         pose.angle = hinge.angle;
-        positions[s.panel_rows[i]] = pose.centre();
+        positions[s.joint_rows[i]] = pose.collider().centre();
     }
 }
 
 /// Bodies moving beyond the speculative reach cannot tunnel through solids:
 /// sweep their pass, sliding along walls and the arena edge and stopping at a
-/// panel surface. Velocity is kept; the next pass's contacts resolve it.
+/// jointed surface. Velocity is kept; the next pass's contacts resolve it.
 fn sweep(
     s: &mut Solver,
     geometry: &Geometry<'_>,
@@ -1259,8 +1330,8 @@ fn sweep(
         swept += 1;
         let r = body_radius(row);
         let mut end = geometry.walls.slide(start, positions[row], r);
-        for p in &physics.panels.rows {
-            if let Some(hit) = p.shape().sweep(start, end - start, r) {
+        for joint in &physics.joints.rows {
+            if let Some(hit) = joint.collider().sweep(start, end - start, r) {
                 end = hit.point() + hit.normal() * crate::wall::SKIN;
             }
         }
@@ -1270,16 +1341,16 @@ fn sweep(
     swept
 }
 
-/// Count a panel row's reportable exchange: momentum with a body or panel, or
-/// a panel held by its frame (which touches a wall like any body).
-fn tally_hinged(s: &mut Solver, c: Hinged, key: Key) -> usize {
+/// Count a jointed row's reportable exchange: momentum with a body or joint,
+/// or a hinge held by its frame (which touches a wall like any body).
+fn tally_jointed(s: &mut Solver, c: Jointed, key: Key) -> usize {
     if c.total <= REPORTED {
         return 0;
     }
     match (c.a, key) {
         (End::Solid, _) | (_, Key::Wall(..) | Key::Arena(..)) => {
-            if let End::Panel(i) = c.b {
-                s.touched[s.panel_rows[i as usize]] |= 1;
+            if let End::Joint(i) = c.b {
+                s.touched[s.joint_rows[i as usize]] |= 1;
             }
             0
         }
@@ -1320,10 +1391,10 @@ fn store(s: &mut Solver, ids: &[EntityId], physics: &mut Physics, h: f32) -> usi
             force: force(c.impulse),
         });
     }
-    for i in 0..s.hinged.len() {
-        let (c, key) = (s.hinged[i], s.hinged_keys[i]);
-        transfers += tally_hinged(s, c, key);
-        let normal = hinged_normal(c, key, ids, physics);
+    for i in 0..s.jointed.len() {
+        let (c, key) = (s.jointed[i], s.jointed_keys[i]);
+        transfers += tally_jointed(s, c, key);
+        let normal = jointed_normal(c, key, ids, physics);
         s.memory.record(Contact {
             key,
             normal,
@@ -1331,9 +1402,11 @@ fn store(s: &mut Solver, ids: &[EntityId], physics: &mut Physics, h: f32) -> usi
         });
     }
     s.memory.accept();
-    for (hinge, p) in s.hinges.iter().zip(&mut physics.panels.rows) {
-        p.lower = hinge.lower * inv_h;
-        p.upper = hinge.upper * inv_h;
+    for (work, joint) in s.joints.iter().zip(&mut physics.joints.rows) {
+        if let Kind::Hinge { lower, upper, .. } = &mut joint.kind {
+            *lower = work.lower * inv_h;
+            *upper = work.upper * inv_h;
+        }
     }
     transfers
 }
@@ -1342,7 +1415,8 @@ fn store(s: &mut Solver, ids: &[EntityId], physics: &mut Physics, h: f32) -> usi
 mod tests {
     use super::*;
     use crate::{
-        Accumulator, Impulse, Mass, MotorCommand, PanelConfig, PanelSpec, Placed, Scene, Template,
+        Accumulator, HingeConfig, Impulse, JointConfig, JointSpec, LockState, LockStrength, Mass,
+        MotorCommand, Placed, Scene, Template, ToppleConfig,
         World,
     };
     use arpg_core::{AimDir, Intent, MoveDir};
@@ -1352,6 +1426,14 @@ mod tests {
     }
     fn idle() -> Intent {
         Intent::new(MoveDir::NONE, AimDir::FORWARD, false)
+    }
+    /// A 2 m hinge bound to the scene's first body, held by `strength`.
+    fn hinge(thickness: f32, strength: f32) -> Vec<JointSpec> {
+        vec![JointSpec {
+            body: 0,
+            joint: JointConfig::Hinge(HingeConfig::new(2.0, thickness, 0.0, -1.5, 1.5).unwrap()),
+            lock: LockStrength::try_from(strength).unwrap(),
+        }]
     }
 
     #[test]
@@ -1425,13 +1507,12 @@ mod tests {
     }
 
     fn driven_chain(count: usize, reverse: bool, ticks: usize) -> f32 {
-        let config = PanelConfig::new(2.0, 0.2, 0.0, -1.5, 1.5, 10000.0).unwrap();
         let mut scene = Scene {
             bodies: vec![Placed {
                 pos: (10.0, 10.0),
                 what: Template::BODY.with_mass(Mass::try_from(2.0).unwrap()),
             }],
-            panels: vec![PanelSpec { body: 0, config }],
+            joints: hinge(0.2, 10000.0),
             ..Scene::default()
         };
         for i in 0..count {
@@ -1453,13 +1534,13 @@ mod tests {
                 .advance(&commands, &[], &mut ())
                 .finish();
         }
-        world.panel(ids[1]).unwrap().reaction_impulse()
+        world.joint(ids[1]).unwrap().reaction_impulse()
     }
 
     #[test]
     fn a_driven_chain_transmits_its_combined_motor_load_in_either_body_order() {
         // Each blocked motor supplies m * a * dt = 1 kg * 60 m/s² / 60 Hz of
-        // momentum per tick at the panel's midpoint: half that at its free edge.
+        // momentum per tick at the hinge's midpoint: half that at its free edge.
         for count in [1, 2, 4, 8, 16] {
             for reverse in [false, true] {
                 let actual = driven_chain(count, reverse, 240);
@@ -1473,31 +1554,30 @@ mod tests {
     }
 
     #[test]
-    fn a_latch_spends_its_strength_and_passes_the_excess_in_the_same_tick() {
+    fn a_lock_spends_its_strength_and_passes_the_excess_in_the_same_tick() {
         let strength = 0.5;
-        let config = PanelConfig::new(2.0, 0.1, 0.0, -1.5, 1.5, strength).unwrap();
         let scene = Scene {
             bodies: vec![Placed {
                 pos: (10.0, 10.0),
                 what: Template::BODY,
             }],
-            panels: vec![PanelSpec { body: 0, config }],
+            joints: hinge(0.1, strength),
             ..Scene::default()
         };
         for (impulse, breaks) in [(0.45, false), (1.5, true)] {
             let mut world = World::from_scene(&scene).unwrap();
-            let panel = world.bodies.slots.ids()[1];
+            let hinged = world.bodies.slots.ids()[1];
             assert!(world.apply_impulse_at(
-                panel,
+                hinged,
                 Vec2::new(11.0, 10.0),
                 Impulse::try_from((0.0, -impulse)).unwrap()
             ));
             world.step(tick(), idle());
-            let state = world.panel(panel).unwrap();
-            assert_eq!(state.latch() == LatchState::Broken, breaks);
+            let state = world.joint(hinged).unwrap();
+            assert_eq!(state.lock() == LockState::Broken, breaks);
             if breaks {
                 assert!((state.reaction_impulse() - strength).abs() < 1e-4);
-                assert!(state.angle() > 0.0, "the excess opened the panel this tick");
+                assert!(state.angle() > 0.0, "the excess opened the hinge this tick");
             } else {
                 assert!((state.reaction_impulse() - impulse).abs() < 1e-4);
                 assert_eq!(state.angle(), 0.0);
@@ -1506,14 +1586,13 @@ mod tests {
     }
 
     #[test]
-    fn a_new_breaching_impulse_cannot_sweep_a_panel_through_a_fixed_prop() {
-        let config = PanelConfig::new(2.0, 0.1, 0.0, -1.5, 1.5, 0.5).unwrap();
+    fn a_new_breaching_impulse_cannot_sweep_a_hinge_through_a_fixed_prop() {
         let mut scene = Scene {
             bodies: vec![Placed {
                 pos: (10.0, 10.0),
                 what: Template::BODY,
             }],
-            panels: vec![PanelSpec { body: 0, config }],
+            joints: hinge(0.1, 0.5),
             ..Scene::default()
         };
         scene.bodies.push(Placed {
@@ -1521,52 +1600,119 @@ mod tests {
             what: Template::BLOCK,
         });
         let mut world = World::from_scene(&scene).unwrap();
-        let panel = world.bodies.slots.ids()[1];
+        let hinged = world.bodies.slots.ids()[1];
         assert!(world.apply_impulse_at(
-            panel,
+            hinged,
             Vec2::new(11.0, 10.0),
             Impulse::try_from((0.0, -150.0)).unwrap()
         ));
         for _ in 0..3 {
             world.step(tick(), idle());
-            let state = world.panel(panel).unwrap();
-            assert_eq!(state.latch(), LatchState::Broken);
+            let state = world.joint(hinged).unwrap();
+            assert_eq!(state.lock(), LockState::Broken);
             assert!(
                 state.angle() < 0.65,
-                "panel passed fixed prop: angle {}",
+                "hinge passed fixed prop: angle {}",
                 state.angle()
             );
         }
         assert!(
-            world.panel(panel).unwrap().angle() > 0.1,
-            "impact did not move panel"
+            world.joint(hinged).unwrap().angle() > 0.1,
+            "impact did not move the hinge"
+        );
+    }
+
+    fn pole_chain(count: usize, strength: f32) -> (crate::JointState, World) {
+        let config = ToppleConfig::new(0.4, 4.0, 0.0, 1.0, 1.0).unwrap();
+        let mut scene = Scene {
+            bodies: vec![Placed {
+                pos: (10.0, 10.0),
+                what: Template::BODY.with_mass(Mass::try_from(300.0).unwrap()),
+            }],
+            joints: vec![JointSpec {
+                body: 0,
+                joint: JointConfig::Topple(config),
+                lock: LockStrength::try_from(strength).unwrap(),
+            }],
+            ..Scene::default()
+        };
+        for i in 0..count {
+            scene.bodies.push(Placed {
+                pos: (10.0, 9.55 - i as f32 * 0.5),
+                what: Template::BODY,
+            });
+        }
+        let mut world = World::from_scene(&scene).unwrap();
+        let ids = world.bodies.slots.ids().to_vec();
+        let pole = ids[1];
+        let commands: Vec<_> = ids[2..]
+            .iter()
+            .map(|&id| MotorCommand::new(id, Vec2::Y, 60.0).unwrap())
+            .collect();
+        for _ in 0..240 {
+            world
+                .begin_step(tick(), idle(), 0)
+                .advance(&commands, &[], &mut ())
+                .finish();
+            if world.joint(pole).unwrap().lock() != LockState::Held {
+                break;
+            }
+        }
+        (world.joint(pole).unwrap(), world)
+    }
+
+    #[test]
+    fn a_pole_lock_carries_a_driven_chain_and_fails_only_when_the_load_exceeds_it() {
+        // Each blocked 1 kg motor supplies 60 m/s² / 60 Hz = 1 kg m/s per tick.
+        for count in [1, 3, 6] {
+            let (pole, _) = pole_chain(count, 1000.0);
+            assert_eq!(pole.lock(), LockState::Held);
+            let expected = count as f32;
+            assert!(
+                (pole.reaction_impulse() - expected).abs() < expected * 0.001,
+                "chain {count}: reaction {}",
+                pole.reaction_impulse()
+            );
+        }
+        // No rule counts bodies. The chain's first arrival is an impact about a
+        // tenth above its steady load, so a 7.5 lock holds six pushers, and
+        // yields to nine whose steady load alone exceeds it.
+        assert_eq!(pole_chain(6, 7.5).0.lock(), LockState::Held);
+        let (pole, world) = pole_chain(9, 7.5);
+        assert_eq!(pole.lock(), LockState::Broken);
+        assert_eq!(pole.reaction_impulse(), 7.5);
+        assert!(pole.direction().abs_diff_eq(Vec2::Y, 1e-3));
+        assert!(
+            world
+                .trace()
+                .iter()
+                .any(|(_, e)| e == Event::LockBroken { id: pole.id() })
         );
     }
 
     #[test]
-    fn a_released_panel_refuses_motor_commands() {
-        let config = PanelConfig::new(2.0, 0.1, 0.0, -1.5, 1.5, 10.0).unwrap();
+    fn a_released_hinge_refuses_motor_commands() {
         let scene = Scene {
             bodies: vec![Placed {
                 pos: (10.0, 10.0),
                 what: Template::BODY,
             }],
-            panels: vec![PanelSpec { body: 0, config }],
+            joints: hinge(0.1, 10.0),
             ..Scene::default()
         };
         let [mut driven, mut still] = [(); 2].map(|()| World::from_scene(&scene).unwrap());
-        let panel = driven.bodies.slots.ids()[1];
+        let hinged = driven.bodies.slots.ids()[1];
         for world in [&mut driven, &mut still] {
-            assert!(world.bodies.physics.panels.release(panel));
+            assert!(world.bodies.physics.joints.release(hinged));
         }
-        let command = MotorCommand::new(panel, Vec2::new(0.0, 3.0), 30.0).unwrap();
+        let command = MotorCommand::new(hinged, Vec2::new(0.0, 3.0), 30.0).unwrap();
         for _ in 0..30 {
             let prepared = driven.begin_step(tick(), idle(), 0);
-            assert!(!prepared.view().movable(panel));
+            assert!(!prepared.view().movable(hinged));
             prepared.advance(&[command], &[], &mut ()).finish();
             still.begin_step(tick(), idle(), 0).advance(&[], &[], &mut ()).finish();
             assert_eq!(driven.hash(), still.hash());
         }
-        assert_eq!(driven.panel(panel).unwrap().angle(), 0.0);
+        assert_eq!(driven.joint(hinged).unwrap().angle(), 0.0);
     }
 }

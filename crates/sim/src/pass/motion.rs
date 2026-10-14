@@ -175,7 +175,7 @@ impl Motion {
 pub(crate) struct Physics {
     who: Members,
     rows: Vec<Motion>,
-    pub(crate) panels: crate::panel::Panels,
+    pub(crate) joints: crate::joint::Joints,
     pub(crate) solver: crate::solver::Solver,
 }
 
@@ -197,8 +197,8 @@ impl DriveSink<'_> {
         let Some(row) = self.physics.who.index(id) else {
             return;
         };
-        // A hinged panel only turns under impulses and contacts.
-        if self.physics.panels.index(id).is_some() {
+        // Jointed bodies only move under impulses and contacts.
+        if self.physics.articulated(id) {
             return;
         }
         let motion = &mut self.physics.rows[row];
@@ -289,8 +289,12 @@ impl ImpulseSink<'_> {
 }
 
 impl Physics {
+    /// Bodies whose collision is their joint's box rather than a disc.
+    pub(crate) fn articulated(&self, id: EntityId) -> bool {
+        self.joints.index(id).is_some()
+    }
     pub(crate) fn set_velocity(&mut self, id: EntityId, velocity: Vec2) {
-        if self.panels.index(id).is_some() {
+        if self.articulated(id) {
             return;
         }
         if let Some(row) = self.who.index(id) {
@@ -300,7 +304,7 @@ impl Physics {
     pub(crate) fn drive(&mut self) -> DriveSink<'_> {
         DriveSink { physics: self }
     }
-    /// Motor velocity change for this tick; a panel's is angular, in `x`.
+    /// Motor velocity change for this tick.
     pub(crate) fn take_drive(&mut self, id: EntityId) -> Vec2 {
         self.who
             .index(id)
@@ -343,7 +347,7 @@ impl Physics {
     }
 
     pub(crate) fn revoke(&mut self, id: EntityId) {
-        self.panels.revoke(id);
+        self.joints.revoke(id);
         if let Some(row) = self.who.remove(id) {
             self.rows.swap_remove(row);
             self.solver.revoke(id);
@@ -353,8 +357,8 @@ impl Physics {
     pub(crate) fn get(&self, id: EntityId) -> Option<Motion> {
         self.who.index(id).map(|row| {
             let mut motion = self.rows[row];
-            if let Some(panel) = self.panels.get(id) {
-                motion.velocity = panel.point_velocity(panel.centre());
+            if let Some(joint) = self.joints.get(id) {
+                motion.velocity = joint.velocity_at(joint.collider().centre());
             }
             motion
         })
@@ -369,7 +373,7 @@ impl Physics {
         centre: Vec2,
         radius: f32,
     ) -> Option<Vec2> {
-        if let Some(shape) = self.panel_shape(id) {
+        if let Some(shape) = self.shape(id) {
             return shape
                 .penetration(centre, radius)
                 .map(|(normal, depth)| centre + normal * (depth - radius));
@@ -391,7 +395,7 @@ impl Physics {
         if axis.length_squared() == 0.0 {
             return None;
         }
-        if let Some(shape) = self.panel_shape(id) {
+        if let Some(shape) = self.shape(id) {
             if let Some((normal, depth)) = shape.penetration(beam.start(), crate::Beam::RADIUS) {
                 return Some(beam.start() + normal * (depth - crate::Beam::RADIUS));
             }
@@ -401,8 +405,8 @@ impl Physics {
         }
         beam.contact(position, body_radius)
     }
-    /// Wall and panel cover between two points; panels are evaluated at their
-    /// current pose, excluding the struck panel.
+    /// Wall and jointed-body cover between two points; boxes are evaluated at
+    /// their current pose, excluding the struck body.
     pub(crate) fn obstructs(
         &self,
         walls: &crate::wall::Walls,
@@ -412,10 +416,10 @@ impl Physics {
     ) -> bool {
         walls.obstructs(start, end)
             || self
-                .panels
+                .joints
                 .rows
                 .iter()
-                .any(|panel| Some(panel.id()) != except && panel.shape().obstructs(start, end))
+                .any(|joint| Some(joint.id()) != except && joint.collider().obstructs(start, end))
     }
     pub(crate) fn solid_hit(
         &self,
@@ -424,8 +428,8 @@ impl Physics {
         end: Vec2,
     ) -> Option<crate::WallHit> {
         let mut nearest = walls.first_hit(start, end);
-        for panel in &self.panels.rows {
-            if let Some(hit) = panel.shape().ray_hit(start, end - start)
+        for joint in &self.joints.rows {
+            if let Some(hit) = joint.collider().ray_hit(start, end - start)
                 && nearest.is_none_or(|current| hit.fraction() < current.fraction())
             {
                 nearest = Some(hit);
@@ -436,11 +440,12 @@ impl Physics {
     pub(crate) fn clip_beam(&self, beam: crate::Beam, walls: &crate::wall::Walls) -> crate::Beam {
         beam.clipped(self.solid_hit(walls, beam.start(), beam.end()))
     }
-    pub(crate) fn panel(&self, id: EntityId) -> Option<crate::PanelState> {
-        self.panels.get(id)
+    pub(crate) fn joint(&self, id: EntityId) -> Option<crate::JointState> {
+        self.joints.get(id)
     }
-    pub(crate) fn panel_shape(&self, id: EntityId) -> Option<crate::Wall> {
-        self.panel(id).map(crate::PanelState::shape)
+    /// The current box of a jointed body; discs have none.
+    pub(crate) fn shape(&self, id: EntityId) -> Option<crate::Wall> {
+        self.joint(id).map(crate::JointState::collider)
     }
     pub(crate) fn impulse_at(
         &mut self,
@@ -453,15 +458,30 @@ impl Physics {
         if !crate::valid_position(point) {
             return false;
         }
-        if let Some(i) = self.panels.index(id) {
-            let panel = &mut self.panels.rows[i];
-            let omega = panel.omega + panel.arm(point, impulse.0) * panel.inverse_inertia;
-            if !admitted_point_speed_squared(omega.powi(2) * panel.config.reach_squared())
-                || !(omega / panel.inverse_inertia).is_finite()
-            {
-                return false;
+        if let Some(i) = self.joints.index(id) {
+            let joint = &mut self.joints.rows[i];
+            let at_arm = joint.at_arm(point, impulse.0);
+            let moves_now = joint.lock != crate::LockState::Held && joint.config().planar();
+            if moves_now {
+                let rate = joint.rate + joint.rate_from(at_arm);
+                if !admitted_point_speed_squared(joint.point_speed(rate).powi(2))
+                    || !(rate / joint.inverse_inertia).is_finite()
+                {
+                    return false;
+                }
+                joint.rate = rate;
+            } else {
+                // The next contact solve applies it: a held lock absorbs it,
+                // and an unlocked pole's base passes it on or its pivot takes it.
+                let pending = joint.pending + at_arm;
+                let rate = joint.rate + joint.rate_from(pending);
+                if !pending.length_squared().is_finite()
+                    || !admitted_point_speed_squared(joint.point_speed(rate).powi(2))
+                {
+                    return false;
+                }
+                joint.pending = pending;
             }
-            panel.omega = omega;
             trace.emit(Event::Impulsed {
                 id,
                 source,
@@ -479,8 +499,8 @@ impl Physics {
         source: Option<EntityId>,
         trace: &mut TraceSink<'_>,
     ) -> bool {
-        if let Some(panel) = self.panel(id) {
-            return self.impulse_at(id, panel.centre(), impulse, source, trace);
+        if let Some(joint) = self.joint(id) {
+            return self.impulse_at(id, joint.collider().centre(), impulse, source, trace);
         }
         let Some(row) = self.who.index(id) else {
             return false;
@@ -503,10 +523,10 @@ impl Physics {
         let Self {
             who,
             rows,
-            panels,
+            joints,
             solver,
         } = self;
-        panels.hash(h);
+        joints.hash(h);
         solver.hash(h);
         who.hash(h);
         h.usize(rows.len());
@@ -529,21 +549,17 @@ impl Physics {
         self.rows
             .iter()
             .all(|m| m.velocity.is_finite() && m.inverse_mass.is_finite())
-            && self
-                .panels
-                .rows
-                .iter()
-                .all(|p| p.angle.is_finite() && p.omega.is_finite() && p.reaction.is_finite())
+            && self.joints.finite()
     }
 
     pub(crate) fn report(&self, pos: &[Vec2], slots: &Slots, out: &mut Report) {
         let Self {
             who,
             rows,
-            panels,
+            joints,
             solver,
         } = self;
-        panels.report(out);
+        joints.report(out);
         solver.report(out);
         out.object("bodies", |out| {
             for (
@@ -559,9 +575,9 @@ impl Physics {
                 let Some(row) = slots.index(id) else { continue };
                 out.object(&id.to_string(), |out| {
                     out.vec3("pos", crate::on_ground(pos[row], 0.0));
-                    let velocity = panels
+                    let velocity = joints
                         .get(id)
-                        .map_or(velocity, |p| p.point_velocity(p.centre()));
+                        .map_or(velocity, |j| j.velocity_at(j.collider().centre()));
                     out.vec3("velocity", crate::on_ground(velocity, 0.0));
                     out.num("inverse_mass", inverse_mass);
                 });
@@ -574,8 +590,10 @@ impl Physics {
 /// Before attacks: a new impulse changes velocity now and moves next tick.
 /// A motor may damp and oppose it before that next integration.
 pub(crate) fn settle(physics: &mut Physics, _dt: Dt, mut trace: TraceSink<'_>) {
-    for panel in &mut physics.panels.rows {
-        panel.omega *= RETAIN;
+    for joint in &mut physics.joints.rows {
+        if joint.config().planar() {
+            joint.rate *= RETAIN;
+        }
     }
     let mut stopped = 0;
     for motion in &mut physics.rows {

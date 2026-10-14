@@ -23,8 +23,9 @@ is `(SceneId, authored index)`. Installing a scene creates its walls; eviction
 removes them together, and restart rebuilds the cached scene. Clearing enemies
 preserves walls. The hash includes authoritative geometry and ownership;
 `state.sim.scenes.walls` reports the same rectangles under `cN/index` keys.
-[Doors](physical-doors.md) are articulated rectangular bodies; they reuse rectangle
-geometry while simulation owns their rotation and latch response.
+[Doors](physical-doors.md) and [tree trunks](felled-trees.md) are jointed
+bodies; they reuse rectangle geometry while simulation owns their
+[joints and locks](joints.md).
 
 ## Motion
 
@@ -50,11 +51,12 @@ only walls near each body.
 
 Cleave, Slam and autonomous attacks test physical shape overlap and require an
 unobstructed segment from the attack origin to the resulting contact point.
-Static walls and current panel poses provide cover; the contacted panel itself
-is excluded from its own cover test. A shielded target receives neither damage
+Static walls and every jointed body's current box (door panels, standing
+trunks and logs) provide cover; the contacted body itself is excluded from its
+own cover test. A shielded target receives neither damage
 nor attack momentum. Damage eligibility is independent of physical contact.
 
-Disintegrate ends at the first wall or panel on its centre ray and still checks cover for
+Disintegrate ends at the first wall or jointed box on its centre ray and still checks cover for
 each potential target, so its width/end cap cannot damage through the wall.
 The app uses that same clipped endpoint and blocking-face normal to trim the
 full band width, including its glow, at diagonal walls. Beam visuals use the completed tick's

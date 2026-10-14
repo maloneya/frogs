@@ -105,9 +105,9 @@ pub struct Scene {
     /// Solid static ground rectangles, independent of circular body placements.
     #[serde(default)]
     pub walls: Vec<crate::Wall>,
-    /// Hinged mechanisms bound to explicit dynamic bodies.
+    /// Locked joints bound to explicit dynamic bodies.
     #[serde(default)]
-    pub panels: Vec<crate::PanelSpec>,
+    pub joints: Vec<crate::JointSpec>,
     /// Human-readable content label; never used as runtime identity.
     pub name: String,
     /// Authored order is spawn order, and therefore deterministic id order.
@@ -130,22 +130,22 @@ impl Scene {
             grids,
             sources,
             walls: _,
-            panels,
+            joints,
         } = self;
-        if panels.len() > crate::MAX_PANELS {
+        if joints.len() > crate::MAX_JOINTS {
             return Err(SceneError::Capacity);
         }
-        for (index, panel) in panels.iter().enumerate() {
+        for (index, joint) in joints.iter().enumerate() {
             let body = bodies
-                .get(panel.body)
-                .ok_or(SceneError::Invalid("panel needs an explicit body"))?;
+                .get(joint.body)
+                .ok_or(SceneError::Invalid("joint needs an explicit body"))?;
             if body.what.fixed()
                 || body.what.is_character()
-                || !panel.config.valid_at(Vec2::from(body.pos))
-                || panels[..index].iter().any(|other| other.body == panel.body)
+                || !joint.joint.fits_at(Vec2::from(body.pos))
+                || joints[..index].iter().any(|other| other.body == joint.body)
             {
                 return Err(SceneError::Invalid(
-                    "panel needs a unique dynamic non-character body and its complete swing must fit the arena",
+                    "joint needs a unique dynamic non-character body and its complete motion must fit the arena",
                 ));
             }
         }
@@ -387,7 +387,7 @@ impl crate::World {
         if count > available {
             return Err(SceneError::Capacity);
         }
-        if self.bodies.physics.panels.rows.len() + scene.panels.len() > crate::MAX_PANELS {
+        if self.bodies.physics.joints.len() + scene.joints.len() > crate::MAX_JOINTS {
             return Err(SceneError::Capacity);
         }
         self.scenes.can_add()?;
@@ -409,9 +409,9 @@ impl crate::World {
                 .expect("scene admission reserved every authored body");
             self.scenes.record_body(owner, id);
         }
-        for panel in &scene.panels {
-            let id = self.scene_bodies(owner).expect("installed scene")[panel.body];
-            let centre = self.bodies.pos_of(id).expect("installed body");
+        for joint in &scene.joints {
+            let id = self.scene_bodies(owner).expect("installed scene")[joint.body];
+            let position = self.bodies.pos_of(id).expect("installed body");
             let mass = self
                 .bodies
                 .physics
@@ -420,8 +420,8 @@ impl crate::World {
                 .inverse_mass();
             self.bodies
                 .physics
-                .panels
-                .install(id, centre, panel.config, mass);
+                .joints
+                .install(id, position, *joint, mass);
         }
         for source in &scene.sources {
             let id = self.sources.add_owned(
@@ -464,7 +464,7 @@ impl crate::World {
     }
 
     /// Read-only segment query shared with presentation. Static walls and current
-    /// panel poses use the same nearest-hit rule as physical beam clipping.
+    /// joint poses use the same nearest-hit rule as physical beam clipping.
     /// Invalid endpoints are refused before any intersection arithmetic.
     pub fn solid_hit(
         &self,
@@ -526,7 +526,7 @@ mod tests {
     fn scene() -> Scene {
         Scene {
             walls: Vec::new(),
-            panels: Vec::new(),
+            joints: Vec::new(),
             name: "pair".into(),
             bodies: vec![Placed {
                 pos: (20.0, 0.0),
@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(world.trace().render(), trace);
         let full = Scene {
             walls: Vec::new(),
-            panels: Vec::new(),
+            joints: Vec::new(),
             name: "full".into(),
             bodies: vec![
                 Placed {
@@ -674,30 +674,34 @@ mod tests {
             before,
             "accepted queue capacity is reserved too"
         );
-        let oversized_panels = Scene {
+        let hinge = crate::JointConfig::Hinge(
+            crate::HingeConfig::new(2.0, 0.18, 0.0, -1.55, 1.55).unwrap(),
+        );
+        let oversized_joints = Scene {
             bodies: vec![
                 Placed {
                     pos: (0.0, 0.0),
                     what: crate::Template::BODY
                 };
-                crate::MAX_PANELS + 1
+                crate::MAX_JOINTS + 1
             ],
-            panels: (0..=crate::MAX_PANELS)
-                .map(|body| crate::PanelSpec {
+            joints: (0..=crate::MAX_JOINTS)
+                .map(|body| crate::JointSpec {
                     body,
-                    config: crate::PanelConfig::default(),
+                    joint: hinge,
+                    lock: crate::LockStrength::try_from(12.0).unwrap(),
                 })
                 .collect(),
             ..Scene::default()
         };
         assert_eq!(
-            world.load_scene(&oversized_panels),
+            world.load_scene(&oversized_joints),
             Err(SceneError::Capacity)
         );
         assert_eq!(
             world.hash(),
             before,
-            "panel refusal preserves accepted work"
+            "joint refusal preserves accepted work"
         );
     }
 
@@ -829,7 +833,7 @@ mod tests {
         // agree bit for bit rather than within a tolerance.
         let shorthand = Scene {
             walls: Vec::new(),
-            panels: Vec::new(),
+            joints: Vec::new(),
             name: "grid".into(),
             bodies: vec![lead],
             grids: vec![BodyGrid {
@@ -843,7 +847,7 @@ mod tests {
         };
         let longhand = Scene {
             walls: Vec::new(),
-            panels: Vec::new(),
+            joints: Vec::new(),
             name: "grid".into(),
             bodies: [
                 lead.pos,

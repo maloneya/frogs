@@ -71,7 +71,7 @@ impl Scene {
         Ok(arpg_sim::Scene {
             name: self.name.clone(),
             walls: self.walls.clone(),
-            panels: Vec::new(),
+            joints: Vec::new(),
             bodies: self
                 .bodies
                 .iter()
@@ -248,11 +248,11 @@ impl Births {
         &mut self,
         scene: &Scene,
         owner: SceneId,
-        bodies: &[EntityId],
+        (bodies, formations): (&[EntityId], &[EntityId]),
         sources: &[SourceId],
         actors: &mut Actors,
     ) {
-        let mut ids = bodies.iter().copied();
+        let mut ids = bodies.iter().chain(formations).copied();
         for body in &scene.bodies {
             actors.install(
                 ids.next().expect("admitted body"),

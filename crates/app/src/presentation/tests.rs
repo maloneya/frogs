@@ -565,35 +565,35 @@ fn world_assets_follow_prop_membership_and_authored_geometry() {
 }
 
 #[test]
-fn panel_presentation_follows_the_hinge_and_survives_breach_without_a_prop_duplicate() {
+fn door_presentation_follows_the_hinge_and_survives_breach_without_a_prop_duplicate() {
     let mut scene = arpg_game::GameScene::default();
     scene.engine.bodies.push(arpg_game::Placed { pos: (0.0, 4.0), what: arpg_game::ActorDefinition {
         physical: arpg_sim::Template::BODY, ..arpg_game::ActorDefinition::prop()
     } });
     scene.doors.push(arpg_game::DoorSpec { body: 0,
-        panel: arpg_sim::PanelConfig::new(2.0, 0.2, 0.0, -1.5, 1.5, 0.1).unwrap() });
+        panel: arpg_game::DoorPanel::new(2.0, 0.2, 0.0, -1.5, 1.5, 0.1).unwrap() });
     let mut game = Game::from_scene(&scene).unwrap();
     let owner = game.scene_instances().next().unwrap().0;
     let id = game.scene_bodies(owner).unwrap()[0];
     let mut view = WorldAssets::load(|_| Ok(())).unwrap();
     view.rebuild(game.prop_presentations(Alpha::ONE), |_| None);
-    view.rebuild_panels(game.panel_presentations(Alpha::ONE));
+    view.rebuild_doors(game.door_presentations(Alpha::ONE));
     assert!(view.props.as_slice().is_empty());
-    assert_eq!(view.panels.len(), 1);
-    assert_eq!(view.panels[0].pos(), Vec3::new(0.0, 0.0, 4.0));
+    assert_eq!(view.doors.len(), 1);
+    assert_eq!(view.doors[0].pos(), Vec3::new(0.0, 0.0, 4.0));
     assert_eq!(view.instance_count(), 2);
     assert!(game.apply_impulse(id, arpg_sim::Impulse::try_from((0.0, -1.0)).unwrap()));
     game.step(Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap(),
         Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
-    assert_eq!(game.panel(id).unwrap().latch(), arpg_sim::LatchState::Broken);
+    assert_eq!(game.joint(id).unwrap().lock(), arpg_sim::LockState::Broken);
     let before = game.hash();
-    let pose = game.panel_presentations(Alpha::ONE).next().unwrap();
-    view.rebuild_panels(game.panel_presentations(Alpha::ONE));
-    assert_eq!(view.panels[0].pos(), Vec3::new(pose.centre().x, 0.0, pose.centre().y));
+    let pose = game.joint_presentations(Alpha::ONE).next().unwrap();
+    view.rebuild_doors(game.door_presentations(Alpha::ONE));
+    assert_eq!(view.doors[0].pos(), Vec3::new(pose.collider().centre().x, 0.0, pose.collider().centre().y));
     assert!(pose.angle() > 0.0);
     assert_eq!(game.hash(), before);
     assert!(game.evict_scene(owner));
-    view.rebuild_panels(game.panel_presentations(Alpha::ONE));
+    view.rebuild_doors(game.door_presentations(Alpha::ONE));
     assert_eq!(view.instance_count(), 1);
 }
 
@@ -978,8 +978,8 @@ fn tree_batches_follow_scene_lifetime_and_keep_game_unchanged() {
     }).unwrap();
     let hash = game.hash();
     for _ in 0..2 {
-        view.rebuild_trees(game.trees());
-        view.rebuild_walls(game.visible_walls());
+        view.rebuild_trees(game.tree_poses(Alpha::ONE));
+        view.rebuild_walls(game.walls());
         assert!(view.walls.is_empty(), "trunk colliders must not draw wall boxes");
         assert_eq!(view.instance_count(), 3);
         assert_eq!(view.draw_count(), 3);
@@ -989,14 +989,14 @@ fn tree_batches_follow_scene_lifetime_and_keep_game_unchanged() {
         assert_eq!(game.hash(), hash);
     }
     assert!(game.evict_scene(scene));
-    view.rebuild_trees(game.trees());
-    view.rebuild_walls(game.visible_walls());
+    view.rebuild_trees(game.tree_poses(Alpha::ONE));
+    view.rebuild_walls(game.walls());
     assert_eq!(view.instance_count(), 1);
     assert_eq!(view.draw_count(), 1);
 }
 
 #[test]
-fn corpses_use_one_frozen_horizontal_pose_and_clear_with_the_game() {
+fn corpses_fall_over_fifteen_ticks_with_one_frozen_pose_and_clear_with_the_game() {
     let mut game = arpg_game::Game::empty();
     game.place(glam::Vec2::new(0.0, 3.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
     game.set_attack_profile(AttackProfile::Disintegrate);

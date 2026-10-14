@@ -69,6 +69,7 @@ Read only what the task needs:
 - [Character workflow](.claude/skills/character-workflow/SKILL.md): references, visual development and review
 - [Blender assets](.claude/skills/author-blender-asset/SKILL.md), [asset contract](docs/character-assets-authoring.md)
 - [Encounters](docs/encounters.md), [interaction](docs/interaction.md), [source enablement](docs/source-enablement.md)
+- [Joints and locks](docs/joints.md) for doors, trees and new jointed objects
 - [Collision debug](docs/collision-debug.md), [attack effects](docs/attack-effects.md)
 
 Keep only non-obvious rationale beside code. Link to owners instead of copying

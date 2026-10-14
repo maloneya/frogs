@@ -17,7 +17,7 @@ pub enum SceneObjectKind {
     Source,
     /// One-time rectangular body layout.
     Grid,
-    /// Tree decoration and its trunk collider.
+    /// Tree and its rooted physical trunk.
     Tree,
     /// Stationary point light and campfire decoration.
     Campfire,

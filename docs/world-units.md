@@ -17,7 +17,8 @@ speed in m/s and acceleration in m/s². Mass converts that acceleration to force
 and determines the velocity change from an impulse. Overlap correction moves at
 most at the push speed and leaves no momentum. [Door latch strength](physical-doors.md) is a
 reaction impulse measured over one fixed simulation tick at the latch's lever
-arm, not health damage accumulated over time.
+arm, not health damage accumulated over time. [Tree root strength](felled-trees.md)
+is the same kind of threshold, on ground-plane impulse at the 1 m load height.
 
 Contact frequency is in Hz, damping ratio is dimensionless, and the overlap push
 speed is in m/s. Overlap within a 0.5 mm slop is held rigidly. The shared impulse owner

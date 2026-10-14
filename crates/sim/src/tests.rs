@@ -1519,7 +1519,7 @@ fn crowd_contacts_replay_through_combat_and_structural_changes() {
         };
         let mut scene = Scene {
             walls: Vec::new(),
-            panels: Vec::new(),
+            joints: Vec::new(),
             name: "grid oracle".into(),
             bodies: vec![],
             grids: vec![],
@@ -1568,7 +1568,7 @@ fn crowd_contacts_replay_through_combat_and_structural_changes() {
                     let id = world
                         .load_scene(&Scene {
                             walls: Vec::new(),
-                            panels: Vec::new(),
+                            joints: Vec::new(),
                             name: "temporary".into(),
                             bodies: vec![
                                 Placed {

@@ -357,9 +357,9 @@ impl App {
             &self.game, alpha,
             self.character_preview.as_ref().map(|character| character.beam_emitter(player)));
         let world_assets = self.world_assets.as_mut().expect("rendering requires world assets");
-        world_assets.rebuild_trees(self.game.trees());
-        world_assets.rebuild_walls(self.game.visible_walls());
-        world_assets.rebuild_panels(self.game.panel_presentations(alpha));
+        world_assets.rebuild_trees(self.game.tree_poses(alpha));
+        world_assets.rebuild_walls(self.game.walls());
+        world_assets.rebuild_doors(self.game.door_presentations(alpha));
         world_assets.rebuild(self.game.prop_presentations(alpha), |id| self.game.chest_state_for_body(id));
         world_assets.torches.rebuild(self.game.torches(), self.attack_effects.vertices(), presentation_seconds);
         self.atmosphere.rebuild(self.game.storm(), presentation_seconds, camera, world_assets.torches.lights());

@@ -120,7 +120,7 @@ pub enum EncounterEvent {
         state: crate::ChestState,
     },
     /// An encounter changed a door's latch. Physical breaches are engine
-    /// transitions, traced as `arpg_sim::Event::LatchBroken`.
+    /// transitions, traced as `arpg_sim::Event::LockBroken`.
     Door {
         /// Owning scene.
         scene: SceneId,

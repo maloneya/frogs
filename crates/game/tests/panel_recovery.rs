@@ -1,11 +1,11 @@
 //! Hinges must react at the overlapping surface, and position repair cannot
 //! bypass solid geometry or manufacture the momentum of an impact.
 use arpg_core::{AimDir, Intent, MoveDir};
-use arpg_game::{
+use arpg_game::{DoorPanel, 
     ActorDefinition, DefeatObjective, DoorSpec, EncounterAction, EncounterObjective,
     EncounterSpec, EncounterStart, Game, GameScene, Placed, SourceSpec,
 };
-use arpg_sim::{Accumulator, Condition, Dt, EntityId, Impulse, LatchState, Mass, PanelConfig, Template, Wall};
+use arpg_sim::{Accumulator, Condition, Dt, EntityId, Impulse, LockState, Mass, Template, Wall};
 use glam::Vec2;
 
 fn prop() -> ActorDefinition {
@@ -14,8 +14,8 @@ fn prop() -> ActorDefinition {
         ..ActorDefinition::prop()
     }
 }
-fn config(thickness: f32) -> PanelConfig {
-    PanelConfig::new(2.0, thickness, 0.0, -1.55, 1.55, 12.0).unwrap()
+fn config(thickness: f32) -> DoorPanel {
+    DoorPanel::new(2.0, thickness, 0.0, -1.55, 1.55, 12.0).unwrap()
 }
 fn step(game: &mut Game) {
     game.step(
@@ -23,7 +23,7 @@ fn step(game: &mut Game) {
         Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
     );
 }
-fn released(panels: &[(Vec2, PanelConfig)], walls: Vec<Wall>) -> (Game, Vec<EntityId>) {
+fn released(panels: &[(Vec2, DoorPanel)], walls: Vec<Wall>) -> (Game, Vec<EntityId>) {
     let mut scene = GameScene::default();
     scene.engine.walls = walls;
     for &(centre, panel) in panels {
@@ -56,10 +56,10 @@ fn released(panels: &[(Vec2, PanelConfig)], walls: Vec<Wall>) -> (Game, Vec<Enti
     );
     step(&mut game);
     for &id in &ids {
-        let panel = game.panel(id).unwrap();
-        assert_eq!(panel.latch(), LatchState::Released);
+        let panel = game.joint(id).unwrap();
+        assert_eq!(panel.lock(), LockState::Released);
         assert_eq!(panel.angle(), 0.0);
-        assert_eq!(panel.angular_velocity(), 0.0);
+        assert_eq!(panel.rate(), 0.0);
     }
     (game, ids)
 }
@@ -74,14 +74,14 @@ fn offset_panel_reacts_on_the_overlapping_end_of_a_long_wall() {
     // behind the hinge, and reverse the reaction's lever arm.
     assert!(game.apply_impulse_at(id, Vec2::new(11.0, 4.11), Impulse::try_from((0.0, -4.8)).unwrap()));
     step(&mut game);
-    let panel = game.panel(id).unwrap();
+    let panel = game.joint(id).unwrap();
     // The lower free corner reaches wall top z=4 when
     // 4.11 - 2*sin(angle) - .1*cos(angle) = 4, near .005001 rad.
     assert!(panel.angle() > 0.0 && panel.angle() < 0.006,
         "offset panel passed its supporting wall: {}", panel.angle());
-    let lowest = panel.hinge().y - 2.0 * panel.angle().sin() - 0.1 * panel.angle().cos();
+    let lowest = panel.anchor().y - 2.0 * panel.angle().sin() - 0.1 * panel.angle().cos();
     assert!(lowest >= 4.0 - 0.00001, "panel penetrated wall: {lowest}");
-    assert_eq!(panel.latch(), LatchState::Released);
+    assert_eq!(panel.lock(), LockState::Released);
     assert_eq!(panel.reaction_impulse(), 0.0);
     assert!(game.all_positions_finite());
 }
@@ -93,25 +93,25 @@ fn a_rotating_panel_transfers_momentum_to_a_second_panel_without_overlap() {
         (Vec2::new(0.0, 3.88), config(0.1)),
     ], vec![]);
     assert!(game.apply_impulse_at(ids[0], Vec2::new(1.0, 4.0), Impulse::try_from((0.0, -2.0)).unwrap()));
-    let initial_omega = game.panel(ids[0]).unwrap().angular_velocity();
+    let initial_omega = game.joint(ids[0]).unwrap().rate();
     step(&mut game);
-    let a = game.panel(ids[0]).unwrap();
-    let b = game.panel(ids[1]).unwrap();
+    let a = game.joint(ids[0]).unwrap();
+    let b = game.joint(ids[1]).unwrap();
     assert!(a.angle() > 0.0 && b.angle() > 0.0);
-    assert!(a.angular_velocity() < initial_omega * 0.9);
-    assert!(b.angular_velocity() > 0.0, "panel contact supplied no angular momentum");
+    assert!(a.rate() < initial_omega * 0.9);
+    assert!(b.rate() > 0.0, "panel contact supplied no angular momentum");
     // Both panels have equal hinge inertia; contact and damping cannot add energy.
-    assert!(a.angular_velocity().powi(2) + b.angular_velocity().powi(2)
+    assert!(a.rate().powi(2) + b.rate().powi(2)
         <= initial_omega.powi(2) + 0.00001);
-    let axis_a = Vec2::new(a.yaw().cos(), -a.yaw().sin());
-    let normal_a = Vec2::new(a.yaw().sin(), a.yaw().cos());
-    let normal_b = Vec2::new(b.yaw().sin(), b.yaw().cos());
+    let axis_a = Vec2::new(a.collider().yaw().cos(), -a.collider().yaw().sin());
+    let normal_a = Vec2::new(a.collider().yaw().sin(), a.collider().yaw().cos());
+    let normal_b = Vec2::new(b.collider().yaw().sin(), b.collider().yaw().cos());
     // A's lower free corner is the first support to reach B's upper face.
-    let corner = a.hinge() + 2.0 * axis_a - 0.05 * normal_a;
-    let separation = (corner - b.centre()).dot(normal_b) - 0.05;
+    let corner = a.anchor() + 2.0 * axis_a - 0.05 * normal_a;
+    let separation = (corner - b.collider().centre()).dot(normal_b) - 0.05;
     assert!(separation >= -0.00001, "panels overlap at the striking corner: {separation}");
     for panel in [a, b] {
-        assert_eq!(panel.latch(), LatchState::Released);
+        assert_eq!(panel.lock(), LockState::Released);
         assert_eq!(panel.reaction_impulse(), 0.0);
     }
     assert!(game.all_positions_finite());
@@ -129,21 +129,21 @@ fn initial_overlap_recovery_cannot_rotate_a_panel_through_a_thin_wall() {
     // Soft correction closes overlap at the contact spring's rate: allow a second.
     for tick in 0..60 {
         step(&mut game);
-        let panel = game.panel(panel_id).unwrap();
+        let panel = game.joint(panel_id).unwrap();
         assert!(panel.angle() >= 0.0 && panel.angle() < 0.03,
             "overlap recovery crossed the thin wall on tick {tick}: {}", panel.angle());
         // Overlap correction moves at no more than the push speed; drag then
         // stops what one relaxation sweep leaves behind.
         let push = game.tuning().get(arpg_sim::TuningField::ContactPushSpeed);
-        assert!(panel.angular_velocity().abs() * 2.0 < push, "overlap correction spun the panel");
+        assert!(panel.rate().abs() * 2.0 < push, "overlap correction spun the panel");
         assert!(game.motion(body).unwrap().velocity().length() < push);
         assert_eq!(panel.reaction_impulse(), 0.0, "position repair loaded the released latch");
-        assert_eq!(panel.latch(), LatchState::Released);
+        assert_eq!(panel.lock(), LockState::Released);
         assert!(game.all_positions_finite());
     }
-    let panel = game.panel(panel_id).unwrap();
+    let panel = game.joint(panel_id).unwrap();
     let position = game.body_pos(body).unwrap();
-    let normal = Vec2::new(panel.yaw().sin(), panel.yaw().cos());
-    let distance = (Vec2::new(position.x, position.z) - panel.centre()).dot(normal);
+    let normal = Vec2::new(panel.collider().yaw().sin(), panel.collider().yaw().cos());
+    let distance = (Vec2::new(position.x, position.z) - panel.collider().centre()).dot(normal);
     assert!(distance >= 0.255 - 0.00001, "body remained inside the panel: {distance}");
 }

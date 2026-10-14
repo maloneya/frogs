@@ -1,6 +1,6 @@
 //! Contact imparts momentum independently from combat eligibility and health.
 use arpg_core::{AimDir, Intent, MoveDir};
-use arpg_game::{ActionDefinition, ActionTiming, ActorDefinition, ActorRole, BehaviorNode, Game, GameScene, Placed, Scene, SwipeAction};
+use arpg_game::{DoorPanel, ActionDefinition, ActionTiming, ActorDefinition, ActorRole, BehaviorNode, Game, GameScene, Placed, Scene, SwipeAction};
 use arpg_sim::{Accumulator, AttackProfile, Dt, EntityId, Event, Template};
 use glam::Vec2;
 use std::num::NonZeroU8;
@@ -194,7 +194,7 @@ fn leap_landing_impacts_a_healthless_bystander_without_granting_damage_membershi
 #[test]
 fn interaction_cover_follows_panel_pose_even_after_its_latch_is_released() {
     use arpg_game::{DefeatObjective, DoorSpec, EncounterAction, EncounterObjective, EncounterSpec, EncounterStart, SourceSpec};
-    use arpg_sim::{Condition, Impulse, InteractionState, LatchState, PanelConfig};
+    use arpg_sim::{Condition, Impulse, InteractionState, LockState};
     let door = ActorDefinition { physical: Template::BODY, ..ActorDefinition::prop() };
     let setup = GameScene {
         engine: Scene {
@@ -207,7 +207,7 @@ fn interaction_cover_follows_panel_pose_even_after_its_latch_is_released() {
                 when: Condition::Always, what: ActorDefinition::passive_hostile(), enabled: false }],
             ..Default::default()
         },
-        doors: vec![DoorSpec { body: 0, panel: PanelConfig::new(0.8, 0.18, 0.0, -1.55, 1.55, 12.0).unwrap() }],
+        doors: vec![DoorSpec { body: 0, panel: DoorPanel::new(0.8, 0.18, 0.0, -1.55, 1.55, 12.0).unwrap() }],
         encounters: vec![EncounterSpec {
             name: "Release test".into(), start: EncounterStart::Activated(2),
             objective: EncounterObjective::Defeat(DefeatObjective { sources: vec![0], count: 1.try_into().unwrap(), within_ticks: 1000.try_into().unwrap() }),
@@ -225,14 +225,14 @@ fn interaction_cover_follows_panel_pose_even_after_its_latch_is_released() {
     game.step(dt, interact);
     assert_eq!(game.interaction_state(behind), Some(InteractionState::Ready));
     assert_eq!(game.interaction_state(trigger), Some(InteractionState::Activated));
-    assert_eq!(game.panel(door).unwrap().latch(), LatchState::Latched);
+    assert_eq!(game.joint(door).unwrap().lock(), LockState::Held);
     game.step(dt, interact);
-    assert_eq!(game.panel(door).unwrap().latch(), LatchState::Released);
-    assert_eq!(game.panel(door).unwrap().angle(), 0.0);
+    assert_eq!(game.joint(door).unwrap().lock(), LockState::Released);
+    assert_eq!(game.joint(door).unwrap().angle(), 0.0);
     assert_eq!(game.interaction_state(behind), Some(InteractionState::Ready));
     assert!(game.apply_impulse(door, Impulse::try_from((0.0, 8.0)).unwrap()));
     for _ in 0..30 { step(&mut game, false, false); }
-    assert!(game.panel(door).unwrap().angle().abs() > 1.0);
+    assert!(game.joint(door).unwrap().angle().abs() > 1.0);
     game.step(dt, interact);
     assert_eq!(game.interaction_state(behind), Some(InteractionState::Activated));
 }
@@ -242,7 +242,7 @@ fn panel_scene(centre: (f32, f32), width: f32) -> GameScene {
         engine: Scene { bodies: vec![Placed { pos: centre, what: ActorDefinition {
             physical: Template::BODY, ..ActorDefinition::prop()
         } }], ..Default::default() },
-        doors: vec![arpg_game::DoorSpec { body: 0, panel: arpg_sim::PanelConfig::new(width, 0.18, 0.0, -1.55, 1.55, 10_000.0).unwrap() }],
+        doors: vec![arpg_game::DoorSpec { body: 0, panel: arpg_game::DoorPanel::new(width, 0.18, 0.0, -1.55, 1.55, 10_000.0).unwrap() }],
         ..Default::default()
     }
 }

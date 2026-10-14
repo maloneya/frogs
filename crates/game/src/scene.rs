@@ -25,7 +25,7 @@ pub struct GameScene {
     /// Stationary lights owned by this scene instance. Omitted means no lights.
     #[serde(default)]
     pub torches: Vec<TorchSpec>,
-    /// Trees owned by this scene, including their solid trunk colliders.
+    /// Trees owned by this scene, each with a rooted physical trunk.
     #[serde(default)]
     pub trees: Vec<TreeSpec>,
     /// Gameplay bindings to initially latched physical panels.
@@ -56,20 +56,26 @@ impl GameScene {
         trees.validate_add(&self.trees)?;
         torches.validate_add(&self.torches)?;
 
-        // Append trunk shapes after authored walls so authored wall identities
-        // and body indices stay stable. Engine admission validates the combined
-        // wall capacity before mutating any live state.
+        // Trunk bodies follow the authored bodies, so authored indices stay
+        // stable; formations are placed after both. Engine admission validates
+        // every joint and the combined capacity before mutating live state.
         let mut physical = self.engine.physical().map_err(SceneError::Behavior)?;
-        physical.walls.extend(self.trees.iter().map(|tree| tree.collider()));
-        physical.panels.extend(self.doors.iter().map(|door| arpg_sim::PanelSpec {
-            body: door.body, config: door.panel,
-        }));
+        let authored = physical.bodies.len();
+        physical.joints.extend(self.doors.iter().map(|door| door.panel.joint(door.body)));
+        for (nth, tree) in self.trees.iter().enumerate() {
+            let (body, joint) = tree.physical(authored + nth);
+            physical.bodies.push(body);
+            physical.joints.push(joint);
+        }
         let owner = world.load_scene(&physical)?;
-        doors.install(owner, &self.doors, world.scene_bodies(owner).expect("admitted scene"));
-        chests.install(owner, &self.chests, world.scene_bodies(owner).expect("admitted scene"));
-        encounters.install(owner, &self.encounters, world.scene_bodies(owner).expect("admitted scene"), world.scene_sources(owner).expect("admitted scene"));
-        births.install(&self.engine, owner, world.scene_bodies(owner).expect("admitted scene"), world.scene_sources(owner).expect("admitted scene"), actors);
-        trees.install(owner, self.engine.walls.len(), &self.trees);
+        let placed = world.scene_bodies(owner).expect("admitted scene");
+        let (bodies, rest) = placed.split_at(authored);
+        let (trunks, formations) = rest.split_at(self.trees.len());
+        doors.install(owner, &self.doors, placed);
+        chests.install(owner, &self.chests, placed);
+        encounters.install(owner, &self.encounters, placed, world.scene_sources(owner).expect("admitted scene"));
+        births.install(&self.engine, owner, (bodies, formations), world.scene_sources(owner).expect("admitted scene"), actors);
+        trees.install(owner, &self.trees, trunks);
         torches.install(owner, &self.torches);
         environments.install(owner, self.environment);
         Ok(owner)

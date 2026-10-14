@@ -1,6 +1,7 @@
 //! Ground-plane angle wrapping shared by simulation and presentation.
 
 use core::f32::consts::{PI, TAU};
+use glam::Vec2;
 
 /// Golden angle, `PI * (3 - sqrt(5))`, written out because sqrt is not const.
 /// Spreads coincident contacts and ring spawns deterministically.
@@ -13,6 +14,17 @@ pub(crate) const GOLDEN_ANGLE: f32 = 2.399_963_2;
 pub(crate) fn wrap(radians: f32) -> f32 {
     let wrapped = radians.rem_euclid(TAU);
     if wrapped > PI { wrapped - TAU } else { wrapped }
+}
+
+/// Local +X of something turned `yaw` about world up; yaw is clockwise from above.
+pub(crate) fn axis(yaw: f32) -> Vec2 {
+    let (sin, cos) = yaw.sin_cos();
+    Vec2::new(cos, -sin)
+}
+
+/// The yaw that points local +Z along a ground-plane direction.
+pub(crate) fn yaw_of(direction: Vec2) -> f32 {
+    direction.x.atan2(direction.y)
 }
 
 /// The shortest signed turn from one angle to another.

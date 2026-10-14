@@ -45,7 +45,7 @@ pub(super) fn place(scene: &mut SceneDocument, kind: PropKind, pos: (f32, f32)) 
     if matches!(kind, PropKind::Door) { what.physical = arpg_sim::Template::BODY; }
     scene.scene.engine.bodies.push(Placed { pos, what });
     match kind {
-        PropKind::Door => scene.scene.doors.push(DoorSpec { body: index, panel: arpg_sim::PanelConfig::default() }),
+        PropKind::Door => scene.scene.doors.push(DoorSpec { body: index, panel: arpg_game::DoorPanel::default() }),
         PropKind::Chest => scene.scene.chests.push(ChestSpec { body: index }),
         PropKind::Prop | PropKind::Switch => {}
     }
@@ -64,7 +64,7 @@ pub(super) fn component(scene: &mut SceneDocument, body: usize, role: u32) -> Re
         scene.scene.engine.bodies[body].what = ActorDefinition::prop();
         if role == 1 {
             scene.scene.engine.bodies[body].what.physical = arpg_sim::Template::BODY;
-            scene.scene.doors.push(DoorSpec { body, panel: arpg_sim::PanelConfig::default() });
+            scene.scene.doors.push(DoorSpec { body, panel: arpg_game::DoorPanel::default() });
         }
         else { scene.scene.chests.push(ChestSpec { body }); }
     }

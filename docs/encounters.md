@@ -94,14 +94,14 @@ interaction endpoints; a door swings in response to physical load.
 
 `Game::encounter_state(scene, index)` returns `EncounterState`; `Game::door_state` returns `DoorState`; `Game::chest_state` returns
 `ChestState`. Doors expose Latched, Released, Broken and Missing; their latch
-state does not imply passage clearance. `Game::panel` observes angle, angular
-velocity and latch reaction. Chests expose Locked, Unlocked, Open and Missing. Even an open
+state does not imply passage clearance. `Game::joint` observes angle, rate and
+lock reaction. Chests expose Locked, Unlocked, Open and Missing. Even an open
 chest becomes Missing if its body disappears; a reused body slot cannot inherit
 its state. Reports expose `encounters`, `doors` and `chests`, keyed by scene/index.
 The HUD is a read-only projection of encounter state. `Game::encounter_trace`
 records progress, phase, encounter-driven door release and chest transitions;
-it is diagnostic only. Physical latch state and load are reported under
-`state.sim.panels`. Engine
+it is diagnostic only. Physical lock state and load are reported under
+`state.sim.joints`. Engine
 source operations at the post-step boundary may have the following tick stamp;
 separate trace streams do not imply a combined chronology.
 

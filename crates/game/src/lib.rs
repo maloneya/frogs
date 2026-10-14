@@ -27,7 +27,7 @@ pub use scene::{GameScene, RestartError, SceneError};
 
 mod door;
 mod encounter;
-pub use door::{DoorSpec, DoorState};
+pub use door::{DoorPanel, DoorPose, DoorSpec, DoorState};
 pub use encounter::{DefeatObjective, EncounterAction, EncounterEvent, EncounterObjective, EncounterPhase, EncounterSpec, EncounterStart, EncounterState, MAX_ENCOUNTERS};
 
 mod chest;
@@ -35,7 +35,7 @@ pub use chest::{ChestSpec, ChestState, MAX_CHESTS};
 
 
 mod tree;
-pub use tree::{TreeKind, TreeSpec, MAX_TREES};
+pub use tree::{TreeKind, TreePose, TreeSpec, TreeState, MAX_TREES};
 
 mod corpse;
 pub use corpse::{Corpse, MAX_CORPSES, CORPSE_LIFETIME_TICKS};

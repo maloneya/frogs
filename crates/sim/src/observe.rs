@@ -52,7 +52,7 @@ pub enum PhysicsPhase {
     Broadphase,
     /// Exact body/body contact tests over grid pairs.
     CrowdContacts,
-    /// Body/wall, body/arena, body/panel and panel/solid contact tests.
+    /// Body/wall, body/arena, body/joint and joint/solid contact tests.
     SolidContacts,
     /// Effective masses, softness and warm-start lookup.
     Prepare,
@@ -60,7 +60,7 @@ pub enum PhysicsPhase {
     WarmStart,
     /// One soft, biased velocity iteration.
     Solve,
-    /// Advance positions and panel angles.
+    /// Advance positions and hinge angles.
     Integrate,
     /// One rigid, unbiased velocity iteration.
     Relax,
@@ -113,14 +113,14 @@ pub enum PhysicsCounter {
     Candidates,
     /// Body/body contact rows, summed over collision passes.
     BodyRows,
-    /// Rows against walls, the arena edge or a panel, summed over passes.
+    /// Rows against walls, the arena edge or a joint, summed over passes.
     SolidRows,
     /// Rows whose surfaces were apart when collected.
     SpeculativeRows,
     /// Bodies swept by the continuous safety pass.
     ContinuousBodies,
-    /// Latches that failed this tick.
-    LatchBreaks,
+    /// Joint locks that failed this tick.
+    LockBreaks,
 }
 impl PhysicsCounter {
     /// Stable report order.
@@ -132,7 +132,7 @@ impl PhysicsCounter {
         Self::SolidRows,
         Self::SpeculativeRows,
         Self::ContinuousBodies,
-        Self::LatchBreaks,
+        Self::LockBreaks,
     ];
     /// Machine-readable field name.
     pub fn label(self) -> &'static str {
@@ -144,7 +144,7 @@ impl PhysicsCounter {
             Self::SolidRows => "solid_rows",
             Self::SpeculativeRows => "speculative_rows",
             Self::ContinuousBodies => "continuous_bodies",
-            Self::LatchBreaks => "latch_breaks",
+            Self::LockBreaks => "lock_breaks",
         }
     }
 }

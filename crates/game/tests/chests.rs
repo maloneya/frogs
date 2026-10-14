@@ -103,7 +103,7 @@ fn refused_chests_preserve_live_state_and_pending_work() {
     for body in [0, 99] { let mut s = scene(); s.chests[0].body = body; invalid.push(s); }
     let mut s = scene(); s.chests.push(s.chests[0]); invalid.push(s);
     let mut s = scene(); s.engine.bodies[1].what.physical = arpg_sim::Template::BLOCK.character(); invalid.push(s);
-    let mut s = scene(); s.doors.push(DoorSpec { body: 1, panel: arpg_sim::PanelConfig::default() }); invalid.push(s);
+    let mut s = scene(); s.doors.push(DoorSpec { body: 1, panel: arpg_game::DoorPanel::default() }); invalid.push(s);
     let mut s = scene(); s.encounters[0].on_success = vec![Action::UnlockChest(99)]; invalid.push(s);
     let mut s = scene(); s.encounters[0].on_success.push(Action::UnlockChest(0)); invalid.push(s);
     let mut s = scene(); s.engine.sources.push(s.engine.sources[0].clone());
@@ -133,7 +133,7 @@ fn capacity_is_global_and_released_on_eviction() {
 #[test]
 fn a_chest_and_a_physical_door_have_different_simulation_and_game_hashes() {
     let mut chest = scene(); chest.encounters.clear();
-    let mut door = chest.clone(); door.chests.clear(); door.doors = vec![DoorSpec { body: 1, panel: arpg_sim::PanelConfig::default() }];
+    let mut door = chest.clone(); door.chests.clear(); door.doors = vec![DoorSpec { body: 1, panel: arpg_game::DoorPanel::default() }];
     door.engine.bodies[1].what.physical = arpg_sim::Template::BODY;
     let a = Game::from_scene(&chest).unwrap();
     let b = Game::from_scene(&door).unwrap();

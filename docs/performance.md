@@ -309,7 +309,7 @@ following the [soft step](crowd-collision.md#soft-step): broadphase, crowd and
 solid contact tests, preparation, then per-substep warm start, solve, integrate
 and relax, the continuous sweep, and storing warm-start forces. Counters report
 collision passes, substeps, body and solid rows, speculative rows, swept bodies
-and latch breaks, summed over every collision pass in the tick; candidates count
+and lock breaks, summed over every collision pass in the tick; candidates count
 the first pass only. More
 than one collision pass means something moved fast enough to split the tick.
 

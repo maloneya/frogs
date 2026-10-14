@@ -126,7 +126,7 @@ impl<const N: usize> Hitbox<N> {
 /// [`Disc::place`] undoes.
 fn polar(offset: Vec2) -> (f32, f32) {
     if offset == Vec2::ZERO { return (0.0, 0.0); }
-    (offset.x.atan2(offset.y), offset.length())
+    (crate::angle::yaw_of(offset), offset.length())
 }
 
 #[cfg(test)]

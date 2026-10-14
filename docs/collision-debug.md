@@ -5,8 +5,9 @@ harness equivalent is `debug collision on` or `debug collision off`. It starts
 off and remains an app setting across scene starts and restarts.
 
 The player is yellow; other bodies, including fixed props, are cyan. Every
-disc uses the simulation's actual centre and radius. Hinged panels use their
-actual rectangular dimensions and rotation, with no circular approximation. These are the last
+disc uses the simulation's actual centre and radius. [Jointed bodies](joints.md),
+such as doors and trees, use their actual box and rotation, with no circular
+approximation; a falling pole shows its base, then its log once it lands. These are the last
 completed tick's positions, with no render interpolation. Moving art may lead
 or trail its outline by part of a tick. This is intentional: the view describes
 physical state, not an approximation inferred from the character mesh.
@@ -27,9 +28,9 @@ separate from this runtime view.
 
 `state.collision_debug` reports `enabled`, `sample_tick`, `outline_count`, and
 `discs` keyed by stable entity identity. Each disc includes `centre` and `radius`.
-`outline_count` totals body, panel and attack outlines; `body_disc_count` counts
-circular bodies. `panel_count` and `panels` describe each rectangle by stable
-identity, with its `centre`, `width`, `thickness` and `yaw`.
+`outline_count` totals body, joint and attack outlines; `body_disc_count` counts
+circular bodies. `joint_count` and `joints` describe each jointed body's current
+box by stable identity, with its `centre`, `width`, `length`, `yaw` and `lock`.
 `attack` reports its displayed `disc_count`, sampled `phase` while enabled, and
 `discs` keyed by zero-based sample index within the committed active window.
 The record describes the same snapshot used to build the outlines, so an agent

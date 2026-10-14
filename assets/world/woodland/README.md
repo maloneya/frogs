@@ -29,15 +29,16 @@ trees: [(kind: Pine, position: (12.0, 3.0), yaw: 0.5, scale: 1.0)],
 ```
 
 Position is X/Z metres, yaw is radians, and scale is uniform. Game validates
-placement, scale and the shared `MAX_TREES` capacity before scene admission.
-Trees participate in scene eviction, restart, hashing and reports. Each tree
-installs a small box matching its trunk base through the shared static collision
-system. Kind, scale and yaw determine the footprint; the canopy is visual only.
-Players, enemies, knockback and attack obstruction all use that same geometry.
-Tree colliders share the engine wall capacity and are admitted atomically with
-the rest of the scene. Their scene-local collider indices appear in tree reports. App batches each kind in
-one draw. `state.sim.trees` exposes ownership and placements;
-`state.world_assets.trees` reports imported meshes and per-kind instance counts.
+placement and scale; simulation admits the shared `MAX_TREES` trunk capacity
+atomically with the rest of the scene. Trees participate in scene eviction,
+restart, hashing and reports. Each tree installs a [fellable physical trunk](../../../docs/felled-trees.md)
+whose square base matches the trunk; kind and scale also set its height, crown,
+mass and root strength. Heights and crowns follow these meshes. Players,
+enemies, knockback and attack obstruction all use the trunk's current collider.
+The mesh origin is the fall pivot: a falling tree is pitched about it. App
+batches each kind in one draw. `state.sim.trees` exposes ownership, trunk body
+and state; `state.world_assets.trees` reports imported meshes and per-kind
+instance counts.
 The Soul trial bakes a random scatter (seed 73129) into 96 authored placements:
 24 near the trial and 72 across the arena. Trees are at least 3.5 m apart, with
 the central objectives and source spawn discs left clear. Coordinates are saved

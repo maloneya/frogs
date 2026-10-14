@@ -139,6 +139,19 @@ impl<'a> PreparedStep<'a> {
         world.contacts = contacts;
         observer.crowd_finished(crowd_work);
         pass::motion::settle(&mut world.bodies.physics, dt, trace.reborrow());
+        // **After the contact solve and settle.** An unlocked pole tips with
+        // the load its base absorbed this tick and meets bodies at their final
+        // positions. Like attack impulses, an impact changes velocity now and
+        // moves its body on the next physics step.
+        pass::topple::topple(
+            &mut world.bodies.physics,
+            world.bodies.slots.ids(),
+            &world.bodies.pos,
+            &world.scenes.walls,
+            &mut world.crowd_grid,
+            dt,
+            trace.reborrow(),
+        );
         pass::face::aim(&mut world.player.facing, &world.player.attack, intent, dt);
 
         // **After `face`.** The hitbox is oriented by the facing this
@@ -213,12 +226,23 @@ impl ResolvedStep<'_> {
         {
             return None;
         }
-        let remaining = world.bodies.health.sink().hit(target, amount)?;
-        world.trace.sink(world.tick).emit(Event::Damaged {
-            actor,
-            target,
-            remaining,
-        });
+        world.hit(actor, target, amount)
+    }
+    /// Bodies met by moving jointed bodies during this tick's physics.
+    pub fn impacts(&self) -> &[crate::Impact] {
+        &self.world.as_ref().expect("resolved tick").bodies.physics.joints.impacts
+    }
+    /// Apply positive damage for one of this tick's impacts. Its source is
+    /// the damage's actor; each impact damages at most once, and a target
+    /// already defeated or removed is refused.
+    pub fn damage_impact(&mut self, impact: usize, amount: NonZeroU8) -> Option<u8> {
+        let world = self.world.as_mut().expect("resolved tick");
+        let record = *world.bodies.physics.joints.impacts.get(impact)?;
+        if record.damaged || !world.actor_view().alive(record.body) {
+            return None;
+        }
+        let remaining = world.hit(record.source, record.body, amount)?;
+        world.bodies.physics.joints.impacts[impact].damaged = true;
         Some(remaining)
     }
     /// Activate an explicit ready endpoint after checking live actor, reach and cover.
@@ -246,6 +270,14 @@ impl ResolvedStep<'_> {
             world.trace.sink(world.tick),
         );
         world.tick += 1;
+    }
+}
+impl World {
+    /// Remove health and trace the hit; callers own eligibility.
+    fn hit(&mut self, actor: EntityId, target: EntityId, amount: NonZeroU8) -> Option<u8> {
+        let remaining = self.bodies.health.sink().hit(target, amount)?;
+        self.trace.sink(self.tick).emit(Event::Damaged { actor, target, remaining });
+        Some(remaining)
     }
 }
 impl Drop for PreparedStep<'_> {

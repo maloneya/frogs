@@ -131,7 +131,7 @@ impl Game {
         let Self {
             world,
             restart: _,
-            trees: _,
+            trees,
             torches: _,
             environments: _,
             doors,
@@ -154,6 +154,9 @@ impl Game {
         births.admit(prepared.spawn_outcomes(), actors);
         actors.prepare(prepared.view(), dt);
         let mut resolved = prepared.advance(actors.drives(), actors.targets(), observer);
+        // Falling trees met bodies during physics; the player's attack has already
+        // resolved, so a body it defeated is refused here.
+        trees.crush(&mut resolved);
         // Player abilities resolve first. The shared effect sink refuses commands
         // from actors killed by them, preserving defeat priority without row mutation.
         actors.resolve(resolved.view());
@@ -235,7 +238,7 @@ impl Game {
             corpses,
         } = self;
         world.report(out);
-        trees.report(out);
+        trees.report(world, out);
         torches.report(out);
         environments.report(out);
         doors.report(world, out);
@@ -305,8 +308,17 @@ impl Game {
         true
     }
 
-    /// Solid trees in scene-installation and authored order.
+    /// Authored trees in scene-installation and authored order, fallen or not.
     pub fn trees(&self) -> impl Iterator<Item = TreeSpec> + '_ { self.trees.iter() }
+
+    /// Interpolated tree mesh placements; a tree whose trunk was removed is absent.
+    pub fn tree_poses(&self, alpha: Alpha) -> impl Iterator<Item = crate::TreePose> + '_ { self.trees.poses(&self.world, alpha) }
+
+    /// Trunk body of a scene-local tree, or None for an evicted scene or missing index.
+    pub fn tree_body(&self, scene: SceneId, nth: usize) -> Option<EntityId> { self.trees.body(scene, nth) }
+
+    /// Observe a scene-local tree, including a removed trunk.
+    pub fn tree_state(&self, scene: SceneId, nth: usize) -> Option<crate::TreeState> { self.trees.state(scene, nth, &self.world) }
 
     /// Presentation weather from the most recently loaded live scene.
     pub fn storm(&self) -> bool { self.environments.storm() }
@@ -368,7 +380,7 @@ impl Game {
         definition.validate()?;
         let old = self.actors.definition(id).ok_or("actor is stale or absent")?;
         if old.physical != definition.physical { return Err("behavior replacement cannot change physical capabilities"); }
-        if self.world.panel(id).is_some() && !Doors::accepts(&definition) {
+        if self.world.joint(id).is_some() && !Doors::accepts(&definition) {
             return Err("door must remain a movable prop without actor actions");
         }
         self.actors.replace(id, self.births.definition(definition));
@@ -408,7 +420,7 @@ impl Game {
     pub fn apply_impulse(&mut self, id: EntityId, impulse: Impulse) -> bool {
         self.world.apply_impulse(id, impulse)
     }
-    /// Submit physical momentum at a world-ground point, including torque on panels.
+    /// Submit physical momentum at a world-ground point, including torque on jointed bodies.
     pub fn apply_impulse_at(&mut self, id: EntityId, point: glam::Vec2, impulse: Impulse) -> bool {
         self.world.apply_impulse_at(id, point, impulse)
     }
@@ -543,16 +555,10 @@ impl Game {
     /// Authored ground-plane wall geometry and scene-local identities.
     pub fn walls(&self) -> impl Iterator<Item = (SceneId, usize, arpg_sim::Wall)> + '_ { self.world.walls() }
 
-    /// Wall meshes only; tree-owned rectangles are presented by their tree mesh.
-    /// Physical queries and collision observations still include all rectangles.
-    pub fn visible_walls(&self) -> impl Iterator<Item = (SceneId, usize, arpg_sim::Wall)> + '_ {
-        self.world.walls().filter(|(owner, index, _)| !self.trees.owns_wall(*owner, *index))
-    }
-
-    /// Active beam clipped to the first wall or panel at the completed tick.
+    /// Active beam clipped to the first wall or jointed body at the completed tick.
     pub fn beam(&self) -> Option<arpg_sim::Beam> { self.world.beam() }
 
-    /// Read-only nearest wall or panel contact, using the shared physical geometry.
+    /// Read-only nearest wall or jointed-body contact, using the shared physical geometry.
     pub fn solid_hit(
         &self,
         start: Vec2,
@@ -692,10 +698,14 @@ impl Game {
     pub fn encounter_state(&self, scene: SceneId, nth: usize) -> Option<crate::EncounterState> { self.encounters.state(scene, nth) }
     /// Scene-installation order, then authored order; presentation cannot mutate these facts.
     pub fn encounters(&self) -> impl Iterator<Item = (&str, crate::EncounterState)> { self.encounters.iter() }
-    /// Physical panel observation by stable body identity.
-    pub fn panel(&self, body: EntityId) -> Option<arpg_sim::PanelState> { self.world.panel(body) }
-    /// Interpolated physical panel geometry for presentation.
-    pub fn panel_presentations(&self, alpha: arpg_sim::Alpha) -> impl Iterator<Item = arpg_sim::PanelPresentation> + '_ { self.world.panel_presentations(alpha) }
+    /// Joint coordinate, lock and collider of a jointed body by stable identity.
+    pub fn joint(&self, body: EntityId) -> Option<arpg_sim::JointState> { self.world.joint(body) }
+    /// Every jointed body with an interpolated pose, for physical diagnostics.
+    pub fn joint_presentations(&self, alpha: arpg_sim::Alpha) -> impl Iterator<Item = arpg_sim::JointPresentation> + '_ { self.world.joint_presentations(alpha) }
+    /// Doors with interpolated panel geometry and latch state, for presentation.
+    pub fn door_presentations(&self, alpha: arpg_sim::Alpha) -> impl Iterator<Item = crate::DoorPose> + '_ { self.doors.poses(&self.world, alpha) }
+    /// Bodies met by moving jointed bodies in the latest completed tick.
+    pub fn impacts(&self) -> &[arpg_sim::Impact] { self.world.impacts() }
     /// Observe a scene-owned door, including broken latches and missing bodies.
     pub fn door_state(&self, scene: SceneId, nth: usize) -> Option<crate::DoorState> { self.doors.state(scene, nth, &self.world) }
     /// Lossless combat outcomes of the latest completed engine tick.
