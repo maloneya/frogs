@@ -151,7 +151,7 @@ it requires `Idle`, `Run`, `Hit` and `Death`. Three fixed hit poses share the
 recoil stages, and one frozen death pose supports a tick-derived fall. `horde show <path.glb>` selects one shared
 character, including all its parts and materials, then groups live enemies into
 bounded [gait/phase buckets](crowd-collision.md#movement-and-pushing). Phase comes
-from stable entity identity, not authored or stored randomness. Startup loads `assets/characters/basic-player/basic-player.glb`
+from stable entity identity, not authored or stored randomness. Startup loads `assets/weapons/thornbound-staff/equipped/sword-glaive/player.glb`
 for the player and `assets/characters/basic-enemy/basic-enemy.glb` for the horde,
 using the existing role scales and tints. Asset paths
 are resolved from the build-time repository location, independently of the launch

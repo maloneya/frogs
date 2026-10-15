@@ -31,7 +31,7 @@ EVIDENCE = ROOT / "benchmarks/evidence"
 LOCAL_EVIDENCE = ROOT / "target/perf/evidence"
 METRICS = ("mean_step_ms", "presentation_ms.mean", "frame_ms.p99")
 EXIT = {"pass": 0, "regression": 1, "inconclusive": 2}
-CHARACTER_ASSETS = {"character": "assets/characters/basic-player/basic-player.glb",
+CHARACTER_ASSETS = {"character": "assets/weapons/thornbound-staff/equipped/sword-glaive/player.glb",
                     "horde": "assets/characters/basic-enemy/basic-enemy.glb"}
 
 

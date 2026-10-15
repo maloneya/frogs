@@ -10,6 +10,7 @@ DIGITS = tuple(anatomy.DIGIT_REGIONS['Right'])
 HANDLE_RADIUS = .021
 SUPPORT_DISTANCE = .15
 CONTACT_TOLERANCE = .006
+ARM_POLES = ((-.85,-.1,1.4),(.85,-.1,1.4))
 
 
 @dataclass
@@ -134,7 +135,7 @@ def close_hand(rig, hand, amount=1):
             world_rotation(rig,name,parent_rotation@hand_rest.inverted()@rotation)
 
 
-def constrain(rig,hands,chain,support):
+def constrain(rig,hands,chain,support,poles=ARM_POLES,support_offset=-SUPPORT_DISTANCE):
     weapon=rig.pose.bones['Weapon']
     desired=weapon.matrix.to_quaternion().copy()
     hand=rig.pose.bones['RightHand']
@@ -150,7 +151,7 @@ def constrain(rig,hands,chain,support):
         target_rotation=grip.matrix.to_quaternion()@local.to_quaternion().inverted()
         right_rotation=rig.pose.bones['RightHand'].matrix.to_quaternion().copy()
         original=rig.pose.bones['RightHand'].head.copy()
-        offset=grip.head-original-(grip.tail-grip.head).normalized()*SUPPORT_DISTANCE-target_rotation@local.translation
+        offset=grip.head-original+(grip.tail-grip.head).normalized()*support_offset-target_rotation@local.translation
         wrist=original.copy()
         for _ in range(8):
             for side,shift in [('Right',Vector()),('Left',offset)]:
@@ -158,15 +159,30 @@ def constrain(rig,hands,chain,support):
                 reach=rig.data.bones[side+'Arm'].length+rig.data.bones[side+'Forearm'].length-.01
                 delta=wrist+shift-start
                 if delta.length>reach: wrist-=delta.normalized()*(delta.length-reach)
-        chain(rig,'RightArm','RightForearm',original.lerp(wrist,support),(-.85,-.1,1.4))
+        chain(rig,'RightArm','RightForearm',original.lerp(wrist,support),poles[0])
         world_rotation(rig,'RightHand',right_rotation)
         bpy.context.view_layer.update()
-        target=grip.head-(grip.tail-grip.head).normalized()*SUPPORT_DISTANCE
+        target=grip.head+(grip.tail-grip.head).normalized()*support_offset
         wrist=target-target_rotation@local.translation
         start=left.head.copy();old_rotation=left.matrix.to_quaternion().copy()
-        chain(rig,'LeftArm','LeftForearm',start.lerp(wrist,support),(.85,-.1,1.4))
+        chain(rig,'LeftArm','LeftForearm',start.lerp(wrist,support),poles[1])
         world_rotation(rig,'LeftHand',old_rotation.slerp(target_rotation,support))
     close_hand(rig,hands['Left'],support)
+
+
+def place(rig,hands,chain,origin,rotation,support,poles=ARM_POLES,support_offset=-SUPPORT_DISTANCE):
+    """Author a weapon goal through the same anatomical grip relationship."""
+    rotation=rotation.normalized()
+    hand=rig.data.bones['RightHand']
+    local=hand.matrix_local.inverted() @ rig.data.bones['RightGrip'].matrix_local
+    hand_rotation=rotation @ local.to_quaternion().inverted()
+    wrist=Vector(origin)-hand_rotation @ local.translation
+    chain(rig,'RightArm','RightForearm',wrist,poles[0])
+    world_rotation(rig,'RightHand',hand_rotation)
+    for name in ['RightGrip','Weapon']:
+        rig.pose.bones[name].matrix_basis.identity()
+    bpy.context.view_layer.update()
+    constrain(rig,hands,chain,support,poles=poles,support_offset=support_offset)
 
 
 def bake(rig,hands,chain):
@@ -198,11 +214,11 @@ def contact_vertices(body, side):
     return result
 
 
-def validate_contact(rig,body,side,vertices):
+def validate_contact(rig,body,side,vertices,support_offset=-SUPPORT_DISTANCE):
     """Check the skinned surface, not just agreement between named bone origins."""
     origin=rig.pose.bones['Weapon'].head.copy()
     axis=(rig.pose.bones['Weapon'].tail-origin).normalized()
-    if side=='Left': origin-=axis*SUPPORT_DISTANCE
+    if side=='Left': origin+=axis*support_offset
     assert (rig.pose.bones[side+'Grip'].head-origin).length<CONTACT_TOLERANCE, 'palm left its equipment grip'
     palette={bone.name:bone.matrix@bone.bone.matrix_local.inverted() for bone in rig.pose.bones}
     for digit,points in vertices.items():
@@ -214,7 +230,7 @@ def validate_contact(rig,body,side,vertices):
         assert gaps and min(gaps)>=-CONTACT_TOLERANCE and min(abs(gap) for gap in gaps)<=CONTACT_TOLERANCE, (side,digit,'invalid skin contact',min(gaps),min(map(abs,gaps)))
 
 
-def validate_motion(rig,body):
+def validate_motion(rig,body,support_window=(10,26),support_offset=-SUPPORT_DISTANCE):
     vertices={side:contact_vertices(body,side) for side in ['Right','Left']}
     surface=forearm_surface(body,'Right')
     for action in bpy.data.actions:
@@ -226,9 +242,62 @@ def validate_motion(rig,body):
             bpy.context.scene.frame_set(int(frame),subframe=frame-int(frame))
             validate_contact(rig,body,'Right',vertices['Right'])
             validate_clearance(rig,body,surface)
-            if action.name=='AttackSlam' and 10<=frame<=26:
-                validate_contact(rig,body,'Left',vertices['Left'])
+            if action.name=='AttackSlam' and support_window[0]<=frame<=support_window[1]:
+                validate_contact(rig,body,'Left',vertices['Left'],support_offset)
     print('PASS grasp: skinned finger/handle contact across every clip and fractional samples',flush=True)
+
+
+def _segment_triangle(start,end,a,b,c):
+    from mathutils.geometry import intersect_ray_tri
+    direction=end-start
+    if direction.length_squared<1e-12: return False
+    hit=intersect_ray_tri(a,b,c,direction,start,True)
+    return hit is not None and .00001<(hit-start).dot(direction)/direction.length_squared<.99999
+
+
+def validate_equipment(rig,body,equipment):
+    """Check the rendered triangles, excluding hands covered by grip admission.
+
+    Retain the bind triangulation while deforming vertices. Retessellating bent
+    quads or treating an articulated human as one closed solid gives misleading
+    inside/outside answers near the shoulders.
+    """
+    from mathutils.bvhtree import BVHTree
+    hands={g.index for g in body.vertex_groups if g.name.endswith('Hand') or
+           any(digit in g.name for digit in DIGITS)}
+    hand_vertices={v.index for v in body.data.vertices if sum(g.weight for g in v.groups if g.group in hands)>.5}
+    body.data.calc_loop_triangles();equipment.data.calc_loop_triangles()
+    body_triangles=[tuple(t.vertices) for t in body.data.loop_triangles
+                    if not all(i in hand_vertices for i in t.vertices)]
+    triangles=[tuple(t.vertices) for t in equipment.data.loop_triangles]
+    bind_points=[v.co.copy() for v in equipment.data.vertices]
+    inverse=rig.data.bones['Weapon'].matrix_local.inverted()
+    worst_floor=float('inf')
+    for action in bpy.data.actions:
+        rig.animation_data.action=action;rig.animation_data.action_slot=action.slots[0]
+        first,last=action.frame_range
+        count=120 if action.name=='AttackSlam' else 48
+        for index in range(count+1):
+            frame=first+(last-first)*index/count
+            bpy.context.scene.frame_set(int(frame),subframe=frame-int(frame))
+            evaluated=body.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            points=[v.co.copy() for v in evaluated.data.vertices]
+            tree=BVHTree.FromPolygons(points,body_triangles,all_triangles=True)
+            transform=rig.pose.bones['Weapon'].matrix @ inverse
+            weapon=[transform @ point for point in bind_points]
+            low=min(p.z for p in weapon);worst_floor=min(worst_floor,low)
+            assert low>=.005, (action.name,frame,'weapon enters floor',low)
+            shape=BVHTree.FromPolygons(weapon,triangles,all_triangles=True)
+            for left,right in tree.overlap(shape):
+                a=[points[i] for i in body_triangles[left]]
+                b=[weapon[i] for i in triangles[right]]
+                crossing=any(_segment_triangle(p,q,*a) for p,q in zip(b,b[1:]+b[:1])) or any(
+                    _segment_triangle(p,q,*b) for p,q in zip(a,a[1:]+a[:1]))
+                regions=sorted({body.vertex_groups[g.group].name for i in body_triangles[left]
+                                for g in body.data.vertices[i].groups if g.weight>.2}) if crossing else []
+                assert not crossing, (action.name,frame,'weapon crosses body surface',regions,left,right)
+    print('PASS equipment: actual weapon triangles clear body/floor; minimum floor',worst_floor,flush=True)
+    return worst_floor
 
 
 def forearm_surface(body,side):

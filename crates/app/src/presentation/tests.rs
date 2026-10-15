@@ -26,7 +26,10 @@ fn startup_assets_support_their_presentation_roles() {
     replace_character(&mut player, player_path.clone(), |_| Ok(())).unwrap();
     replace_horde(&mut horde, horde_path.clone(), |_| Ok(())).unwrap();
     assert!(horde.as_ref().unwrap().asset.shadow_mesh().is_some());
-    assert_eq!(player.unwrap().path, player_path);
+    let player = player.unwrap();
+    assert_eq!(player.path, player_path);
+    assert!(player.path.ends_with("thornbound-staff/equipped/sword-glaive/player.glb"));
+    assert!(player.asset.parts().iter().any(|part| part.node_name() == "ThornboundStaff"));
     assert_eq!(horde.unwrap().path, horde_path);
 }
 
@@ -125,11 +128,11 @@ fn character_replacement_is_atomic_across_import_and_upload_failure() {
     let current = slot.as_ref().unwrap();
     assert_eq!(
         (current.asset.vertex_count(), current.asset.index_count()),
-        (21585, 124062)
+        (36704, 197286)
     );
     assert_eq!(
         (current.asset.node_count(), current.asset.joint_count()),
-        (57, 54)
+        (58, 54)
     );
     assert_eq!(current.asset.clip_count(), 8);
     let current = slot.as_mut().unwrap();
@@ -160,9 +163,9 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview(Some(&preview), &mut active);
     assert_eq!(
         active.finish(),
-        r#"{"active":true,"path":"assets/character.glb","vertices":21585,"indices":124062,"part_count":2,"material_count":2,"image_count":2,"texture_bytes":699048,"parts":{"0":{"node":"HoodedCloak","primitive":0,"material":0,"vertices":8772,"indices":52536},"1":{"node":"Swordsman","primitive":0,"material":1,"vertices":12813,"indices":71526}},"materials":{"0":{"image":0},"1":{"image":1}},"images":{"0":{"width":256,"height":256},"1":{"width":256,"height":256}},"nodes":57,"joints":54,"clips":8,"role":"idle","clip":"Idle","clip_duration":3.2000,"channels":108,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000,"channel_weight":0.0000}"#
+        r#"{"active":true,"path":"assets/character.glb","vertices":36704,"indices":197286,"part_count":3,"material_count":3,"image_count":3,"texture_bytes":11883860,"parts":{"0":{"node":"HoodedCloak","primitive":0,"material":0,"vertices":8772,"indices":52536},"1":{"node":"Swordsman","primitive":0,"material":1,"vertices":11908,"indices":70008},"2":{"node":"ThornboundStaff","primitive":0,"material":2,"vertices":16024,"indices":74742}},"materials":{"0":{"image":0},"1":{"image":1},"2":{"image":2}},"images":{"0":{"width":256,"height":256},"1":{"width":256,"height":256},"2":{"width":2048,"height":1024}},"nodes":58,"joints":54,"clips":8,"role":"idle","clip":"Idle","clip_duration":3.2000,"channels":108,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000,"channel_weight":0.0000}"#
     );
-    assert_eq!(preview.draw_count(), 2);
+    assert_eq!(preview.draw_count(), 3);
 }
 
 #[test]
@@ -542,7 +545,10 @@ fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
                 resolved.startup() + tick, alpha,
             );
             assert!(current.z > 0.0, "cleave went behind the player: {current:?}");
-            assert!(current.x <= previous.x + 1.0e-4, "cleave reversed: {previous:?} -> {current:?}");
+            // Forward travel changes with blade length; its sweep angle must
+            // keep turning toward anatomical right throughout contact.
+            assert!(current.x.atan2(current.z) <= previous.x.atan2(previous.z) + 1.0e-4,
+                "cleave reversed: {previous:?} -> {current:?}");
             previous = current;
         }
     }
@@ -904,7 +910,7 @@ fn malformed_last_image_preserves_every_live_part_before_upload() {
 }
 
 #[test]
-fn channel_attachment_matches_the_extended_sword_tip_and_follows_world_aim() {
+fn channel_attachment_matches_the_staff_tip_and_follows_world_aim() {
     let mut character = loaded_character("channel.glb");
     let mut game = Game::empty();
     game.set_attack_profile(AttackProfile::Disintegrate);
@@ -920,7 +926,7 @@ fn channel_attachment_matches_the_extended_sword_tip_and_follows_world_aim() {
         let tip = character.asset.joint_transform(&character.pose, socket).unwrap().transform_point3(Vec3::ZERO);
         let blade = character.asset.joint_transform(&character.pose, weapon).unwrap().transform_vector3(Vec3::Y).normalize();
         assert!(blade.dot(Vec3::Z) > 0.999);
-        assert!(tip.z > 1.5 && tip.y > 1.3 && tip.y < 1.6, "extended horizontal sword: {tip:?}");
+        assert!(tip.z > 1.5 && tip.y > 1.3 && tip.y < 1.6, "extended horizontal staff: {tip:?}");
         let expected = player.ground_position() + glam::Quat::from_rotation_y(player.facing()) * tip;
         assert!(character.beam_emitter(player).tip.abs_diff_eq(expected, 0.0001));
     }
@@ -969,11 +975,11 @@ fn channel_pose_blends_by_elapsed_time_on_entry_release_and_restart() {
 }
 
 #[test]
-fn channel_geometry_clips_the_interpolated_sword_path_when_the_damage_ray_misses() {
+fn channel_geometry_clips_the_interpolated_staff_path_when_the_damage_ray_misses() {
     // Both +X and +Z damage rays miss this off-axis wall. Immediately after
-    // turning, the displayed sword still points +X; its connector toward +Z
+    // turning, the displayed staff still points +X; its connector toward +Z
     // crosses the wall before z=3. The visual must stop there too.
-    let wall = arpg_sim::Wall::new(glam::Vec2::new(1.3, 3.0), glam::Vec2::splat(0.4), 0.0).unwrap();
+    let wall = arpg_sim::Wall::new(glam::Vec2::new(1.6, 3.0), glam::Vec2::splat(0.4), 0.0).unwrap();
     let mut game = Game::from_scene(
         &arpg_game::Scene {
             walls: vec![wall],
@@ -1239,7 +1245,7 @@ fn stationary_slam_braces_the_knees_and_enemy_height_is_close_to_player_height()
 }
 
 #[test]
-fn slam_loads_overhead_releases_low_and_keeps_the_sword_in_its_hand_through_game() {
+fn slam_plants_the_staff_butt_and_keeps_both_grips_through_game() {
     for movement in [MoveDir::NONE, MoveDir::new(Vec3::X)] {
         let mut game = Game::empty();
         game.set_attack_profile(AttackProfile::Slam);
@@ -1262,16 +1268,28 @@ fn slam_loads_overhead_releases_low_and_keeps_the_sword_in_its_hand_through_game
                 if (9..24).contains(&elapsed) {
                     let relative = hand.inverse() * weapon;
                     if let Some(previous) = grip {
-                        assert!(relative.abs_diff_eq(previous, 1e-4), "sword rotated inside the hand");
+                        assert!(relative.abs_diff_eq(previous, 1e-4), "staff rotated inside the hand");
                     } else { grip = Some(relative); }
                 }
-                if elapsed == 8 && alpha == Alpha::ONE { assert!(tip.y > 2.0, "slam must load above the head"); }
+                if elapsed == 8 && alpha == Alpha::ONE {
+                    assert!(tip.y > 2.5, "staff must load upright before contact");
+                }
+                if (9..14).contains(&elapsed) {
+                    let support = weapon.transform_point3(Vec3::Y * 0.15);
+                    assert!(support.distance(transform("LeftGrip").transform_point3(Vec3::ZERO)) < 0.003,
+                        "support hand must lead toward the blade during contact");
+                }
                 if elapsed == 13 && alpha == Alpha::ONE {
-                    // Walking retains its pelvis/leg gait beneath the upper-body
-                    // strike; its low release is relative to that moving torso.
-                    let low = if movement == MoveDir::NONE { tip.y < 0.3 }
-                        else { tip.y < transform("Chest").transform_point3(Vec3::ZERO).y - 0.25 };
-                    assert!(low && tip.z > 0.8, "slam must release low in front during contact: {tip:?}");
+                    let butt = weapon.transform_point3(Vec3::Y * -1.025);
+                    let axis = weapon.transform_vector3(Vec3::Y).normalize();
+                    assert!(axis.y > 0.95, "staff must remain upright during the plant");
+                    assert!(butt.z > 0.4, "staff butt must plant in front: {butt:?}");
+                    if movement == MoveDir::NONE {
+                        assert!((0.005..0.04).contains(&butt.y), "staff butt must meet the floor: {butt:?}");
+                    } else {
+                        assert!(butt.y < transform("Chest").transform_point3(Vec3::ZERO).y - 0.8,
+                            "moving plant must reach below the torso: {butt:?}");
+                    }
                 }
             }
             assert_eq!(hash, game.hash());
@@ -1378,15 +1396,18 @@ fn cleave_coils_before_damage_then_accelerates_across_the_front_through_game() {
         } else if tick < 12 {
             assert_eq!(game.health(target), Some(1));
             assert!(tip.z > 0.0, "strike went behind the player");
-            active.push(-tip.x);
+            active.push(tip);
         }
         assert_eq!(hash, game.hash());
     }
-    let entry = active[1] - active[0];
-    let release = active[3] - active[1];
+    // Turning direction/acceleration use angle; keep the original metre-space
+    // travel requirement while allowing the longer tip to move forward.
+    let progress = |tip: Vec3| -tip.x.atan2(tip.z);
+    let entry = progress(active[1]) - progress(active[0]);
+    let release = progress(active[3]) - progress(active[1]);
     assert!(release > entry * 3.0, "cleave has no acceleration: {active:?}");
-    assert!(active.windows(2).all(|p| p[1] >= p[0]));
-    assert!(active.last().unwrap() - active[0] > 2.5);
+    assert!(active.windows(2).all(|p| progress(p[1]) >= progress(p[0])));
+    assert!(active[0].x - active.last().unwrap().x > 2.5);
 }
 
 #[test]

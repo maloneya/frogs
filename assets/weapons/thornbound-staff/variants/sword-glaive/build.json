@@ -1,0 +1,40 @@
+{
+  "vertices": 12543,
+  "triangles": 24914,
+  "texture": [
+    2048,
+    1024
+  ],
+  "landmarks_blender_metres": {
+    "primary_grasp": [
+      0,
+      0,
+      0
+    ],
+    "support_grasp": [
+      0,
+      0,
+      0.15
+    ],
+    "blade_tip": [
+      0.006,
+      0,
+      1.505
+    ]
+  },
+  "bounds_blender": [
+    [
+      -0.0514957532286644,
+      -0.04260462895035744,
+      -1.024999976158142
+    ],
+    [
+      0.04699999839067459,
+      0.040330544114112854,
+      1.5049999952316284
+    ]
+  ],
+  "blade_profile": "sword-glaive",
+  "blade_height_m": 0.6999999999999998,
+  "blade_max_width_m": 0.08
+}

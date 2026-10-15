@@ -21,6 +21,20 @@ failed skinned contact or forearm clearance across intermediate samples. Player
 admission checks the fixed hierarchy and closed-pose contact before upload;
 regressions cover open grasps, animated locals, missing channels and atomic refusal.
 
+## A long weapon is reported inside the body when the point is visibly outside
+
+**Cause:** nearest-polygon normals and a single parity ray through deformed human
+quads gave inconsistent containment results near shoulders. Retessellating those
+quads per pose also differs from the exported bind triangulation (2026-10-15).
+**Check:** inspect the reported point and triangle, rather than moving the weapon
+from a signed-distance result alone. The misleading staff diagnostic reported a
+point 16 cm from the skin as inside, while cardinal rays from it hit no surface.
+**Safeguard:** [equipment admission](../assets/characters/basic-player/grasp.py)
+retains bind triangles, deforms their vertices, and tests actual weapon/body
+surface crossings. Hand contact is checked separately. The staff's
+[`check_equipment.py`](../assets/weapons/thornbound-staff/check_equipment.py)
+rejects a body-crossing shaft and floor penetration, and admits separated geometry.
+
 ## Screenshot times out or the image is black
 
 **Cause:** capture depends on a presented surface. A fully covered window or a

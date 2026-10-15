@@ -1027,7 +1027,7 @@ fn load_static<T>(
 /// The checked-in playable asset is resolved independently of the launch directory.
 pub(super) fn default_character_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/characters/basic-player/basic-player.glb")
+        .join("../../assets/weapons/thornbound-staff/equipped/sword-glaive/player.glb")
 }
 
 /// The checked-in enemy asset is resolved independently of the launch directory.

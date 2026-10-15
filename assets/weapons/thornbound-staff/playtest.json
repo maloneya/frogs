@@ -1,0 +1,81 @@
+{
+  "date": "2026-10-15",
+  "scene": "scenes/combat_feel.ron",
+  "method": "ARPG_HARNESS; release app; input and screenshot capture",
+  "assets": {
+    "d": {
+      "variant": "d",
+      "source_sha256": "4e6f6f7346187da4edbde0d1ed7369bb66c0b522d3b25ea8d63554cc82064691",
+      "player_source_sha256": "b0a07c20da154812f8d75ecace1a56df6877fed11756409765f9e34869aedf08",
+      "output_sha256": "016fe26d5c6c366d799d3933ede1b90f8921721341eddce6681e012c83339ffd",
+      "minimum_floor_m": 0.01492238137871027
+    },
+    "e": {
+      "variant": "e",
+      "source_sha256": "4c588c5e566aa3caeeb5152cb2c2d7ee92872c60bd4f6108d3b8a94df1a7fa79",
+      "player_source_sha256": "b0a07c20da154812f8d75ecace1a56df6877fed11756409765f9e34869aedf08",
+      "output_sha256": "d9ecfe317e07facedb54b17f7761b4466e426c2cc07d74483ec71e56f15effa2",
+      "minimum_floor_m": 0.01492238137871027
+    }
+  },
+  "checks": {
+    "reproducible_glb": "two isolated builds per variant, byte identical",
+    "shared_grasp": "default accepted; open hand and wrist-mounted weapon refused",
+    "equipment_admission": "sampled all clips; right hand/fingers, two-hand Slam window, forearm, body surface, floor, ready seam",
+    "runtime_refusal": "missing file preserves selected staff for D and E",
+    "restart": "selected staff persists across scene restart",
+    "clear": "default character path restored; report remains active because default character is loaded"
+  },
+  "evidence": {
+    "live": "target/staff-equipped/live",
+    "wide_live": "target/staff-equipped/wide-live",
+    "normal_speed_studio": "target/staff-equipped/motion-review/critic"
+  },
+  "limitations": [
+    "Gameplay damage, timing and reach unchanged; E length is visual.",
+    "Screenshot/state commands observe successive frames, not a single atomic tick.",
+    "Static samples and geometric checks do not establish human judgement of cadence, foot sliding or impact feel."
+  ],
+  "performance": {
+    "scope": "release live sparse workload, three trials; partial suite coverage",
+    "baseline": "target/perf/staff-before-20261015.json",
+    "d_comparison": "target/perf/staff-d-comparison-20261015.json",
+    "e_comparison": "target/perf/staff-e-comparison-20261015.json",
+    "assessment": "both comparisons pass relative and absolute gates",
+    "baseline_frame_p99_ms": 18.144,
+    "e_frame_p99_ms": 18.214
+  },
+  "historical_labels": {
+    "d": "large-talon; A in the final two-way comparison",
+    "e": "sword-glaive; B in the final two-way comparison"
+  },
+  "promotion": {
+    "default": "equipped/sword-glaive/player.glb",
+    "alternate": "equipped/large-talon/player.glb",
+    "checks": [
+      "ordinary startup from /tmp selects sword glaive",
+      "alternate selection and scene restart",
+      "missing file preserves alternate",
+      "character clear restores sword glaive",
+      "default Cleave/Slam each reduce three front targets from 3 to 1 health",
+      "casting damages centre target and ends on release"
+    ],
+    "evidence": "target/staff-cleanup/live/evidence.json",
+    "performance": "target/perf/staff-default-comparison-20261015.json",
+    "performance_scope": "sparse live workload only; relative and absolute gates pass; full live suite omitted"
+  },
+  "cases": [
+    {"variant":"d","case":"cleave","sampled_clips":["AttackCleave","Idle"],"health_changes":{"#1v1":[3,1],"#2v1":[3,1],"#3v1":[3,1]}},
+    {"variant":"d","case":"slam","sampled_clips":["AttackSlam","Idle"],"health_changes":{"#1v1":[3,1],"#2v1":[3,1],"#3v1":[3,1]}},
+    {"variant":"d","case":"moving-cleave","sampled_clips":["AttackCleave","Idle","Run"],"health_changes":{"#1v1":[3,1],"#2v1":[3,1],"#3v1":[3,1]}},
+    {"variant":"d","case":"moving-slam","sampled_clips":["AttackSlam","Idle","Run"],"health_changes":{"#1v1":[3,1],"#2v1":[3,1],"#3v1":[3,1]}},
+    {"variant":"d","case":"casting","sampled_clips":["Disintegrate","Idle"],"health_changes":{"#2v1":[3,"defeated"]}},
+    {"variant":"d","case":"moving-casting","sampled_clips":["Disintegrate","Idle"],"health_changes":{"#2v1":[3,2],"#3v1":[3,1],"#6v1":[3,2],"#7v1":[3,2],"#8v1":[3,2],"#9v1":[3,2],"#11v1":[3,2],"#12v1":[3,2],"#13v1":[3,2],"#17v1":[3,2]}},
+    {"variant":"e","case":"cleave","sampled_clips":["AttackCleave","Idle"],"health_changes":{"#1v1":[3,1],"#2v1":[3,1],"#3v1":[3,1]}},
+    {"variant":"e","case":"slam","sampled_clips":["AttackSlam","Idle"],"health_changes":{"#1v1":[3,1],"#2v1":[3,1],"#3v1":[3,1]}},
+    {"variant":"e","case":"moving-cleave","sampled_clips":["AttackCleave","Idle","Run"],"health_changes":{"#1v1":[3,1],"#2v1":[3,1],"#3v1":[3,1]}},
+    {"variant":"e","case":"moving-slam","sampled_clips":["AttackSlam","Idle","Run"],"health_changes":{"#1v1":[3,1],"#2v1":[3,1],"#3v1":[3,1]}},
+    {"variant":"e","case":"casting","sampled_clips":["Disintegrate","Idle"],"health_changes":{"#2v1":[3,"defeated"]}},
+    {"variant":"e","case":"moving-casting","sampled_clips":["Disintegrate","Idle"],"health_changes":{"#2v1":[3,2],"#3v1":[3,1],"#6v1":[3,2],"#7v1":[3,2],"#8v1":[3,2],"#9v1":[3,2],"#11v1":[3,2],"#12v1":[3,2],"#13v1":[3,2]}}
+  ]
+}

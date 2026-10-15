@@ -1,6 +1,6 @@
 # Swordsman player
 
-The default player uses the CC0 Blender Human Base Mesh realistic male surface,
+This retained sword foundation uses the CC0 Blender Human Base Mesh realistic male surface,
 uniformly normalized to two metres and fitted to a 54-joint rig. A charcoal
 hooded cloak covers the head and shoulders, with an open front, folded skirt,
 tunic, leggings and leather boots. The body and slender longsword share one
@@ -11,6 +11,10 @@ sword's `RightHand` → `RightGrip` attachment follow that physical side.
 
 [Source geometry, licences and motion provenance](reference/README.md) remain
 editable inputs. Shoulder weights remain refinement work.
+
+The playable default is the [Thornbound sword glaive](../../weapons/thornbound-staff/README.md),
+compiled from this foundation. This directory retains the reusable body, rig and
+sword motion sources; regenerating it does not replace the equipped default.
 
 ## Compile and check
 
