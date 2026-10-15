@@ -1123,17 +1123,25 @@ mod tests {
         );
         let width = bounds.1 - bounds.0 + 1;
         let height = bounds.3 - bounds.2 + 1;
-        assert!(
-            height > width && height >= 70 && width >= 45,
-            "expected a 1.9m upright sampled pose, got {width}x{height} from {bounds:?}"
-        );
+        let projected: Vec<_> = cpu.vertices().iter().map(|vertex| {
+            let skinned = vertex.joints().into_iter().zip(vertex.weights()).fold(Vec3::ZERO, |sum, (joint, weight)|
+                sum + pose.joint_matrices()[usize::from(joint)].matrix().transform_point3(vertex.position()) * weight);
+            camera.view_proj().project_point3(skinned)
+        }).collect();
+        for (axis, actual) in [(0, width), (1, height)] {
+            let min = projected.iter().map(|p| p[axis]).fold(f32::INFINITY, f32::min);
+            let max = projected.iter().map(|p| p[axis]).fold(f32::NEG_INFINITY, f32::max);
+            let expected = (max - min) * N as f32 * 0.5;
+            assert!((actual as f32 - expected).abs() <= 6.0,
+                "sampled silhouette axis {axis}: expected {expected:.1}px, got {actual}px from {bounds:?}");
+        }
         rgba
     }
 
     #[test]
     fn coarse_caster_keeps_the_visible_character_pixels_identical() {
-        let enemy = include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.glb");
-        let shadow = include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.shadow.glb");
+        let enemy = include_bytes!("../../../assets/characters/wolf/wolf.glb");
+        let shadow = include_bytes!("../../../assets/characters/wolf/wolf.shadow.glb");
         for seconds in [0.0, 0.5] {
             assert_eq!(render_character_bucket(enemy, 0.0, false, seconds),
                 render_character_bucket_with_shadow(enemy, 0.0, false, seconds, Some(shadow)));

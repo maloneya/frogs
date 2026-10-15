@@ -147,13 +147,13 @@ player grip contract; the compiler additionally checks intermediate hand contact
 and forearm clearance. Visual review still covers clothing and the whole pose.
 
 The ordinary-horde contract is a smaller view of the same interchange format:
-it requires `Idle`, `Run`, `Hit` and `Death`. Three fixed hit poses share the
-recoil stages, and one frozen death pose supports a tick-derived fall. `horde show <path.glb>` selects one shared
+it requires `Idle`, `Walk`, `Run`, `Bite`, `Leap`, `Hit` and `Death`. Three fixed hit poses share the
+recoil stages, and one frozen death pose supports a tick-derived drop. `horde show <path.glb>` selects one shared
 character, including all its parts and materials, then groups live enemies into
 bounded [gait/phase buckets](crowd-collision.md#movement-and-pushing). Phase comes
 from stable entity identity, not authored or stored randomness. Startup loads `assets/weapons/thornbound-staff/equipped/sword-glaive/player.glb`
-for the player and `assets/characters/basic-enemy/basic-enemy.glb` for the horde,
-using the existing role scales and tints. Asset paths
+for the player and `assets/characters/wolf/wolf.glb` for the horde,
+using the role scales and tints. Asset paths
 are resolved from the build-time repository location, independently of the launch
 directory. Missing or invalid defaults fail startup explicitly. `character clear`
 and `horde clear` restore their respective default assets; there is no character cube fallback.
@@ -194,5 +194,10 @@ blender --background --factory-startup --python-exit-code 1 \
 The basic placeholder player and its editable Blender source live in
 [`assets/characters/basic-player`](../assets/characters/basic-player/README.md).
 The dedicated horde asset lives in
-[`assets/characters/basic-enemy`](../assets/characters/basic-enemy/README.md).
+[`assets/characters/wolf`](../assets/characters/wolf/README.md).
 Each generator produces its checked-in `.blend` and `.glb` artifacts.
+The wolf compiler imports retained CC0 anatomy and motions; its README records
+the source contract, phase mapping and review commands. Presentation retains
+eight shared gait poses, four attack poses, three recoil poses and one corpse
+pose. Game bounds simultaneous combat commitments to four, so each committed
+attacker samples its exact phase without expanding pose storage with crowd size.

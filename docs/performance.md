@@ -166,7 +166,7 @@ isolated before/after source states, then declare every changed asset explicitly
 
 ```sh
 python3 scripts/perf.py compare target/perf/before.json target/perf/after.json \
-  --asset-change assets/characters/basic-enemy/basic-enemy.glb \
+  --asset-change assets/characters/wolf/wolf.glb \
   --output target/perf/asset-comparison.json
 ```
 

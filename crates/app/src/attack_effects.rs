@@ -34,7 +34,7 @@ const _: () = assert!(
     (THROAT_SEGMENTS + TAIL_SEGMENTS + 2) * 3 * 12 + MAX_MARKERS * 24 <= MAX_ATTACK_VERTICES
 );
 
-/// Poses and ground markers consume the same bounded, ordered observations.
+/// Ground markers consume bounded, ordered observations.
 pub(crate) fn visible_actions(actions: impl Iterator<Item = arpg_game::ActionStatus>) -> impl Iterator<Item = arpg_game::ActionStatus> {
     actions.filter(|action| matches!(action.kind, arpg_game::ActionKind::Swipe | arpg_game::ActionKind::Leap)
         && action.phase != AttackPhase::Idle).take(MAX_VISIBLE_ACTIONS)

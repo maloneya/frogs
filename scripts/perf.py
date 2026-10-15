@@ -26,13 +26,13 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "benchmarks/suite.json"
 # Workload and asset identities are separate; old artifacts cannot establish both.
-SCHEMA = 3
+SCHEMA = 4
 EVIDENCE = ROOT / "benchmarks/evidence"
 LOCAL_EVIDENCE = ROOT / "target/perf/evidence"
 METRICS = ("mean_step_ms", "presentation_ms.mean", "frame_ms.p99")
 EXIT = {"pass": 0, "regression": 1, "inconclusive": 2}
 CHARACTER_ASSETS = {"character": "assets/weapons/thornbound-staff/equipped/sword-glaive/player.glb",
-                    "horde": "assets/characters/basic-enemy/basic-enemy.glb"}
+                    "horde": "assets/characters/wolf/wolf.glb"}
 
 
 class MeasurementStopped(ValueError):
@@ -238,7 +238,7 @@ def validate_trial(trial, workload):
     corpses = number(perf["current_corpses"], "corpse population")
     if horde["corpse_instances"] != corpses or horde["instances"] != end + corpses:
         raise ValueError("rendered living and corpse populations disagree with Game")
-    if horde["idle_instances"] + horde["run_instances"] != end or horde[workload["animation"] + "_instances"] <= 0:
+    if horde["idle_instances"] + horde["run_instances"] + horde["attack_instances"] + horde["recoiling_instances"] != end or horde[workload["animation"] + "_instances"] <= 0:
         raise ValueError("expected enemy animation was not presented")
     fingerprint(trial["final_hash"], 16)
     for name in METRICS:

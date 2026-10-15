@@ -1,7 +1,8 @@
 """Blender-frame samples and their presentation times for character reviews."""
 import math
 
-MELEE = {'AttackCleave': (6, 6, 10), 'AttackSlam': (9, 5, 16)}
+MELEE = {'AttackCleave': (6, 6, 10), 'AttackSlam': (9, 5, 16),
+         'Bite': (36, 9, 39), 'Leap': (42, 36, 54)}
 
 
 def sampling(name, frame_range, native, fps, poses=False, requested=None):

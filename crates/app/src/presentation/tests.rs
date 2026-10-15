@@ -43,7 +43,7 @@ fn horde_sidecar_is_atomic_on_refusal_and_is_removed_when_the_asset_changes() {
     let dir = std::env::temp_dir().join(format!("arpg-shadow-admission-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("enemy.glb");
-    std::fs::write(&path, include_bytes!("../../../../assets/characters/basic-enemy/basic-enemy.glb")).unwrap();
+    std::fs::write(&path, include_bytes!("../../../../assets/characters/wolf/wolf.glb")).unwrap();
     let sidecar = path.with_extension("shadow.glb");
     for bytes in [&b"not a GLB"[..], &include_bytes!("../../../../assets/fixtures/blender-bind-pose.glb")[..]] {
         std::fs::write(&sidecar, bytes).unwrap();
@@ -206,7 +206,7 @@ fn horde_replacement_is_atomic_and_its_report_is_derived() {
     assert!(report.contains(r#""active":true"#));
     assert!(report.contains(r#""idle_clip":"Idle""#));
     assert!(report.contains(r#""run_clip":"Run""#));
-    assert!(report.contains(r#""pose_buckets":12"#));
+    assert!(report.contains(r#""pose_buckets":16"#));
     assert!(report.contains(r#""instances":32"#));
     assert!(report.contains(r#""idle_instances":32"#));
     assert!(report.contains(r#""run_instances":0"#));
@@ -1050,8 +1050,8 @@ fn varied_ground_speeds_use_three_cadences_within_the_existing_pose_budget() {
         assert_eq!(horde.buckets[role * HORDE_PHASES_PER_ROLE..(role + 1) * HORDE_PHASES_PER_ROLE]
             .iter().map(|bucket| bucket.instances.len()).sum::<usize>(), 1);
     }
-    assert_eq!(horde.buckets.len(), 12);
-    assert!(HordeRole::Walk.playback_rate() < HordeRole::Run.playback_rate());
+    assert_eq!(horde.buckets.len(), MAX_HORDE_POSE_BUCKETS);
+    assert_ne!(horde.clips.for_role(HordeRole::Walk), horde.clips.for_role(HordeRole::Run));
     assert!(HordeRole::Run.playback_rate() < HordeRole::Sprint.playback_rate());
 }
 
@@ -1102,17 +1102,19 @@ fn corpses_fall_over_fifteen_ticks_with_one_frozen_pose_and_clear_with_the_game(
     assert_eq!(horde.instance_count(), 1);
     assert_eq!(horde.occupied_buckets(), 1);
     let instance = horde.buckets[CORPSE_BUCKET].instances[0];
-    assert!(instance.pitch() > 0.0 && instance.pitch() < 0.03);
+    assert_eq!(instance.pitch(), 0.0);
+    let first_height = instance.pos().y;
     assert_eq!(instance.white_mix(), 0.0);
     assert_eq!(instance.pos().z, game.corpses()[0].position().y);
     let pose = corpse_joint_matrices(&horde);
     for _ in 0..7 { game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); }
     horde.rebuild_corpses(game.corpses(), Alpha::ZERO);
-    let halfway = horde.buckets[CORPSE_BUCKET].instances[0].pitch();
-    assert!(halfway > 0.6 && halfway < 0.8);
+    let halfway = horde.buckets[CORPSE_BUCKET].instances[0].pos().y;
+    assert!(halfway < first_height && halfway > -horde.corpse_min_height);
     for _ in 0..8 { game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); }
     horde.rebuild_corpses(game.corpses(), Alpha::ZERO);
-    assert_eq!(horde.buckets[CORPSE_BUCKET].instances[0].pitch(), std::f32::consts::FRAC_PI_2);
+    assert_eq!(horde.buckets[CORPSE_BUCKET].instances[0].pitch(), 0.0);
+    assert_eq!(horde.buckets[CORPSE_BUCKET].instances[0].pos().y, -horde.corpse_min_height);
     let instance = horde.buckets[CORPSE_BUCKET].instances[0];
     let palette = horde.buckets[CORPSE_BUCKET].pose.joint_matrices();
     let rotation = glam::Quat::from_rotation_y(instance.yaw()) * glam::Quat::from_rotation_x(instance.pitch());
@@ -1136,7 +1138,7 @@ fn corpse_joint_matrices(horde: &LoadedHorde<()>) -> Vec<glam::Mat4> {
 }
 
 #[test]
-fn committed_attacker_faces_its_strike_and_tilts_without_extra_pose_buckets() {
+fn committed_attacker_faces_its_strike_and_samples_bite_on_committed_phases() {
     let mut game = arpg_game::Game::from_scene(&arpg_game::GameScene {
         engine: arpg_game::Scene { bodies: vec![arpg_game::Placed {
             pos: (0.0, 1.4), what: arpg_game::ActorDefinition::attacker(),
@@ -1153,15 +1155,24 @@ fn committed_attacker_faces_its_strike_and_tilts_without_extra_pose_buckets() {
         assert_eq!(horde.occupied_buckets(), 1);
         let instance = horde.buckets.iter().flat_map(|b| &b.instances).next().unwrap();
         assert!((instance.yaw().abs() - std::f32::consts::PI).abs() < 0.0001);
-        if tick == 35 { assert!((instance.pitch() + 0.25).abs() < 0.0001); }
-        if tick == 44 { assert!((instance.pitch() - 0.55).abs() < 0.0001); }
-        if tick == 83 { assert!(instance.pitch().abs() < 0.0001); }
+        assert_eq!(instance.pitch(), 0.0);
+        let completed = (tick + 1) as f32;
+        let normalized = if completed <= 36.0 { 0.4 * completed / 36.0 }
+            else if completed <= 45.0 { 0.4 + 0.2 * (completed - 36.0) / 9.0 }
+            else { 0.6 + 0.4 * (completed - 45.0) / 39.0 };
+        let mut expected = horde.asset.bind_pose();
+        let clip = horde.clips.bite;
+        horde.asset.sample(clip, normalized * horde.asset.clip(clip).unwrap().duration_seconds(), &mut expected);
+        let actual = &horde.buckets.iter().find(|b| !b.instances.is_empty()).unwrap().pose;
+        for (actual, expected) in actual.joint_matrices().iter().zip(expected.joint_matrices()) {
+            assert!(actual.matrix().abs_diff_eq(expected.matrix(), 1e-5), "bite phase at tick {tick}");
+        }
         assert_eq!(game.hash(), hash);
     }
 }
 
 #[test]
-fn leaping_enemy_rises_and_lands_without_expanding_shared_pose_count() {
+fn leaping_enemy_rises_and_lands_within_the_shared_pose_budget() {
     let mut game = arpg_game::Game::from_scene(&arpg_game::GameScene {
         engine: arpg_game::Scene { bodies: vec![arpg_game::Placed {
             pos: (0.0, 4.0), what: arpg_game::ActorDefinition::attacker(),
@@ -1179,8 +1190,95 @@ fn leaping_enemy_rises_and_lands_without_expanding_shared_pose_count() {
         let instance = horde.buckets.iter().flat_map(|b| &b.instances).next().unwrap();
         if !(42..77).contains(&tick) { assert_eq!(instance.pos().y, 0.0); }
         if tick == 59 { assert!((instance.pos().y - 1.8).abs() < 0.0001); }
+        let completed = (tick + 1) as f32;
+        let normalized = if completed <= 42.0 { 0.4 * completed / 42.0 }
+            else if completed <= 78.0 { 0.4 + 0.2 * (completed - 42.0) / 36.0 }
+            else { 0.6 + 0.4 * (completed - 78.0) / 54.0 };
+        let mut expected = horde.asset.bind_pose();
+        let clip = horde.clips.leap;
+        horde.asset.sample(clip, normalized * horde.asset.clip(clip).unwrap().duration_seconds(), &mut expected);
+        let actual = &horde.buckets.iter().find(|b| !b.instances.is_empty()).unwrap().pose;
+        for (actual, expected) in actual.joint_matrices().iter().zip(expected.joint_matrices()) {
+            assert!(actual.matrix().abs_diff_eq(expected.matrix(), 1e-5), "leap phase at tick {tick}");
+        }
         assert_eq!(game.hash(), hash);
     }
+}
+
+#[test]
+fn every_coordinated_wolf_animates_at_its_own_phase_and_stale_ids_clear() {
+    let mut game = Game::empty();
+    let mut ids = Vec::new();
+    for index in 0..6 {
+        let angle = index as f32 * std::f32::consts::TAU / 6.0;
+        ids.push(game.place(glam::Vec2::new(angle.cos(), angle.sin()) * 1.4,
+            arpg_game::ActorDefinition::attacker()).unwrap());
+    }
+    let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    for _ in 0..37 { game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); }
+    let mut slot = None;
+    replace_horde(&mut slot, default_horde_path(), |_| Ok(())).unwrap();
+    let horde = slot.as_mut().unwrap();
+    let hash = game.hash();
+    horde.rebuild(game.character_presentations(Alpha::ONE), 0.0, |_| 0.0, |_| None,
+        game.action_statuses(), Alpha::ONE);
+    assert_eq!(horde.buckets[ATTACK_START..RECOIL_START].iter().map(|b| b.instances.len()).sum::<usize>(), 4);
+    // Admission is spaced by twelve ticks: one wolf has begun contact while
+    // the other three are at different points in their wind-ups.
+    for (id, completed) in ids.iter().zip([37.0, 25.0, 13.0, 1.0]) {
+        let normalized = if completed <= 36.0 { 0.4 * completed / 36.0 }
+            else { 0.4 + 0.2 * (completed - 36.0) / 9.0 };
+        let position = game.character_presentations(Alpha::ONE).find(|actor| actor.id() == *id)
+            .unwrap().ground_position();
+        let bucket = horde.buckets[ATTACK_START..RECOIL_START].iter()
+            .find(|bucket| bucket.instances.iter().any(|instance| instance.pos() == position))
+            .expect("each committed wolf has an attack pose");
+        assert_eq!(bucket.instances.len(), 1);
+        let mut expected = horde.asset.bind_pose();
+        let duration = horde.asset.clip(horde.clips.bite).unwrap().duration_seconds();
+        horde.asset.sample(horde.clips.bite, normalized * duration, &mut expected);
+        for (actual, expected) in bucket.pose.joint_matrices().iter().zip(expected.joint_matrices()) {
+            assert!(actual.matrix().abs_diff_eq(expected.matrix(), 1e-5), "wolf {id:?} at {completed} ticks");
+        }
+    }
+    assert_eq!(game.hash(), hash);
+    for id in ids { assert!(game.despawn_body(id)); }
+    let replacement = game.place(glam::Vec2::new(8.0, 8.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
+    horde.rebuild(game.character_presentations(Alpha::ONE), 0.1, |_| 0.0, |_| None,
+        game.action_statuses(), Alpha::ONE);
+    assert_eq!(horde.instance_count(), 1);
+    assert!(horde.buckets[ATTACK_START..RECOIL_START].iter().all(|b| b.instances.is_empty()));
+    assert_eq!(horde.headings.len(), 1);
+    assert!(horde.headings.contains_key(&replacement));
+    game.start_scene(&Default::default()).unwrap();
+    horde.clear();
+    assert_eq!(horde.instance_count(), 0);
+    assert!(horde.headings.is_empty());
+}
+
+#[test]
+fn missing_quadruped_roles_refuse_before_upload_and_preserve_the_accepted_horde() {
+    let mut slot = None;
+    replace_horde(&mut slot, default_horde_path(), |_| Ok(())).unwrap();
+    let mut before = Report::default();
+    report_horde_preview(slot.as_ref(), &mut before);
+    let before = before.finish();
+    let path = std::env::temp_dir().join(format!("arpg-wolf-roles-{}.glb", std::process::id()));
+    for name in ["Walk", "Bite", "Leap"] {
+        let mut bytes = std::fs::read(default_horde_path()).unwrap();
+        let needle = format!("\"{name}\"");
+        let start = bytes.windows(needle.len()).position(|w| w == needle.as_bytes()).unwrap();
+        bytes[start..start + needle.len()].copy_from_slice(b"\"Gone\"");
+        std::fs::write(&path, bytes).unwrap();
+        let mut uploaded = false;
+        let error = replace_horde(&mut slot, path.clone(), |_| { uploaded = true; Ok(()) }).unwrap_err();
+        assert!(error.contains(name), "{error}");
+        assert!(!uploaded);
+        let mut after = Report::default();
+        report_horde_preview(slot.as_ref(), &mut after);
+        assert_eq!(before, after.finish());
+    }
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -1220,7 +1318,7 @@ fn damage_uses_three_reaction_stages_then_returns_to_gait_without_mutating_game(
 }
 
 #[test]
-fn stationary_slam_braces_the_knees_and_enemy_height_is_close_to_player_height() {
+fn stationary_slam_braces_the_knees_and_wolf_stays_at_quadruped_height() {
     let mut game = Game::empty();
     game.set_attack_profile(AttackProfile::Slam);
     let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
@@ -1234,14 +1332,14 @@ fn stationary_slam_braces_the_knees_and_enemy_height_is_close_to_player_height()
         let actual = player.asset.joint_transform(&player.pose, joint).unwrap();
         assert!(actual.abs_diff_eq(player.asset.joint_transform(&expected, joint).unwrap(), 1e-5), "{name}");
     }
-    let enemy = arpg_assets::import_character_glb(include_bytes!("../../../../assets/characters/basic-enemy/basic-enemy.glb")).unwrap();
+    let enemy = arpg_assets::import_character_glb(include_bytes!("../../../../assets/characters/wolf/wolf.glb")).unwrap();
     let height = |asset: &arpg_assets::CharacterAsset| {
         let min = asset.vertices().iter().map(|v| v.position().y).fold(f32::INFINITY, f32::min);
         let max = asset.vertices().iter().map(|v| v.position().y).fold(f32::NEG_INFINITY, f32::max);
         max - min
     };
     let ratio = height(&enemy) * HORDE_SCALE / height(&player.asset);
-    assert!((0.80..=0.90).contains(&ratio), "enemy/player height {ratio}");
+    assert!((0.50..=0.65).contains(&ratio), "enemy/player height {ratio}");
 }
 
 #[test]

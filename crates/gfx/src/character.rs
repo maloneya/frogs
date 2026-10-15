@@ -18,7 +18,7 @@ mod tests {
 
     #[test]
     fn posed_bounds_keep_geometry_and_upload_keeps_offscreen_shadow_casters() {
-        let asset=arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.glb")).unwrap();
+        let asset=arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/wolf/wolf.glb")).unwrap();
         let (device,queue)=crate::tests::headless_device();
         let binding=CameraBinding::new(&device);
         let mesh=CharacterMesh::new(&device,&queue,&MaterialLayout::new(&device),&asset).unwrap();
@@ -85,7 +85,7 @@ mod tests {
 /// This is a renderer budget rather than gameplay content. The app decides
 /// which clip/phase each bucket represents, while this bound fixes GPU buffer
 /// sizes at initialization.
-pub const MAX_HORDE_POSE_BUCKETS: usize = 12;
+pub const MAX_HORDE_POSE_BUCKETS: usize = 16;
 const PALETTE_SLOTS: usize = 1 + MAX_HORDE_POSE_BUCKETS;
 
 /// One uploaded character with shared geometry buffers and per-part materials.

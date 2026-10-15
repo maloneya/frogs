@@ -129,7 +129,10 @@ def load(path, native):
         source_sword(rig)
     else:
         assert bpy.ops.wm.open_mainfile(filepath=str(path), use_scripts=False) == {'FINISHED'}
-        rig = bpy.data.objects['SwordsmanRig']
+        rigs = [obj for obj in bpy.context.scene.objects if obj.type == 'ARMATURE']
+        if len(rigs) != 1:
+            raise ValueError('Character preview requires exactly one armature')
+        rig = rigs[0]
     missing = [block.name for block in bpy.data.user_map() if block.library and block.is_missing]
     if missing:
         raise ValueError(f'Missing linked source data: {missing}')
@@ -207,7 +210,7 @@ def prepare_mode(rig, mode, native):
     if mode == 'plain':
         clay = material('PreviewClay', (.22, .26, .30))
         for obj in meshes:
-            if ((not native and obj.name != 'Swordsman')
+            if ((not native and 'Swordsman' in bpy.data.objects and obj.name != 'Swordsman')
                     or (native and obj.name.startswith('Reference'))):
                 obj.hide_render = True
                 continue
@@ -240,7 +243,7 @@ def prepare_mode(rig, mode, native):
         rod = bpy.context.object
         rod.data.materials.append(colors[side])
         rods.append((rod, bone.name))
-    if not native:
+    if not native and 'Weapon' in rig.data.bones:
         bpy.ops.mesh.primitive_cylinder_add(vertices=8, radius=1, depth=1)
         rod = bpy.context.object
         rod.data.materials.append(colors['centre'])
@@ -317,7 +320,7 @@ def main():
         raise FileExistsError(f'Choose a new review directory: {output}')
     paths = ([args.source] if args.source else ([args.before] if args.before else []) + [args.after])
     variants = [(chr(65 + i), path.resolve()) for i, path in enumerate(paths)]
-    evidence = {'kind': 'native source preview' if args.source else 'retimed Blender player preview',
+    evidence = {'kind': 'native source preview' if args.source else 'retimed Blender character preview',
                 'inputs': {}, 'tools': {str(HERE / name): digest(HERE / name) for name in
                                        ('preview.py', 'preview_timing.py', 'preview_gifs.py')},
                 'clips': {}, 'series': [], 'resolution': args.resolution,
@@ -329,8 +332,6 @@ def main():
     for variant, path in variants:
         expected = digest(path)
         rig = load(path, bool(args.source))
-        if 'plain' in args.modes and not args.source and 'Swordsman' not in bpy.data.objects:
-            raise ValueError('Plain player previews require the Swordsman body mesh')
         dependencies = [Path(bpy.path.abspath(library.filepath)).resolve() for library in bpy.data.libraries]
         evidence['inputs'][variant] = {str(p): digest(p) for p in [path, *dependencies]}
         if evidence['inputs'][variant][str(path)] != expected:

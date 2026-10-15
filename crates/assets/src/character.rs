@@ -1461,8 +1461,8 @@ mod tests {
 
     #[test]
     fn refused_shadow_preserves_the_accepted_caster_and_visible_asset() {
-        const ENEMY: &[u8] = include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.glb");
-        const SHADOW: &[u8] = include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.shadow.glb");
+        const ENEMY: &[u8] = include_bytes!("../../../assets/characters/wolf/wolf.glb");
+        const SHADOW: &[u8] = include_bytes!("../../../assets/characters/wolf/wolf.shadow.glb");
         let mut owner = import_character_glb(ENEMY).unwrap();
         owner.attach_shadow(import_character_glb(SHADOW).unwrap()).unwrap();
         let before = bytemuck::cast_slice::<_, u8>(owner.shadow_mesh().unwrap().vertices()).to_vec();
@@ -1608,7 +1608,7 @@ mod tests {
                 .iter()
                 .all(|matrix| { matrix.matrix().abs_diff_eq(Mat4::IDENTITY, 1.0e-5) })
         );
-        assert_eq!(character.clip_count(), 6);
+        assert_eq!(character.clip_count(), 9);
         let idle = character.clip_named("Idle").unwrap();
         let clip = character.clip(idle).unwrap();
         assert_eq!(clip.name(), "Idle");

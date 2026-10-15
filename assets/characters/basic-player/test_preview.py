@@ -18,7 +18,8 @@ import review
 class Timing(unittest.TestCase):
     def test_attack_phase_edges_follow_gameplay_ticks_not_blender_fps(self):
         for name, loaded, released, end in [('AttackCleave', .1, .2, 22/60),
-                                             ('AttackSlam', .15, 14/60, .5)]:
+                                             ('AttackSlam', .15, 14/60, .5),
+                                             ('Bite', .6, .75, 1.4), ('Leap', .7, 1.3, 2.2)]:
             with self.subTest(name=name):
                 clip = sampling(name, (1, 31), False, 120, poses=True)
                 self.assertEqual(clip['frames'][:3], [1, 13, 19])

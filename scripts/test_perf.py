@@ -27,7 +27,7 @@ def fixture():
         "overwritten": 0, "samples": 60, "presented": 60, "ticks": 60,
         "window_ms": 1020, "current_tick": 180, "current_enemies": 100, "current_corpses": 0,
         "mean_step_ms": 10, "presentation_ms": {"mean": 1}, "frame_ms": {"p99": 17},
-        "horde": {"instances": 100, "idle_instances": 100, "run_instances": 0, "corpse_instances": 0},
+        "horde": {"instances": 100, "idle_instances": 100, "run_instances": 0, "attack_instances": 0, "recoiling_instances": 0, "corpse_instances": 0},
         "frames": {str(i): {"ticks": 1, "end_tick": 121 + i, "enemies": 100,
                             "presented": True, "focused": True, "occluded": False, "frame_ms": 17,
                             "game_step_ms": 10, "presentation_ms": 1}

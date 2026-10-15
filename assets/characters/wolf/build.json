@@ -1,0 +1,13 @@
+{
+  "blender": "5.2.1 LTS",
+  "compiler_sha256": "ca7b4eb1d2cddb68ca6ccb7e9a2c3d6a0fb7ff1a1112e5a7376a355becda67c0",
+  "sources": {
+    "experimental/character-references/sources/micket-wolf/wolf.blend": "0a8c5be20ee8010eb15286a4f2f5f08950bbf4d7c79dd941c6cfcf4ba4b9a956",
+    "experimental/character-references/sources/tomek-wolf/wolf.blend": "98cb707d20ba11da8f6a215177ebe7fa731db60083bed90a416fa27ff8499161",
+    "assets/characters/basic-player/motion.py": "b49bb3c90e4392ec22b554b7d4a0f0584f0d55c2cda4704a2fd482d5a487bb83"
+  },
+  "artifacts": {
+    "wolf.glb": "ce51c30846ccc7384e597bd2ce2a67ddd2cb3c21a98e416b1267b8cd7b7e2eb1",
+    "wolf.shadow.glb": "f2f4dcfe48bc63021ad48210f64cf71821999d20015e7545bd148d960abc15fc"
+  }
+}

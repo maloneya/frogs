@@ -275,8 +275,8 @@ mod tests {
         let floor_pipeline = MeshPipeline::new(&device, &binding.layout, MaterialLayout::new(&device), format, crate::DEPTH_FORMAT);
         let ground = arpg_assets::import_glb(include_bytes!("../../../assets/world/ground.glb")).unwrap();
         let floor = floor_pipeline.upload_mesh(&device, &queue, &ground).unwrap();
-        let mut asset = arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.glb")).unwrap();
-        asset.attach_shadow(arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/basic-enemy/basic-enemy.shadow.glb")).unwrap()).unwrap();
+        let mut asset = arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/wolf/wolf.glb")).unwrap();
+        asset.attach_shadow(arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/wolf/wolf.shadow.glb")).unwrap()).unwrap();
         let mut characters = CharacterPipeline::new(&device, &binding.layout, MaterialLayout::new(&device), format, crate::DEPTH_FORMAT);
         let mesh = characters.upload_character(&device, &queue, &asset).unwrap();
         let mut camera = OrthoCamera::new(N, N);

@@ -488,9 +488,11 @@ fn attack_clip_time(
 const HORDE_ROLES: [HordeRole; 4] = [HordeRole::Idle, HordeRole::Walk, HordeRole::Run, HordeRole::Sprint];
 const CORPSE_BUCKET: usize = MAX_HORDE_POSE_BUCKETS - 1;
 const HORDE_PHASES_PER_ROLE: usize = 2;
-const RECOIL_START: usize = HORDE_ROLES.len() * HORDE_PHASES_PER_ROLE;
+const ATTACK_START: usize = HORDE_ROLES.len() * HORDE_PHASES_PER_ROLE;
+const ATTACK_BUCKETS: usize = arpg_game::MAX_COMBAT_COMMITMENTS;
+const RECOIL_START: usize = ATTACK_START + ATTACK_BUCKETS;
 const RECOIL_BUCKETS: usize = crate::enemy_feedback::Recoil::POSE_PHASES.len();
-const HORDE_SCALE: f32 = 0.95;
+const HORDE_SCALE: f32 = 1.0;
 const _: () = assert!(RECOIL_START + RECOIL_BUCKETS == CORPSE_BUCKET);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -515,12 +517,11 @@ impl HordeRole {
         else { Self::Sprint }
     }
 
-    // Reuse the authored Run clip with bounded cadences. Selection follows real
-    // displacement, so a blocked sprinter does not run in place at full cadence.
+    // Selection follows real displacement, so a blocked sprinter does not
+    // gallop in place. Walk has its own four-foot support cycle.
     fn playback_rate(self) -> f64 {
         match self {
-            Self::Idle | Self::Run => 1.0,
-            Self::Walk => f64::from(REFERENCE_GROUND_SPEEDS[0] / REFERENCE_GROUND_SPEEDS[1]),
+            Self::Idle | Self::Walk | Self::Run => 1.0,
             Self::Sprint => f64::from(REFERENCE_GROUND_SPEEDS[2] / REFERENCE_GROUND_SPEEDS[1]),
         }
     }
@@ -531,7 +532,10 @@ struct HordeClips {
     hit: arpg_assets::ClipId,
     death: arpg_assets::ClipId,
     idle: arpg_assets::ClipId,
+    walk: arpg_assets::ClipId,
     run: arpg_assets::ClipId,
+    bite: arpg_assets::ClipId,
+    leap: arpg_assets::ClipId,
 }
 
 impl HordeClips {
@@ -543,7 +547,10 @@ impl HordeClips {
         };
         Ok(Self {
             idle: clip("Idle")?,
+            walk: clip("Walk")?,
             run: clip("Run")?,
+            bite: clip("Bite")?,
+            leap: clip("Leap")?,
             hit: clip("Hit")?,
             death: clip("Death")?,
         })
@@ -552,9 +559,24 @@ impl HordeClips {
     fn for_role(self, role: HordeRole) -> arpg_assets::ClipId {
         match role {
             HordeRole::Idle => self.idle,
-            HordeRole::Walk | HordeRole::Run | HordeRole::Sprint => self.run,
+            HordeRole::Walk => self.walk,
+            HordeRole::Run | HordeRole::Sprint => self.run,
         }
     }
+}
+
+/// Game bounds simultaneous commitments, so each attack can sample its exact
+/// phase while the much larger locomotion crowd continues to share gait poses.
+fn horde_attack_time(attack: arpg_game::ActionStatus, alpha: Alpha) -> Option<f32> {
+    if !matches!(attack.kind, arpg_game::ActionKind::Swipe | arpg_game::ActionKind::Leap) { return None; }
+    let (start, span) = match attack.phase {
+        AttackPhase::Startup => (0.0, 0.4),
+        AttackPhase::Active => (0.4, 0.2),
+        AttackPhase::Recovery => (0.6, 0.4),
+        AttackPhase::Idle => return None,
+    };
+    let progress = ((attack.elapsed as f32 + alpha.get()) / attack.duration as f32).clamp(0.0, 1.0);
+    Some(start + span * progress)
 }
 
 struct HordeBucket {
@@ -575,7 +597,6 @@ pub(super) struct LoadedHorde<T> {
     clips: HordeClips,
     buckets: [HordeBucket; MAX_HORDE_POSE_BUCKETS],
     corpse_min_height: f32,
-    corpse_front: f32,
     headings: std::collections::HashMap<arpg_sim::EntityId, RememberedHeading>,
     rebuild_id: u64,
     gpu: T,
@@ -584,7 +605,7 @@ pub(super) struct LoadedHorde<T> {
 impl<T> LoadedHorde<T> {
     pub(super) fn summary(&self) -> String {
         format!(
-            "horde character vertices={} indices={} joints={} pose_buckets={} idle=Idle run=Run path={}",
+            "horde character vertices={} indices={} joints={} pose_buckets={} idle=Idle walk=Walk run=Run bite=Bite leap=Leap path={}",
             self.asset.vertex_count(),
             self.asset.index_count(),
             self.asset.joint_count(),
@@ -625,13 +646,11 @@ impl<T> LoadedHorde<T> {
         // corpse again on the CPU every frame.
         let palette = buckets[CORPSE_BUCKET].pose.joint_matrices();
         let mut corpse_min_height = f32::INFINITY;
-        let mut corpse_front = f32::NEG_INFINITY;
         for vertex in asset.vertices() {
             let point = vertex.joints().into_iter().zip(vertex.weights())
                 .fold(Vec3::ZERO, |sum, (joint, weight)| sum
                     + palette[usize::from(joint)].matrix().transform_point3(vertex.position()) * weight);
             corpse_min_height = corpse_min_height.min(point.y * HORDE_SCALE);
-            corpse_front = corpse_front.max(point.z * HORDE_SCALE);
         }
         // Three fixed stages articulate every struck enemy without sampling
         // a separate skeleton per body or increasing cost with hit age variety.
@@ -646,7 +665,6 @@ impl<T> LoadedHorde<T> {
             clips,
             buckets,
             corpse_min_height,
-            corpse_front,
             headings: std::collections::HashMap::new(),
             rebuild_id: 0,
             gpu,
@@ -685,8 +703,10 @@ impl<T> LoadedHorde<T> {
             bucket.instances.clear();
         }
 
-        let mut committed = crate::attack_effects::visible_actions(attacks);
-        let attacks: [Option<arpg_game::ActionStatus>; crate::attack_effects::MAX_VISIBLE_ACTIONS] = std::array::from_fn(|_| committed.next());
+        let mut committed = attacks.filter_map(|attack|
+            horde_attack_time(attack, alpha).map(|time| (attack, time)));
+        let attacks: [Option<_>; ATTACK_BUCKETS] = std::array::from_fn(|_| committed.next());
+        debug_assert!(committed.next().is_none(), "Game owns combat commitment capacity");
         self.rebuild_id = self.rebuild_id.wrapping_add(1);
         for enemy in enemies {
             let (mut bucket, key) = Self::bucket(enemy);
@@ -704,26 +724,14 @@ impl<T> LoadedHorde<T> {
             heading.seen_in_rebuild = self.rebuild_id;
             let mut pitch = 0.0;
             let mut height = 0.0;
-            if let Some(attack) = attacks.iter().flatten().find(|a| a.body == enemy.id()) {
+            if let Some((index, (attack, _))) = attacks.iter().enumerate()
+                .filter_map(|(index, action)| action.as_ref().map(|action| (index, action)))
+                .find(|(_, (attack, _))| attack.body == enemy.id()) {
                 heading.yaw = attack.direction.x.atan2(attack.direction.y);
+                bucket = ATTACK_START + index;
                 let progress = ((attack.elapsed as f32 + alpha.get()) / attack.duration as f32).clamp(0.0, 1.0);
-                if attack.kind == arpg_game::ActionKind::Leap {
-                    match attack.phase {
-                        AttackPhase::Startup => pitch = -0.4 * progress,
-                        AttackPhase::Active => {
-                            height = 4.0 * 1.8 * progress * (1.0 - progress);
-                            pitch = -0.4 + 0.9 * progress;
-                        }
-                        AttackPhase::Recovery => pitch = 0.5 * (1.0 - progress),
-                        AttackPhase::Idle => {}
-                    }
-                } else {
-                    pitch = match attack.phase {
-                        AttackPhase::Startup => -0.25 * progress,
-                        AttackPhase::Active => -0.25 + 0.8 * (progress * 3.0).min(1.0),
-                        AttackPhase::Recovery => 0.55 * (1.0 - progress),
-                        AttackPhase::Idle => 0.0,
-                    };
+                if attack.kind == arpg_game::ActionKind::Leap && attack.phase == AttackPhase::Active {
+                    height = 4.0 * 1.8 * progress * (1.0 - progress);
                 }
             }
             let mut yaw = heading.yaw;
@@ -747,7 +755,7 @@ impl<T> LoadedHorde<T> {
         self.headings
             .retain(|_, heading| heading.seen_in_rebuild == self.rebuild_id);
 
-        for (index, bucket) in self.buckets[..RECOIL_START].iter_mut().enumerate() {
+        for (index, bucket) in self.buckets[..ATTACK_START].iter_mut().enumerate() {
             if bucket.instances.is_empty() {
                 continue;
             }
@@ -760,6 +768,15 @@ impl<T> LoadedHorde<T> {
             let time = metadata.loop_time(presentation_seconds * role.playback_rate() + offset);
             let sampled = self.asset.sample(clip, time, &mut bucket.pose);
             debug_assert!(sampled, "resolved clip remains live");
+        }
+        for (index, action) in attacks.into_iter().enumerate() {
+            let Some((attack, normalized)) = action else { continue; };
+            let bucket = &mut self.buckets[ATTACK_START + index];
+            if bucket.instances.is_empty() { continue; }
+            let clip = if attack.kind == arpg_game::ActionKind::Leap { self.clips.leap } else { self.clips.bite };
+            let duration = self.asset.clip(clip).expect("resolved attack").duration_seconds();
+            let sampled = self.asset.sample(clip, normalized * duration, &mut bucket.pose);
+            debug_assert!(sampled, "resolved attack remains live");
         }
     }
 
@@ -774,12 +791,13 @@ impl<T> LoadedHorde<T> {
             let age = (arpg_game::CORPSE_LIFETIME_TICKS - corpse.remaining_ticks()) as f32 + alpha.get();
             let fall = (age / 15.0).clamp(0.0, 1.0);
             let fall = fall * fall * (3.0 - 2.0 * fall);
-            let pitch = std::f32::consts::FRAC_PI_2 * fall;
-            let height = (self.corpse_front * pitch.sin() - self.corpse_min_height * pitch.cos()).max(0.0);
+            // The authored wolf is already curled on its side. Drop that pose
+            // onto its measured support instead of pitching a quadruped nose-first.
+            let height = -self.corpse_min_height + 0.25 * (1.0 - fall);
             bucket.instances.push(Instance::new(
                 Vec3::new(position.x, height, position.y),
                 Vec3::splat(HORDE_SCALE), LinearRgb::splat(0.6),
-            ).with_yaw(yaw).with_pitch(pitch));
+            ).with_yaw(yaw));
         }
     }
 
@@ -876,9 +894,14 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("occupied_buckets", preview.occupied_buckets() as u64);
         out.int("instances", preview.instance_count() as u64);
         out.int("corpse_instances", preview.buckets[CORPSE_BUCKET].instances.len() as u64);
-        out.num("corpse_settled_height", preview.corpse_front);
+        out.num("corpse_settled_height", -preview.corpse_min_height);
         out.int("recoiling_instances", preview.buckets[RECOIL_START..CORPSE_BUCKET].iter()
             .map(|bucket| bucket.instances.len() as u64).sum());
+        out.int("attack_instances", preview.buckets[ATTACK_START..RECOIL_START].iter()
+            .map(|bucket| bucket.instances.len() as u64).sum());
+        for (label, clip) in [("walk_clip", preview.clips.walk), ("bite_clip", preview.clips.bite), ("leap_clip", preview.clips.leap)] {
+            out.text(label, preview.asset.clip(clip).expect("resolved clip").name());
+        }
         out.int("flashing_instances", preview.buckets.iter()
             .flat_map(|bucket| &bucket.instances)
             .filter(|instance| instance.white_mix() > 0.0).count() as u64);
@@ -891,7 +914,7 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         );
         out.int(
             "run_instances",
-            preview.buckets[HORDE_PHASES_PER_ROLE..RECOIL_START]
+            preview.buckets[HORDE_PHASES_PER_ROLE..ATTACK_START]
                 .iter()
                 .map(|bucket| bucket.instances.len() as u64)
                 .sum(),
@@ -905,6 +928,10 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("corpse_instances", 0);
         out.num("corpse_settled_height", 0.0);
         out.int("recoiling_instances", 0);
+        out.int("attack_instances", 0);
+        out.text("walk_clip", "");
+        out.text("bite_clip", "");
+        out.text("leap_clip", "");
         out.int("flashing_instances", 0);
         out.int("idle_instances", 0);
         out.int("run_instances", 0);
@@ -1033,7 +1060,7 @@ pub(super) fn default_character_path() -> std::path::PathBuf {
 /// The checked-in enemy asset is resolved independently of the launch directory.
 pub(super) fn default_horde_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/characters/basic-enemy/basic-enemy.glb")
+        .join("../../assets/characters/wolf/wolf.glb")
 }
 
 const PLAYER_DIGITS: [&str; 5] = ["Little", "Ring", "Middle", "Index", "Thumb"];
