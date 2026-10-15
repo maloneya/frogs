@@ -110,30 +110,73 @@ controlled rig; ordinary character regeneration does not run it.
 
 ## Review motion
 
-Keep a previous `.blend` and matching `.glb` in an ignored review directory.
-One renderer compares clips at gameplay cadence with equal camera, lighting and
-scale; omit `--before` for the current asset alone:
+Run [`review.py`](review.py) with **Python and Pillow**. In Codex, use the Python
+executable returned by `load_workspace_dependencies`. The launcher checks image
+dependencies before starting Blender, waits for rendering to finish, then packages
+the results. It never regenerates or saves an input asset. Choose a new output
+directory for each checkpoint; existing review work is refused.
+
+Use `--before` to compare another `.blend` with `--after`, or omit both to inspect
+the current player. Labels **A/B** are neutral identifiers in command order;
+actual input paths and hashes stay in `evidence.json`, outside `critic/`.
+This example produces an equipped and skeleton motion comparison from both the
+game angle and side, with matched framing across assets, modes and all samples:
 
 ```sh
-blender --background --factory-startup --python-exit-code 1 \
-  --python assets/characters/basic-player/preview.py -- target/player-review \
+python3 assets/characters/basic-player/review.py target/player-review \
   --before /absolute/path/to/previous.blend --after target/player-a/basic-player.blend \
-  --clips AttackCleave AttackSlam Run RunBackward RunLeft RunRight
-python3 assets/characters/basic-player/preview_gifs.py target/player-review
+  --clips AttackCleave --views game side --modes equipped skeleton
 ```
 
-Packaging requires Pillow and produces normal/quarter-speed GIFs and pose strips.
-`evidence.json` records hashes, sampled frames and cadence; packaging refuses stale
-inputs. These are Blender previews. Use [ARPG_HARNESS](../../../.claude/skills/playtest/SKILL.md)
-for actual shading, contacts, transitions and standing/moving abilities.
+`critic/` contains normal-speed and quarter-speed GIFs, timestamped pose strips,
+and a local `index.html`. Give the independent critic selected images from this
+directory using the [visual critique protocol](../../../.claude/skills/character-workflow/references/visual-critique.md).
+`--references image.png ...` adds neutrally named copies of visual targets.
+The evidence records input/tool hashes, camera framing, sample times and output
+hashes. Packaging refuses changed inputs, missing/changed frames and existing
+packets. A `.blend` preview establishes the authored appearance; it does not
+establish that a separately exported GLB matches it.
+
+Choose the evidence for the defect under review:
+
+| Option | Use |
+|---|---|
+| `--views game front side opposite-side back` | Fixed full-body cameras with a two-metre floor grid; specify only needed views. |
+| `--modes equipped plain skeleton` | Equipped character, plain body without clothing/sword, or bone diagram. Skeleton colours follow bone names and do not establish surface contact. |
+| `--samples poses` | Inexpensive semantic poses: ready, loaded, release end, recovery and ready for melee; quarter-cycle samples for other clips. Stills only. |
+| `--frames 13 14.75 19` | Exact or fractional Blender frames, labelled with presentation time. Stills only. |
+| `--views grip-palm grip-back --hand right` | Opposing close-ups that follow the selected hand. Requires equipped mode and hand/finger landmarks. Use `--hand left` for the supporting hand. |
+| `--grip-orbit 45` | Rotate both grip cameras around the hand axis when the hood or another limb occludes contact. |
+| `--grip-cutaway` | Labelled hand/forearm/weapon isolation in grip views. Intact full-body views stay unchanged; use those for body/clothing clearance. |
+| `--resolution 640` | Increase diagnostic image resolution (default 420). |
+
+For clothing proportions or a sparse blocking pass:
+
+```sh
+python3 assets/characters/basic-player/review.py target/player-poses \
+  --clips AttackCleave --views front side back --modes equipped plain --samples poses
+```
+
+For grasp, wrist and supporting-hand contact:
+
+```sh
+python3 assets/characters/basic-player/review.py target/player-grip \
+  --clips AttackSlam --views front grip-palm grip-back --hand left \
+  --grip-cutaway --frames 13 14.75 19
+```
+
+The complete motion is sampled by default. Pose strips include gameplay phase
+edges, not just evenly spaced thumbnails. Sparse stills never become a GIF;
+they cannot certify timing or feel. Grip cameras follow the hand, so use the
+fixed full-body views to judge body travel and support. These are Blender
+previews; use [ARPG_HARNESS](../../../.claude/skills/playtest/SKILL.md) for actual
+game shading, contacts, transitions and standing/moving abilities.
 
 Native references use the same renderer at their original scene cadence:
 
 ```sh
-blender --background --factory-startup --python-exit-code 1 \
-  --python assets/characters/basic-player/preview.py -- target/slam-source-review \
+python3 assets/characters/basic-player/review.py target/slam-source-review \
   --source assets/characters/basic-player/reference/slam-source.glb --clips Sword_Regular_C
-python3 assets/characters/basic-player/preview_gifs.py target/slam-source-review
 ```
 
 Native reference previews normalize height and preserve anatomical handedness.
@@ -141,6 +184,17 @@ Quaternius hand rigs
 receive a diagnostic sword. Retimed player motion is a separate visual judgement.
 Follow [motion acceptance](../../../docs/character-motion.md) and run the
 [completion checks](../../../docs/verification.md) when promoting an asset.
+
+[`preview.py`](preview.py) is the headless Blender renderer; [`preview_gifs.py`](preview_gifs.py)
+packages an already completed render directory when these stages need to run
+separately. [`preview_timing.py`](preview_timing.py) owns presentation-time sampling
+and GIF cadence. Focused review-pipeline checks (same Python with Pillow):
+
+```sh
+python3 -B -m unittest discover -s assets/characters/basic-player -p test_preview.py
+blender --background --factory-startup --python-exit-code 1 \
+  --python assets/characters/basic-player/check_preview.py
+```
 
 Grasp regressions, including refusal of an open hand and wrist-mounted weapon:
 

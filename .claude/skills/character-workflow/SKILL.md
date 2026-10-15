@@ -25,9 +25,19 @@ usable contents and licence before building around a pack. Retain provenance.
 A style video provides visual reference; it does not provide measured 3D motion.
 
 Adapt an accepted foundation before inventing a new body, rig, or choreography.
+For the current player, start with its retained body, motions and reference catalog.
+State the visible properties to preserve and the specific mismatch to change;
+“more weight” must identify support, body travel or timing rather than imply a
+more extreme bend. Rejected visual directions are evidence for changing the
+foundation or method, not just increasing the same pose offsets.
 Keep the production rig stable across motions within a character family; add
 joints for a demonstrated articulation or deformation need. Runtime rig limits need not restrict the
 controls used for authoring: bake supported motion into the export rig.
+Choose controls for the edit: hip and foot targets for stance or weight transfer,
+with sparse whole-body poses before dense baking. Reuse existing controls.
+Preserve the accepted poses when adding them; inspect the evaluated result before
+building the rest of the export. Keep any human-facing posing file simple and
+ready to key and save, rather than exposing a dense runtime bake by default.
 
 ## Develop the visible result
 
@@ -44,7 +54,11 @@ A rig with more joints is not evidence of better anatomy or skinning.
 
 **Motion.** Start with the source or a few whole-body key poses. Show readiness,
 loaded effort, release and follow-through. Review silhouettes, support, opposite
-arm participation and a solid grip before smoothing curves. Use a pose strip and
+arm participation and a solid grip before smoothing curves. Trace the force:
+which foot loads, how pelvis and chest travel through release, and which foot
+receives the body. Distinguish torso bending from weight transfer. For the
+current Cleave, retain a moving wind-up and rear-foot drive; do not generalize
+its exact pose depth or travel to other actions. Use a pose strip and
 normal-cadence playback, then slow playback to diagnose arcs and deformation.
 Retarget explicitly for units, facing, handedness and bind axes; inspect the
 loaded and released poses after conversion. Preserve the gameplay hit window.
@@ -54,13 +68,31 @@ loaded and released poses after conversion. Preserve the gameplay hit window.
 scale, standing/moving attacks, transitions and relevant contact feedback.
 Add fitted clothing, equipment and effects over the working body and motion.
 Keep the neck, waist, arm separation and action silhouette readable.
+For clothing, establish the garment silhouette, attachment/support and continuous
+surface before adding folds or texture. Inspect front, side and back joins under
+motion. Where hand-shaped folds remain unconvincing, compare an authored garment
+or an offline cloth drape baked into source geometry; runtime cloth is a separate
+capability decision, and simulation alone does not establish a good garment.
 
 ## Keep review fast and concrete
 
 Compare candidates with the last accepted version using the same camera, scale,
 lighting and cadence. Before presenting progress, inspect the comparison yourself
 and identify the improvement and remaining defect. Do not rely on the user to
-catch basic proportion or articulation failures.
+catch basic proportion or articulation failures. Choose views for the suspected
+defect: side and skeleton views for support/body travel, front/back for garment
+volume and joins, contact close-ups for grips. Compare semantic action phases
+such as load, contact and recovery; evenly spaced thumbnails can miss them.
+State what visibly improved against the target and what still fails before
+running promotion checks. A failed visual approach calls for a new hypothesis
+and a small diagnostic, rather than another complete build of the same guess.
+
+For substantial visual checkpoints, use a fresh subagent as an independent
+visual critic. Give it images and visual references, without the implementation
+history, test results or claimed improvements. Follow the
+[visual critique protocol](references/visual-critique.md) for evidence selection,
+uncertainty and checking the revised result. Reuse relevant review evidence for
+small edits; request only the views affected by the change.
 
 Inspect the complete equipped character, not just the requested change. Check
 hands enclosing grips, weapon/body clearance, clothing fit, joint deformation,
@@ -86,8 +118,21 @@ a stale render must not silently stand in for a newer asset.
 
 Use the player's [preview tools](../../../assets/characters/basic-player/README.md#review-motion)
 and the [reference catalog](../../../experimental/character-references/README.md)
-where they fit; keep new tooling narrowly tied to the current review need. Work toward
-repeatable preview generation instead of rewriting capture/render commands.
+where they fit. Run `review.py` with the bundled Python/Pillow runtime for one
+render-and-package command. Select fixed views, equipped/plain/skeleton mode,
+semantic poses or fractional frames, and opposing grip close-ups using its
+options. Its `critic/` packet has neutral labels; keep provenance outside the
+critic's inputs. Extend this maintained tool for a missing diagnostic instead
+of writing another task-specific render script.
+Keep the strongest provisional candidate available during exploration; the
+latest revision must earn replacement through a matched visual comparison.
+Retain a compact record of the visual hypothesis, changed owner, result and
+unresolved issue so failed approaches are not rediscovered after context changes.
+Use the bundled dependency runtime for Pillow packaging. Run packaging only
+after rendering succeeds. Inspect unfamiliar source inventory and evaluated
+poses before building adapters around assumed bones, face sets or clips.
+When changing handedness or blade paths, include runtime trails and impact
+effects in the visual comparison through the active phase.
 
 Seek feedback on concrete visual choices or checkpoints. Use approval already
 given in the conversation; do not add repeated confirmations for routine
