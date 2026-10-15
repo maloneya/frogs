@@ -123,10 +123,16 @@ at those edges so moving a key pose into the wrong phase fails visibly.
 
 The swordsman player uses a 54-joint rig fitted to the accepted CC0 authored
 human surface, with a separate fitted hooded cloak and a rigid sword,
-and a Cleave retargeted from approved authored motion, including weight transfer
-and an articulated wrist. [Motion acceptance](character-motion.md) records the
+and a Cleave compiled from the edited five-pose source, including weight transfer
+and an articulated wrist. Its authoring controls are baked onto the original rig
+before export. [Motion acceptance](character-motion.md) records the
 visual principles. Authoring exports ordinary transform clips; runtime uses the
 same importer and pose sampler.
+
+Anatomical right is `-X` for a character facing Blender `-Y` or runtime `+Z`.
+The player compiler checks the named limbs against that physical side; names
+alone do not establish handedness. Reflections must be baked into geometry,
+face winding, the bind rig and poses rather than left as an object scale.
 
 The player sword is rigidly weighted to `Weapon`, a fixed child of the palm
 socket `RightGrip` below `RightHand`. Anatomical finger joints and grip alignment

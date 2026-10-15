@@ -248,7 +248,7 @@ def build_armature(scale, low, hands):
     bpy.context.view_layer.objects.active = rig
     rig.select_set(True)
     assert bpy.ops.object.mode_set(mode='EDIT') == {'FINISHED'}
-    point = lambda v: Vector((v[0], v[1], v[2] - low)) * scale
+    point = lambda v: anatomy.SOURCE_TO_PLAYER @ Vector((v[0], v[1], v[2] - low)) * scale
     def bone(name, head, tail, parent=None, normalize=True):
         b = data.edit_bones.new(name)
         b.head, b.tail = (point(head), point(tail)) if normalize else (head, tail)
@@ -318,15 +318,15 @@ def pose(rig, settings):
     bpy.context.view_layer.update()
     wrist=Vector(settings['hand'])
     blade=Vector(settings['blade']).normalized()
-    chain(rig,'RightArm','RightForearm',wrist,(.52,.06,1.25))
+    chain(rig,'RightArm','RightForearm',wrist,(-.52,.06,1.25))
     # Each arm supplies reach and an elbow plane. The final grasp pass derives
     # wrist orientation and finger closure from the requested blade direction.
-    rotate_global(rig,'RightHand',(.25,-.12,-1))
+    rotate_global(rig,'RightHand',(-.25,-.12,-1))
     rotate_global(rig,'Weapon',blade)
-    chain(rig,'LeftArm','LeftForearm',(-.34,-.08,1.02),(-.48,.10,1.24))
-    rotate_global(rig,'LeftHand',(-.15,-.10,-1))
-    for side, sign in [('Left',-1),('Right',1)]:
-        goal=(sign*.27, -.06 if sign<0 else .10, .14)
+    chain(rig,'LeftArm','LeftForearm',(.34,-.08,1.02),(.48,.10,1.24))
+    rotate_global(rig,'LeftHand',(.15,-.10,-1))
+    for side, sign in anatomy.SIDES:
+        goal=(sign*.27, -.06 if side=='Left' else .10, .14)
         chain(rig,side+'Leg',side+'Shin',goal,(sign*.25,-1,.55))
         rotate_global(rig,side+'Foot',(sign*.14,-1,-.25))
     bpy.context.view_layer.update()
@@ -365,16 +365,16 @@ def mix(a,b,amount):
 def build_actions(rig):
     bpy.context.scene.render.fps=30
     rig.animation_data_create()
-    ready={'hand':(.40,-.24,1.06),'blade':(.38,-.90,.14),
-           'rotations':{'Spine':(2,0,0),'Chest':(-1,3,0),'Neck':(-1,-3,0),
-                        'RightShoulder':(0,-2,-2),'LeftShoulder':(0,1,1)}}
+    ready={'hand':(-.40,-.24,1.06),'blade':(-.38,-.90,.14),
+           'rotations':{'Spine':(2,0,0),'Chest':(-1,-3,0),'Neck':(-1,3,0),
+                        'RightShoulder':(0,2,2),'LeftShoulder':(0,-1,-1)}}
     idle=authored_idle.bake(rig, lambda: pose(rig, ready), chain, rotate_global)
     # Moving carry keeps the blade elevated for clearance during the stride.
-    traveling_guard={**ready,'blade':(.40,-.83,.39)}
+    traveling_guard={**ready,'blade':(-.40,-.83,.39)}
     authored_locomotion.bake(rig, lambda: pose(rig, traveling_guard))
-    bake(rig,lambda:pose(rig,ready))
+    bake(rig)
     authored_slam.bake(rig, lambda: pose(rig, ready), chain, rotate_global)
-    channel={**ready,'hand':(.32,-.64,1.48),'blade':(0,-1,0)}
+    channel={**ready,'hand':(-.32,-.64,1.48),'blade':(0,-1,0)}
     action(rig,'Disintegrate',[(1,channel),(31,channel)])
     rig.animation_data.action=idle
     bpy.context.scene.frame_set(1)
@@ -387,6 +387,7 @@ def main():
     objects, scale, low = anatomy.import_body()
     hands = grasp.calibrate(objects[0])
     rig = build_armature(scale, low, hands)
+    anatomy.validate_handedness(rig)
     body = build_mesh(objects, make_material(), rig)
     build_actions(rig)
     grasp.bake(rig, hands, chain)

@@ -37,6 +37,30 @@ fn basic_player_satisfies_the_player_presentation_contract() {
 }
 
 #[test]
+fn sword_side_is_anatomically_right_when_facing_forward() {
+    let asset = import_character_glb(BASIC_PLAYER).unwrap();
+    let glb = gltf::Gltf::from_slice(BASIC_PLAYER).unwrap();
+    assert!(glb.nodes().all(|node| node.transform().decomposed().2.into_iter().all(|scale| scale > 0.0)),
+        "handedness must be baked into the asset, not an object reflection");
+    let mut pose = asset.bind_pose();
+    let point = |pose: &arpg_assets::CharacterPose, name: &str| asset.joint_transform(pose,
+        asset.joint_named(name).unwrap()).unwrap().transform_point3(glam::Vec3::ZERO);
+    // +Z forward and +Y up put anatomical right on -X, regardless of labels.
+    for part in ["Arm", "Hand", "Leg", "Foot"] {
+        assert!(point(&pose, &format!("Right{part}")).x < 0.0);
+        assert!(point(&pose, &format!("Left{part}")).x > 0.0);
+    }
+    assert!(point(&pose, "Weapon").x < 0.0);
+    for name in ["Idle", "Run", "RunBackward", "RunLeft", "RunRight", "AttackCleave", "AttackSlam", "Disintegrate"] {
+        for fraction in [0.0, 0.4, 0.5, 0.6, 1.0] {
+            let clip = asset.clip_named(name).unwrap();
+            asset.sample(clip, asset.clip(clip).unwrap().duration_seconds() * fraction, &mut pose);
+            assert!(point(&pose, "Weapon").distance(point(&pose, "RightGrip")) < 0.001, "{name} left its anatomical right grasp");
+        }
+    }
+}
+
+#[test]
 fn longsword_fits_human_scale_and_keeps_the_beam_socket_on_its_tip() {
     let asset = import_character_glb(BASIC_PLAYER).unwrap();
     let weapon = asset.joint_named("Weapon").unwrap();
@@ -94,7 +118,10 @@ fn cloak_has_a_raised_open_hood_and_a_separate_draped_hem() {
         v.joints().into_iter().zip(v.weights()).any(|(joint, weight)| usize::from(joint) == head && weight > 0.99)
     }).map(|v| v.position()).collect();
     assert!(hood.len() > 100, "raised hood geometry is absent");
-    assert!(hood.iter().any(|p| p.y > 2.04), "hood must cover the crown");
+    assert!(hood.iter().any(|p| p.y > 2.08), "hood must rise into a point over the crown");
+    assert!(hood.iter().all(|p| p.x.abs() < 0.19), "hood regained excessive side volume");
+    assert!(hood.iter().filter(|p| p.y > 2.03).all(|p| p.x.abs() < 0.07),
+        "hood crown must taper into the point");
     assert!(hood.iter().any(|p| p.y > 1.8 && p.z < -0.1), "hood must cover the back of the head");
     assert!(!hood.iter().any(|p| (1.8..1.9).contains(&p.y) && p.x.abs() < 0.10 && p.z > 0.15),
         "hood closed the face opening");
@@ -210,7 +237,7 @@ fn locomotion_swings_both_arms_turns_strafe_hips_and_keeps_loop_and_grip_continu
 }
 
 #[test]
-fn articulated_limbs_deform_and_attacks_hold_then_release() {
+fn articulated_limbs_deform_and_attacks_load_then_release() {
     let asset = import_character_glb(BASIC_PLAYER).unwrap();
     assert!(asset.vertices().iter().any(|v| v.weights().into_iter().filter(|w| *w > 0.0).count() > 1));
     let mut pose = asset.bind_pose();
@@ -225,15 +252,23 @@ fn articulated_limbs_deform_and_attacks_hold_then_release() {
             asset.sample(clip, seconds, &mut pose);
             asset.joint_transform(&pose, socket).unwrap().transform_point3(glam::Vec3::ZERO)
         };
-        let held = point(0.3);
-        assert!(held.abs_diff_eq(point(0.4), 1e-5), "{role} does not hold anticipation");
-        assert!(held.distance(point(0.6)) > 0.5, "{role} never releases");
+        let late_windup = point(0.3);
+        let loaded = point(0.4);
+        let release = loaded.distance(point(0.6));
+        if role == "AttackCleave" {
+            let loading = late_windup.distance(loaded);
+            assert!(loading > 0.01, "cleave freezes during the wind-up");
+            assert!(release > loading * 2.0, "cleave loads as fast as it releases");
+        } else {
+            assert!(late_windup.abs_diff_eq(loaded, 1e-5), "{role} does not hold anticipation");
+        }
+        assert!(release > 0.5, "{role} never releases");
         let follow_through = if role == "AttackCleave" { 0.3 } else { 0.1 };
         assert!(point(0.6).distance(point(0.7)) > follow_through,
             "{role} froze instead of carrying the strike through recovery");
         assert!(point(0.0).abs_diff_eq(point(1.0), 1e-5));
         if role == "AttackSlam" {
-            assert!(held.y > 2.0, "slam sword must rise above the head: {held:?}");
+            assert!(loaded.y > 2.0, "slam sword must rise above the head: {loaded:?}");
             assert!(point(0.6).y < 0.8, "slam must drive toward the ground");
         }
     }
@@ -284,7 +319,7 @@ fn cleave_has_independent_arm_arcs_and_a_pivot_at_the_sword_wrist() {
     let released_wrist = relative(&pose, "RightForearm", "Weapon").transform_vector3(glam::Vec3::Y).normalize();
     assert!(ready_wrist.angle_between(released_wrist) > 0.7, "hand and blade stay locked to the forearm");
     assert!(loaded_grip.abs_diff_eq(relative(&pose, "RightHand", "Weapon"), 1e-5), "blade rotated inside the gripping hand");
-    assert!(position(&pose, "RightHand").x > 0.7, "sword arm never extends outside the torso");
+    assert!(position(&pose, "RightHand").x < -0.7, "sword arm never extends outside the torso");
     let sword = asset.joint_transform(&pose, joint("Weapon")).unwrap();
     let free_hand = position(&pose, "LeftHand");
     asset.sample(clip, 0.7, &mut pose);

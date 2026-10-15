@@ -51,12 +51,16 @@ def world_rotation(rig, name, desired):
     bpy.context.view_layer.update()
 
 
-def set_linear_keys(action):
+def action_curves(action):
     for slot in action.slots:
         for layer in action.layers:
             for strip in layer.strips:
                 bag = strip.channelbag(slot)
                 if bag:
-                    for curve in bag.fcurves:
-                        for key in curve.keyframe_points:
-                            key.interpolation = 'LINEAR'
+                    yield from bag.fcurves
+
+
+def set_linear_keys(action):
+    for curve in action_curves(action):
+        for key in curve.keyframe_points:
+            key.interpolation = 'LINEAR'

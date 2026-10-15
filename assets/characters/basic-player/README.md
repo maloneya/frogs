@@ -6,6 +6,8 @@ hooded cloak covers the head and shoulders, with an open front, folded skirt,
 tunic, leggings and leather boots. The body and slender longsword share one
 mesh/atlas; clothing is a second skinned mesh with its own 256-pixel sRGB atlas.
 Blender is Z-up / -Y forward; runtime is Y-up / +Z forward.
+Anatomical right is negative X in both spaces. Bone names, skin weights and the
+sword's `RightHand` → `RightGrip` attachment follow that physical side.
 
 [Source geometry, licences and motion provenance](reference/README.md) remain
 editable inputs. Shoulder weights remain refinement work.
@@ -37,6 +39,8 @@ faces. [`motion.py`](motion.py) owns shared import cleanup, bind conversion and 
 clothing input. The compiler appends `HoodedCloak` and attaches the existing rig;
 ordinary regeneration preserves source edits. The hood follows `Head`, the
 shoulder wrap follows the upper torso, and the skirt blends down to `Pelvis`.
+The chest wrap, shoulders and back are one welded cloth surface; its folds share
+the same skin weights across the join. The fitted hood tapers into a pointed crown.
 The front stays open for stride and sword clearance. Cloth movement is baked
 skinning, without runtime cloth simulation or additional joints.
 
@@ -55,8 +59,12 @@ blender --background --factory-startup --python-exit-code 1 \
   3.2-second relaxed loop: low arms, small pelvis/torso weight transfer and
   independent wrist motion, with planted feet and a rigid sword grip. Attacks
   recover to its opening pose; running keeps an elevated blade for clearance.
-- [`authored_cleave.py`](authored_cleave.py) retargets the descending slash with
-  compression, opposite-arm motion, wrist rotation and moving recovery.
+- [`authored_cleave.py`](authored_cleave.py) compiles the edited five-pose
+  [`cleave-poses.blend`](cleave-poses.blend), baking its hip and foot controls
+  onto the original rig. The wind-up keeps moving; the release curves ease into
+  the cut without continuing the wind-up after contact starts. A shorter rear
+  stance loads the leg, then its heel releases as the hips carry forward into a
+  planted front foot. Foot arcs clear the floor on the step back and return.
   Half-frame keys occupy the existing 6/6/10 tick schedule.
 - [`authored_slam.py`](authored_slam.py) adapts an airborne one-handed finisher into
   a planted two-handed strike. Quarter-frame keys preserve the shared grip and
@@ -82,6 +90,23 @@ Moving abilities retain leg locomotion and aim above the turning pelvis;
 stationary attacks use the braced pose. The app owns role selection, phase
 mapping and masks; see [the asset contract](../../../docs/character-assets-authoring.md).
 Presentation never drives gameplay timing, aim or movement.
+
+## Edit Cleave poses
+
+[`cleave-poses.blend`](cleave-poses.blend) is the editable five-pose source, separate
+from the generated player. Its labelled timeline and `HOW TO - hips and foot
+controls` text explain the authoring controls. Move the hip ring to reposition
+the body with feet held at their targets; move or rotate either foot rectangle
+to place it. The optional knee guides live in their own hidden bone collection.
+Record pose changes with **I**, then save the file. Ordinary character compilation
+reads this authored input, validates its bind and ready seam, and samples the
+evaluated poses onto the original deform rig. The extra controls and IK remain
+in this file; the game receives ordinary transform animation.
+
+[`add_pose_controls.py`](add_pose_controls.py) adds these authoring-only controls
+to a separate output copy, matches the existing key poses, and checks planted
+feet while raising the hips. It refuses an existing output or an already
+controlled rig; ordinary character regeneration does not run it.
 
 ## Review motion
 
@@ -111,7 +136,8 @@ blender --background --factory-startup --python-exit-code 1 \
 python3 assets/characters/basic-player/preview_gifs.py target/slam-source-review
 ```
 
-Source previews normalize height and mirror handedness; Quaternius hand rigs
+Native reference previews normalize height and preserve anatomical handedness.
+Quaternius hand rigs
 receive a diagnostic sword. Retimed player motion is a separate visual judgement.
 Follow [motion acceptance](../../../docs/character-motion.md) and run the
 [completion checks](../../../docs/verification.md) when promoting an asset.

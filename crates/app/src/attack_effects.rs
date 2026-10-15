@@ -199,13 +199,20 @@ impl AttackEffects {
                 .attack_discs()
                 .next()
                 .expect("active attack has a live sample");
+            let origin = game.player_pos() * Vec3::new(1.0, 0.0, 1.0);
+            let (sin, cos) = game.player_presentation(Alpha::ONE).facing().sin_cos();
+            let lateral = Vec3::new(cos, 0.0, -sin);
+            // The right-handed blade sweeps opposite the gameplay disc order.
+            // Reflect only the visual offset in the committed facing plane;
+            // retain each observed world origin so later movement cannot drag it.
+            let centre = origin + (disc.centre() - origin).reflect(lateral);
             if self.samples.len() == CAPACITY {
                 self.samples.pop_front();
             }
             self.samples.push_back(Sample {
                 tick,
-                centre: disc.centre(),
-                origin: game.player_pos() * Vec3::new(1.0, 0.0, 1.0),
+                centre,
+                origin,
                 radius: disc.radius(),
                 end_normal: None,
                 kind: SampleKind::Cleave,
@@ -263,7 +270,7 @@ impl AttackEffects {
                         // A tiny leading slash makes the first active sample visible.
                         let radial = (end.centre - end.origin).normalize_or_zero();
                         Sample {
-                            centre: end.centre + Vec3::new(-radial.z, 0.0, radial.x) * 0.06,
+                            centre: end.centre + Vec3::new(radial.z, 0.0, -radial.x) * 0.06,
                             ..end
                         }
                     } else {
@@ -615,7 +622,11 @@ mod tests {
                     let live = game.attack_discs().next().unwrap();
                     let sample = effects.samples.back().unwrap();
                     assert!(sample.kind == SampleKind::Cleave);
-                    assert_eq!(sample.centre, live.centre());
+                    // This test swings toward +X: mirror the lateral Z offset,
+                    // while preserving gameplay reach and forward placement.
+                    let offset = live.centre() - sample.origin;
+                    let expected = sample.origin + Vec3::new(offset.x, offset.y, -offset.z);
+                    assert!(sample.centre.abs_diff_eq(expected, 1e-5));
                     assert_eq!(
                         sample.origin.y, 0.0,
                         "trail uses ground pose, not body half-height"
@@ -740,7 +751,7 @@ mod tests {
     fn cleave_interpolation_preserves_arc_and_observed_endpoints() {
         let start = Sample {
             tick: 1,
-            centre: Vec3::new(-1.8, 0.0, 1.2),
+            centre: Vec3::new(1.8, 0.0, 1.2),
             origin: Vec3::ZERO,
             radius: 1.1,
             kind: SampleKind::Cleave,
@@ -748,7 +759,7 @@ mod tests {
         };
         let end = Sample {
             tick: 2,
-            centre: Vec3::new(1.8, 0.0, 1.2),
+            centre: Vec3::new(-1.8, 0.0, 1.2),
             ..start
         };
         let middle = cross_section(start, end, 0.5);

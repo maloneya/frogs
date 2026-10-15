@@ -6,6 +6,10 @@ from mathutils import Matrix, Vector
 SOURCE = Path(__file__).resolve().parent / 'reference/realistic-male.blend'
 BODY = 'GEO-body_male_realistic'
 NAMES = [BODY, BODY + '.eye.L', BODY + '.eye.R']
+# Anatomical right is -X when facing -Y with Z up. The retained construction
+# landmarks and region mapping used +X for right; normalize them at import.
+SOURCE_TO_PLAYER = Matrix.Diagonal((-1, 1, 1, 1))
+SIDES = (('Left', 1), ('Right', -1))
 CENTRAL_REGIONS = {18: 'Pelvis', 19: 'Spine'}
 LIMB_REGIONS = {20: 'Arm', 21: 'Arm', 11: 'Forearm', 12: 'Forearm',
                 9: 'Hand', 10: 'Hand', 15: 'Shin', 16: 'Shin',
@@ -16,6 +20,12 @@ DIGIT_REGIONS = {
 }
 
 
+def validate_handedness(rig):
+    for side, sign in SIDES:
+        for part in ('Arm', 'Hand', 'Leg', 'Foot'):
+            assert rig.data.bones[side+part].head_local.x * sign > 0, ('Anatomical side reversed', side+part)
+
+
 def import_body():
     with bpy.data.libraries.load(str(SOURCE), link=False) as (_, data):
         data.objects = list(NAMES)
@@ -23,12 +33,13 @@ def import_body():
     low = min(v.co.z for v in body.data.vertices)
     height = max(v.co.z for v in body.data.vertices) - low
     scale = 2 / height
-    # Only uniform unit normalization. No torso/limb/head reshaping.
+    # Uniform units and anatomical handedness; no anatomy reshaping.
     origin = body.location.copy()
     for obj in data.objects:
         bpy.context.collection.objects.link(obj)
         matrix = Matrix.Translation(Vector((0, 0, -low))) @ Matrix.Translation(obj.location - origin)
-        obj.data.transform(Matrix.Scale(scale, 4) @ matrix)
+        obj.data.transform(SOURCE_TO_PLAYER @ Matrix.Scale(scale, 4) @ matrix)
+        obj.data.flip_normals()
         obj.matrix_world = Matrix.Identity(4)
         obj.modifiers.clear()
         obj.hide_viewport = obj.hide_render = False
@@ -39,7 +50,7 @@ def import_body():
 def region_bone(region, centre):
     if region in CENTRAL_REGIONS:
         return CENTRAL_REGIONS[region]
-    side = 'Right' if centre.x > 0 else 'Left'
+    side = 'Right' if centre.x < 0 else 'Left'
     if region in LIMB_REGIONS:
         return side + LIMB_REGIONS[region]
     if 25 <= region <= 63:

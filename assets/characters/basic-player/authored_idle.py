@@ -2,7 +2,8 @@
 from pathlib import Path
 
 import bpy
-from mathutils import Matrix, Quaternion, Vector
+from anatomy import SIDES
+from mathutils import Quaternion, Vector
 from motion import QUATERNIUS_MAP, imported_source, world_rotation, set_linear_keys
 
 SOURCE = Path(__file__).resolve().parent / 'reference/idle-source.glb'
@@ -12,8 +13,7 @@ BODY = ('Pelvis', 'Spine', 'Chest', 'Neck', 'Head', 'LeftShoulder', 'RightShould
 
 def source_samples():
     with imported_source(SOURCE) as (rig, meshes):
-        mirror = Matrix.Diagonal((-1, 1, 1, 1))
-        axes = mirror @ rig.matrix_world
+        axes = rig.matrix_world.copy()
         points = [obj.matrix_world @ vertex.co for obj in meshes for vertex in obj.data.vertices]
         scale = 2 / (max(point.z for point in points) - min(point.z for point in points))
         action = bpy.data.actions['Sword_Idle']
@@ -25,7 +25,7 @@ def source_samples():
             frame = first + (last - first) * (index % 96) / 96
             bpy.context.scene.frame_set(int(frame), subframe=frame - int(frame))
             frames.append({
-                'rotations': {target: (axes @ rig.pose.bones[QUATERNIUS_MAP[target]].matrix @ mirror).to_quaternion()
+                'rotations': {target: (axes @ rig.pose.bones[QUATERNIUS_MAP[target]].matrix).to_quaternion()
                               for target in (*BODY, 'LeftHand', 'RightHand')},
                 'positions': {target: (axes @ rig.pose.bones[QUATERNIUS_MAP[target]].head) * scale
                               for target in ('Pelvis', 'LeftHand', 'RightHand')},
@@ -56,7 +56,7 @@ def bake(rig, ready_pose, chain, rotate_global):
             world_rotation(rig, name, Quaternion().slerp(delta, .65) @ ready_rotations[name])
         # Keep support planted while pelvis and torso transfer the reference's
         # weight. The arms follow with independent small reaches and wrist arcs.
-        for side, sign in [('Left', -1), ('Right', 1)]:
+        for side, sign in SIDES:
             chain(rig, side + 'Leg', side + 'Shin', feet[side], (sign * .25, -1, .55))
             rotate_global(rig, side + 'Foot', (sign * .14, -1, -.25))
             name = side + 'Hand'

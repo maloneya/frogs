@@ -58,8 +58,16 @@ valid source data does not certify finished deformation.
 
 The current compiler lives in
 [`authored_cleave.py`](../assets/characters/basic-player/authored_cleave.py).
-It retargets the approved CC0 descending slash into the existing 54-joint player,
-keeps the reference recovery moving, and preserves the 6/6/10 gameplay schedule.
+It compiles the user's edited [five-pose Cleave source](../assets/characters/basic-player/cleave-poses.blend),
+derived from the approved CC0 descending slash. Authoring-only hip and foot IK
+are baked onto the existing 54-joint player. The loaded poses raise the hips and
+moderate the torso fold. The rear leg loads in a shorter stance, extends while
+the heel rises, and drives roughly 21 cm of forward hip travel through contact.
+The front foot stays planted as the body follows through; foot arcs clear the
+floor during the step back and return. A moving wind-up and eased release
+preserve the 6/6/10 gameplay schedule and do not move the simulation body.
+The user's five-pose checkpoint from 2026-10-15 remains the editable foundation;
+the subsequent weight-transfer refinement awaits their judgement of feel.
 Stationary attacks use the whole bracing pose; moving attacks retain directional
 leg locomotion under the attack's articulated upper body. The shared importer,
 mask and phase contract remain in

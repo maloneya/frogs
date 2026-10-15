@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 import bpy
+import bmesh
 from mathutils import Vector
 
 sys.dont_write_bytecode = True
@@ -46,7 +47,7 @@ def material():
     return mat
 
 
-def mesh(name, vertices, faces, weights, mat, tile=0, thickness=.008):
+def mesh(name, vertices, faces, weights, mat, tile=0, thickness=.008, weld=False, source_axes=True):
     data = bpy.data.meshes.new(name + 'Mesh')
     data.from_pydata(vertices, [], faces)
     data.update()
@@ -60,12 +61,24 @@ def mesh(name, vertices, faces, weights, mat, tile=0, thickness=.008):
             point = data.vertices[data.loops[loop].vertex_index].co
             uv.data[loop].uv = ((tile % 2) * .5 + .035 + (point.x + 1) % 1 * .43,
                                (tile // 2) * .5 + .035 + point.z % 1 * .43)
+    # Panel landmarks share the retained body's source axes. Bake the same
+    # anatomical normalization before skinning, including face winding.
+    if source_axes:
+        data.transform(anatomy.SOURCE_TO_PLAYER)
+        data.flip_normals()
     groups = {}
     for i, row in enumerate(weights):
         for name, weight in row:
             if name not in groups:
                 groups[name] = obj.vertex_groups.new(name=name)
             groups[name].add([i], weight, 'REPLACE')
+    if weld:
+        edit = bmesh.new()
+        edit.from_mesh(data)
+        bmesh.ops.remove_doubles(edit, verts=list(edit.verts), dist=.00001)
+        bmesh.ops.recalc_face_normals(edit, faces=list(edit.faces))
+        edit.to_mesh(data)
+        edit.free()
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
     if thickness:
@@ -78,7 +91,7 @@ def mesh(name, vertices, faces, weights, mat, tile=0, thickness=.008):
     return obj
 
 
-def panels(name, rows, mat, tile=0, reverse=False):
+def panels(name, rows, mat, tile=0, reverse=False, weld=False):
     vertices, weights = [], []
     for points, row_weights in rows:
         vertices.extend(points)
@@ -90,7 +103,7 @@ def panels(name, rows, mat, tile=0, reverse=False):
             a = row * count + col
             face = (a, a + 1, a + count + 1, a + count)
             faces.append(tuple(reversed(face)) if reverse else face)
-    return mesh(name, vertices, faces, weights, mat, tile)
+    return mesh(name, vertices, faces, weights, mat, tile, weld=weld)
 
 
 def cloak(mat):
@@ -99,57 +112,59 @@ def cloak(mat):
     # of borrowing knee weights, which would split the cloth on every stride.
     sections = [(.24, .44, .34, .88), (.45, .43, .32, .88),
                 (.72, .38, .29, .84), (1.00, .34, .26, .80),
-                (1.20, .31, .23, .79), (1.40, .29, .22, .85),
-                (1.51, .33, .20, .99), (1.61, .30, .19, .85),
-                (1.69, .17, .15, .60)]
+                (1.20, .31, .23, .79), (1.40, .30, .22, .85),
+                (1.47, .335, .225, .70), (1.51, .34, .235, .42),
+                (1.54, .32, .245, .19), (1.57, .29, .225, .07),
+                (1.595, .31, .23, 0), (1.62, .29, .20, 0),
+                (1.645, .26, .20, 0), (1.67, .19, .165, 0),
+                (1.70, .145, .14, 0)]
     for z, width, depth, opening in sections:
         points, weights = [], []
         chest = max(0, min(1, (z - 1.1) / .43))
         for col in range(65):
             angle = opening + (math.tau - 2 * opening) * col / 64
-            fold = (.012 + .016 * (1 - z / 1.8)) * math.cos(angle * 14 + z * .6)
+            skirt = max(0, min(1, (1.55 - z) / .30))
+            fold = skirt * (.012 + .016 * (1 - z / 1.8)) * math.cos(angle * 14 + z * .6)
+            # The cowl and back share positions, normals and weights. Its
+            # diagonal rolls are folds in this surface, not floating rings.
+            cowl = max(0, min(1, (z - 1.40) / .14))
+            centre_y = .055 * (1 - cowl) - .005 * cowl
+            drape = cowl * .035 * math.sin(angle + .5) * min(1, (1.71 - z) / .12)
+            drape -= cowl * .10 * max(0, math.cos(angle)) ** 2 * min(1, (1.70 - z) / .10)
             points.append(((width + fold) * math.sin(angle),
-                           .055 - (depth + fold) * math.cos(angle),
-                           z + .012 * math.sin(angle * 7) * max(0, 1 - z)))
+                           centre_y - (depth + fold) * math.cos(angle),
+                           z + drape + .012 * math.sin(angle * 7) * max(0, 1 - z)))
             weights.append([('Chest', .85 * chest), ('Spine', .15 * chest),
                             ('Pelvis', 1 - chest)])
         rows.append((points, weights))
-    panels('OpenCloak', rows, mat)
-    # Layered diagonal folds give the shoulder wrap its own silhouette.
-    for layer in range(3):
-        rows = []
-        for row in range(5):
-            points = []
-            for col in range(41):
-                angle = math.tau * col / 40
-                width = .20 + .105 * row / 4
-                depth = .165 + .055 * row / 4
-                z = 1.70 - .075 * layer - .13 * row / 4
-                z += .065 * math.sin(angle + .6 + layer * .3) + .012 * math.cos(row / 4 * math.pi * 2)
-                points.append((width * math.sin(angle), -.016 - depth * math.cos(angle), z))
-            rows.append((points, [[('Chest', .85), ('Neck', .15)]] * len(points)))
-        panels('ShoulderFold' + str(layer), rows, mat, reverse=True)
+    panels('OpenCloak', rows, mat, weld=True)
 
 
 def hood(mat):
     rows = []
     for z, width, depth, opening in [
-        (1.65, .14, .16, .38), (1.72, .19, .21, .72),
-        (1.82, .215, .235, .83), (1.92, .205, .24, .62),
-        (2.00, .145, .18, .25), (2.035, .065, .085, .04),
+        (1.65, .135, .145, .38), (1.72, .165, .18, .76),
+        (1.82, .18, .195, .86), (1.92, .165, .195, .62),
+        (1.985, .12, .155, .25), (2.045, .045, .075, .04),
     ]:
         points = []
         for col in range(49):
             angle = opening + (math.tau - 2 * opening) * col / 48
-            fold = .006 * math.cos(angle * 8 + z * 6)
+            fold = .002 * math.cos(angle * 6 + z * 6)
             points.append(((width + fold) * math.sin(angle),
                            -.03 - (depth + fold) * math.cos(angle), z))
         rows.append((points, [[('Head', 1)]] * len(points)))
-    obj = panels('RaisedHood', rows, mat)
-    # Close the crown while preserving the open face and a thick visible rim.
-    points = rows[-1][0] + [(0, -.03, 2.055)]
-    mesh('HoodCrown', points, [(i, i + 1, len(points) - 1) for i in range(48)],
-         [[('Head', 1)]] * len(points), mat)
+    # Share the crown's vertices with the hood so smoothing carries into the
+    # point rather than making a separate cone perched on a rounded cap.
+    points = [point for row, _ in rows for point in row] + [(0, -.085, 2.085)]
+    faces = []
+    for row in range(len(rows) - 1):
+        for col in range(48):
+            a = row * 49 + col
+            faces.append((a, a + 1, a + 50, a + 49))
+    start = (len(rows) - 1) * 49
+    faces.extend((start + i, start + i + 1, len(points) - 1) for i in range(48))
+    obj = mesh('RaisedHood', points, faces, [[('Head', 1)]] * len(points), mat)
     for edge in [0, -1]:
         points = []
         for row, _ in rows:
@@ -183,7 +198,7 @@ def fitted_underlayer(body, mat):
                 vertices.append(vertex.co + vertex.normal * .014)
                 weights.append([(groups[g.group], g.weight) for g in vertex.groups])
         faces.append(tuple(remap[i] for i in face.vertices))
-    mesh('TravelTunicAndLeggings', vertices, faces, weights, mat, tile=1, thickness=.005)
+    mesh('TravelTunicAndLeggings', vertices, faces, weights, mat, tile=1, thickness=.005, source_axes=False)
     # A real raised leather belt reads across the open cloak front.
     rows = []
     for z in [1.12, 1.165]:

@@ -9,15 +9,22 @@ Retained source SHA-256:
 `7f0612ce1ae2776c62b2be632c4feb1e7fb7e40975fc9614a25301a307dafd13`.
 
 The user approved the descending slash as the visual baseline on 2026-10-12.
-`Sword_Regular_B` and `Sword_Regular_B_Rec` drive the player compiler.
+`Sword_Regular_B` and `Sword_Regular_B_Rec` supplied the original retargeted Cleave.
 `Sword_Regular_A` and its recovery remain for comparison. This is authoring input;
 its 65-joint rig and creator clip names do not satisfy the runtime player contract.
-The compiler retargets into the 54-joint player and eight app roles.
+The edited production motion now lives in
+[`cleave-poses.blend`](../cleave-poses.blend), on the 54-joint player with additional
+authoring-only hip/foot controls. The user adjusted the wind-up and strike to
+raise the hips and moderate the torso bend; compilation preserves the five poses
+and bakes their interpolated IK onto the original runtime hierarchy.
 
-Production timing and handedness normalization belong to
-[`authored_cleave.py`](../authored_cleave.py). The source's anatomical sword hand
-is on negative X; the player's named sword arm is on positive X. Mirroring that
-handedness preserves forward lean; rotating the motion by 180 degrees does not.
+Production baking belongs to [`authored_cleave.py`](../authored_cleave.py).
+The reference and production player's anatomical right hand are on negative X
+when facing Blender -Y. The original player's named right arm was physically
+left; its body/rig normalization and authored poses were reflected to correct
+that side while retaining forward lean, grasp and weight transfer. Production
+reference retargeting now preserves anatomical handedness. A 180-degree facing
+rotation would also reverse forward motion.
 See [motion acceptance](../../../../docs/character-motion.md) before extending
 this approach to other actions.
 
@@ -34,7 +41,7 @@ The retained file SHA-256 is
 Extraction retains all 10,582 body base vertices, polygon indices and anatomical
 face sets. It removes the multires authoring modifier/cache. The source surface
 is uniformly scaled and grounded by `anatomy.py`; it is not procedurally rebuilt.
-The production compiler owns fitting and skinning. Extract from the original
+The production compiler owns unit/handedness normalization, fitting and skinning. Extract from the original
 bundle with [extract_body.py](../../../../experimental/character-references/extract_body.py),
 passing `GEO-body_male_realistic` as the body name. The [player preview tools](../README.md#review-motion)
 and [source gallery](../../../../experimental/character-references/README.md)
@@ -75,10 +82,12 @@ original meshes, skin and chosen animation bytes without resampling.
 
 `authored_locomotion.py` combines the humanoid jog's torso/clavicles and opposite
 arm swing with KayKit's backward/sideways support. Forward motion uses the
-humanoid jog throughout. It mirrors handedness, retargets bind axes, grounds the
+humanoid jog throughout. It retains anatomical handedness, retargets bind axes, grounds the
 feet, moderates torso lean, keeps chest twist within 12 degrees and head yaw on
 aim, and carries the sword through the shared palm grasp. All four cycles
 retain the existing half-second gait duration and common supporting-leg phase.
+The lateral source clips are exchanged at mapping so their travel still matches
+the game's directional clip roles after the handedness correction.
 These adaptations are authoring decisions, distinct from native source playback.
 
 ## Relaxed idle source

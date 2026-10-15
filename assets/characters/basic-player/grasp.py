@@ -26,7 +26,7 @@ def calibrate(body):
     """Use authored segment boundaries, rather than guessed finger joint locations."""
     sets = body.data.attributes['.sculpt_face_set']
     hands = {}
-    for side, sign in [('Right', 1), ('Left', -1)]:
+    for side, sign in anatomy.SIDES:
         regions = {}
         for polygon, region in zip(body.data.polygons, sets.data):
             for index in polygon.vertices:
@@ -89,7 +89,7 @@ def solve_digit(hand, digit):
                 if digit != 'Thumb' or index > 0 or gap < 0:
                     value += gap*gap * (10 if gap < 0 else 1)
         return value
-    sign = -1 if hand.side == 'Right' else 1
+    sign = 1 if hand.side == 'Right' else -1
     if digit == 'Thumb': sign = -sign
     angles = [0.0] * (4 if digit == 'Thumb' else 3)
     limit=sign*math.radians(115)
@@ -158,13 +158,13 @@ def constrain(rig,hands,chain,support):
                 reach=rig.data.bones[side+'Arm'].length+rig.data.bones[side+'Forearm'].length-.01
                 delta=wrist+shift-start
                 if delta.length>reach: wrist-=delta.normalized()*(delta.length-reach)
-        chain(rig,'RightArm','RightForearm',original.lerp(wrist,support),(.85,-.1,1.4))
+        chain(rig,'RightArm','RightForearm',original.lerp(wrist,support),(-.85,-.1,1.4))
         world_rotation(rig,'RightHand',right_rotation)
         bpy.context.view_layer.update()
         target=grip.head-(grip.tail-grip.head).normalized()*SUPPORT_DISTANCE
         wrist=target-target_rotation@local.translation
         start=left.head.copy();old_rotation=left.matrix.to_quaternion().copy()
-        chain(rig,'LeftArm','LeftForearm',start.lerp(wrist,support),(-.85,-.1,1.4))
+        chain(rig,'LeftArm','LeftForearm',start.lerp(wrist,support),(.85,-.1,1.4))
         world_rotation(rig,'LeftHand',old_rotation.slerp(target_rotation,support))
     close_hand(rig,hands['Left'],support)
 

@@ -63,7 +63,7 @@ def load(path, native):
                   for vertex in obj.data.vertices]
         scale = 2 / (max(point.z for point in points) - min(point.z for point in points))
         rig.rotation_mode, rig.rotation_euler.z = 'XYZ', 0
-        rig.scale = (-scale, scale, scale)
+        rig.scale = (scale, scale, scale)
         source_sword(rig)
     else:
         assert bpy.ops.wm.open_mainfile(filepath=str(path)) == {'FINISHED'}

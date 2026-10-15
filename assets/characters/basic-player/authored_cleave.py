@@ -1,103 +1,108 @@
-"""Retarget the approved CC0 descending slash, preserving authored joint motion.
-
-The reference's sword hand is at negative X; this rig's is at positive X.
-Mirror the handedness, preserving forward lean and proper rotation frames. Reference motion is transferred without arm IK. Feet receive only a vertical floor correction after reference retargeting.
-"""
+"""Bake the editable Cleave poses and authoring IK onto the production rig."""
+import math
 from pathlib import Path
+
 import bpy
-from mathutils import Matrix, Vector
-from motion import QUATERNIUS_MAP as MAP, bind_corrections, imported_source, world_rotation, set_linear_keys
+from mathutils import Matrix
 
-SOURCE = Path(__file__).resolve().parent / 'reference/cleave-source.glb'
+from motion import action_curves, set_linear_keys
 
-
-def source_samples():
-    with imported_source(SOURCE) as (rig, meshes):
-        mesh = next(o for o in meshes if o.name.startswith('Mannequin'))
-        scale=2/(max(v.co.z for v in mesh.data.vertices)-min(v.co.z for v in mesh.data.vertices))
-        mirror=Matrix.Diagonal((-1,1,1,1))
-        axes=mirror@rig.matrix_world
-        assert (axes@rig.data.bones['upperarm_r'].head_local).x > 0
-        actions={name:bpy.data.actions[name] for name in ['Sword_Regular_B','Sword_Regular_B_Rec']}
-        fps=bpy.context.scene.render.fps
-        duration=actions['Sword_Regular_B'].frame_range[1]/fps
-        recovery=actions['Sword_Regular_B_Rec'].frame_range[1]/fps
-        hand=rig.data.bones['hand_r']
-        blade_axis=hand.matrix_local.to_3x3().inverted()@(rig.data.bones['index_01_r'].head_local-rig.data.bones['pinky_01_r'].head_local).normalized()
-        blade_axis=mirror.to_3x3()@blade_axis
-        rest={target:(axes@rig.data.bones[source].matrix_local@mirror).to_quaternion() for target,source in MAP.items()}
-        root_rest=(axes@rig.data.bones['root'].matrix_local@mirror).to_quaternion()
-
-        def sample(seconds):
-            name='Sword_Regular_B' if seconds<=duration else 'Sword_Regular_B_Rec'
-            action=actions[name];rig.animation_data.action=action;rig.animation_data.action_slot=action.slots[0]
-            frame=(seconds if seconds<=duration else seconds-duration)*fps
-            bpy.context.scene.frame_set(int(frame),subframe=frame-int(frame))
-            rotations={target:(axes@rig.pose.bones[source].matrix@mirror).to_quaternion() for target,source in MAP.items()}
-            return {'rotations':rotations,'pelvis':(axes@rig.pose.bones['pelvis'].head)*scale,
-                    'root':(axes@rig.pose.bones['root'].matrix@mirror).to_quaternion()@root_rest.inverted(),
-                    'blade':rotations['RightHand']@blade_axis}
-
-        neutral=sample(duration+recovery)
-        # Load, release, and follow-through are selected from the source's actual
-        # front-facing strike. Recovery continues the cut instead of freezing it.
-        anchors=[(4,0.0),(9,.235),(13,.235),(14,.237),(16,.251),(19,.285),
-                 (22,.38),(26,duration+.20),(31,duration+recovery)]
-        frames=[]
-        for i in range(61):
-            frame=1+i*.5
-            if frame<4:
-                seconds=0;weight=(frame-1)/3
-            else:
-                left=next(j for j in range(len(anchors)-1) if anchors[j][0]<=frame<=anchors[j+1][0])
-                fa,sa=anchors[left];fb,sb=anchors[left+1];seconds=sa+(sb-sa)*(frame-fa)/(fb-fa)
-                weight=1 if frame<=26 else (31-frame)/5
-            frames.append((frame,weight,sample(seconds)))
-        return rest,neutral,frames
+SOURCE = Path(__file__).resolve().parent / 'cleave-poses.blend'
 
 
-def bake(rig,ready_pose):
-    return bake_samples(rig, ready_pose, "AttackCleave", source_samples())
+def ease_release(action):
+    # Automatic tangents can continue the wind-up after contact begins. Flatten
+    # only the active segment's boundary tangents, preserving all authored poses
+    # and the moving wind-up before frame 13.
+    for curve in action_curves(action):
+        for key in curve.keyframe_points:
+            if key.co.x == 13:
+                key.handle_right_type = 'FREE'
+                key.handle_right = (15, key.co.y)
+            elif key.co.x == 19:
+                key.handle_left_type = 'FREE'
+                key.handle_left = (17, key.co.y)
 
 
-def bake_samples(rig, ready_pose, clip_name, samples, adapt=None, continuous_quaternions=False):
-    rest,neutral,frames=samples
-    corrections = bind_corrections(rig, rest)
-    action=bpy.data.actions.new(clip_name);action.use_fake_user=True;rig.animation_data.action=action
+def source_samples(target):
+    """Validate and evaluate the complete input before changing the output rig."""
+    collections = [bpy.data.objects, bpy.data.meshes, bpy.data.armatures,
+                   bpy.data.actions, bpy.data.materials, bpy.data.images,
+                   bpy.data.collections]
+    before = [set(collection) for collection in collections]
+    scene = bpy.context.scene
+    initial_frame, initial_subframe = scene.frame_current, scene.frame_subframe
+    try:
+        with bpy.data.libraries.load(str(SOURCE), link=False) as (_, data):
+            data.objects = ['SwordsmanRig']
+        source = data.objects[0]
+        assert source and not source.is_missing, 'Missing Cleave source rig'
+        bpy.context.scene.collection.objects.link(source)
+        source.hide_set(False)
+        assert max(abs(a-b) for ra, rb in zip(source.matrix_world, Matrix.Identity(4))
+                   for a, b in zip(ra, rb)) < .00001, 'Cleave source object transform changed'
+        for bone in target.data.bones:
+            authored = source.data.bones.get(bone.name)
+            assert authored, ('Missing source bone', bone.name)
+            assert max(abs(a-b) for ra, rb in zip(bone.matrix_local, authored.matrix_local)
+                       for a, b in zip(ra, rb)) < .00001, ('Cleave bind changed', bone.name)
+            if bone.parent:
+                assert authored.parent and authored.parent.name == bone.parent.name, ('Cleave parent changed', bone.name)
+        for bone in source.data.bones:
+            if bone.name not in target.data.bones:
+                assert bone.name.startswith('CTRL_') and not bone.use_deform, ('Unexpected source joint', bone.name)
+        action = source.animation_data.action
+        assert action and tuple(action.frame_range) == (1, 31), 'Cleave must span frames 1 to 31'
+        ease_release(action)
+        frames = []
+        for index in range(61):
+            frame = 1 + index*.5
+            bpy.context.scene.frame_set(int(frame), subframe=frame-int(frame))
+            matrices = {bone.name: source.pose.bones[bone.name].matrix.copy() for bone in target.data.bones}
+            assert all(math.isfinite(value) for matrix in matrices.values() for row in matrix for value in row), 'Non-finite Cleave pose'
+            frames.append((frame, matrices))
+        assert max(abs(a-b) for name, first in frames[0][1].items()
+                   for ra, rb in zip(first, frames[-1][1][name])
+                   for a, b in zip(ra, rb)) < .00001, 'Cleave ready poses do not meet'
+        return frames
+    finally:
+        for collection, old in zip(collections, before):
+            for item in list(collection):
+                if item not in old:
+                    collection.remove(item, do_unlink=True)
+        scene.frame_set(initial_frame, subframe=initial_subframe)
+
+
+def bake(rig):
+    frames = source_samples(rig)
+    # Resolve the control rig's evaluated poses against the original hierarchy.
+    # This folds the hip offset and foot IK into ordinary local transforms.
+    keys = []
+    for frame, matrices in frames:
+        transforms = {}
+        for bone in rig.data.bones:
+            arguments = {'parent_matrix': matrices[bone.parent.name],
+                         'parent_matrix_local': bone.parent.matrix_local} if bone.parent else {}
+            basis = bone.convert_local_to_pose(matrices[bone.name], bone.matrix_local,
+                                              invert=True, **arguments)
+            location, rotation, scale = basis.decompose()
+            assert max(abs(value-1) for value in scale) < .0001, ('Cleave changed bone scale', frame, bone.name)
+            transforms[bone.name] = location, rotation.normalized()
+        keys.append((frame, transforms))
+    action = bpy.data.actions.new('AttackCleave')
+    action.use_fake_user = True
+    rig.animation_data.action = action
     previous = {}
-    for frame,weight,source in frames:
-        ready_pose()
-        ready={bone.name:(bone.rotation_quaternion.copy(),bone.location.copy()) for bone in rig.pose.bones}
+    for frame, transforms in keys:
         for bone in rig.pose.bones:
-            bone.rotation_quaternion=(1,0,0,0);bone.location=(0,0,0)
-        world_rotation(rig,'Root',source['root']@rig.data.bones['Root'].matrix_local.to_quaternion())
-        rig.pose.bones['Root'].location=rig.data.bones['Root'].matrix_local.to_quaternion().inverted()@(source['pelvis']-neutral['pelvis']+Vector((0,0,-.025)))
-        bpy.context.view_layer.update()
-        for target in MAP:world_rotation(rig,target,source['rotations'][target]@corrections[target])
-        hand=rig.pose.bones['RightHand'].matrix.to_quaternion()
-        weapon_bind=rig.data.bones['RightHand'].matrix_local.to_quaternion().inverted()@rig.data.bones['Weapon'].matrix_local.to_quaternion()
-        base=hand@weapon_bind
-        world_rotation(rig,'Weapon',(base@Vector((0,1,0))).rotation_difference(source['blade'])@base)
-        if adapt:
-            adapt(rig, source)
-        bpy.context.view_layer.update()
-        floor=1
-        for side,sign in [('Left',-1),('Right',1)]:
-            bone=rig.pose.bones[side+'Foot'];palette=bone.matrix@bone.bone.matrix_local.inverted()
-            for point in [(sign*.23,-.25,.015),(sign*.23,.03,.02)]:floor=min(floor,(palette@Vector(point)).z)
-        if floor<.01:
-            rig.pose.bones['Root'].location+=rig.data.bones['Root'].matrix_local.to_quaternion().inverted()@Vector((0,0,.01-floor))
-        for bone in rig.pose.bones:
-            rotation,location=ready[bone.name]
-            bone.rotation_quaternion=rotation.slerp(bone.rotation_quaternion,weight)
-            bone.location=location.lerp(bone.location,weight)
-            if continuous_quaternions:
-                # Blender interpolates quaternion components. Matching signs
-                # prevents a half-key from passing through a zero quaternion.
-                if bone.name in previous and bone.rotation_quaternion.dot(previous[bone.name]) < 0:
-                    bone.rotation_quaternion.negate()
-                previous[bone.name] = bone.rotation_quaternion.copy()
-            bone.keyframe_insert(data_path='rotation_quaternion',frame=frame)
-            bone.keyframe_insert(data_path='location',frame=frame)
+            location, rotation = transforms[bone.name]
+            if bone.name in previous and rotation.dot(previous[bone.name]) < 0:
+                rotation.negate()
+            previous[bone.name] = rotation.copy()
+            bone.rotation_mode = 'QUATERNION'
+            bone.location = location
+            bone.rotation_quaternion = rotation
+            bone.keyframe_insert(data_path='location', frame=frame)
+            bone.keyframe_insert(data_path='rotation_quaternion', frame=frame)
     set_linear_keys(action)
     return action

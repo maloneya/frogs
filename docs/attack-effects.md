@@ -1,7 +1,11 @@
 # Attack effects
 
-Cleave leaves a blue crescent from committed active hitbox samples. Slam makes a
-compact ground impact at the end of its committed contact phase: a brief pale
+Cleave leaves a pale blue crescent from committed active hitbox samples. Its
+lateral offset is reflected about the committed facing direction to follow the
+right-handed sword's sweep. Damage discs retain their gameplay order; the visual
+history keeps each observed world origin, reach and radius while fading.
+
+Slam makes a compact ground impact at the end of its committed contact phase: a brief pale
 flash, broken dark splinters, kicked-up chips and low, fading dust. The impact
 locks 1.6 m ahead of the player when the blade finishes descending, then remains
 in world space for 24 ticks while the player recovers or moves away. It does not

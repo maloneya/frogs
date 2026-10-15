@@ -125,7 +125,7 @@ fn character_replacement_is_atomic_across_import_and_upload_failure() {
     let current = slot.as_ref().unwrap();
     assert_eq!(
         (current.asset.vertex_count(), current.asset.index_count()),
-        (22137, 127350)
+        (21585, 124062)
     );
     assert_eq!(
         (current.asset.node_count(), current.asset.joint_count()),
@@ -160,7 +160,7 @@ fn character_preview_report_is_derived_from_the_committed_selection() {
     report_character_preview(Some(&preview), &mut active);
     assert_eq!(
         active.finish(),
-        r#"{"active":true,"path":"assets/character.glb","vertices":22137,"indices":127350,"part_count":2,"material_count":2,"image_count":2,"texture_bytes":699048,"parts":{"0":{"node":"HoodedCloak","primitive":0,"material":0,"vertices":9324,"indices":55824},"1":{"node":"Swordsman","primitive":0,"material":1,"vertices":12813,"indices":71526}},"materials":{"0":{"image":0},"1":{"image":1}},"images":{"0":{"width":256,"height":256},"1":{"width":256,"height":256}},"nodes":57,"joints":54,"clips":8,"role":"idle","clip":"Idle","clip_duration":3.2000,"channels":108,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000,"channel_weight":0.0000}"#
+        r#"{"active":true,"path":"assets/character.glb","vertices":21585,"indices":124062,"part_count":2,"material_count":2,"image_count":2,"texture_bytes":699048,"parts":{"0":{"node":"HoodedCloak","primitive":0,"material":0,"vertices":8772,"indices":52536},"1":{"node":"Swordsman","primitive":0,"material":1,"vertices":12813,"indices":71526}},"materials":{"0":{"image":0},"1":{"image":1}},"images":{"0":{"width":256,"height":256},"1":{"width":256,"height":256}},"nodes":57,"joints":54,"clips":8,"role":"idle","clip":"Idle","clip_duration":3.2000,"channels":108,"sample_seconds":0.2500,"locomotion_base":"Idle","locomotion_overlay":"Idle","locomotion_weight":0.0000,"channel_weight":0.0000}"#
     );
     assert_eq!(preview.draw_count(), 2);
 }
@@ -531,8 +531,8 @@ fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
         resolved.startup() + resolved.active(), Alpha::ZERO,
     );
     assert!(
-        wound.x < -0.15 && struck.x > 0.55 && struck.x - wound.x > 0.9,
-        "cleave must sweep left to right: {wound:?} -> {struck:?}"
+        wound.x > 0.15 && struck.x < -0.55 && wound.x - struck.x > 0.9,
+        "right-handed cleave must sweep across the front: {wound:?} -> {struck:?}"
     );
     let mut previous = wound;
     for tick in 0..resolved.active() {
@@ -542,7 +542,7 @@ fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
                 resolved.startup() + tick, alpha,
             );
             assert!(current.z > 0.0, "cleave went behind the player: {current:?}");
-            assert!(current.x >= previous.x - 1.0e-4, "cleave reversed: {previous:?} -> {current:?}");
+            assert!(current.x <= previous.x + 1.0e-4, "cleave reversed: {previous:?} -> {current:?}");
             previous = current;
         }
     }
@@ -1305,6 +1305,60 @@ fn missing_horde_reaction_clip_preserves_the_complete_accepted_asset_before_uplo
 }
 
 #[test]
+fn cleave_whoosh_sweeps_with_the_right_handed_sword_through_game() {
+    for aim in [AimDir::FORWARD, AimDir::new(Vec3::X).unwrap(), AimDir::new(Vec3::new(-1.0, 0.0, -1.0)).unwrap()] {
+        for movement in [MoveDir::NONE, MoveDir::new(Vec3::X)] {
+            let mut game = Game::empty();
+            let mut character = loaded_character_from(default_character_path());
+            let mut effects = crate::attack_effects::AttackEffects::default();
+            let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+            let mut interpolation = Accumulator::default();
+            assert_eq!(interpolation.pending(arpg_sim::Dt::SECS * 0.5).count(), 0);
+            let mut blade = Vec::new();
+            let mut whoosh = Vec::new();
+            for tick in 0..=22 {
+                game.step(dt, Intent::new(movement, aim, tick == 0));
+                // Changing the selected ability cannot reverse the committed cut.
+                if tick == 1 { game.set_attack_profile(AttackProfile::Slam); }
+                let hash = game.hash();
+                effects.observe(&game);
+                let mut cap_start = None;
+                for alpha in [Alpha::ZERO, interpolation.alpha(), Alpha::ONE] {
+                    let player = game.player_presentation(alpha);
+                    character.sample(player, alpha, presentation_seconds(game.tick(), alpha));
+                    effects.rebuild(&game, alpha, Some(character.beam_emitter(player)));
+                    if (6..12).contains(&tick) {
+                        let forward = aim.as_vec3();
+                        let lateral = Vec3::new(forward.z, 0.0, -forward.x);
+                        let leading = effects.vertices().last().unwrap().position() - player.ground_position();
+                        assert!(leading.dot(forward) > 0.0, "whoosh went behind the committed aim");
+                        if tick == 6 && movement == MoveDir::NONE {
+                            let angle = leading.dot(lateral).atan2(leading.dot(forward));
+                            if alpha == Alpha::ZERO { cap_start = Some(angle); }
+                            if alpha == Alpha::ONE {
+                                assert!(angle < cap_start.unwrap(), "opening slash points against the sword sweep");
+                            }
+                        }
+                        if alpha == Alpha::ONE {
+                            let tip = character.beam_emitter(player).tip - player.ground_position();
+                            blade.push(tip.dot(lateral));
+                            whoosh.push(leading.dot(lateral));
+                        }
+                    } else if tick < 6 || tick == 22 {
+                        assert!(effects.vertices().is_empty(), "whoosh escaped its active/fade lifetime");
+                    }
+                }
+                assert_eq!(hash, game.hash(), "whoosh changed gameplay");
+            }
+            for (name, path) in [("sword", blade), ("whoosh", whoosh)] {
+                assert!(path[0] > 1.0 && *path.last().unwrap() < -1.0, "{name} has the wrong handedness: {path:?}");
+                assert!(path.windows(2).all(|p| p[1] <= p[0]), "{name} reversed during contact: {path:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn cleave_coils_before_damage_then_accelerates_across_the_front_through_game() {
     let mut game = Game::empty();
     let target = game.place(glam::Vec2::new(-1.8, 1.2), arpg_game::ActorDefinition::passive_hostile()).unwrap();
@@ -1320,11 +1374,11 @@ fn cleave_coils_before_damage_then_accelerates_across_the_front_through_game() {
         let tip = character.asset.joint_transform(&character.pose, socket).unwrap().transform_point3(Vec3::ZERO);
         if tick < 6 {
             assert_eq!(game.health(target), Some(3));
-            if tick >= 4 { assert!(tip.x < -1.0, "cleave never coils fully: {tip:?}"); }
+            if tick >= 4 { assert!(tip.x > 1.0, "cleave never coils fully: {tip:?}"); }
         } else if tick < 12 {
             assert_eq!(game.health(target), Some(1));
             assert!(tip.z > 0.0, "strike went behind the player");
-            active.push(tip.x);
+            active.push(-tip.x);
         }
         assert_eq!(hash, game.hash());
     }
@@ -1333,6 +1387,58 @@ fn cleave_coils_before_damage_then_accelerates_across_the_front_through_game() {
     assert!(release > entry * 3.0, "cleave has no acceleration: {active:?}");
     assert!(active.windows(2).all(|p| p[1] >= p[0]));
     assert!(active.last().unwrap() - active[0] > 2.5);
+}
+
+#[test]
+fn cleave_pushes_from_the_rear_foot_into_a_planted_front_leg_through_game() {
+    let mut game = Game::empty();
+    let mut character = loaded_character_from(default_character_path());
+    let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    let mut interpolation = Accumulator::default();
+    assert_eq!(interpolation.pending(arpg_sim::Dt::SECS * 0.5).count(), 0);
+    let origin = game.player_pos();
+    let mut loaded = None;
+    let mut previous_hips = f32::NEG_INFINITY;
+    let mut released = None;
+    for tick in 0..=22 {
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, tick == 0));
+        let hash = game.hash();
+        for alpha in [Alpha::ZERO, interpolation.alpha(), Alpha::ONE] {
+            character.sample(game.player_presentation(alpha), alpha,
+                presentation_seconds(game.tick(), alpha));
+            let transform = |name| character.asset.joint_transform(&character.pose,
+                character.asset.joint_named(name).unwrap()).unwrap();
+            let point = |name| transform(name).transform_point3(Vec3::ZERO);
+            let hips = point("Pelvis");
+            let rear = point("LeftFoot");
+            let knee = point("LeftShin");
+            let extension = (point("LeftLeg") - knee).angle_between(rear - knee);
+            if tick == 6 && alpha == Alpha::ZERO {
+                assert!(hips.z - rear.z > 0.3, "rear leg never loads behind the hips");
+                loaded = Some((hips, rear, extension, transform("RightFoot")));
+            }
+            if (6..12).contains(&tick) || (tick == 12 && alpha == Alpha::ZERO) {
+                let (_, _, _, front) = loaded.unwrap();
+                assert!(front.abs_diff_eq(transform("RightFoot"), 0.001),
+                    "front foot slides while receiving the swing");
+                assert!(hips.z >= previous_hips - 0.001, "hips retreat during the cut");
+                previous_hips = hips.z;
+            }
+            if tick == 12 && alpha == Alpha::ZERO {
+                let (start, foot, angle, _) = loaded.unwrap();
+                assert!((0.18..0.25).contains(&(hips.z - start.z)), "body does not carry forward through contact");
+                assert!(rear.y - foot.y > 0.06, "rear heel does not release");
+                assert!(extension - angle > 0.18, "rear leg does not push into extension");
+                released = Some(hips);
+            }
+            if tick == 16 && alpha == Alpha::ZERO {
+                assert!(hips.z > released.unwrap().z, "follow-through loses forward momentum");
+            }
+            validate_player_grasp_at(&character.asset, &character.pose).unwrap();
+        }
+        assert_eq!(game.player_pos(), origin, "authored weight transfer changed gameplay movement");
+        assert_eq!(game.hash(), hash);
+    }
 }
 
 #[test]
@@ -1365,7 +1471,9 @@ fn cleave_arm_and_wrist_articulation_survives_game_phase_sampling() {
         .angle_between(axis(samples[2][1].inverse() * samples[2][5])) > 0.7,
         "sword did not release at the wrist");
     let point = |matrix: glam::Mat4| matrix.transform_point3(Vec3::ZERO);
-    assert!(point(samples[0][6]).y - point(samples[1][6]).y > 0.25, "hips stayed upright instead of loading the supporting leg");
+    let compression = point(samples[0][6]).y - point(samples[1][6]).y;
+    assert!((0.15..0.25).contains(&compression),
+        "cleave must load the supporting leg with the approved shallower crouch: {compression}");
     assert!(point(samples[1][7]).z - point(samples[1][6]).z > 0.15, "body arches away from the cut");
     assert!(!samples[2][5].abs_diff_eq(samples[3][5], 0.1), "sword freezes at the start of recovery");
     assert!((samples[1][3].inverse() * samples[1][5]).abs_diff_eq(samples[2][3].inverse() * samples[2][5], 1e-5), "sword twists inside the hand");

@@ -2,13 +2,15 @@
 from pathlib import Path
 import bpy
 import math
-from mathutils import Euler, Matrix, Vector
+from mathutils import Euler, Vector
+from anatomy import SIDES
 from motion import QUATERNIUS_MAP as HUMAN_MAP, bind_corrections, imported_source, world_rotation, set_linear_keys
 
 SOURCE = Path(__file__).resolve().parent / 'reference/locomotion-source.glb'
 JOG_SOURCE = Path(__file__).resolve().parent / 'reference/jog-source.glb'
+# Retain the game's lateral travel roles after removing the old X reflection.
 CLIPS = {'RunBackward': 'Walking_Backwards',
-         'RunLeft': 'Running_Strafe_Left', 'RunRight': 'Running_Strafe_Right'}
+         'RunLeft': 'Running_Strafe_Right', 'RunRight': 'Running_Strafe_Left'}
 LOWER = ('Pelvis', 'LeftLeg', 'LeftShin', 'LeftFoot', 'RightLeg', 'RightShin', 'RightFoot')
 MAP = {'Pelvis': 'hips'}
 for side, suffix in [('Left', 'l'), ('Right', 'r')]:
@@ -18,10 +20,9 @@ for side, suffix in [('Left', 'l'), ('Right', 'r')]:
 
 def source_samples(path, mapping, clips):
     with imported_source(path) as (rig, meshes):
-        mirror = Matrix.Diagonal((-1, 1, 1, 1))
-        axes = mirror @ rig.matrix_world
-        assert (axes @ rig.data.bones[mapping['RightLeg']].head_local).x > 0
-        rest = {target: (axes @ rig.data.bones[source].matrix_local @ mirror).to_quaternion()
+        axes = rig.matrix_world.copy()
+        assert (axes @ rig.data.bones[mapping['RightLeg']].head_local).x < 0
+        rest = {target: (axes @ rig.data.bones[source].matrix_local).to_quaternion()
                 for target, source in mapping.items()}
         pelvis = axes @ rig.data.bones[mapping['Pelvis']].head_local
         meshes = [o for o in meshes
@@ -38,7 +39,7 @@ def source_samples(path, mapping, clips):
                 frame = first + (last - first) * (i % 60) / 60
                 bpy.context.scene.frame_set(int(frame), subframe=frame - int(frame))
                 frames.append({
-                    'rotations': {t: (axes @ rig.pose.bones[s].matrix @ mirror).to_quaternion() for t, s in mapping.items()},
+                    'rotations': {t: (axes @ rig.pose.bones[s].matrix).to_quaternion() for t, s in mapping.items()},
                     'height': ((axes @ rig.pose.bones[mapping['Pelvis']].head).z - pelvis.z) * scale,
                 })
             samples[target] = frames
@@ -103,7 +104,7 @@ def bake(rig, ready_pose):
             rig.pose.bones['Weapon'].rotation_quaternion = grip
             bpy.context.view_layer.update()
             floor = min((rig.pose.bones[side + 'Foot'].matrix @ rig.data.bones[side + 'Foot'].matrix_local.inverted() @ Vector(point)).z
-                        for side, sign in [('Left', -1), ('Right', 1)]
+                        for side, sign in SIDES
                         for point in [(sign * .23, -.25, .015), (sign * .23, .03, .02)])
             rig.pose.bones['Root'].location += rig.data.bones['Root'].matrix_local.to_quaternion().inverted() @ Vector((0, 0, .01 - floor))
             for bone in rig.pose.bones:
