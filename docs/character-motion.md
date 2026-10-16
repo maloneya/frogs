@@ -73,7 +73,7 @@ leg locomotion under the attack's articulated upper body. The shared importer,
 mask and phase contract remain in
 [character asset authoring](character-assets-authoring.md).
 
-The accepted Slam is compiled by
+The retained sword-foundation Slam is compiled by
 [`authored_slam.py`](../assets/characters/basic-player/authored_slam.py) from the
 CC0 `Sword_Regular_C` overhead segment. Its airborne, one-handed source is
 adapted into a planted two-handed strike on the same production rig, retaining
@@ -81,6 +81,15 @@ compression, wrist motion and moving recovery. The 9/5/16 tick schedule remains
 unchanged. Quarter-frame keys and continuous quaternion signs keep both grips
 consistent between authored poses; Blender motion checks also inspect
 intermediate samples. The user accepted this motion checkpoint on 2026-10-12.
+
+The playable [staff compiler](../assets/weapons/thornbound-staff/equip.py)
+replaces that weapon path with a one-handed right-hand lift and butt-first plant.
+The free left arm counterbalances to the side without touching the shaft.
+Its grounded body reference is retimed to receive the plant on the first active
+sample (authored frame 14.2); the staff stays planted through the force release.
+The shared 9/5/16 gameplay schedule remains unchanged. The app captures the
+sampled butt at that contact for the [magic wave](attack-effects.md), independently
+of gameplay geometry. This visual checkpoint awaits user judgement of feel.
 
 Directional locomotion uses the compatible Quaternius humanoid jog for arm
 counter-swing and KayKit's authored backward/strafe support on the same human

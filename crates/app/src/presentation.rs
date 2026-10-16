@@ -296,6 +296,8 @@ pub(super) struct LoadedCharacter<T> {
     full_mask: arpg_assets::PoseMask,
     upper_mask: arpg_assets::PoseMask,
     beam_origin: arpg_assets::JointId,
+    weapon: arpg_assets::JointId,
+    weapon_butt: Vec3,
     sampled_role: PresentationRole,
     sampled_seconds: f32,
     channel_weight: f32,
@@ -332,6 +334,17 @@ impl<T> LoadedCharacter<T> {
             tip: player.ground_position() + facing * socket.transform_point3(Vec3::ZERO),
             direction: (facing * socket.transform_vector3(Vec3::Y)).normalize(),
         }
+    }
+
+    pub(super) fn slam_origin(&mut self, player: PlayerPresentation, seconds: f64) -> Vec3 {
+        // Sample the completed contact even when several ticks pass without a
+        // redraw. Reusing the normal sampler includes moving-attack layering.
+        self.sample(player, Alpha::ONE, seconds);
+        let socket = self.asset.joint_transform(&self.pose, self.weapon)
+            .expect("validated weapon belongs to this character");
+        let point = player.ground_position()
+            + glam::Quat::from_rotation_y(player.facing()) * socket.transform_point3(self.weapon_butt);
+        Vec3::new(point.x, 0.0, point.z)
     }
 
     pub(super) fn draw_count(&self) -> usize { self.asset.parts().len() }
@@ -1231,6 +1244,18 @@ pub(super) fn replace_character<T>(
     let beam_origin = asset.joint_named("BeamOrigin").ok_or("missing player sword-tip attachment BeamOrigin")?;
     let upper_mask = player_upper_mask(&asset)?;
     validate_player_grasp(&asset, clips.idle)?;
+    let weapon = asset.joint_named("Weapon").expect("validated weapon");
+    let lane = asset.joint_index(weapon).expect("owned weapon joint");
+    let bind = asset.bind_pose();
+    let inverse = asset.joint_transform(&bind, weapon).expect("owned weapon pose").inverse();
+    // Derive the shaft endpoint from the admitted rigid mesh, so alternate
+    // staff lengths share the contact relationship without an app offset.
+    let butt_y = asset.vertices().iter().filter(|vertex|
+        vertex.joints().into_iter().zip(vertex.weights())
+            .any(|(joint, weight)| usize::from(joint) == lane && weight > 0.99))
+        .map(|vertex| inverse.transform_point3(vertex.position()).y)
+        .reduce(f32::min).ok_or("player weapon has no rigid geometry")?;
+    let weapon_butt = Vec3::Y * butt_y;
     let full_mask = asset.full_mask();
     let scratch = asset.bind_pose();
     let gpu = upload(&asset).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -1246,6 +1271,8 @@ pub(super) fn replace_character<T>(
         full_mask,
         upper_mask,
         beam_origin,
+        weapon,
+        weapon_butt,
         sampled_role: PresentationRole::Idle,
         sampled_seconds: 0.0,
         channel_weight: 0.0,

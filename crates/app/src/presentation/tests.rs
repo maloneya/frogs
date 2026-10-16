@@ -513,10 +513,17 @@ fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
         );
         assert!(active_start.abs_diff_eq(wound, 1.0e-4));
         assert!(ready.distance(wound) > 0.12, "{profile:?} never prepares");
-        assert!(
-            wound.distance(struck) > 0.20,
-            "{profile:?} has no active strike"
-        );
+        if profile == AttackProfile::Slam {
+            let raised = tip(&mut character, profile, AttackPhase::Startup,
+                resolved.startup() * 3 / 4, Alpha::ONE);
+            let planted = tip(&mut character, profile, AttackPhase::Active,
+                resolved.startup(), Alpha::ONE);
+            assert!(raised.y - planted.y > 0.5, "Slam must drive down from its raised pose");
+            assert!(wound.y - planted.y > 0.12, "Slam must finish its plant in the first active sample");
+            assert!(planted.abs_diff_eq(struck, 0.003), "Slam must hold the plant while force spreads");
+        } else {
+            assert!(wound.distance(struck) > 0.20, "{profile:?} has no active strike");
+        }
         assert!(
             recovered.distance(ready) < 1.0e-4,
             "{profile:?} does not recover"
@@ -1001,12 +1008,12 @@ fn channel_geometry_clips_the_interpolated_staff_path_when_the_damage_ray_misses
         Intent::new(MoveDir::NONE, AimDir::new(Vec3::X).unwrap(), false).with_attack_held(true),
     );
     character.sample(game.player_presentation(Alpha::ONE), Alpha::ONE, 1.0);
-    effects.observe(&game);
+    effects.observe(&game, || None);
     game.step(
         dt,
         Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true),
     );
-    effects.observe(&game);
+    effects.observe(&game, || None);
     assert!(game.beam().unwrap().end_normal().is_none());
     let player = game.player_presentation(Alpha::ZERO);
     character.sample(player, Alpha::ZERO, 1.0);
@@ -1453,7 +1460,7 @@ fn stationary_slam_braces_the_knees_and_wolf_stays_at_quadruped_height() {
 }
 
 #[test]
-fn slam_plants_the_staff_butt_and_keeps_both_grips_through_game() {
+fn slam_plants_the_staff_butt_with_one_hand_through_game() {
     for movement in [MoveDir::NONE, MoveDir::new(Vec3::X)] {
         let mut game = Game::empty();
         game.set_attack_profile(AttackProfile::Slam);
@@ -1462,9 +1469,31 @@ fn slam_plants_the_staff_butt_and_keeps_both_grips_through_game() {
         let mut interpolation = Accumulator::default();
         assert_eq!(interpolation.pending(arpg_sim::Dt::SECS * 0.5).count(), 0);
         let mut grip = None;
+        let mut effects = crate::attack_effects::AttackEffects::default();
+        let mut wave_origin = None;
         for elapsed in 0..31 {
             game.step(dt, Intent::new(movement, AimDir::FORWARD, elapsed == 0));
             let hash = game.hash();
+            let mut sampled_origin = None;
+            effects.observe(&game, || {
+                let point = player.slam_origin(game.player_presentation(Alpha::ONE),
+                    presentation_seconds(game.tick(), Alpha::ONE));
+                sampled_origin = Some(point);
+                Some(point)
+            });
+            if elapsed == 9 {
+                wave_origin = sampled_origin;
+                assert!(wave_origin.is_some(), "first active tick must capture the staff contact");
+            } else { assert!(sampled_origin.is_none(), "only the contact tick samples an emitter"); }
+            if (9..31).contains(&elapsed) {
+                let mut report = Report::default();
+                effects.report(&mut report);
+                let report: serde_json::Value = serde_json::from_str(&report.finish()).unwrap();
+                let point = wave_origin.unwrap();
+                for (axis, expected) in [point.x, point.y, point.z].into_iter().enumerate() {
+                    assert!((report["slam_centre"][axis].as_f64().unwrap() as f32 - expected).abs() < 1e-4);
+                }
+            }
             for alpha in [Alpha::ZERO, interpolation.alpha(), Alpha::ONE] {
                 player.sample(game.player_presentation(alpha), alpha, presentation_seconds(game.tick(), alpha));
                 validate_player_grasp_at(&player.asset, &player.pose).unwrap();
@@ -1479,16 +1508,25 @@ fn slam_plants_the_staff_butt_and_keeps_both_grips_through_game() {
                         assert!(relative.abs_diff_eq(previous, 1e-4), "staff rotated inside the hand");
                     } else { grip = Some(relative); }
                 }
-                if elapsed == 8 && alpha == Alpha::ONE {
-                    assert!(tip.y > 2.5, "staff must load upright before contact");
+                if elapsed == 6 && alpha == Alpha::ONE {
+                    assert!(hand.transform_point3(Vec3::ZERO).y > transform("Head").transform_point3(Vec3::ZERO).y + 0.15,
+                        "the right hand must raise above the head before driving down: movement={movement:?}, grip={:?}, head={:?}", hand.transform_point3(Vec3::ZERO), transform("Head").transform_point3(Vec3::ZERO));
+                    assert!(tip.y > 3.1, "the lifted staff must show a substantial downward stroke");
                 }
                 if (9..14).contains(&elapsed) {
-                    let support = weapon.transform_point3(Vec3::Y * 0.15);
-                    assert!(support.distance(transform("LeftGrip").transform_point3(Vec3::ZERO)) < 0.003,
-                        "support hand must lead toward the blade during contact");
+                    let free_hand = transform("LeftGrip").transform_point3(Vec3::ZERO)
+                        - hand.transform_point3(Vec3::ZERO);
+                    let axis = weapon.transform_vector3(Vec3::Y).normalize();
+                    assert!((free_hand - axis * free_hand.dot(axis)).length() > 0.25,
+                        "left hand must stay clear of the staff during the one-handed plant");
                 }
-                if elapsed == 13 && alpha == Alpha::ONE {
-                    let butt = weapon.transform_point3(Vec3::Y * -1.025);
+                if elapsed == 9 && alpha == Alpha::ONE {
+                    let butt = weapon.transform_point3(player.weapon_butt);
+                    let facing = glam::Quat::from_rotation_y(game.player_presentation(alpha).facing());
+                    let world = game.player_presentation(alpha).ground_position() + facing * butt;
+                    let emitted = wave_origin.unwrap();
+                    assert!(glam::Vec2::new(world.x, world.z).distance(glam::Vec2::new(emitted.x, emitted.z)) < 1e-4,
+                        "wave must begin at the sampled staff butt");
                     let axis = weapon.transform_vector3(Vec3::Y).normalize();
                     assert!(axis.y > 0.95, "staff must remain upright during the plant");
                     assert!(butt.z > 0.4, "staff butt must plant in front: {butt:?}");
@@ -1547,7 +1585,7 @@ fn cleave_whoosh_sweeps_with_the_right_handed_sword_through_game() {
                 // Changing the selected ability cannot reverse the committed cut.
                 if tick == 1 { game.set_attack_profile(AttackProfile::Slam); }
                 let hash = game.hash();
-                effects.observe(&game);
+                effects.observe(&game, || None);
                 let mut cap_start = None;
                 for alpha in [Alpha::ZERO, interpolation.alpha(), Alpha::ONE] {
                     let player = game.player_presentation(alpha);

@@ -22,8 +22,12 @@ The [shared asset contract](../../../docs/character-assets-authoring.md) owns li
 `generate.py` authors the weapon; `equip.py` fits it to the retained
 [basic player foundation](../../characters/basic-player/README.md). The equipped
 export keeps its body, cloak, rig and eight role clips. Cleave/casting retain
-the source motion; Slam plants the staff butt with both hands in front of the
-body. `BeamOrigin` follows the physical blade tip. Combat damage, timing and
+the source motion; Slam raises the primary right hand above the hood, drives the
+butt down in front of the body and settles into grounded knee/torso compression.
+The left arm opens to the side for balance and stays clear of the shaft. The first active sample
+plants the butt; the remaining active samples hold it while the force wave
+spreads. Eighth-frame keys preserve the fast stroke's grasp between samples.
+`BeamOrigin` follows the physical blade tip. Combat damage, timing and
 reach use the current gameplay values for both blades.
 
 From the repository root, with Blender 5.2.1 LTS:
@@ -43,7 +47,7 @@ compiling its equipped player. Promote both equipped outputs and their build
 record only after checks pass. Two isolated builds of every retained static and
 equipped asset must produce identical GLBs.
 
-The compiler checks anatomical finger contact, the supporting-hand interval,
+The compiler checks anatomical right-hand contact,
 forearm clearance, ready seams, sampled weapon/body triangle surface crossings
 and floor clearance. The lowest sampled staff vertex is 1.49 cm above the floor
 for both blades. These samples do not certify every runtime blend or human feel.
@@ -71,5 +75,6 @@ The [playtest record](playtest.json) retains hashes and compact outcomes for the
 the three front targets from 3 to 1 health; casting damaged targets and ended on
 release. Refused loads preserved the selection. Sampled review found no clear
 high-impact grip/body defect; moving-plant bracing, Cleave recovery and impact
-weight remain human feel questions. Existing effects are provisional for the
-staff motion. The recorded sparse live benchmark is partial performance coverage.
+weight remain human feel questions. That record predates the raised-hand Slam
+and magical force wave; it does not certify their timing or appearance. The
+recorded sparse live benchmark is partial performance coverage.

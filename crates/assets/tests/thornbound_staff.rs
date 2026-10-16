@@ -70,9 +70,10 @@ fn retained_staffs_keep_equipped_grips_and_casting_tips() {
                 let grip = weapon.transform_point3(Vec3::ZERO);
                 assert!(grip.distance(matrix(&pose, "RightGrip").transform_point3(Vec3::ZERO)) < 0.001, "{name}");
                 if name == "AttackSlam" && (0.4..=0.6).contains(&fraction) {
-                    let support = weapon.transform_point3(Vec3::Y * 0.15);
-                    assert!(support.distance(matrix(&pose, "LeftGrip").transform_point3(Vec3::ZERO)) < 0.003,
-                        "the supporting hand must lead toward the blade");
+                    let free_hand = matrix(&pose, "LeftGrip").transform_point3(Vec3::ZERO) - grip;
+                    let axis = weapon.transform_vector3(Vec3::Y).normalize();
+                    assert!((free_hand - axis * free_hand.dot(axis)).length() > 0.25,
+                        "the free hand must stay visibly clear of the staff during the one-handed slam");
                 }
             }
         }

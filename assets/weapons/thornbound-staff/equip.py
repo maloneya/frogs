@@ -16,7 +16,7 @@ sys.dont_write_bytecode=True
 sys.path.insert(0,str(PLAYER))
 import grasp
 import generate as player
-from motion import set_linear_keys
+from motion import set_linear_keys, world_rotation
 
 
 def remove_sword(body):
@@ -55,8 +55,8 @@ def equip(rig,source,landmarks):
     return staff
 
 
-def staff_slam(rig,body,support_offset):
-    """Retain the accepted bracing/body travel, author a clear two-hand staff plant."""
+def staff_slam(rig,body):
+    """Raise the primary hand, then drive the butt down as the force wave releases."""
     hands=grasp.calibrate(body)
     action=bpy.data.actions['AttackSlam']
     rig.animation_data.action=action
@@ -67,19 +67,34 @@ def staff_slam(rig,body,support_offset):
     ready=weapon.head.copy()
     axis=(weapon.tail-weapon.head).normalized()
     ready_rotation=weapon.matrix.to_quaternion().copy()
-    anchors=[(1,ready,axis,0),
-             (4,ready+Vector((0,-.10,.10)),Vector((.15,-.40,.90)),.1),
-             (7,Vector((-.12,-.65,1.30)),Vector((0,-.03,1)),.65),
-             (13,Vector((-.12,-.65,1.32)),Vector((0,-.03,1)),1),
-             (19,Vector((-.12,-.65,1.04)),Vector((0,-.02,1)),1),
-             (24,Vector((-.12,-.65,1.10)),Vector((0,-.03,1)),1),
-             (28,ready,Vector((.15,-.40,.90)),.25),
-             (31,ready,axis,0)]
+    left=rig.pose.bones['LeftHand']
+    left_ready=left.head.copy()
+    left_rotation=left.matrix.to_quaternion().copy()
+    left_shoulder=rig.pose.bones['LeftShoulder'].rotation_quaternion.copy()
+    left_rest={name:rig.pose.bones[name].rotation_quaternion.copy()
+               for name in ['LeftArm','LeftForearm','LeftHand']}
+    free_arm=[(1,left_ready), (8,Vector((.54,.08,1.15))),
+              (10,Vector((.57,.10,1.17))), (14.2,Vector((.60,-.10,.98))),
+              (21,Vector((.56,-.05,.95))), (31,left_ready)]
+    anchors=[(1,ready,axis),
+             (4,ready+Vector((0,-.10,.10)),Vector((.15,-.40,.90))),
+             (8,Vector((-.30,-.46,1.86)),Vector((-.08,-.08,1))),
+             (10,Vector((-.27,-.48,1.90)),Vector((-.04,-.04,1))),
+             (13,Vector((-.18,-.65,1.23)),Vector((0,-.02,1))),
+             (14.2,Vector((-.18,-.65,1.04)),Vector((0,-.02,1))),
+             (21,Vector((-.18,-.65,1.04)),Vector((0,-.02,1))),
+             (24,Vector((-.18,-.65,1.12)),Vector((0,-.03,1))),
+             (28,ready,Vector((.15,-.40,.90))),
+             (31,ready,axis)]
     # Read all inherited samples before adding replacement arm keys.
     samples=[]
-    for i in range(121):
-        frame=1+i*.25
-        bpy.context.scene.frame_set(int(frame),subframe=frame-int(frame))
+    for frame in sorted({1+i*.125 for i in range(241)} | {14.2}):
+        # Reuse the grounded support reference, retimed so compression receives
+        # the plant at the first active sample (frame 14.2), not its last.
+        source_frame = (frame if frame<=4 else 4 + (frame-4)*9/6 if frame<=10 else
+                        13 + (frame-10)*6/4.2 if frame<=14.2 else
+                        19 + (frame-14.2)*12/16.8)
+        bpy.context.scene.frame_set(int(source_frame),subframe=source_frame-int(source_frame))
         samples.append((frame,{b.name:(b.location.copy(),b.rotation_quaternion.copy()) for b in rig.pose.bones}))
     previous={}
     for frame,pose in samples:
@@ -95,8 +110,19 @@ def staff_slam(rig,body,support_offset):
         weight=max(0,min(1,(frame-1)/6,(31-frame)/5))
         poles=tuple(rig.pose.bones[side+'Forearm'].head.lerp(Vector((sign*.85,-.85,1.15)),weight)
                     for side,sign in [('Right',-1),('Left',1)])
-        grasp.place(rig,hands,player.chain,a[1].lerp(b[1],t),rotation,a[3]+(b[3]-a[3])*t,
-                    poles=poles,support_offset=support_offset)
+        rig.pose.bones['LeftShoulder'].rotation_quaternion=left_shoulder
+        bpy.context.view_layer.update()
+        c,d=next((c,d) for c,d in zip(free_arm,free_arm[1:]) if c[0]<=frame<=d[0])
+        u=(frame-c[0])/(d[0]-c[0])
+        u=u*u*(3-2*u)
+        player.chain(rig,'LeftArm','LeftForearm',c[1].lerp(d[1],u),(.75,.30,1.05))
+        world_rotation(rig,'LeftHand',left_rotation)
+        free_weight=max(0,min(1,(frame-1)/4,(31-frame)/5))
+        for name,rest in left_rest.items():
+            joint=rig.pose.bones[name]
+            joint.rotation_quaternion=rest.slerp(joint.rotation_quaternion,free_weight)
+        bpy.context.view_layer.update()
+        grasp.place(rig,hands,player.chain,a[1].lerp(b[1],t),rotation,0,poles=poles)
         for joint in rig.pose.bones:
             joint.rotation_quaternion.normalize()
             if joint.name in previous and joint.rotation_quaternion.dot(previous[joint.name])<0:
@@ -110,7 +136,6 @@ def staff_slam(rig,body,support_offset):
         error=max(abs(a-b) for joint in rig.pose.bones
                   for x,y in zip(ready_pose[joint.name],joint.matrix) for a,b in zip(x,y))
         assert error<.001, ('staff Slam changed its ready seam',frame,error)
-    return min(row[0] for row in anchors if row[3]==1), max(row[0] for row in anchors if row[3]==1)
 
 
 def main():
@@ -128,11 +153,10 @@ def main():
     remove_sword(body)
     landmarks=json.loads(source.with_name('build.json').read_text())['landmarks_blender_metres']
     staff=equip(rig,source,landmarks)
-    support_offset=landmarks['support_grasp'][2]-landmarks['primary_grasp'][2]
-    support_window=staff_slam(rig,body,support_offset)
+    staff_slam(rig,body)
     # Failed admission remains inspectable without producing a runtime GLB.
     assert bpy.ops.wm.save_as_mainfile(filepath=str(out/'candidate.blend')) == {'FINISHED'}
-    grasp.validate_motion(rig,body,support_window=support_window,support_offset=support_offset)
+    grasp.validate_motion(rig,body,support_window=None)
     floor=grasp.validate_equipment(rig,body,staff)
     rig.animation_data.action=bpy.data.actions['Idle']
     rig.animation_data.action_slot=rig.animation_data.action.slots[0]

@@ -270,7 +270,7 @@ fn restart_resets_the_complete_playtest_boundary() {
     for dt in app.accumulator.pending(arpg_sim::Dt::SECS * 8.0) {
         let intent = Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false);
         app.game.step(dt, intent);
-        app.attack_effects.observe(&app.game);
+        app.attack_effects.observe(&app.game, || None);
         app.audio.observe(&app.game, intent);
     }
     let audio_report = |app: &App| {

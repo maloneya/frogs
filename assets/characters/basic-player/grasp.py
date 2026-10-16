@@ -240,10 +240,13 @@ def validate_motion(rig,body,support_window=(10,26),support_offset=-SUPPORT_DIST
         for index in range(count+1):
             frame=first+(last-first)*index/count
             bpy.context.scene.frame_set(int(frame),subframe=frame-int(frame))
-            validate_contact(rig,body,'Right',vertices['Right'])
-            validate_clearance(rig,body,surface)
-            if action.name=='AttackSlam' and support_window[0]<=frame<=support_window[1]:
-                validate_contact(rig,body,'Left',vertices['Left'],support_offset)
+            try:
+                validate_contact(rig,body,'Right',vertices['Right'])
+                validate_clearance(rig,body,surface)
+                if action.name=='AttackSlam' and support_window is not None and support_window[0]<=frame<=support_window[1]:
+                    validate_contact(rig,body,'Left',vertices['Left'],support_offset)
+            except AssertionError as error:
+                raise AssertionError((action.name,frame,*error.args)) from error
     print('PASS grasp: skinned finger/handle contact across every clip and fractional samples',flush=True)
 
 

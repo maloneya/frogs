@@ -313,7 +313,9 @@ impl App {
             self.game.step_observed(dt, intent, &mut crowd);
             game_step += step_start.elapsed();
             ticks += 1;
-            self.attack_effects.observe(&self.game);
+            self.attack_effects.observe(&self.game, || self.character_preview.as_mut().map(|character|
+                character.slam_origin(self.game.player_presentation(Alpha::ONE),
+                    presentation_seconds(self.game.tick(), Alpha::ONE))));
             self.audio.observe(&self.game, intent);
             if let Some(trial) = &mut self.trial {
                 trial.stepped(self.game.enemy_count());

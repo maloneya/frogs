@@ -116,7 +116,7 @@ visible contact interval. These names and segment boundaries are
 gameplay-presentation roles owned by `app`, not special cases in the importer.
 
 The playable player attacks use the same 30-frame authoring contract: frame 1 is
-neutral, frame 13 is fully wound, frame 19 completes contact, and frame 31 is
+neutral, frame 13 ends startup, frame 19 completes contact, and frame 31 is
 neutral again. Runtime maps startup to normalized `0.0..0.4`, active to
 `0.4..0.6`, and recovery to `0.6..1.0`; tests sample the exported weapon motion
 at those edges so moving a key pose into the wrong phase fails visibly.

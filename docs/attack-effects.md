@@ -5,11 +5,14 @@ lateral offset is reflected about the committed facing direction to follow the
 right-handed sword's sweep. Damage discs retain their gameplay order; the visual
 history keeps each observed world origin, reach and radius while fading.
 
-Slam makes a compact ground impact at the end of its committed contact phase: a brief pale
-flash, broken dark splinters, kicked-up chips and low, fading dust. The impact
-locks 1.6 m ahead of the player when the blade finishes descending, then remains
-in world space for 24 ticks while the player recovers or moves away. It does not
-outline the expanding damage radius. The same impact appears on empty ground.
+Slam plants the staff butt on the first active sample. A cyan-white contact flash
+releases a raised, translucent pressure wave and outward magical wisps. The wave
+expands to the committed attack's final radius over its active samples, then
+dissolves; the wisps fade over 24 ticks. The origin comes from the equipped
+weapon's sampled butt, derived from its rigid mesh at admission. It locks in
+world space at contact, including when ticks pass without a redraw. The same
+release appears on empty ground. This visual wave is offset from the
+player-centred damage discs; it is not an exact collision outline.
 Changing the selected attack mid-swing does not change the committed effect.
 Fading never extends the damage window. Start/restart clears history.
 
