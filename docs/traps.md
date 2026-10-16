@@ -35,6 +35,18 @@ surface crossings. Hand contact is checked separately. The staff's
 [`check_equipment.py`](../assets/weapons/thornbound-staff/check_equipment.py)
 rejects a body-crossing shaft and floor penetration, and admits separated geometry.
 
+## Snapshot staff assertion fails while the live asset test passes
+
+**Cause:** replacing the snapshot checkout while preserving live file timestamps
+let Cargo reuse a test binary with an older `include_bytes!` asset, even though
+the captured GLB contained the new pose (2026-10-16).
+**Check:** compare captured asset contents, then run the cached failing binary
+and a freshly compiled test; matching source files alone do not prove embedded bytes.
+**Safeguard:** [snapshot capture](../scripts/verify_snapshot.py) refreshes timestamps
+for changed inputs and capture protocol changes while retaining unchanged input
+timestamps. The [verification tests](../scripts/test_verify.py) compile a small
+embedded asset through changed, reverted and backdated inputs against one build cache.
+
 ## Screenshot times out or the image is black
 
 **Cause:** capture depends on a presented surface. A fully covered window or a

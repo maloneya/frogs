@@ -73,8 +73,11 @@ the usual logs. The revision is context, not a claim that only committed files r
 The isolated checkout lives at `target/verify/snapshot/workspace`, with its own
 reusable build cache at `target/verify/snapshot/build`. Its first build is cold;
 later runs reuse that cache without competing for the live checkout's build
-directory. One snapshot run at a time owns this workspace and cache; a second run
-refuses immediately. The verifier and its direct checks retain the reservation
+directory. Changed captured inputs receive fresh timestamps so Cargo rebuilds
+embedded assets even when the live file's timestamp predates a cached binary;
+unchanged inputs retain their previous snapshot timestamps. One snapshot run at
+a time owns this workspace and cache; a second run refuses immediately. The
+verifier and its direct checks retain the reservation
 if the waiting parent process exits. Git operations ignore inherited checkout/index
 overrides so capturing a snapshot cannot rewrite the live index.
 Historical source archives remain after the next capture

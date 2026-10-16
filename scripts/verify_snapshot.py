@@ -33,6 +33,12 @@ def capture(root, workspace, artifact):
     """Refuse changing or uncopiable inputs; never substitute committed content."""
     root = root.resolve()
     before = verify.source_manifest(root)
+    previous = verify.source_manifest(workspace) if workspace.exists() else {}
+    # Cargo checks dependency mtimes, including include_bytes! assets. A copied
+    # input can predate a cached binary even though its content has changed.
+    # Refresh all inputs when changing this protocol to retire stale old builds.
+    if previous.get("scripts/verify_snapshot.py") != before.get("scripts/verify_snapshot.py"):
+        previous = {}
     revision = git(root, "rev-parse", "HEAD").decode().strip()
     index = git(root, "ls-files", "--stage", "-z")
     if any(entry.split(b"\t", 1)[0].split()[-1] != b"0" for entry in index.split(b"\0") if entry):
@@ -59,6 +65,11 @@ def capture(root, workspace, artifact):
                 destination.symlink_to(os.readlink(source))
             else:
                 shutil.copy2(source, destination)
+                if previous.get(name) == before[name]:
+                    metadata = (workspace / name).stat()
+                    os.utime(destination, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+                else:
+                    os.utime(destination, None)
         if (verify.source_manifest(root) != before or verify.source_manifest(staging) != before
                 or git(root, "rev-parse", "HEAD").decode().strip() != revision
                 or git(root, "ls-files", "--stage", "-z") != index):

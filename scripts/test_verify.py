@@ -154,6 +154,53 @@ class Workspace(unittest.TestCase):
         self.assertEqual((workspace / "source.rs").read_text(), "second")
         self.assertTrue(verify_snapshot.live_comparison(captured)["matches"])
 
+    def test_snapshot_rebuilds_embedded_content_even_when_live_timestamps_go_backwards(self):
+        (self.root / "Cargo.toml").write_text(
+            '[package]\nname = "snapshot-input"\nversion = "0.1.0"\nedition = "2024"\n')
+        (self.root / "src").mkdir()
+        (self.root / "src/main.rs").write_text(
+            'fn main() { print!("{}", include_str!("../asset.txt")); }\n')
+        asset = self.root / "asset.txt"
+        asset.write_text("first")
+        os.utime(asset, (1, 1))
+        # Capture protocol changes must also retire artifacts from older capture
+        # implementations that preserved misleading live timestamps.
+        protocol = self.root / "scripts/verify_snapshot.py"
+        protocol.parent.mkdir()
+        protocol.write_text("first protocol")
+        workspace, _ = self.snapshot()
+
+        def run_binary():
+            result = subprocess.run(["cargo", "run", "--quiet", "--offline"], cwd=workspace,
+                                    env=dict(verify.checkout_environment(),
+                                             CARGO_TARGET_DIR=str(workspace.parent / "build")),
+                                    capture_output=True, text=True, check=True)
+            return result.stdout
+
+        self.assertEqual(run_binary(), "first")
+        for value in ["other", "first"]:
+            asset.write_text(value)  # Same size and older than the cached binary.
+            os.utime(asset, (1, 1))
+            self.next_run()
+            self.snapshot()
+            self.assertEqual(run_binary(), value)
+
+        captured_mtime = (workspace / "asset.txt").stat().st_mtime_ns
+        self.next_run()
+        self.snapshot()
+        self.assertEqual((workspace / "asset.txt").stat().st_mtime_ns, captured_mtime)
+
+        # Model a stale artifact left by the old protocol, with the current
+        # source already on disk and a backdated timestamp hiding the edit.
+        (workspace / "asset.txt").write_text("other")
+        self.assertEqual(run_binary(), "other")
+        (workspace / "asset.txt").write_text("first")
+        os.utime(workspace / "asset.txt", (1, 1))
+        protocol.write_text("fixed protocol")
+        self.next_run()
+        self.snapshot()
+        self.assertEqual(run_binary(), "first")
+
     def test_snapshot_lock_refuses_concurrent_runs_without_touching_reserved_state(self):
         state = self.root / "target/verify/snapshot"
         state.mkdir(parents=True)
