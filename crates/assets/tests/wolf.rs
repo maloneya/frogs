@@ -117,3 +117,31 @@ fn bite_closes_the_jaw_during_contact_and_attacks_recover_to_idle() {
         }
     }
 }
+
+#[test]
+fn run_staggers_each_paw_pair_instead_of_moving_them_in_lockstep() {
+    let asset = import_character_glb(WOLF).unwrap();
+    let clip = asset.clip_named("Run").unwrap();
+    let duration = asset.clip(clip).unwrap().duration_seconds();
+    let mut pose = asset.bind_pose();
+    for limb in ["ForeToe", "HindToe"] {
+        let left = asset.joint_named(&format!("Left{limb}")).unwrap();
+        let right = asset.joint_named(&format!("Right{limb}")).unwrap();
+        let mut minimum = glam::Vec2::splat(f32::INFINITY);
+        let mut maximum = glam::Vec2::splat(f32::NEG_INFINITY);
+        for sample in 0..60 {
+            asset.sample(clip, duration * sample as f32 / 60.0, &mut pose);
+            let paw = |joint| asset.joint_transform(&pose, joint).unwrap().transform_point3(glam::Vec3::ZERO);
+            let difference = paw(left) - paw(right);
+            let sagittal = glam::Vec2::new(difference.y, difference.z);
+            minimum = minimum.min(sagittal);
+            maximum = maximum.max(sagittal);
+        }
+        assert!(minimum.x < -0.05 && maximum.x > 0.05,
+            "{limb} must lift at different phases: {minimum:?}..{maximum:?}");
+        // A gallop retains a lead leg; the paws need different arcs without
+        // necessarily passing each other in the forward direction.
+        assert!(maximum.y - minimum.y > 0.16,
+            "{limb} must recover independently: {minimum:?}..{maximum:?}");
+    }
+}

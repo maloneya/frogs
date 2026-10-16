@@ -19,8 +19,10 @@ The compiler imports the retained, versioned authored sources directly:
 - [Micket's CC0 Eurasian wolf](../../../experimental/character-references/sources/micket-wolf/wolf.blend)
   supplies the continuous mesh, painted weights and anatomical rig.
 - [tomek's CC0 wolf](../../../experimental/character-references/sources/tomek-wolf/wolf.blend)
-  supplies `wolf_idle`, `wolf_walk`, `wolf_run`, `wolf_attack01`, `wolf_jump`,
+  supplies `wolf_idle`, `wolf_walk`, `wolf_attack01`, `wolf_jump`,
   `wolf_fly`, `wolf_land` and `wolf_die`.
+- [Mesh2Motion’s CC0 fox run](../../../experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-run.blend)
+  supplies `Run`, evaluated with its retained [control rig](../../../experimental/character-references/sources/mesh2motion/rigs/rig-fox.blend).
 
 [The reference catalog](../../../experimental/character-references/README.md)
 retains exact source hashes, license snapshots and attribution. Original source
@@ -49,7 +51,10 @@ the runtime uses only its geometry with the visible asset's palette.
 ## Motion review
 
 `Idle` breathes over 3.2 seconds, `Walk` uses a four-foot cycle over 1 second,
-and `Run` bounds over 0.6 seconds. Faster travel retimes the run. `Bite` and `Leap`
+and `Run` uses the fox’s staggered gallop over 0.6 seconds. Each front and rear
+paw retains its independent source trajectory. The longer wolf trunk uses a
+reduced torso bend while preserving the gathered and extended phases. Faster
+travel retimes the run. `Bite` and `Leap`
 use frames 1/13/19/31 for ready/load/contact-end/recovered poses. App maps those
 segments to each action's committed phase lengths, including authored tuning.
 Default preview cadence is 36/9/39 ticks for bite and 42/36/54 for leap.

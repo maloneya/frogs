@@ -17,8 +17,11 @@ from motion import action_curves
 
 BODY = ROOT / 'experimental/character-references/sources/micket-wolf/wolf.blend'
 MOTION = ROOT / 'experimental/character-references/sources/tomek-wolf/wolf.blend'
+FOX_RUN = ROOT / 'experimental/character-references/sources/mesh2motion/rigs/fox/animation-fox-run.blend'
+FOX_RIG = ROOT / 'experimental/character-references/sources/mesh2motion/rigs/rig-fox.blend'
 BODY_SCALE = .30
 MOTION_SCALE = 1.8
+FOX_SCALE = .75
 NAMES = {'Bone': 'Pelvis', 'Bone.005': 'Spine', 'Bone.001': 'Chest',
          'Neck1': 'NeckBase', 'Neck2': 'Neck', 'Neck3': 'UpperNeck',
          'Jaw1': 'JawHinge', 'Jaw2': 'Jaw', 'Bone.012': 'Belly'}
@@ -58,18 +61,19 @@ def source_samples():
             rig.animation_data.action = action
             rig.animation_data.action_slot = action.slots[0]
             bpy.context.scene.frame_set(math.floor(frame), subframe=frame % 1)
-            cache[key] = ({b.name: b.matrix.to_quaternion() @ bind[b.name].inverted()
-                           for b in rig.pose.bones}, (rig.pose.bones['Bone'].head - origin) * MOTION_SCALE,
-                          {name:(rig.pose.bones[bone].head-rig.data.bones[bone].head_local)*MOTION_SCALE
-                           for name,bone in FEET.items()})
+            rotations = {b.name: b.matrix.to_quaternion() @ bind[b.name].inverted() for b in rig.pose.bones}
+            cache[key] = ({joint:rotations[bone] for joint,bone in MAP.items()},
+                          (rig.pose.bones['Bone'].head - origin) * MOTION_SCALE,
+                          {name:((rig.pose.bones[bone].head-rig.data.bones[bone].head_local)*MOTION_SCALE,
+                                 rotations[bone]) for name,bone in FEET.items()})
         return cache[key]
     # Sample before opening the independent body source.
     clips = {}
-    for name, last in [('Idle',97), ('Walk',31), ('Run',19), ('Bite',31), ('Leap',31), ('Hit',31), ('Death',31)]:
+    for name, last in [('Idle',97), ('Walk',31), ('Bite',31), ('Leap',31), ('Hit',31), ('Death',31)]:
         clips[name] = []
         for frame in range(1, last + 1):
             p = (frame - 1) / (last - 1)
-            if name in ('Idle','Walk','Run'):
+            if name in ('Idle','Walk'):
                 a = sample('wolf_' + name.lower(), p * 24)
                 jaw = 0
             elif name == 'Bite':
@@ -89,7 +93,7 @@ def source_samples():
                 ready=sample('wolf_idle',0)
                 settle=max(0,min(1,(p-.7)/.3))
                 rotations=dict(a[0])
-                for joint in ['Bone.001','Bone.002','Bone.003','Bone.004']:
+                for joint in ['Tail1','Tail2','Tail3','Tail4']:
                     rotations[joint]=rotations[joint].slerp(ready[0][joint],settle)
                 a=(rotations,a[1],a[2])
                 jaw = piecewise(p, [(0,0),(.3,12),(.4,22),(.54,26),(.6,0),(.75,3),(1,0)])
@@ -98,8 +102,9 @@ def source_samples():
                 jaw = 0
                 strength = piecewise(p, [(0,0),(.2,1),(.5,.7),(1,0)])
                 rotations = dict(a[0])
-                for joint in ['Bone','neck_01','head']:
-                    rotations[joint] = Quaternion((1,0,0), -.18*strength) @ rotations[joint]
+                for joint in rotations:
+                    if MAP[joint] in ('Bone','neck_01','head'):
+                        rotations[joint] = Quaternion((1,0,0), -.18*strength) @ rotations[joint]
                 a = (rotations, Vector((0,.06*strength,-.04*strength)), a[2])
             else:
                 # Retain the source recoil, then gather the limbs before a side
@@ -109,7 +114,60 @@ def source_samples():
                 a = interpolate(sample('wolf_die',min(p/.6,1)*36),sample('wolf_jump',0),settle)
                 jaw = 0
             clips[name].append((frame, a, jaw))
+    clips['Run'] = fox_run_samples()
     return clips
+
+
+def fox_run_samples():
+    """Retarget the authored fox gallop, including its independent paw targets."""
+    assert bpy.ops.wm.open_mainfile(filepath=str(FOX_RUN), use_scripts=False) == {'FINISHED'}
+    library = bpy.data.libraries['rig-fox-v2.blend']
+    library.filepath = str(FOX_RIG)
+    library.reload()
+    missing = [block.name for block in bpy.data.user_map() if block.library and block.is_missing]
+    assert not missing, f'Unresolved fox source data: {missing}'
+    rigs = [obj for obj in bpy.context.scene.objects if obj.type == 'ARMATURE']
+    assert len(rigs) == 1, 'Fox run requires its unique source rig'
+    rig = rigs[0]
+    rig.animation_data.use_nla = False
+    action = bpy.data.actions['Run']
+    rig.animation_data.action = action
+    rig.animation_data.action_slot = action.slots[0]
+    joints = {'Pelvis':'Hips', 'Spine':'Spine_1', 'Chest':'Spine_2', 'Belly':'Hips',
+              'NeckBase':'Spine_2.001', 'Neck':'Spine_3', 'UpperNeck':'Spine_4',
+              'Head':'Head', 'JawHinge':'Head', 'Jaw':'Head',
+              'Tail1':'Tail_Base', 'Tail2':'Tail_Mid', 'Tail3':'Tail_Mid.001', 'Tail4':'Tail_End'}
+    paws = {}
+    for side, suffix in [('Left','L'), ('Right','R')]:
+        for target, source in [('Shoulder','Front_Leg_Shoulder'), ('Foreleg','Front_Leg_Upper'),
+                               ('ForeShin','Front_Leg_Lower'), ('ForePaw','Front_Leg_Ankle'),
+                               ('ForeToe','Front_Leg_Foot'), ('Thigh','Back_Leg_Upper'),
+                               ('Hock','Back_Leg_Lower'), ('HindPaw','Back_Leg_Ankle'),
+                               ('HindToe','Back_Leg_Foot_1')]:
+            joints[side+target] = source+'_'+suffix
+        paws[side+'Fore'] = 'Front_Leg_Foot_'+suffix
+        paws[side+'Hind'] = 'Back_Leg_Foot_1_'+suffix
+    bind = {bone.name:bone.matrix_local.to_quaternion() for bone in rig.data.bones}
+    origin = rig.data.bones['Hips'].head_local
+    first,last = action.frame_range
+    samples = []
+    # Keep the existing 0.6 s cadence; the source retains all four limb phases.
+    for frame in range(1,20):
+        source_frame = first+(last-first)*((frame-1)/18 % 1)
+        bpy.context.scene.frame_set(math.floor(source_frame), subframe=source_frame % 1)
+        evaluated = rig.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        rotations = {bone.name:bone.matrix.to_quaternion() @ bind[bone.name].inverted()
+                     for bone in evaluated.pose.bones}
+        feet = {name:((evaluated.pose.bones[bone].head-rig.data.bones[bone].head_local)*FOX_SCALE,
+                     rotations[bone]) for name,bone in paws.items()}
+        travel = (evaluated.pose.bones['Hips'].head-origin)*FOX_SCALE
+        mapped = {joint:rotations[bone] for joint,bone in joints.items()}
+        # The wolf's longer trunk amplifies the fox's gathered bend. Retain its
+        # body pitch at a smaller amplitude without changing the four paw arcs.
+        for joint in ('Pelvis','Spine','Chest','Belly'):
+            mapped[joint] = Quaternion().slerp(mapped[joint],.6)
+        samples.append((frame, (mapped,travel,feet),0))
+    return samples
 
 
 def piecewise(p, keys):
@@ -120,24 +178,23 @@ def piecewise(p, keys):
 
 def interpolate(a, b, t):
     return ({n: q.slerp(b[0][n], t) for n,q in a[0].items()}, a[1].lerp(b[1], t),
-            {n:p.lerp(b[2][n],t) for n,p in a[2].items()})
+            {n:(p.lerp(b[2][n][0],t), q.slerp(b[2][n][1],t)) for n,(p,q) in a[2].items()})
 
 
-def support_limbs(rig, feet, rotations):
+def support_limbs(rig, feet):
     """Preserve source paw trajectories on the wolf's different segment lengths."""
     def aim(name, head, tail):
         bone=rig.data.bones[name]
         rotation=(bone.tail_local-bone.head_local).rotation_difference(tail-head) @ bone.matrix_local.to_quaternion()
         rig.pose.bones[name].matrix=Matrix.LocRotScale(head,rotation,Vector((1,1,1)))
         bpy.context.view_layer.update()
-    for prefix,delta in feet.items():
+    for prefix,(delta,foot_rotation) in feet.items():
         side='Left' if prefix.startswith('Left') else 'Right'
         front=prefix.endswith('Fore')
         upper=side+('Foreleg' if front else 'Thigh')
         lower=side+('ForeShin' if front else 'Hock')
         ankle=prefix+'Paw'
         toe=prefix+'Toe'
-        foot_rotation=rotations[FEET[prefix]]
         displacement=delta.copy()
         displacement.x*=.45
         end=rig.data.bones[toe].head_local+displacement
@@ -335,7 +392,7 @@ def bake(rig, body, clips):
                 pb.matrix_basis = Matrix.Identity(4)
                 pb.rotation_mode = 'QUATERNION'
             global_rotations = {}
-            head_delta = source['head']
+            head_delta = source['Head']
             axis = head_delta @ rest['Head'].to_quaternion() @ Vector((0,1,0))
             tilt = math.atan2(axis.z,-axis.y)
             if name != 'Death':
@@ -348,9 +405,9 @@ def bake(rig, body, clips):
                 parent_q = global_rotations[bone.parent.name] if bone.parent else Quaternion()
                 local_bind = rest[bone.parent.name].inverted() @ rest[name_b] if bone.parent else rest[name_b]
                 local_q = local_bind.to_quaternion()
-                if name_b in MAP:
-                    delta = source[MAP[name_b]]
-                    if MAP[name_b] == 'head': delta = head_delta
+                if name_b in source:
+                    delta = source[name_b]
+                    if name_b in ('Head','JawHinge','Jaw'): delta = head_delta
                     # Tail source is carried horizontally; retain the wolf's hanging bind tail.
                     if name_b.startswith('Tail'): delta = Quaternion().slerp(delta,.3)
                     wanted = delta @ rest[name_b].to_quaternion()
@@ -366,7 +423,7 @@ def bake(rig, body, clips):
             root = rig.pose.bones['Root']
             root.location = (0, travel.y if name=='Bite' else 0, travel.z)
             bpy.context.view_layer.update()
-            support_limbs(rig,feet,source)
+            support_limbs(rig,feet)
             if name == 'Death':
                 progress=(frame-1)/(len(samples)-1)
                 fall=max(0,min(1,(progress-.4)/.6))
@@ -448,7 +505,7 @@ def main():
     export(out,rig,True)
     (out/'build.json').write_text(json.dumps({'blender':bpy.app.version_string,
         'compiler_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        'sources':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in [BODY,MOTION,MOTION_TOOLS]},
+        'sources':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in [BODY,MOTION,FOX_RUN,FOX_RIG,MOTION_TOOLS]},
         'artifacts':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.glob('*.glb'))}},indent=2)+'\n')
 
 
