@@ -5,9 +5,9 @@ breakable latch. Its body survives release and breaching. Passage clearance,
 contact and cover follow the panel's actual angle; latch state alone does not
 mean that a doorway is open.
 
-Open [the crowd breach scene](../scenes/door_breach.ron) in Scenes and **Save & play**.
-The player starts across a wall from two sources. Leave the gate intact and let
-the crowd build; restart to compare pushing, attacks and changes to physical tuning.
+To author a breach trial in the [scene editor](scene-editor.md), place a door in
+a wall gap and sources across the wall from the player. Leave the gate intact
+and let the crowd build; restart to compare pushing, attacks and physical tuning.
 
 A door is a body on a locked [hinge](joints.md). [Joint and lock
 mechanics](../crates/sim/src/joint.rs) belong to simulation; [doors](../crates/game/src/door.rs)

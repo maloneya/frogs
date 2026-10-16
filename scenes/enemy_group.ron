@@ -1,0 +1,54 @@
+// Compare attacks against twelve stationary enemies in a 4-by-3 group.
+// They remain damageable but have no pursuit or attack actions.
+(
+    scene: (
+        environment: (
+            storm: false,
+            ambient_colour: (1.0, 1.0, 1.0),
+            ambient_intensity: 0.22,
+            directional_colour: (1.0, 1.0, 1.0),
+            directional_intensity: 0.35,
+            direction: (0.4, 1.0, 0.3),
+        ),
+        engine: (
+            name: "Enemy group — passive",
+            bodies: [],
+            grids: [
+                (
+                    origin: (-1.8, 3.0),
+                    columns: 4,
+                    rows: 3,
+                    spacing: 1.2,
+                    what: (
+                        physical: (
+                            fixed: false,
+                            mass: 1.0,
+                            interactable: false,
+                            health: Some(3),
+                            character: true,
+                        ),
+                        role: Hostile,
+                        actions: [],
+                        behavior: Idle,
+                    ),
+                ),
+            ],
+            sources: [],
+            walls: [],
+        ),
+        torches: [],
+        trees: [],
+        doors: [],
+        chests: [],
+        encounters: [],
+    ),
+    labels: [
+        (
+            target: (
+                kind: grid,
+                index: 0,
+            ),
+            name: "Twelve passive targets",
+        ),
+    ],
+)

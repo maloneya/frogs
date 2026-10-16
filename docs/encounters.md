@@ -1,10 +1,10 @@
 # Authoring encounters
 
-Start with [the playable soul trial](../scenes/soul_trial.ron). Within its `scene`
-field, `encounters` contains the gameplay composition. Physical placements remain
+Within a [scene document](scene-authoring.md#document-and-runtime-boundary),
+the `scene.encounters` field contains the gameplay composition. Physical placements remain
 under `engine`; `doors` bind movable props to physical panels, while `chests` bind
-fixed props to gameplay components. The
-trial uses eight sources around a central light and rewards a chest opening. Multiple
+fixed props to gameplay components. The example below binds eight sources to
+a defeat objective and rewards a chest opening. Multiple
 entries run independently in the same scene, and loading the scene twice makes
 independent copies of every relationship.
 

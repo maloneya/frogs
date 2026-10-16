@@ -29,7 +29,7 @@ skip the interactive scene preference, so load content explicitly:
 
 ```sh
 sock() { echo "$1" | nc -U /tmp/arpg.sock; }
-sock 'scene start scenes/seekers.ron'
+sock 'scene start scenes/three_enemy_spawners.ron'
 sock state
 sock 'hold d 500'
 sock 'shot /tmp/arpg-frame.png'

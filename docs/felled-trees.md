@@ -5,10 +5,10 @@ lock, and holds against ground-plane load the way a [door latch](physical-doors.
 about its base under gravity, strikes what it comes down on and lies on the
 ground as a solid log.
 
-Open [the felled grove](../scenes/felled_grove.ron) in Scenes and **Save & play**.
-A crowd presses on the pine that plugs a gap in the wall. When the root fails,
-the pine falls onto a second pine, and its momentum breaks that root too.
-Restart to compare standing aside, being struck and slamming the small bare trees.
+To author a falling-tree trial in the [scene editor](scene-editor.md), place a
+pine in a wall gap and a crowd behind it. Place a second pine in its fall path
+to try a chain reaction. Restart to compare standing aside, being struck and
+slamming smaller bare trees.
 
 [Joints, locks and impacts](../crates/sim/src/joint.rs) belong to simulation
 and know nothing of trees. [Trees](../crates/game/src/tree.rs) derive each

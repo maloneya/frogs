@@ -1,0 +1,61 @@
+// Move and attack into a horde of exactly one thousand pursuing enemies.
+// The 40-by-25 formation starts clear of the player; there are no reinforcements.
+(
+    scene: (
+        environment: (
+            storm: false,
+            ambient_colour: (1.0, 1.0, 1.0),
+            ambient_intensity: 0.22,
+            directional_colour: (1.0, 1.0, 1.0),
+            directional_intensity: 0.35,
+            direction: (0.4, 1.0, 0.3),
+        ),
+        engine: (
+            name: "Horde — 1,000 enemies",
+            bodies: [],
+            grids: [
+                (
+                    origin: (-13.65, 6.0),
+                    columns: 40,
+                    rows: 25,
+                    spacing: 0.7,
+                    what: (
+                        physical: (
+                            fixed: false,
+                            mass: 1.0,
+                            interactable: false,
+                            health: Some(3),
+                            character: true,
+                        ),
+                        role: Hostile,
+                        actions: [
+                            Move((
+                                destination: Target(Player),
+                                speed: 2.5,
+                                acceleration: 30.0,
+                                stop_distance: 0.55,
+                            )),
+                        ],
+                        behavior: Action(0),
+                    ),
+                ),
+            ],
+            sources: [],
+            walls: [],
+        ),
+        torches: [],
+        trees: [],
+        doors: [],
+        chests: [],
+        encounters: [],
+    ),
+    labels: [
+        (
+            target: (
+                kind: grid,
+                index: 0,
+            ),
+            name: "Thousand-enemy horde",
+        ),
+    ],
+)

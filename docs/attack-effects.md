@@ -98,4 +98,4 @@ The jump adds real ground travel through the shared motor, plus a visual arc
 the jump, and airborne enemies remain damageable; it does not grant collision
 immunity or allow jumping over walls. Landing damage requires actual physical
 reach as well as overlap with the promised disc, so blocked jumps cannot hit
-remotely. `scenes/leaping_horde.ron` is a small playable mixed-attack trial.
+remotely. Use the [scene editor](scene-editor.md) to compose a mixed-attack trial.

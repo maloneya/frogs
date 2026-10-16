@@ -1,7 +1,9 @@
-// Dodge the purple leap target, then bait the amber swipe up close.
+// Try Cleave, Slam and Disintegrate against one stationary enemy.
+// It remains damageable but has no pursuit or attack actions.
 (
     scene: (
         environment: (
+            storm: false,
             ambient_colour: (1.0, 1.0, 1.0),
             ambient_intensity: 0.22,
             directional_colour: (1.0, 1.0, 1.0),
@@ -9,10 +11,10 @@
             direction: (0.4, 1.0, 0.3),
         ),
         engine: (
-            name: "Single attacking enemy",
+            name: "Single enemy — passive",
             bodies: [
                 (
-                    pos: (0.0, 4.0),
+                    pos: (0.0, 3.0),
                     what: (
                         physical: (
                             fixed: false,
@@ -22,378 +24,8 @@
                             character: true,
                         ),
                         role: Hostile,
-                        actions: [
-                            Swipe((
-                                target: Player,
-                                timing: (
-                                    startup: 36,
-                                    active: 9,
-                                    recovery: 39,
-                                ),
-                                reach: 1.5,
-                                offset: 0.75,
-                                radius: 0.65,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Leap((
-                                target: Player,
-                                timing: (
-                                    startup: 42,
-                                    active: 36,
-                                    recovery: 54,
-                                ),
-                                min_range: 3.0,
-                                max_range: 7.0,
-                                radius: 0.9,
-                                cooldown: 240,
-                                speed: 18.0,
-                                acceleration: 120.0,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Move((
-                                destination: Target(Player),
-                                speed: 2.5,
-                                acceleration: 30.0,
-                                stop_distance: 0.55,
-                            )),
-                        ],
-                        behavior: Priority([
-                            Action(0),
-                            Action(1),
-                            Action(2),
-                        ]),
-                    ),
-                ),
-                (
-                    pos: (-3.0, 4.0),
-                    what: (
-                        physical: (
-                            fixed: false,
-                            mass: 1.0,
-                            interactable: false,
-                            health: Some(3),
-                            character: true,
-                        ),
-                        role: Hostile,
-                        actions: [
-                            Swipe((
-                                target: Player,
-                                timing: (
-                                    startup: 36,
-                                    active: 9,
-                                    recovery: 39,
-                                ),
-                                reach: 1.5,
-                                offset: 0.75,
-                                radius: 0.65,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Leap((
-                                target: Player,
-                                timing: (
-                                    startup: 42,
-                                    active: 36,
-                                    recovery: 54,
-                                ),
-                                min_range: 3.0,
-                                max_range: 7.0,
-                                radius: 0.9,
-                                cooldown: 240,
-                                speed: 18.0,
-                                acceleration: 120.0,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Move((
-                                destination: Target(Player),
-                                speed: 2.5,
-                                acceleration: 30.0,
-                                stop_distance: 0.55,
-                            )),
-                        ],
-                        behavior: Priority([
-                            Action(0),
-                            Action(1),
-                            Action(2),
-                        ]),
-                    ),
-                ),
-                (
-                    pos: (-3.0, 4.0),
-                    what: (
-                        physical: (
-                            fixed: false,
-                            mass: 1.0,
-                            interactable: false,
-                            health: Some(3),
-                            character: true,
-                        ),
-                        role: Hostile,
-                        actions: [
-                            Swipe((
-                                target: Player,
-                                timing: (
-                                    startup: 36,
-                                    active: 9,
-                                    recovery: 39,
-                                ),
-                                reach: 1.5,
-                                offset: 0.75,
-                                radius: 0.65,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Leap((
-                                target: Player,
-                                timing: (
-                                    startup: 42,
-                                    active: 36,
-                                    recovery: 54,
-                                ),
-                                min_range: 3.0,
-                                max_range: 7.0,
-                                radius: 0.9,
-                                cooldown: 240,
-                                speed: 18.0,
-                                acceleration: 120.0,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Move((
-                                destination: Target(Player),
-                                speed: 2.5,
-                                acceleration: 30.0,
-                                stop_distance: 0.55,
-                            )),
-                        ],
-                        behavior: Priority([
-                            Action(0),
-                            Action(1),
-                            Action(2),
-                        ]),
-                    ),
-                ),
-                (
-                    pos: (3.5, 3.5),
-                    what: (
-                        physical: (
-                            fixed: false,
-                            mass: 1.0,
-                            interactable: false,
-                            health: Some(3),
-                            character: true,
-                        ),
-                        role: Hostile,
-                        actions: [
-                            Swipe((
-                                target: Player,
-                                timing: (
-                                    startup: 36,
-                                    active: 9,
-                                    recovery: 39,
-                                ),
-                                reach: 1.5,
-                                offset: 0.75,
-                                radius: 0.65,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Leap((
-                                target: Player,
-                                timing: (
-                                    startup: 42,
-                                    active: 36,
-                                    recovery: 54,
-                                ),
-                                min_range: 3.0,
-                                max_range: 7.0,
-                                radius: 0.9,
-                                cooldown: 240,
-                                speed: 18.0,
-                                acceleration: 120.0,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Move((
-                                destination: Target(Player),
-                                speed: 2.5,
-                                acceleration: 30.0,
-                                stop_distance: 0.55,
-                            )),
-                        ],
-                        behavior: Priority([
-                            Action(0),
-                            Action(1),
-                            Action(2),
-                        ]),
-                    ),
-                ),
-                (
-                    pos: (2.5, 4.5),
-                    what: (
-                        physical: (
-                            fixed: false,
-                            mass: 1.0,
-                            interactable: false,
-                            health: Some(3),
-                            character: true,
-                        ),
-                        role: Hostile,
-                        actions: [
-                            Swipe((
-                                target: Player,
-                                timing: (
-                                    startup: 36,
-                                    active: 9,
-                                    recovery: 39,
-                                ),
-                                reach: 1.5,
-                                offset: 0.75,
-                                radius: 0.65,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Leap((
-                                target: Player,
-                                timing: (
-                                    startup: 42,
-                                    active: 36,
-                                    recovery: 54,
-                                ),
-                                min_range: 3.0,
-                                max_range: 7.0,
-                                radius: 0.9,
-                                cooldown: 240,
-                                speed: 18.0,
-                                acceleration: 120.0,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Move((
-                                destination: Target(Player),
-                                speed: 2.5,
-                                acceleration: 30.0,
-                                stop_distance: 0.55,
-                            )),
-                        ],
-                        behavior: Priority([
-                            Action(0),
-                            Action(1),
-                            Action(2),
-                        ]),
-                    ),
-                ),
-                (
-                    pos: (2.0, 2.5),
-                    what: (
-                        physical: (
-                            fixed: false,
-                            mass: 1.0,
-                            interactable: false,
-                            health: Some(3),
-                            character: true,
-                        ),
-                        role: Hostile,
-                        actions: [
-                            Swipe((
-                                target: Player,
-                                timing: (
-                                    startup: 36,
-                                    active: 9,
-                                    recovery: 39,
-                                ),
-                                reach: 1.5,
-                                offset: 0.75,
-                                radius: 0.65,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Leap((
-                                target: Player,
-                                timing: (
-                                    startup: 42,
-                                    active: 36,
-                                    recovery: 54,
-                                ),
-                                min_range: 3.0,
-                                max_range: 7.0,
-                                radius: 0.9,
-                                cooldown: 240,
-                                speed: 18.0,
-                                acceleration: 120.0,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Move((
-                                destination: Target(Player),
-                                speed: 2.5,
-                                acceleration: 30.0,
-                                stop_distance: 0.55,
-                            )),
-                        ],
-                        behavior: Priority([
-                            Action(0),
-                            Action(1),
-                            Action(2),
-                        ]),
-                    ),
-                ),
-                (
-                    pos: (-1.5, 2.5),
-                    what: (
-                        physical: (
-                            fixed: false,
-                            mass: 1.0,
-                            interactable: false,
-                            health: Some(3),
-                            character: true,
-                        ),
-                        role: Hostile,
-                        actions: [
-                            Swipe((
-                                target: Player,
-                                timing: (
-                                    startup: 36,
-                                    active: 9,
-                                    recovery: 39,
-                                ),
-                                reach: 1.5,
-                                offset: 0.75,
-                                radius: 0.65,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Leap((
-                                target: Player,
-                                timing: (
-                                    startup: 42,
-                                    active: 36,
-                                    recovery: 54,
-                                ),
-                                min_range: 3.0,
-                                max_range: 7.0,
-                                radius: 0.9,
-                                cooldown: 240,
-                                speed: 18.0,
-                                acceleration: 120.0,
-                                damage: 1,
-                                impulse: 1.0,
-                            )),
-                            Move((
-                                destination: Target(Player),
-                                speed: 2.5,
-                                acceleration: 30.0,
-                                stop_distance: 0.55,
-                            )),
-                        ],
-                        behavior: Priority([
-                            Action(0),
-                            Action(1),
-                            Action(2),
-                        ]),
+                        actions: [],
+                        behavior: Idle,
                     ),
                 ),
             ],
@@ -407,4 +39,13 @@
         chests: [],
         encounters: [],
     ),
+    labels: [
+        (
+            target: (
+                kind: body,
+                index: 0,
+            ),
+            name: "Passive target",
+        ),
+    ],
 )

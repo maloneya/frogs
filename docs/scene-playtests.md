@@ -34,7 +34,7 @@ Launch with the [live playtest guide](../.claude/skills/playtest/SKILL.md), then
 one command per connection:
 
 ```sh
-echo 'scene start scenes/soul_trial.ron' | nc -U /tmp/arpg.sock
+echo 'scene start scenes/single_enemy.ron' | nc -U /tmp/arpg.sock
 echo 'scene restart' | nc -U /tmp/arpg.sock
 echo 'scene add scenes/three_enemy_spawners.ron' | nc -U /tmp/arpg.sock
 echo 'scene list' | nc -U /tmp/arpg.sock

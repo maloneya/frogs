@@ -8,7 +8,7 @@ The library's dependency guard excludes the application and graphics crates.
 ```sh
 cargo build --release -p arpg-authoring --bin arpg-author
 printf '%s\n' '{"action":"new"}' | target/release/arpg-author
-printf '%s\n' '{"action":"open","path":"scenes/soul_trial.ron"}' | target/release/arpg-author
+printf '%s\n' '{"action":"open","path":"scenes/single_enemy.ron"}' | target/release/arpg-author
 ```
 
 Each invocation reads one JSON request through stdin EOF and returns one JSON

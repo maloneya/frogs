@@ -27,9 +27,16 @@ For the storm-night visual study, open **Storm watch — the last fire**
 reveal the approaching crowd. **Scene lighting → Rain and lightning** toggles
 the weather.
 
-For the character/combat study, open **Combat feel — poses and impact**
-(`scenes/combat_feel.ron`). Compare Cleave and Slam while standing and moving,
-then hit the front targets again to see deaths. Restart restores the targets.
+The scene catalog contains five starting points:
+
+- `scenes/single_enemy.ron`: one stationary, attackable enemy with no pursuit or attacks.
+- `scenes/enemy_group.ron`: twelve enemies with the same passive behavior.
+- `scenes/three_enemy_spawners.ron`: three sources emitting pursuing enemies,
+  once per second each, up to sixty enemies in total.
+- `scenes/horde_1000.ron`: exactly 1,000 pursuing enemies, with no reinforcements.
+- `scenes/storm_watch.ron`: the storm-night clearing described above.
+
+Restart restores the selected scene's starting layout.
 
 ## Controls
 
