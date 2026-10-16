@@ -283,6 +283,10 @@ impl Scenes {
             .push(source);
     }
 
+    pub(crate) fn body_owner(&self, body: EntityId) -> Option<SceneId> {
+        self.live.iter().find(|scene| scene.bodies.contains(&body)).map(|scene| scene.id)
+    }
+
     /// Retires membership and returns its owner in the same traversal.
     pub(crate) fn forget_body(&mut self, body: EntityId) -> Option<SceneId> {
         for scene in &mut self.live {

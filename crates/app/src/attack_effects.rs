@@ -852,7 +852,7 @@ mod beam_tests {
                 assert_eq!(effects.vertices().len(), 504 + 24);
             }
         }
-        assert!(game.health(target).is_none());
+        assert_eq!(game.health(target), Some(0));
         assert_eq!(effects.markers.len(), 1, "killing pulse leaves a marker");
         for _ in 0..8 {
             game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
@@ -860,6 +860,7 @@ mod beam_tests {
         }
         effects.rebuild(
             &game, Alpha::ONE, Some(BeamEmitter { tip: Vec3::Y * 0.85, direction: Vec3::Z }));
+        assert_eq!(game.health(target), Some(0));
         assert!(effects.markers.is_empty());
         assert!(effects.vertices().is_empty());
         effects.clear();

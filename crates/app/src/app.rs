@@ -27,7 +27,7 @@ use crate::harness::{self, Request};
 use crate::hud;
 use crate::input::Controls;
 use crate::presentation::{
-    LoadedCharacter, LoadedHorde, WorldAssets, default_character_path,
+    HordeFrame, LoadedCharacter, LoadedHorde, WorldAssets, default_character_path,
     default_horde_path, presentation_seconds, replace_character,
     replace_horde,
 };
@@ -347,8 +347,7 @@ impl App {
             horde.rebuild(self.game.character_presentations(alpha), presentation_seconds,
                 |id| self.enemy_feedback.flash(id, self.game.tick(), alpha),
                 |id| self.enemy_feedback.recoil(id, self.game.tick(), alpha),
-                self.game.action_statuses(), alpha);
-            horde.rebuild_corpses(self.game.corpses(), alpha);
+                self.game.action_statuses(), HordeFrame { alpha, corpses: self.game.corpses() });
         }
         if let Some(character) = &mut self.character_preview {
             character.sample(player, alpha, presentation_seconds);

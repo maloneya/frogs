@@ -165,7 +165,8 @@ fn crowd_observations_follow_the_same_game_schedule_without_changing_replay() {
     for tick in 0..90 {
         observer.candidates = 0;
         observer.possible_pairs = 0;
-        let before = observed.enemy_count() as u64;
+        // Collision geometry includes moving corpses as well as living characters.
+        let before = observed.collision_discs().count() as u64 - 1;
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         let intent = Intent::new(MoveDir::new(Vec3::X), AimDir::FORWARD, tick % 25 == 0);
         observed.step_observed(dt, intent, &mut observer);

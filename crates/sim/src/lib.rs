@@ -77,7 +77,7 @@ use slots::Slots;
 pub use time::{Accumulator, Alpha, Dt, TICK_HZ, Ticks};
 pub use trace::{Event, EventKind, MAX_TRACE_EVENTS, Trace, TraceSink};
 mod access;
-pub use access::{ActorView, GameplayAccess};
+pub use access::{ActorView, DefeatedBodyRetirement, GameplayAccess};
 mod step;
 pub use step::{PreparedStep, ResolvedStep};
 
@@ -392,12 +392,6 @@ impl World {
     }
 }
 
-/// Final facts retained by the shared removal boundary for gameplay outcomes.
-struct RemovedBody {
-    position: Vec2,
-    scene: Option<SceneId>,
-}
-
 /// The one implementation of non-player body removal, shared by between-tick callers and
 /// the final scheduled defeat pass.
 fn remove_body(
@@ -405,14 +399,13 @@ fn remove_body(
     scenes: &mut Scenes,
     id: EntityId,
     trace: &mut trace::TraceSink<'_>,
-) -> Option<RemovedBody> {
-    let position = bodies.pos_of(id)?;
+) -> Option<()> {
     if !bodies.despawn(id) {
         return None;
     }
-    let scene = scenes.forget_body(id);
+    scenes.forget_body(id);
     trace.emit(Event::Removed { id });
-    Some(RemovedBody { position, scene })
+    Some(())
 }
 
 impl World {
@@ -423,7 +416,9 @@ impl World {
     /// counter is a second copy of the same fact, and the two drift the first
     /// time something spawns or kills one without going through the same door.
     pub fn damageable_count(&self) -> usize {
-        self.bodies.health.len() - 1
+        self.bodies.health.ids().iter().filter(|&&id| {
+            id != self.player_id() && self.bodies.health.get(id) != Some(0)
+        }).count()
     }
 
     /// Non-player bodies, including props; all share the instance capacity.
@@ -951,7 +946,8 @@ impl World {
 
     /// Immutable, allocation-free presentation facts for every character member.
     ///
-    /// Character presentation membership is independent of health and body order.
+    /// Defeated characters leave this iterator immediately; Game presents their corpses.
+    /// Character membership is otherwise independent of health and body order.
     /// Dense rows may move after a despawn, so callers receive stable ids and
     /// must not treat iterator position as identity.
     pub fn character_presentations(
@@ -964,7 +960,7 @@ impl World {
             .copied()
             .enumerate()
             .filter_map(move |(offset, id)| {
-                if !self.bodies.characters.contains(id) {
+                if !self.bodies.characters.contains(id) || self.bodies.health.get(id) == Some(0) {
                     return None;
                 }
                 let row = offset + 1;

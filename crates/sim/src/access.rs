@@ -205,3 +205,34 @@ impl World {
         )
     }
 }
+
+/// Cleanup authority restricted to defeated nonplayer bodies. Cannot remove a
+/// living actor, spawn, move, or damage anything.
+pub struct DefeatedBodyRetirement<'a> {
+    bodies: &'a mut crate::Bodies,
+    scenes: &'a mut crate::scene::Scenes,
+    trace: TraceSink<'a>,
+}
+impl DefeatedBodyRetirement<'_> {
+    /// Previous physical position for smooth admission on the lethal tick.
+    pub fn previous_position(&self, id: EntityId) -> Option<glam::Vec2> {
+        self.bodies.slots.index(id).map(|row| self.bodies.prev_pos[row])
+    }
+    /// Remove a still-physical defeated body, refusing living and stale identities.
+    pub fn retire(&mut self, id: EntityId) -> bool {
+        if self.bodies.health.get(id) != Some(0) || id == self.bodies.slots.ids()[0] {
+            return false;
+        }
+        crate::remove_body(self.bodies, self.scenes, id, &mut self.trace).is_some()
+    }
+}
+impl World {
+    /// Completed deaths and narrow authority to bound their remaining physical lifetime.
+    pub fn retirement_access(&mut self) -> (DefeatedBodyRetirement<'_>, &[crate::Defeat]) {
+        (DefeatedBodyRetirement {
+            bodies: &mut self.bodies,
+            scenes: &mut self.scenes,
+            trace: self.trace.sink(self.tick.saturating_sub(1)),
+        }, &self.defeats)
+    }
+}

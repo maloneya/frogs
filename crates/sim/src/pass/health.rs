@@ -17,9 +17,9 @@ use crate::{Bodies, EntityId, SourceId};
 /// Kept independently of diagnostics, including the producer after body removal.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Defeat {
-    /// Retired generational body identity.
+    /// Defeated generational body identity; physics may still be settling.
     pub body: EntityId,
-    /// Final ground position before removal.
+    /// Ground position on the lethal tick.
     pub position: glam::Vec2,
     /// Scene responsible for this body, retained for visual cleanup.
     pub scene: Option<crate::SceneId>,
@@ -33,6 +33,7 @@ pub(crate) struct Health {
     remaining: Vec<u8>,
     maximum: Vec<u8>,
     origins: Vec<Option<SourceId>>,
+    announced: Vec<bool>,
 }
 
 /// A hit producer may subtract positive damage, but cannot grant health, heal, or
@@ -74,6 +75,7 @@ impl Health {
             self.remaining.push(initial.get());
             self.maximum.push(initial.get());
             self.origins.push(None);
+            self.announced.push(false);
         }
     }
 
@@ -90,6 +92,7 @@ impl Health {
             self.remaining.swap_remove(row);
             self.maximum.swap_remove(row);
             self.origins.swap_remove(row);
+            self.announced.swap_remove(row);
         }
     }
 
@@ -106,8 +109,9 @@ impl Health {
     }
 
     pub(crate) fn hash(&self, hash: &mut Fnv) {
-        let Self { who, remaining, maximum, origins } = self;
+        let Self { who, remaining, maximum, origins, announced } = self;
         who.hash(hash);
+        for value in announced { hash.usize(usize::from(*value)); }
         for origin in origins {
             hash.usize(usize::from(origin.is_some()));
             if let Some(id) = origin { id.hash_into(hash); }
@@ -119,6 +123,11 @@ impl Health {
     }
 
     pub(crate) fn report(&self, out: &mut Report) {
+        out.object("defeat_announced", |out| {
+            for (&id, &value) in self.who.ids().iter().zip(&self.announced) {
+                out.bool(&id.to_string(), value);
+            }
+        });
         out.object("body_sources", |out| {
             for (&id, source) in self.who.ids().iter().zip(&self.origins) {
                 if let Some(source) = source { out.text(&id.to_string(), &source.to_string()); }
@@ -135,8 +144,8 @@ impl Health {
     }
 }
 
-/// Removes bodies whose last hit reduced them to zero. This runs last because
-/// removal swap-moves the horde's parallel arrays.
+/// Publishes death once, retaining character physics until motion rests. Runs
+/// last because removal swap-moves the shared body arrays.
 pub(crate) fn remove_defeated(
     bodies: &mut Bodies,
     scenes: &mut Scenes,
@@ -152,8 +161,23 @@ pub(crate) fn remove_defeated(
             continue;
         }
         let source = bodies.health.origins[row];
-        let removed = crate::remove_body(bodies, scenes, id, &mut trace)
+        let newly_defeated = !bodies.health.announced[row];
+        if newly_defeated {
+            bodies.health.announced[row] = true;
+            defeats.push(Defeat {
+                body: id, source, position: bodies.pos_of(id).expect("health owns a body"),
+                scene: scenes.body_owner(id),
+            });
+        }
+        let character = bodies.characters.contains(id);
+        // Attack impulses arrive after the solver. Retain the body until the
+        // shared motion owner snaps it to rest, preserving all carried momentum.
+        if character
+            && bodies.physics.get(id).is_some_and(|motion| motion.velocity() != glam::Vec2::ZERO)
+        {
+            continue;
+        }
+        crate::remove_body(bodies, scenes, id, &mut trace)
             .expect("a defeated body must still be alive in the final pass");
-        defeats.push(Defeat { body: id, source, position: removed.position, scene: removed.scene });
     }
 }

@@ -85,7 +85,8 @@ mod tests {
 /// This is a renderer budget rather than gameplay content. The app decides
 /// which clip/phase each bucket represents, while this bound fixes GPU buffer
 /// sizes at initialization.
-pub const MAX_HORDE_POSE_BUCKETS: usize = 16;
+// Four collapse phases join the existing gait, action, recoil and held-death poses.
+pub const MAX_HORDE_POSE_BUCKETS: usize = 20;
 const PALETTE_SLOTS: usize = 1 + MAX_HORDE_POSE_BUCKETS;
 
 /// One uploaded character with shared geometry buffers and per-part materials.

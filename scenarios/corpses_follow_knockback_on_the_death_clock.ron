@@ -1,0 +1,31 @@
+// Lethal Cleave adds 6 kg m/s on tick 6 after integration. The defeated
+// character moves .1m on tick 7, then retains .9 of its speed each step.
+// After 83 integrations it rests on tick 89, having travelled about 1m.
+(
+    description: "A corpse starts at death, follows full knockback, and expires on the death clock.",
+    setup: (scenes: [(engine: (name: "Corpse handoff", bodies: [
+        (pos: (-2.8, 1.2), what: (physical: (health: Some(1), character: true), role: Hostile)),
+    ]))]),
+    attacks: [0],
+    checkpoints: [
+        (at: 5, expect: (enemy_count: 1, corpse_count: 0, bodies: [(nth: 0, health: 1)])),
+        (at: 6, expect: (enemy_count: 0, corpse_count: 1, bodies: [
+            (nth: 0, alive: true, health: 0, pos: (x: -2.8, z: 1.2, tol: 0.00001), velocity: (x: 0.0, z: 6.0, tol: 0.00001)),
+        ])),
+        (at: 7, expect: (corpse_count: 1, bodies: [
+            (nth: 0, alive: true, health: 0, pos: (x: -2.8, z: 1.3, tol: 0.00001), velocity: (x: 0.0, z: 5.4, tol: 0.00001)),
+        ])),
+        (at: 88, expect: (corpse_count: 1, bodies: [(nth: 0, alive: true, health: 0)])),
+        (at: 89, expect: (corpse_count: 1, bodies: [(nth: 0, alive: false)])),
+        (at: 605, expect: (corpse_count: 1)),
+        (at: 606, expect: (corpse_count: 0)),
+    ],
+    budget: (ticks: 607),
+    expect: (enemy_count: 0, corpse_count: 0, events: (
+        kinds: [Damaged, Removed],
+        sequence: [
+            (6, Damaged(actor: (0, 1), target: (1, 1), remaining: 0)),
+            (89, Removed(id: (1, 1))),
+        ],
+    )),
+)

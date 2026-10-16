@@ -486,14 +486,17 @@ fn attack_clip_time(
 }
 
 const HORDE_ROLES: [HordeRole; 4] = [HordeRole::Idle, HordeRole::Walk, HordeRole::Run, HordeRole::Sprint];
+const DEATH_PHASES: usize = 4;
 const CORPSE_BUCKET: usize = MAX_HORDE_POSE_BUCKETS - 1;
+const DEATH_START: usize = CORPSE_BUCKET - DEATH_PHASES;
+const DEATH_BLEND_SECONDS: f32 = 0.15;
 const HORDE_PHASES_PER_ROLE: usize = 2;
 const ATTACK_START: usize = HORDE_ROLES.len() * HORDE_PHASES_PER_ROLE;
 const ATTACK_BUCKETS: usize = arpg_game::MAX_COMBAT_COMMITMENTS;
 const RECOIL_START: usize = ATTACK_START + ATTACK_BUCKETS;
 const RECOIL_BUCKETS: usize = crate::enemy_feedback::Recoil::POSE_PHASES.len();
 const HORDE_SCALE: f32 = 1.0;
-const _: () = assert!(RECOIL_START + RECOIL_BUCKETS == CORPSE_BUCKET);
+const _: () = assert!(RECOIL_START + RECOIL_BUCKETS == DEATH_START);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HordeRole {
@@ -545,6 +548,10 @@ impl HordeClips {
                 .clip_named(name)
                 .ok_or_else(|| format!("missing horde presentation clip {name}"))
         };
+        let death = clip("Death")?;
+        if asset.clip(death).expect("resolved death").duration_seconds() <= 0.0 {
+            return Err("Death must contain a nonzero collapse duration".into());
+        }
         Ok(Self {
             idle: clip("Idle")?,
             walk: clip("Walk")?,
@@ -552,7 +559,7 @@ impl HordeClips {
             bite: clip("Bite")?,
             leap: clip("Leap")?,
             hit: clip("Hit")?,
-            death: clip("Death")?,
+            death,
         })
     }
 
@@ -587,7 +594,39 @@ struct HordeBucket {
 #[derive(Clone, Copy)]
 struct RememberedHeading {
     yaw: f32,
+    drawn_yaw: f32,
     seen_in_rebuild: u64,
+    bucket: usize,
+    height: f32,
+}
+
+fn pose_support(asset: &arpg_assets::CharacterAsset, pose: &arpg_assets::CharacterPose) -> f32 {
+    let palette = pose.joint_matrices();
+    asset.vertices().iter().map(|vertex| vertex.joints().into_iter().zip(vertex.weights())
+        .fold(Vec3::ZERO, |sum, (joint, weight)| sum
+            + palette[usize::from(joint)].matrix().transform_point3(vertex.position()) * weight).y * HORDE_SCALE)
+        .fold(f32::INFINITY, f32::min)
+}
+
+pub(super) struct HordeFrame<'a> {
+    pub(super) alpha: Alpha,
+    pub(super) corpses: &'a [arpg_game::Corpse],
+}
+
+struct DeathVisual {
+    yaw: f32,
+    height: f32,
+    pose: arpg_assets::CharacterPose,
+    seen_in_rebuild: u64,
+}
+
+fn corpse_age(corpse: &arpg_game::Corpse, alpha: Alpha) -> f32 {
+    ((arpg_game::CORPSE_LIFETIME_TICKS - corpse.remaining_ticks()) as f32 + alpha.get())
+        / arpg_sim::TICK_HZ as f32
+}
+
+fn collapse_phase(age: f32, duration: f32) -> usize {
+    ((age / duration * DEATH_PHASES as f32) as usize).min(DEATH_PHASES - 1)
 }
 
 /// One mesh and a bounded set of shared poses for every ordinary enemy.
@@ -599,6 +638,8 @@ pub(super) struct LoadedHorde<T> {
     corpse_min_height: f32,
     headings: std::collections::HashMap<arpg_sim::EntityId, RememberedHeading>,
     rebuild_id: u64,
+    deaths: std::collections::HashMap<arpg_sim::EntityId, DeathVisual>,
+    full_mask: arpg_assets::PoseMask,
     gpu: T,
 }
 
@@ -644,14 +685,7 @@ impl<T> LoadedHorde<T> {
         // The larger corpse needs its frozen skin's support extent. Compute it
         // once, rather than clipping its head into the floor or skinning each
         // corpse again on the CPU every frame.
-        let palette = buckets[CORPSE_BUCKET].pose.joint_matrices();
-        let mut corpse_min_height = f32::INFINITY;
-        for vertex in asset.vertices() {
-            let point = vertex.joints().into_iter().zip(vertex.weights())
-                .fold(Vec3::ZERO, |sum, (joint, weight)| sum
-                    + palette[usize::from(joint)].matrix().transform_point3(vertex.position()) * weight);
-            corpse_min_height = corpse_min_height.min(point.y * HORDE_SCALE);
-        }
+        let corpse_min_height = pose_support(&asset, &buckets[CORPSE_BUCKET].pose);
         // Three fixed stages articulate every struck enemy without sampling
         // a separate skeleton per body or increasing cost with hit age variety.
         let hit_duration = asset.clip(clips.hit).expect("resolved hit").duration_seconds();
@@ -659,6 +693,7 @@ impl<T> LoadedHorde<T> {
             asset.sample(clips.hit, phase * hit_duration, &mut buckets[RECOIL_START + index].pose);
         }
         debug_assert!(sampled, "resolved death clip remains live");
+        let full_mask = asset.full_mask();
         Self {
             path,
             asset,
@@ -667,6 +702,8 @@ impl<T> LoadedHorde<T> {
             corpse_min_height,
             headings: std::collections::HashMap::new(),
             rebuild_id: 0,
+            deaths: std::collections::HashMap::new(),
+            full_mask,
             gpu,
         }
     }
@@ -697,9 +734,12 @@ impl<T> LoadedHorde<T> {
         flash: impl Fn(arpg_sim::EntityId) -> f32,
         recoil: impl Fn(arpg_sim::EntityId) -> Option<crate::enemy_feedback::Recoil>,
         attacks: impl Iterator<Item = arpg_game::ActionStatus>,
-        alpha: Alpha,
+        frame: HordeFrame<'_>,
     ) {
-        for bucket in &mut self.buckets {
+        let HordeFrame { alpha, corpses } = frame;
+        self.rebuild_id = self.rebuild_id.wrapping_add(1);
+        self.rebuild_corpses(corpses, alpha);
+        for bucket in &mut self.buckets[..DEATH_START] {
             bucket.instances.clear();
         }
 
@@ -707,7 +747,6 @@ impl<T> LoadedHorde<T> {
             horde_attack_time(attack, alpha).map(|time| (attack, time)));
         let attacks: [Option<_>; ATTACK_BUCKETS] = std::array::from_fn(|_| committed.next());
         debug_assert!(committed.next().is_none(), "Game owns combat commitment capacity");
-        self.rebuild_id = self.rebuild_id.wrapping_add(1);
         for enemy in enemies {
             let (mut bucket, key) = Self::bucket(enemy);
             let displacement = enemy.displacement();
@@ -716,7 +755,9 @@ impl<T> LoadedHorde<T> {
                 .entry(enemy.id())
                 .or_insert(RememberedHeading {
                     yaw: 0.0,
+                    drawn_yaw: 0.0,
                     seen_in_rebuild: self.rebuild_id,
+                    bucket, height: 0.0,
                 });
             if displacement.length_squared() > 1.0e-8 {
                 heading.yaw = displacement.x.atan2(displacement.y);
@@ -740,6 +781,9 @@ impl<T> LoadedHorde<T> {
                 yaw = recoil.yaw();
                 pitch += -0.12 * recoil.strength();
             }
+            heading.bucket = bucket;
+            heading.height = height;
+            heading.drawn_yaw = yaw;
             let shade = 0.72 + ((key >> 8) & 0xff) as f32 / 255.0 * 0.28;
             self.buckets[bucket].instances.push(
                 Instance::new(
@@ -780,24 +824,62 @@ impl<T> LoadedHorde<T> {
         }
     }
 
-    /// One bent-limb death pose supports tick-derived falls and settled remains.
-    pub(super) fn rebuild_corpses(&mut self, corpses: &[arpg_game::Corpse], alpha: Alpha) {
-        let bucket = &mut self.buckets[CORPSE_BUCKET];
-        bucket.instances.clear();
+    /// Capture the visible handoff before live buckets are rebuilt. Moving and
+    /// stationary corpses share the same death clock; velocity never selects a gait.
+    fn rebuild_corpses(&mut self, corpses: &[arpg_game::Corpse], alpha: Alpha) {
         for corpse in corpses {
-            let key = Self::phase_key(corpse.id());
-            let yaw = (key & 0xffff) as f32 / 65535.0 * std::f32::consts::TAU;
-            let position = corpse.position();
-            let age = (arpg_game::CORPSE_LIFETIME_TICKS - corpse.remaining_ticks()) as f32 + alpha.get();
-            let fall = (age / 15.0).clamp(0.0, 1.0);
-            let fall = fall * fall * (3.0 - 2.0 * fall);
-            // The authored wolf is already curled on its side. Drop that pose
-            // onto its measured support instead of pitching a quadruped nose-first.
-            let height = -self.corpse_min_height + 0.25 * (1.0 - fall);
-            bucket.instances.push(Instance::new(
+            let death = self.deaths.entry(corpse.id()).or_insert_with(|| {
+                if let Some(heading) = self.headings.get(&corpse.id()) {
+                    DeathVisual { yaw: heading.drawn_yaw, height: heading.height,
+                        pose: self.buckets[heading.bucket].pose.clone(), seen_in_rebuild: self.rebuild_id }
+                } else {
+                    let mut pose = self.asset.bind_pose();
+                    self.asset.sample(self.clips.death, 0.0, &mut pose);
+                    let travel = corpse.position() - corpse.drawn_position(Alpha::ZERO);
+                    DeathVisual { yaw: travel.x.atan2(travel.y), height: 0.0, pose,
+                        seen_in_rebuild: self.rebuild_id }
+                }
+            });
+            death.seen_in_rebuild = self.rebuild_id;
+        }
+        self.deaths.retain(|_, death| death.seen_in_rebuild == self.rebuild_id);
+        for bucket in &mut self.buckets[DEATH_START..] { bucket.instances.clear(); }
+        let duration = self.asset.clip(self.clips.death).expect("resolved death").duration_seconds();
+        // A representative age per phase keeps lone deaths smooth and many
+        // different death times bounded by four shared animated palettes.
+        let mut samples: [Option<(f32, arpg_sim::EntityId)>; DEATH_PHASES] = [None; DEATH_PHASES];
+        for corpse in corpses {
+            let age = corpse_age(corpse, alpha);
+            if age < duration {
+                let phase = collapse_phase(age, duration);
+                samples[phase].get_or_insert((age, corpse.id()));
+            }
+        }
+        let mut supports = [0.0; DEATH_PHASES];
+        for (phase, sample) in samples.into_iter().enumerate() {
+            let Some((age, id)) = sample else { continue; };
+            let pose = &mut self.buckets[DEATH_START + phase].pose;
+            self.asset.sample(self.clips.death, age, pose);
+            let blend = (age / DEATH_BLEND_SECONDS).clamp(0.0, 1.0);
+            if blend < 1.0 {
+                self.asset.blend(pose, &self.deaths[&id].pose, &self.full_mask, 1.0 - blend);
+            }
+            supports[phase] = pose_support(&self.asset, pose);
+        }
+        for corpse in corpses {
+            let age = corpse_age(corpse, alpha);
+            let death = &self.deaths[&corpse.id()];
+            let (bucket, support) = if age < duration {
+                let phase = collapse_phase(age, duration);
+                (DEATH_START + phase, supports[phase])
+            } else { (CORPSE_BUCKET, self.corpse_min_height) };
+            let progress = (age / duration).clamp(0.0, 1.0);
+            let height = -support + death.height * (1.0 - progress).powi(2);
+            let position = corpse.drawn_position(alpha);
+            self.buckets[bucket].instances.push(Instance::new(
                 Vec3::new(position.x, height, position.y),
                 Vec3::splat(HORDE_SCALE), LinearRgb::splat(0.6),
-            ).with_yaw(yaw));
+            ).with_yaw(death.yaw));
         }
     }
 
@@ -806,6 +888,7 @@ impl<T> LoadedHorde<T> {
             bucket.instances.clear();
         }
         self.headings.clear();
+        self.deaths.clear();
     }
 }
 
@@ -893,9 +976,10 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("pose_buckets", MAX_HORDE_POSE_BUCKETS as u64);
         out.int("occupied_buckets", preview.occupied_buckets() as u64);
         out.int("instances", preview.instance_count() as u64);
-        out.int("corpse_instances", preview.buckets[CORPSE_BUCKET].instances.len() as u64);
+        out.int("corpse_instances", preview.buckets[DEATH_START..].iter().map(|bucket| bucket.instances.len()).sum::<usize>() as u64);
+        out.int("collapsing_instances", preview.buckets[DEATH_START..CORPSE_BUCKET].iter().map(|bucket| bucket.instances.len() as u64).sum());
         out.num("corpse_settled_height", -preview.corpse_min_height);
-        out.int("recoiling_instances", preview.buckets[RECOIL_START..CORPSE_BUCKET].iter()
+        out.int("recoiling_instances", preview.buckets[RECOIL_START..DEATH_START].iter()
             .map(|bucket| bucket.instances.len() as u64).sum());
         out.int("attack_instances", preview.buckets[ATTACK_START..RECOIL_START].iter()
             .map(|bucket| bucket.instances.len() as u64).sum());
@@ -926,6 +1010,7 @@ pub(super) fn report_horde_preview<T>(preview: Option<&LoadedHorde<T>>, out: &mu
         out.int("occupied_buckets", 0);
         out.int("instances", 0);
         out.int("corpse_instances", 0);
+        out.int("collapsing_instances", 0);
         out.num("corpse_settled_height", 0.0);
         out.int("recoiling_instances", 0);
         out.int("attack_instances", 0);

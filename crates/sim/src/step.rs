@@ -260,7 +260,7 @@ impl ResolvedStep<'_> {
             &mut world.trace.sink(world.tick),
         )
     }
-    /// Retire defeated nonplayer bodies and publish the completed tick.
+    /// Publish death immediately; moving characters retire once their physical motion rests.
     pub fn finish(mut self) {
         let world = self.world.take().expect("resolved tick");
         pass::health::remove_defeated(

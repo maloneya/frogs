@@ -117,7 +117,7 @@ fn a_fall_strikes_what_it_comes_down_on_once_and_damage_follows_health() {
     assert!((hit.impulse() - effective * hit.closing_speed()).abs() < 1e-4);
     // Three health, three damage: the victim is defeated by the trunk.
     assert!(game.trace().iter().any(|(_, e)| e == Event::Damaged { actor: body, target: victim, remaining: 0 }));
-    assert!(game.health(victim).is_none(), "defeated bodies are removed");
+    assert_eq!(game.health(victim), Some(0), "the defeated body keeps the fall impulse until rest");
     // A body without health is pushed along the fall but never damaged.
     let (_, _, pushed) = seen[1];
     assert!(pushed.impulse() > 0.0 && !pushed.damaged());

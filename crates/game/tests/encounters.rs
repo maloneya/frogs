@@ -280,12 +280,15 @@ fn defeating_an_unrelated_replacement_never_counts_as_a_source_defeat() {
     for tick in 2..700 {
         step(&mut game, tick, false);
     }
-    assert!(!game.is_alive(replacement));
+    assert_eq!(game.health(replacement), Some(0));
     assert_eq!(game.defeats().len(), 1);
     assert_eq!(game.defeats()[0].source, None);
     assert_eq!(game.encounter_state(id, 0).unwrap().defeated, 0);
     assert_eq!(game.encounter_state(id, 0).unwrap().phase, Phase::Running);
     assert_eq!(game.door_state(id, 0), Some(DoorState::Latched));
+    step(&mut game, 700, false);
+    assert_eq!(game.health(replacement), Some(0));
+    assert!(game.defeats().is_empty(), "retirement cannot count the death again");
 }
 
 #[test]

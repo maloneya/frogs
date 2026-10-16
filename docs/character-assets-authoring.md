@@ -148,7 +148,8 @@ and forearm clearance. Visual review still covers clothing and the whole pose.
 
 The ordinary-horde contract is a smaller view of the same interchange format:
 it requires `Idle`, `Walk`, `Run`, `Bite`, `Leap`, `Hit` and `Death`. Three fixed hit poses share the
-recoil stages, and one frozen death pose supports a tick-derived drop. `horde show <path.glb>` selects one shared
+recoil stages. Four shared collapse palettes play `Death` on the lethal tick,
+then a frozen final pose holds until the death-clock lifetime expires. `horde show <path.glb>` selects one shared
 character, including all its parts and materials, then groups live enemies into
 bounded [gait/phase buckets](crowd-collision.md#movement-and-pushing). Phase comes
 from stable entity identity, not authored or stored randomness. Startup loads `assets/weapons/thornbound-staff/equipped/sword-glaive/player.glb`

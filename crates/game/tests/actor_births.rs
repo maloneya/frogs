@@ -109,13 +109,14 @@ fn simultaneous_lethal_effects_produce_one_defeat_and_no_second_hit() {
     step(&mut game);
     assert_eq!(game.defeats().len(), 1);
     assert_eq!(game.defeats()[0].body, target);
-    assert!(!game.is_alive(target));
+    assert_eq!(game.health(target), Some(0));
     assert_eq!(game.enemy_count(), 0);
     // The first commitment starts at 0 with 20 startup ticks; the second
     // starts at 12 with eight. Both retain nine active and 39 recovery ticks
     // after losing their target, completing together at tick 68.
     for tick in 21..68 {
         step(&mut game);
+        assert!(matches!(game.health(target), Some(0) | None), "a defeated target cannot recover health");
         assert!(game.defeats().is_empty());
         for actor in [first, second] {
             assert_eq!(game.action_status(actor).unwrap().kind, ActionKind::Swipe,
@@ -139,6 +140,8 @@ fn simultaneous_lethal_effects_produce_one_defeat_and_no_second_hit() {
         })
         .collect();
     assert_eq!(hits, [(20, first, 0)]);
+    for _ in 0..100 { step(&mut game); }
+    assert!(!game.is_alive(target), "settled physics retires the target");
 }
 
 fn report(game: &Game) -> String {

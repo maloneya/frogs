@@ -57,10 +57,10 @@ impl EnemyFeedback {
     /// observations of unchanged health never refresh it. Removal/eviction retires
     /// history; App clears it when a run replaces IDs.
     pub(crate) fn observe(&mut self, game: &Game, mut contact: impl FnMut(Vec3, Vec3)) {
-        self.damaged.retain(|id, _| game.health(*id).zip(game.max_health(*id)).is_some_and(|(hp, max)| hp < max));
+        self.damaged.retain(|id, _| game.health(*id).zip(game.max_health(*id)).is_some_and(|(hp, max)| hp > 0 && hp < max));
         for enemy in game.character_presentations(Alpha::ONE) {
             let Some((hp, max)) = game.health(enemy.id()).zip(game.max_health(enemy.id())) else { continue; };
-            if hp == max { continue; }
+            if hp == 0 || hp == max { continue; }
             let entry = self.damaged.entry(enemy.id());
             let fresh = matches!(entry, std::collections::hash_map::Entry::Vacant(_));
             let remembered = entry.or_insert(Remembered {
@@ -185,7 +185,7 @@ mod tests {
         game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         let mut feedback = EnemyFeedback::default();
-        // Beam pulses on ticks 0, 12 and 24; there is no push to move the target.
+        // Beam pulses on ticks 0, 12 and 24; death retires feedback before final physics.
         for tick in 0..=24 {
             game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));
             feedback.observe(&game, |_, _| {});
@@ -194,6 +194,13 @@ mod tests {
                 6 | 18 | 24 => assert_eq!(feedback.flash(id, game.tick(), Alpha::ZERO), 0.0),
                 _ => {}
             }
+        }
+        assert_eq!(game.health(id), Some(0));
+        assert!(feedback.damaged.is_empty());
+        for _ in 0..120 {
+            game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+            feedback.observe(&game, |_, _| {});
+            assert!(feedback.damaged.is_empty());
         }
         assert!(!game.is_alive(id));
         assert!(feedback.damaged.is_empty());

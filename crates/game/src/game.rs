@@ -172,10 +172,14 @@ impl Game {
             };
             actors.effect_result(actor, accepted);
         }
+        // Capture the final physical pose before settled bodies retire.
+        // Admission below uses death, so collapse never waits for that retirement.
+        crate::corpse::follow(corpses, resolved.view());
         resolved.finish();
-        crate::corpse::advance(corpses, world.defeats().iter().filter(|defeat| {
+        let (mut retirement, defeats) = world.retirement_access();
+        crate::corpse::advance(corpses, defeats.iter().filter(|defeat| {
             actors.definition(defeat.body).is_some_and(|definition| definition.physical.is_character())
-        }));
+        }), &mut retirement);
         let (mut access, defeats) = world.encounter_access();
         encounter::finish(encounters, doors, chests, defeats, &mut access, &mut trace);
         actors.retire(world.actor_view());
@@ -337,7 +341,7 @@ impl Game {
         self.torches.state(scene, nth)
     }
 
-    /// Nonphysical remains in admission order.
+    /// Corpses in lethal-tick admission order, including bodies still moving.
     pub fn corpses(&self) -> &[crate::Corpse] { self.corpses.as_slice() }
 
     /// Number of live scene instances.
@@ -370,6 +374,7 @@ impl Game {
     pub fn despawn_body(&mut self, id: EntityId) -> bool {
         if !self.world.despawn_body(id) { return false; }
         self.actors.remove(id);
+        self.corpses.remove(id);
         self.births.prune();
         true
     }

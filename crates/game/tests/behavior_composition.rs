@@ -297,9 +297,11 @@ fn two_actions_hitting_the_same_lethal_target_in_one_tick_share_damage_admission
             assert_eq!(game.health(ids[2]), Some(1));
         }
     }
-    assert_eq!(game.health(ids[2]), None);
+    assert_eq!(game.health(ids[2]), Some(0));
     assert_eq!(game.enemy_count(), 0);
     assert_eq!(game.action_statuses().count(), 2);
+    for _ in 0..120 { step(&mut game); }
+    assert_eq!(game.health(ids[2]), None);
 }
 
 #[test]
@@ -716,8 +718,9 @@ fn interrupting_a_nested_sequence_discards_its_abandoned_progress() {
     assert_eq!(status.kind, ActionKind::Swipe);
     assert_eq!(status.previous_outcome, ActionOutcome::Cancelled);
     step(&mut game);
-    assert_eq!(game.health(target), None);
+    assert_eq!(game.health(target), Some(0));
     step(&mut game);
+    assert_eq!(game.health(target), Some(0));
     assert_eq!(game.action_status(id).unwrap().phase, arpg_sim::AttackPhase::Recovery,
         "defeating the target does not skip physical action recovery");
     step(&mut game);

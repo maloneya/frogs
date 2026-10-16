@@ -189,7 +189,7 @@ fn horde_replacement_is_atomic_and_its_report_is_derived() {
         game.place(glam::Vec2::new(4.0 + index as f32, 4.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
     }
     let current = slot.as_mut().unwrap();
-    current.rebuild(game.character_presentations(Alpha::ONE), 0.25, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    current.rebuild(game.character_presentations(Alpha::ONE), 0.25, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     assert_eq!(current.instance_count(), 32);
     assert!((1..=HORDE_PHASES_PER_ROLE).contains(&current.occupied_buckets()));
 
@@ -206,7 +206,7 @@ fn horde_replacement_is_atomic_and_its_report_is_derived() {
     assert!(report.contains(r#""active":true"#));
     assert!(report.contains(r#""idle_clip":"Idle""#));
     assert!(report.contains(r#""run_clip":"Run""#));
-    assert!(report.contains(r#""pose_buckets":16"#));
+    assert!(report.contains(r#""pose_buckets":20"#));
     assert!(report.contains(r#""instances":32"#));
     assert!(report.contains(r#""idle_instances":32"#));
     assert!(report.contains(r#""run_instances":0"#));
@@ -224,12 +224,12 @@ fn stable_identity_selects_bounded_reused_horde_pose_buckets() {
     let survivor = enemies[1];
     let survivor_bucket = LoadedHorde::<()>::bucket(survivor).0;
 
-    horde.rebuild(enemies.into_iter(), 0.0, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    horde.rebuild(enemies.into_iter(), 0.0, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     let capacities = horde
         .buckets
         .each_ref()
         .map(|bucket| bucket.instances.capacity());
-    horde.rebuild(game.character_presentations(Alpha::ONE), 0.1, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    horde.rebuild(game.character_presentations(Alpha::ONE), 0.1, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     assert_eq!(
         horde
             .buckets
@@ -258,7 +258,7 @@ fn stable_identity_selects_bounded_reused_horde_pose_buckets() {
         .next()
         .unwrap();
     game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
-    horde.rebuild(game.character_presentations(Alpha::ONE), 0.2, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    horde.rebuild(game.character_presentations(Alpha::ONE), 0.2, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     assert!(
         horde.buckets[..HORDE_PHASES_PER_ROLE]
             .iter()
@@ -285,7 +285,7 @@ fn stopped_horde_members_keep_heading_and_dead_identities_are_forgotten() {
         .next()
         .unwrap();
     game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
-    horde.rebuild(game.character_presentations(Alpha::ONE), 0.0, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    horde.rebuild(game.character_presentations(Alpha::ONE), 0.0, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     let moving_yaw = horde
         .buckets
         .iter()
@@ -300,7 +300,7 @@ fn stopped_horde_members_keep_heading_and_dead_identities_are_forgotten() {
         game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
     assert_eq!(game.character_presentations(Alpha::ONE).next().unwrap().displacement(), glam::Vec2::ZERO);
-    horde.rebuild(game.character_presentations(Alpha::ONE), 0.1, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    horde.rebuild(game.character_presentations(Alpha::ONE), 0.1, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     let stopped_yaw = horde
         .buckets
         .iter()
@@ -312,7 +312,7 @@ fn stopped_horde_members_keep_heading_and_dead_identities_are_forgotten() {
 
     let dead = game.character_presentations(Alpha::ONE).next().unwrap().id();
     assert!(game.despawn_body(dead));
-    horde.rebuild(game.character_presentations(Alpha::ONE), 0.2, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    horde.rebuild(game.character_presentations(Alpha::ONE), 0.2, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     assert!(horde.headings.is_empty());
 }
 
@@ -327,7 +327,7 @@ fn resetting_horde_presentation_cannot_reuse_a_previous_runs_heading() {
         .next()
         .unwrap();
     old.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
-    horde.rebuild(old.character_presentations(Alpha::ONE), 1.0, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    horde.rebuild(old.character_presentations(Alpha::ONE), 1.0, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: old.corpses() });
     let old_id = old.character_presentations(Alpha::ONE).next().unwrap().id();
     assert_ne!(horde.headings[&old_id].yaw, 0.0);
 
@@ -340,7 +340,7 @@ fn resetting_horde_presentation_cannot_reuse_a_previous_runs_heading() {
     horde.clear();
     assert_eq!(horde.instance_count(), 0);
     assert_eq!(horde.occupied_buckets(), 0);
-    horde.rebuild(fresh.character_presentations(Alpha::ONE), 0.0, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    horde.rebuild(fresh.character_presentations(Alpha::ONE), 0.0, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: fresh.corpses() });
     assert_eq!(horde.headings[&old_id].yaw, 0.0);
 }
 
@@ -760,7 +760,7 @@ fn contact_flash_reaches_instances_without_changing_pose_buckets() {
     }
     feedback.observe(&game, |_, _| {});
     horde.rebuild(game.character_presentations(Alpha::ZERO), 0.2,
-        |id| feedback.flash(id, game.tick(), Alpha::ZERO), |_| None, std::iter::empty(), Alpha::ONE);
+        |id| feedback.flash(id, game.tick(), Alpha::ZERO), |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     let instance = horde.buckets.iter().flat_map(|bucket| &bucket.instances).next().unwrap();
     assert_eq!(game.health(id), Some(1));
     assert_eq!(instance.white_mix(), 1.0);
@@ -1043,7 +1043,7 @@ fn varied_ground_speeds_use_three_cadences_within_the_existing_pose_budget() {
         game.step(Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap(),
             Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     }
-    horde.rebuild(game.character_presentations(Alpha::ONE), 0.37, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
+    horde.rebuild(game.character_presentations(Alpha::ONE), 0.37, |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     assert_eq!(horde.instance_count(), 4);
     assert_eq!(horde.occupied_buckets(), 4);
     for role in 0..HORDE_ROLES.len() {
@@ -1085,56 +1085,138 @@ fn tree_batches_follow_scene_lifetime_and_keep_game_unchanged() {
     assert_eq!(view.draw_count(), 1);
 }
 
+fn death_palette(horde: &LoadedHorde<()>) -> Vec<glam::Mat4> {
+    horde.buckets[DEATH_START..].iter().find(|bucket| !bucket.instances.is_empty()).unwrap()
+        .pose.joint_matrices().iter().map(|joint| joint.matrix()).collect()
+}
+fn rebuild_game_horde(horde: &mut LoadedHorde<()>, game: &Game, alpha: Alpha) {
+    horde.rebuild(game.character_presentations(alpha), presentation_seconds(game.tick(), alpha),
+        |_| 0.0, |_| None, game.action_statuses(), HordeFrame { alpha, corpses: game.corpses() });
+}
+
 #[test]
-fn corpses_fall_over_fifteen_ticks_with_one_frozen_pose_and_clear_with_the_game() {
-    let mut game = arpg_game::Game::empty();
-    game.place(glam::Vec2::new(0.0, 3.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
-    game.set_attack_profile(AttackProfile::Disintegrate);
-    let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
-    for _ in 0..25 {
-        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));
-    }
+fn lethal_tick_starts_collapse_while_physics_moves_then_holds_the_pose_until_expiration() {
+    let mut game = Game::empty();
+    let body = game.place(glam::Vec2::new(1.0, 0.0), arpg_game::ActorDefinition {
+        physical: arpg_sim::Template::BODY.character().with_health(std::num::NonZeroU8::MIN),
+        ..arpg_game::ActorDefinition::passive_hostile()
+    }).unwrap();
     let mut slot = None;
     replace_horde(&mut slot, default_horde_path(), |_| Ok(())).unwrap();
     let mut horde = slot.unwrap();
-    horde.rebuild(game.character_presentations(Alpha::ONE), 1.0, |_| 1.0, |_| None, std::iter::empty(), Alpha::ONE);
-    horde.rebuild_corpses(game.corpses(), Alpha::ONE);
-    assert_eq!(horde.instance_count(), 1);
-    assert_eq!(horde.occupied_buckets(), 1);
-    let instance = horde.buckets[CORPSE_BUCKET].instances[0];
-    assert_eq!(instance.pitch(), 0.0);
-    let first_height = instance.pos().y;
-    assert_eq!(instance.white_mix(), 0.0);
-    assert_eq!(instance.pos().z, game.corpses()[0].position().y);
-    let pose = corpse_joint_matrices(&horde);
-    for _ in 0..7 { game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); }
-    horde.rebuild_corpses(game.corpses(), Alpha::ZERO);
-    let halfway = horde.buckets[CORPSE_BUCKET].instances[0].pos().y;
-    assert!(halfway < first_height && halfway > -horde.corpse_min_height);
-    for _ in 0..8 { game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false)); }
-    horde.rebuild_corpses(game.corpses(), Alpha::ZERO);
-    assert_eq!(horde.buckets[CORPSE_BUCKET].instances[0].pitch(), 0.0);
-    assert_eq!(horde.buckets[CORPSE_BUCKET].instances[0].pos().y, -horde.corpse_min_height);
-    let instance = horde.buckets[CORPSE_BUCKET].instances[0];
-    let palette = horde.buckets[CORPSE_BUCKET].pose.joint_matrices();
-    let rotation = glam::Quat::from_rotation_y(instance.yaw()) * glam::Quat::from_rotation_x(instance.pitch());
-    for vertex in horde.asset.vertices() {
-        let skinned = vertex.joints().into_iter().zip(vertex.weights())
-            .fold(Vec3::ZERO, |sum, (joint, weight)| sum
-                + palette[usize::from(joint)].matrix().transform_point3(vertex.position()) * weight);
-        let point = instance.pos() + rotation * (skinned * instance.scale());
-        assert!(point.y >= -1e-5, "corpse penetrates the floor: {point:?}");
+    let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    assert!(game.apply_impulse(body, arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()));
+    game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+    rebuild_game_horde(&mut horde, &game, Alpha::ZERO);
+    let previous = horde.buckets.iter().find(|b| !b.instances.is_empty()).unwrap();
+    let previous_pose: Vec<_> = previous.pose.joint_matrices().iter().map(|j| j.matrix()).collect();
+    let yaw = previous.instances[0].yaw();
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    game.step(dt, Intent::new(MoveDir::NONE, AimDir::new(Vec3::X).unwrap(), false).with_attack_held(true));
+    assert_eq!(game.health(body), Some(0));
+    rebuild_game_horde(&mut horde, &game, Alpha::ZERO);
+    assert!(horde.buckets[..DEATH_START].iter().all(|b| b.instances.is_empty()));
+    assert_eq!(horde.buckets[DEATH_START].instances.len(), 1);
+    assert_eq!(death_palette(&horde), previous_pose, "collapse begins at the last visible pose");
+    assert_eq!(horde.buckets[DEATH_START].instances[0].yaw(), yaw);
+    let mut held = None;
+    for age in 1..=arpg_game::CORPSE_LIFETIME_TICKS {
+        if age == 65 { assert!(game.apply_impulse(body, arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap())); }
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+        let hash = game.hash();
+        rebuild_game_horde(&mut horde, &game, Alpha::ONE);
+        assert_eq!(game.hash(), hash);
+        if age == arpg_game::CORPSE_LIFETIME_TICKS { break; }
+        assert_eq!(horde.instance_count(), 1);
+        assert!(horde.buckets[..DEATH_START].iter().all(|b| b.instances.is_empty()));
+        let bucket = horde.buckets[DEATH_START..].iter().find(|b| !b.instances.is_empty()).unwrap();
+        let instance = bucket.instances[0];
+        assert_eq!(instance.yaw(), yaw);
+        assert_eq!(instance.white_mix(), 0.0);
+        for vertex in horde.asset.vertices() {
+            let skinned = vertex.joints().into_iter().zip(vertex.weights()).fold(Vec3::ZERO, |sum, (joint, weight)| sum
+                + bucket.pose.joint_matrices()[usize::from(joint)].matrix().transform_point3(vertex.position()) * weight);
+            assert!(instance.pos().y + skinned.y >= -1e-5, "death penetrates the floor at age {age}");
+        }
+        if age == 30 { assert_ne!(death_palette(&horde), previous_pose, "the full authored clip must advance"); }
+        if age == 61 {
+            assert!(game.motion(body).unwrap().velocity().length() > 0.0);
+            held = Some(death_palette(&horde));
+        }
+        if age > 61 { assert_eq!(Some(death_palette(&horde)), held, "later motion cannot restart death"); }
     }
-    horde.rebuild(game.character_presentations(Alpha::ONE), 9.0, |_| 0.0, |_| None, std::iter::empty(), Alpha::ONE);
-    horde.rebuild_corpses(game.corpses(), Alpha::ONE);
-    assert_eq!(pose, corpse_joint_matrices(&horde));
-    game.start_scene(&arpg_game::GameScene::default()).unwrap();
-    horde.rebuild_corpses(game.corpses(), Alpha::ONE);
     assert_eq!(horde.instance_count(), 0);
+    assert!(horde.deaths.is_empty());
+    assert!(!game.is_alive(body));
 }
 
-fn corpse_joint_matrices(horde: &LoadedHorde<()>) -> Vec<glam::Mat4> {
-    horde.buckets[CORPSE_BUCKET].pose.joint_matrices().iter().map(|joint| joint.matrix()).collect()
+#[test]
+fn death_during_recoil_keeps_the_last_drawn_heading() {
+    let mut game = Game::empty();
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    let body = game.place(glam::Vec2::new(1.0, 0.0), arpg_game::ActorDefinition {
+        physical: arpg_sim::Template::BODY.character().with_health(std::num::NonZeroU8::new(2).unwrap()),
+        ..arpg_game::ActorDefinition::passive_hostile()
+    }).unwrap();
+    let mut horde = loaded_horde("recoil-death.glb");
+    let mut feedback = crate::enemy_feedback::EnemyFeedback::default();
+    let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    let aim = AimDir::new(Vec3::X).unwrap();
+    for _ in 0..12 {
+        game.step(dt, Intent::new(MoveDir::NONE, aim, false).with_attack_held(true));
+        feedback.observe(&game, |_, _| {});
+    }
+    assert_eq!(game.health(body), Some(1));
+    horde.rebuild(game.character_presentations(Alpha::ONE), presentation_seconds(game.tick(), Alpha::ONE),
+        |_| 0.0, |id| feedback.recoil(id, game.tick(), Alpha::ONE), game.action_statuses(),
+        HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
+    let before = horde.buckets[RECOIL_START..DEATH_START].iter()
+        .flat_map(|bucket| &bucket.instances).next().unwrap().yaw();
+    assert!((before - horde.headings[&body].yaw).abs() > 1.0,
+        "the recoil heading must differ from the carried movement heading");
+    game.step(dt, Intent::new(MoveDir::NONE, aim, false).with_attack_held(true));
+    assert_eq!(game.health(body), Some(0));
+    let hash = game.hash();
+    rebuild_game_horde(&mut horde, &game, Alpha::ZERO);
+    assert_eq!(horde.buckets[DEATH_START].instances[0].yaw(), before);
+    assert_eq!(game.hash(), hash);
+}
+
+#[test]
+fn death_during_a_leap_preserves_heading_and_airborne_height_before_collapsing() {
+    let mut game = Game::empty();
+    let body = game.place(glam::Vec2::new(0.0, 4.0), arpg_game::ActorDefinition {
+        physical: arpg_sim::Template::BODY.character().with_health(std::num::NonZeroU8::MIN),
+        ..arpg_game::ActorDefinition::attacker()
+    }).unwrap();
+    let mut horde = loaded_horde("airborne-death.glb");
+    let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    for _ in 0..60 {
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+        rebuild_game_horde(&mut horde, &game, Alpha::ONE);
+    }
+    let before = horde.buckets.iter().flat_map(|b| &b.instances).next().unwrap();
+    let height = before.pos().y;
+    let yaw = before.yaw();
+    assert!(height > 1.7);
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));
+    assert_eq!(game.health(body), Some(0));
+    rebuild_game_horde(&mut horde, &game, Alpha::ZERO);
+    let initial = horde.buckets[DEATH_START].instances[0];
+    assert_eq!(initial.yaw(), yaw);
+    assert!(initial.pos().y > 1.5, "lethal damage cannot teleport an airborne body to the floor");
+    for _ in 0..65 {
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+        rebuild_game_horde(&mut horde, &game, Alpha::ONE);
+    }
+    assert_eq!(horde.buckets[CORPSE_BUCKET].instances.len(), 1);
+    assert_eq!(horde.buckets[CORPSE_BUCKET].instances[0].yaw(), yaw);
+    assert!((horde.buckets[CORPSE_BUCKET].instances[0].pos().y + horde.corpse_min_height).abs() < 1e-5);
+    game.start_scene(&arpg_game::GameScene::default()).unwrap();
+    rebuild_game_horde(&mut horde, &game, Alpha::ONE);
+    assert_eq!(horde.instance_count(), 0);
+    assert!(horde.deaths.is_empty());
 }
 
 #[test]
@@ -1151,7 +1233,7 @@ fn committed_attacker_faces_its_strike_and_samples_bite_on_committed_phases() {
         game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
         let hash = game.hash();
         horde.rebuild(game.character_presentations(Alpha::ONE), 0.0, |_| 0.0, |_| None,
-            game.action_statuses(), Alpha::ONE);
+            game.action_statuses(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
         assert_eq!(horde.occupied_buckets(), 1);
         let instance = horde.buckets.iter().flat_map(|b| &b.instances).next().unwrap();
         assert!((instance.yaw().abs() - std::f32::consts::PI).abs() < 0.0001);
@@ -1185,7 +1267,7 @@ fn leaping_enemy_rises_and_lands_within_the_shared_pose_budget() {
         game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
         let hash = game.hash();
         horde.rebuild(game.character_presentations(Alpha::ONE), 0.0, |_| 0.0, |_| None,
-            game.action_statuses(), Alpha::ONE);
+            game.action_statuses(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
         assert_eq!(horde.occupied_buckets(), 1);
         let instance = horde.buckets.iter().flat_map(|b| &b.instances).next().unwrap();
         if !(42..77).contains(&tick) { assert_eq!(instance.pos().y, 0.0); }
@@ -1221,7 +1303,7 @@ fn every_coordinated_wolf_animates_at_its_own_phase_and_stale_ids_clear() {
     let horde = slot.as_mut().unwrap();
     let hash = game.hash();
     horde.rebuild(game.character_presentations(Alpha::ONE), 0.0, |_| 0.0, |_| None,
-        game.action_statuses(), Alpha::ONE);
+        game.action_statuses(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     assert_eq!(horde.buckets[ATTACK_START..RECOIL_START].iter().map(|b| b.instances.len()).sum::<usize>(), 4);
     // Admission is spaced by twelve ticks: one wolf has begun contact while
     // the other three are at different points in their wind-ups.
@@ -1245,7 +1327,7 @@ fn every_coordinated_wolf_animates_at_its_own_phase_and_stale_ids_clear() {
     for id in ids { assert!(game.despawn_body(id)); }
     let replacement = game.place(glam::Vec2::new(8.0, 8.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
     horde.rebuild(game.character_presentations(Alpha::ONE), 0.1, |_| 0.0, |_| None,
-        game.action_statuses(), Alpha::ONE);
+        game.action_statuses(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
     assert_eq!(horde.instance_count(), 1);
     assert!(horde.buckets[ATTACK_START..RECOIL_START].iter().all(|b| b.instances.is_empty()));
     assert_eq!(horde.headings.len(), 1);
@@ -1301,8 +1383,8 @@ fn damage_uses_three_reaction_stages_then_returns_to_gait_without_mutating_game(
         assert!(feedback.recoil(missed, game.tick(), Alpha::ZERO).is_none());
         horde.rebuild(game.character_presentations(Alpha::ZERO), presentation_seconds(game.tick(), Alpha::ZERO),
             |id| feedback.flash(id, game.tick(), Alpha::ZERO),
-            |id| feedback.recoil(id, game.tick(), Alpha::ZERO), std::iter::empty(), Alpha::ZERO);
-        assert_eq!(horde.buckets[RECOIL_START..CORPSE_BUCKET].iter().map(|b| b.instances.len()).sum::<usize>(),
+            |id| feedback.recoil(id, game.tick(), Alpha::ZERO), std::iter::empty(), HordeFrame { alpha: Alpha::ZERO, corpses: game.corpses() });
+        assert_eq!(horde.buckets[RECOIL_START..DEATH_START].iter().map(|b| b.instances.len()).sum::<usize>(),
             usize::from(expected.is_some()));
         assert_eq!(horde.instance_count(), 2);
         assert_eq!(game.hash(), hash);
@@ -1603,4 +1685,32 @@ fn cleave_arm_and_wrist_articulation_survives_game_phase_sampling() {
         assert!(sample[3].transform_point3(Vec3::ZERO)
             .distance(sample[5].transform_point3(Vec3::ZERO)) > 0.035);
     }
+}
+
+#[test]
+fn staggered_deaths_share_collapse_phases_and_never_return_to_live_buckets() {
+    let mut game = Game::empty();
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    let mut horde = loaded_horde("staggered-deaths.glb");
+    let dt = Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
+    let stride = (horde.asset.clip(horde.clips.death).unwrap().duration_seconds()
+        * arpg_sim::TICK_HZ as f32 / DEATH_PHASES as f32).ceil() as u32;
+    for group in 0..6 {
+        game.place(glam::Vec2::new(0.0, 3.0), arpg_game::ActorDefinition {
+            physical: arpg_sim::Template::BLOCK.character().with_health(std::num::NonZeroU8::MIN),
+            ..arpg_game::ActorDefinition::passive_hostile()
+        }).unwrap();
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));
+        rebuild_game_horde(&mut horde, &game, Alpha::ZERO);
+        if group < 5 {
+            for _ in 0..stride.saturating_sub(1) {
+                game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+                rebuild_game_horde(&mut horde, &game, Alpha::ONE);
+            }
+        }
+    }
+    assert_eq!(horde.instance_count(), 6);
+    assert_eq!(horde.occupied_buckets(), DEATH_PHASES + 1);
+    assert!(horde.buckets[..DEATH_START].iter().all(|bucket| bucket.instances.is_empty()));
+    assert_eq!(horde.deaths.len(), 6);
 }

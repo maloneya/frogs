@@ -180,7 +180,7 @@ impl AnimationClip {
 }
 
 /// Reusable CPU scratch and GPU-ready matrices for one sampled character pose.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CharacterPose {
     asset_id: CharacterAssetId,
     locals: Vec<NodePose>,

@@ -192,12 +192,12 @@ fn defeat_releases_an_active_history_before_another_actor_commits() {
                 Accumulator::default().pending(Dt::SECS).next().unwrap(),
                 Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true),
             );
-            if !game.is_alive(actor) {
+            if game.health(actor) == Some(0) {
                 break;
             }
         }
         assert!(
-            !game.is_alive(actor),
+            game.health(actor) == Some(0),
             "beam must defeat active producer {attempt}"
         );
         assert!(game.action_status(actor).is_none());
@@ -208,5 +208,8 @@ fn defeat_releases_an_active_history_before_another_actor_commits() {
                 .count(),
             1
         );
+        // Release the beam so the defeated producer's physics can settle.
+        for _ in 0..120 { step(&mut game); }
+        assert!(!game.is_alive(actor));
     }
 }

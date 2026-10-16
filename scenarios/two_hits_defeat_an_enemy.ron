@@ -1,9 +1,9 @@
 // Walk 633 ticks to rest at z=94.2995 by tick 639, 1.40m from a target at
 // 95.7: inside Slam's first 1.4m sample (reach 1.65 with its radius). The
 // arena edge keeps it there after knockback. Two 30-tick swings hit at 639
-// and 669; only the second may retire its stable identity.
+// and 669; the second defeats it, then physics retires it on tick 670.
 (
-    description: "One slam preserves a damaged enemy; the second retires its stable identity.",
+    description: "One slam preserves a damaged enemy; the second defeats it before final physics retires its identity.",
     setup: (actions: [Place((0.0, 95.7))]),
     inputs: [(at: 0, ticks: 633, dir: (0.0, 1.0))],
     attack_profiles: [(at: 0, profile: Slam)], attacks: [630, 660],
@@ -12,8 +12,9 @@
             (nth: 0, alive: true, health: 1, velocity: (x: 0.0, z: 72.0, tol: 0.00001)),
         ])),
         (at: 668, expect: (enemy_count: 1, bodies: [(nth: 0, alive: true, health: 1)])),
-        (at: 669, expect: (enemy_count: 0, bodies: [(nth: 0, alive: false)])),
+        (at: 669, expect: (enemy_count: 0, bodies: [(nth: 0, alive: true, health: 0)])),
+        (at: 670, expect: (enemy_count: 0, bodies: [(nth: 0, alive: false)])),
     ],
-    budget: (ticks: 670),
+    budget: (ticks: 671),
     expect: (enemy_count: 0, bodies: [(nth: 0, alive: false)], trace: "two_hits_defeat_an_enemy.trace"),
 )
