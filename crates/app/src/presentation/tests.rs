@@ -1029,6 +1029,33 @@ fn channel_geometry_clips_the_interpolated_staff_path_when_the_damage_ray_misses
 }
 
 #[test]
+fn alternating_pursuit_uses_walk_and_run_poses_from_actual_displacement() {
+    let mut horde = loaded_horde("horde.glb");
+    let mut game = Game::empty();
+    let first = game.place(glam::Vec2::new(60.0, 0.0), arpg_game::ActorDefinition::hostile()).unwrap();
+    let second = game.place(glam::Vec2::new(-60.0, 0.0), arpg_game::ActorDefinition::hostile()).unwrap();
+    for tick in 0..213 {
+        game.step(Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap(),
+            Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
+        if tick != 10 && tick != 33 && tick != 211 && tick != 212 { continue; }
+        let hash = game.hash();
+        horde.rebuild(game.character_presentations(Alpha::ONE), tick as f64 / 60.0,
+            |_| 0.0, |_| None, std::iter::empty(), HordeFrame { alpha: Alpha::ONE, corpses: game.corpses() });
+        for character in game.character_presentations(Alpha::ONE) {
+            let (bucket, _) = LoadedHorde::<()>::bucket(character);
+            // On tick 211 the second creature finishes braking, but its travel
+            // over that tick still averages above the 2 m/s walk threshold.
+            let expected = if tick == 211 || (character.id() == first) == (tick != 33) { HordeRole::Run } else { HordeRole::Walk };
+            assert!(character.id() == first || character.id() == second);
+            assert_eq!(HORDE_ROLES[bucket / HORDE_PHASES_PER_ROLE], expected, "tick {tick}");
+        }
+        assert_eq!(horde.instance_count(), 2);
+        assert_eq!(horde.occupied_buckets(), 2);
+        assert_eq!(game.hash(), hash, "presentation cannot drive gameplay");
+    }
+}
+
+#[test]
 fn varied_ground_speeds_use_three_cadences_within_the_existing_pose_budget() {
     let mut horde = loaded_horde("horde.glb");
     let mut game = Game::empty();
@@ -1036,6 +1063,7 @@ fn varied_ground_speeds_use_three_cadences_within_the_existing_pose_budget() {
         let mut actor = arpg_game::ActorDefinition::hostile();
         let arpg_game::ActionDefinition::Move(movement) = &mut actor.actions[0] else { unreachable!() };
         movement.speed = speed;
+        movement.vary_speed = false;
         game.place(pos, actor).unwrap();
     }
     game.place(glam::Vec2::new(0.0, -20.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();

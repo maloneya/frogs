@@ -372,7 +372,7 @@ impl Actors {
 
     /// Admission already ran. Decisions observe the same preceding physical state
     /// for every actor; only the motor/physics passes that follow may move them.
-    pub(crate) fn prepare(&mut self, view: ActorView<'_>, dt: Dt) {
+    pub(crate) fn prepare(&mut self, view: ActorView<'_>, dt: Dt, tick: u64) {
         self.drives.clear();
         self.effects.clear();
         self.targets.rebuild(&self.rows);
@@ -492,7 +492,7 @@ impl Actors {
                     }
                 }
             }
-            if let Some(command) = motor(actor, view, dt) {
+            if let Some(command) = motor(actor, view, dt, tick) {
                 self.drives.push(command);
             }
         }
@@ -619,7 +619,7 @@ impl Actors {
             }
         }
     }
-    pub(crate) fn report(&self, out: &mut Report) {
+    pub(crate) fn report(&self, out: &mut Report, tick: u64) {
         out.object("actor_definitions", |out| {
             let mut seen = std::collections::BTreeSet::new();
             for actor in &self.rows {
@@ -672,6 +672,9 @@ impl Actors {
                         },
                     );
                     if let Some(running) = &actor.running {
+                        if let ActionDefinition::Move(settings) = actor.definition.actions[running.action] {
+                            out.num("move_speed", settings.speed_at(actor.body, tick));
+                        }
                         let (phase, elapsed, duration) = running.execution.phase();
                         out.int("action_index", running.action as u64);
                         out.int("node", running.node as u64);
@@ -1010,7 +1013,7 @@ fn admit(
     }
     Selection::Run(running)
 }
-fn motor(actor: &Actor, view: ActorView<'_>, dt: Dt) -> Option<MotorCommand> {
+fn motor(actor: &Actor, view: ActorView<'_>, dt: Dt, tick: u64) -> Option<MotorCommand> {
     let running = actor.running.as_ref()?;
     if !running.execution.holds(ActionControls::Movement) {
         return None;
@@ -1032,7 +1035,7 @@ fn motor(actor: &Actor, view: ActorView<'_>, dt: Dt) -> Option<MotorCommand> {
             } else {
                 0.0
             };
-            let speed = settings.speed.min(arpg_sim::stopping_speed(
+            let speed = settings.speed_at(actor.body, tick).min(arpg_sim::stopping_speed(
                 distance,
                 approach,
                 dt,

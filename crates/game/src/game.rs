@@ -152,7 +152,7 @@ impl Game {
         // All decisions see the same start-of-tick physical snapshot.
         let prepared = world.begin_step(dt, intent, actors.population());
         births.admit(prepared.spawn_outcomes(), actors);
-        actors.prepare(prepared.view(), dt);
+        actors.prepare(prepared.view(), dt, tick);
         let mut resolved = prepared.advance(actors.drives(), actors.targets(), observer);
         // Falling trees met bodies during physics; the player's attack has already
         // resolved, so a body it defeated is refused here.
@@ -248,7 +248,7 @@ impl Game {
         doors.report(world, out);
         chests.report(out);
         encounters.report(out);
-        actors.report(out);
+        actors.report(out, world.tick().saturating_sub(1));
         births.report(out);
         corpses.report(out);
         out.int("encounter_events_dropped", encounter_trace.dropped() as u64);

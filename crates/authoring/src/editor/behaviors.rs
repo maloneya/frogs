@@ -156,6 +156,8 @@ fn project_settings(settings: &Value, prefix: &str, label: &str, out: &mut Vec<V
                     0.5,
                 ));
             }
+        } else if let Some(enabled) = value.as_bool() {
+            out.push(field(&key, &label, "bool", f32::from(enabled), 1.0));
         } else if value.is_object() {
             project_settings(value, &key, &label, out);
         } else if let Some(n) = value.as_u64() {
@@ -368,7 +370,9 @@ fn edit_action(actor: &mut ActorDefinition, key: &str, value: &Number) -> Result
             for part in field.split('.') {
                 slot = slot.get_mut(part).ok_or("Unknown action setting.")?;
             }
-            *slot = if slot.as_u64().is_some() {
+            *slot = if slot.is_boolean() {
+                json!(bool_value(value)?)
+            } else if slot.as_u64().is_some() {
                 json!(integer::<u64>(value)?)
             } else {
                 Value::Number(value.clone())

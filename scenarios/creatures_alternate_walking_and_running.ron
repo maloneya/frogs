@@ -1,0 +1,45 @@
+// Complete identities #1v1 and #2v1 start 333 and 150 ticks into a 360-tick
+// walk/run cycle. Tick 27 brakes the first from 2.5 to .9*2.5-.5 = 1.75.
+// Tick 30 accelerates the second from 1.5 to .9*1.5+.5 = 1.85.
+(
+    description: "Creature pace changes are staggered and go through physical acceleration and braking.",
+    setup: (actions: [
+        Place((60.0, 0.0)),
+        Assign(body: 0, actor: (physical: (health: Some(3), character: true), role: Hostile,
+            actions: [Move((speed: 2.5, vary_speed: true))], behavior: Action(0))),
+        Place((-60.0, 0.0)),
+        Assign(body: 1, actor: (physical: (health: Some(3), character: true), role: Hostile,
+            actions: [Move((speed: 2.5, vary_speed: true))], behavior: Action(0))),
+    ]),
+    checkpoints: [
+        (at: 26, expect: (bodies: [
+            (nth: 0, velocity: (x: -2.5, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 1.5, z: 0.0, tol: 0.00001)),
+        ])),
+        (at: 27, expect: (bodies: [
+            (nth: 0, velocity: (x: -1.75, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 1.5, z: 0.0, tol: 0.00001)),
+        ])),
+        (at: 29, expect: (bodies: [
+            (nth: 0, velocity: (x: -1.5, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 1.5, z: 0.0, tol: 0.00001)),
+        ])),
+        (at: 30, expect: (bodies: [
+            (nth: 0, velocity: (x: -1.5, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 1.85, z: 0.0, tol: 0.00001)),
+        ])),
+        (at: 33, expect: (bodies: [
+            (nth: 0, velocity: (x: -1.5, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 2.5, z: 0.0, tol: 0.00001)),
+        ])),
+        (at: 207, expect: (bodies: [
+            (nth: 0, velocity: (x: -1.85, z: 0.0, tol: 0.00001)),
+            (nth: 1, velocity: (x: 2.5, z: 0.0, tol: 0.00001)),
+        ])),
+    ],
+    budget: (ticks: 212),
+    expect: (player_health: 5, contacts: 0, crowd_contacts: 0, bodies: [
+        (nth: 0, action: Move, velocity: (x: -2.5, z: 0.0, tol: 0.00001)),
+        (nth: 1, action: Move, velocity: (x: 1.5, z: 0.0, tol: 0.00001)),
+    ]),
+)

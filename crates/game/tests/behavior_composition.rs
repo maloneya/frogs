@@ -518,6 +518,7 @@ fn maximum_speed_diagonal_actions_remain_valid_when_velocity_is_rounded() {
         actions: vec![ActionDefinition::Move(MoveAction {
             destination: Destination::Point((100.0, 100.0)),
             speed: 30.0,
+            vary_speed: false,
             acceleration: 300.0,
             stop_distance: 0.1,
         })],
@@ -546,6 +547,7 @@ fn arrival_keeps_the_motor_until_bounded_braking_has_stopped_the_body() {
             speed: 1.0,
             acceleration: 6.0,
             stop_distance: 1.0,
+            vary_speed: false,
         })],
         behavior: BehaviorNode::Action(0),
         ..ActorDefinition::civilian()

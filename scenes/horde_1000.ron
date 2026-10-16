@@ -31,7 +31,8 @@
                         actions: [
                             Move((
                                 destination: Target(Player),
-                                speed: 2.5,
+                                speed: 3.125,
+                                vary_speed: true,
                                 acceleration: 30.0,
                                 stop_distance: 0.55,
                             )),

@@ -1,5 +1,15 @@
 # Performance telemetry
 
+## Temporary branch exception
+
+While working on branch `physical-joints`, performance-specific requirements are
+temporarily paused. This includes mandatory before/after measurements, benchmark
+cadence and completion gates, the feature-work stop and handoff rule, and separate
+user authorization for performance investigation or optimization. Feature work may
+continue after a performance concern. Preserve existing evidence and report known
+performance issues and omitted coverage accurately; correctness requirements remain
+in force. Other branches follow the normal policy below.
+
 ## Feature work: stop and handoff
 
 Before changing a feature likely to affect crowd cost, animation, assets or

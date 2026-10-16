@@ -9,7 +9,7 @@ fn step(game: &mut Game) {
 fn moving(speed:f32) -> ActorDefinition {
     let mut definition=ActorDefinition::hostile();
     let ActionDefinition::Move(movement)=&mut definition.actions[0] else { panic!("move preset") };
-    movement.speed=speed; definition
+    movement.speed=speed; movement.vary_speed=false; definition
 }
 fn scene() -> arpg_game::GameScene {
     Scene { bodies:vec![Placed{pos:(20.0,0.0),what:moving(2.5)},Placed{pos:(-20.0,0.0),what:moving(4.0)},Placed{pos:(0.0,20.0),what:moving(1.5)}],..Default::default() }.into()

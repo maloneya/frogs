@@ -57,6 +57,16 @@ actor execution and future spawn definitions; presentation only reads observatio
 Runtime movement speeds belong to actions, while player controls and ability
 impulses remain in the shared tuning panel.
 
+Movement's `vary_speed` setting alternates between walking at 60% of the authored
+`speed` and running at that speed. Hostile presets and pursuit scenes enable it:
+the usual 3.125 m/s pursuit becomes 1.875 m/s walking and 3.125 m/s running. Each pace
+lasts three simulation seconds, with a stagger derived from the complete body
+identity. The shared motor accelerates and brakes between them. Attacks retain
+their normal priority and commitment; the pace clock continues while attacking
+or blocked. Restart repeats the same phases, and removing another creature
+cannot change a survivor's timing. The Move inspector exposes the same setting
+to the companion and headless editor; constant-speed routines leave it off.
+
 [Game tests](../crates/game/tests/behavior_composition.rs) own small independent
 setups. [Birth tests](../crates/game/tests/actor_births.rs) cover all admission paths
 and simultaneous lethal effects. Playable scenes remain human playtests rather

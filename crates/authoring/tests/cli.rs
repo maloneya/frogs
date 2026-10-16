@@ -76,6 +76,7 @@ fn agent_and_visual_edits_round_trip_into_the_same_playable_encounter() {
     let saved = call(json!({"action":"save","document":authored["editor"]["document"],"path":path}), true);
     let opened = call(json!({"action":"open","path":path}), true);
     assert_eq!(opened["editor"]["document"], saved["editor"]["document"]);
+    assert_eq!(opened["editor"]["document"]["scene"]["engine"]["sources"][0]["what"]["actions"][2]["Move"]["vary_speed"], true);
     // The native map sends this exact edit shape. Both clients keep the rest opaque.
     let moved = call(json!({"action":"edit","document":opened["editor"]["document"],
         "edit":{"action":"move","target":{"kind":"body","index":1},"pos":[5.0,0.0]}}), true);

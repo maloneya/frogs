@@ -12,6 +12,7 @@ fn mover(destination: f32) -> ActorDefinition {
         actions: vec![ActionDefinition::Move(MoveAction {
             destination: Destination::Point((destination, 10.0)),
             speed: 2.0,
+            vary_speed: false,
             acceleration: 30.0,
             stop_distance: 0.0,
         })],

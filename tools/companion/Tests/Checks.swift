@@ -369,12 +369,14 @@ func liveSceneEditorChecks(_ model: Model) async throws {
     precondition(!model.editorFailed && model.editor!.objects.count == 1)
     let source = model.editor!.objects[0]
     precondition(source.fields.first { $0.key == "actor_role" }!.options == ["Hostile", "Civilian", "Prop"])
-    for (field, value) in [("action.2.speed", 4.0), ("action.2.order", 1.0)] {
+    precondition(source.value("action.2.vary_speed") == 1)
+    for (field, value) in [("action.2.speed", 4.0), ("action.2.vary_speed", 0.0), ("action.2.order", 1.0)] {
         await model.editScene(.object(["action": .string("set"), "target": source.target, "field": .string(field), "value": .number(value)]))
         precondition(!model.editorFailed)
     }
     precondition(model.editor!.objects[0].value("action.0.kind") == 0)
     precondition(model.editor!.objects[0].value("action.0.speed") == 4)
+    precondition(model.editor!.objects[0].value("action.0.vary_speed") == 0)
     precondition(model.editor!.objects[0].value("behavior.0.action") == 2, "Reordering preserves behavior references")
     let actorAccepted = model.editor!.document
     await model.editScene(.object(["action": .string("set"), "target": source.target, "field": .string("action_count"), "value": .number(0)]))

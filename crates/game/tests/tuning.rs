@@ -72,6 +72,7 @@ fn existing_and_new_monsters_use_new_speed_through_the_normal_motor() {
     let mut slow = ActorDefinition::hostile();
     let ActionDefinition::Move(movement) = &mut slow.actions[0] else { panic!("movement preset") };
     movement.speed = 1.0;
+    movement.vary_speed = false;
     game.assign_behavior(existing, slow.clone()).unwrap();
     let new = game.place(Vec2::new(-20.0, 0.0), slow).unwrap();
     step(&mut game, false);
@@ -113,6 +114,7 @@ fn increased_motor_acceleration_allows_speeds_above_the_old_drag_ceiling() {
     let mut fast = ActorDefinition::hostile();
     let ActionDefinition::Move(movement) = &mut fast.actions[0] else { panic!("movement preset") };
     movement.speed = 10.0;
+    movement.vary_speed = false;
     movement.acceleration = 300.0;
     let id = game.place(Vec2::new(40.0, 0.0), fast).unwrap();
     // Acceleration of 300m/s² adds up to 5m/s each tick: 5, 9.5, then 10.

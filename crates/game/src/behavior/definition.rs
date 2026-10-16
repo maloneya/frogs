@@ -11,6 +11,8 @@ pub const MAX_BEHAVIOR_NODES: usize = 64;
 /// Maximum depth, counting the root, of a behaviour composition.
 pub const MAX_BEHAVIOR_DEPTH: usize = 8;
 
+const HOSTILE_RUN_SPEED: f32 = 3.125;
+
 /// Gameplay classification, independent of physical movement and health.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ActorRole {
@@ -52,6 +54,9 @@ pub struct MoveAction {
     pub destination: Destination,
     /// Maximum desired ground speed in metres per second.
     pub speed: f32,
+    /// Alternate walking at 60% of `speed` and running at `speed`, with independent
+    /// identity-derived three-second phases. Constant-speed routines leave this off.
+    pub vary_speed: bool,
     /// Bounded motor acceleration in metres per second squared.
     pub acceleration: f32,
     /// Centre-to-centre arrival distance in metres.
@@ -62,9 +67,25 @@ impl Default for MoveAction {
         Self {
             destination: Destination::Target(TargetSelection::Player),
             speed: 2.5,
+            vary_speed: false,
             acceleration: 30.0,
             stop_distance: arpg_sim::PLAYER_RADIUS + arpg_sim::ENEMY_RADIUS,
         }
+    }
+}
+impl MoveAction {
+    pub(crate) fn speed_at(self, body: arpg_sim::EntityId, tick: u64) -> f32 {
+        if !self.vary_speed {
+            return self.speed;
+        }
+        // Identity and tick already belong to the run hash/lifetime. Deriving the
+        // phase avoids a second clock that could survive removal or restart.
+        let mut seed = Fnv::default();
+        body.hash_into(&mut seed);
+        let half_cycle = u64::from(arpg_sim::TICK_HZ) * 3;
+        let cycle = half_cycle * 2;
+        let phase = (tick % cycle + seed.finish() % cycle) % cycle;
+        if phase < half_cycle { self.speed * 0.6 } else { self.speed }
     }
 }
 
@@ -250,11 +271,11 @@ impl ActorDefinition {
             ..Self::default()
         }
     }
-    /// A pursuing hostile with no attack capabilities.
+    /// A pursuing hostile that alternates walking and running, with no attacks.
     #[must_use]
     pub fn hostile() -> Self {
         Self {
-            actions: vec![ActionDefinition::Move(MoveAction::default())],
+            actions: vec![ActionDefinition::Move(MoveAction { speed: HOSTILE_RUN_SPEED, vary_speed: true, ..MoveAction::default() })],
             behavior: BehaviorNode::Action(0),
             ..Self::passive_hostile()
         }
@@ -266,7 +287,7 @@ impl ActorDefinition {
             actions: vec![
                 ActionDefinition::Swipe(SwipeAction::default()),
                 ActionDefinition::Leap(LeapAction::default()),
-                ActionDefinition::Move(MoveAction::default()),
+                ActionDefinition::Move(MoveAction { speed: HOSTILE_RUN_SPEED, vary_speed: true, ..MoveAction::default() }),
             ],
             behavior: BehaviorNode::Priority(vec![
                 BehaviorNode::Action(0),
@@ -519,6 +540,7 @@ impl ActionDefinition {
                     }
                 }
                 out.num("speed", settings.speed);
+                out.bool("vary_speed", settings.vary_speed);
                 out.num("acceleration", settings.acceleration);
                 out.num("stop_distance", settings.stop_distance);
             }
@@ -571,6 +593,7 @@ impl ActionDefinition {
                     }
                 }
                 out.f32(settings.speed);
+                out.usize(usize::from(settings.vary_speed));
                 out.f32(settings.acceleration);
                 out.f32(settings.stop_distance);
             }

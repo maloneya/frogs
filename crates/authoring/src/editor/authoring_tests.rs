@@ -160,6 +160,7 @@ fn actor_definitions_and_compositions_are_editable_on_every_producer() {
         set_field(&mut scene, object, "action.0.kind", 0.0);
         set_field(&mut scene, object, "action.0.x", 12.0);
         set_field(&mut scene, object, "action.0.speed", 1.5);
+        set_field(&mut scene, object, "action.0.vary_speed", 1.0);
         set_field(&mut scene, object, "action.1.ticks", 90.0);
         set_field(&mut scene, object, "behavior.kind", 2.0);
         set_field(&mut scene, object, "behavior.children", 2.0);
@@ -173,6 +174,11 @@ fn actor_definitions_and_compositions_are_editable_on_every_producer() {
             _ => unreachable!(),
         };
         assert_eq!(actor.role, arpg_game::ActorRole::Civilian);
+        let arpg_game::ActionDefinition::Move(movement) = actor.actions[0] else { panic!("move action") };
+        assert!(movement.vary_speed);
+        let serialized = serde_json::to_value(&scene).unwrap();
+        let restored: SceneDocument = serde_json::from_value(serialized.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), serialized);
         assert_eq!(actor.actions[1], arpg_game::ActionDefinition::Wait { ticks: 90 });
         assert_eq!(actor.behavior, arpg_game::BehaviorNode::Sequence(vec![arpg_game::BehaviorNode::Action(0), arpg_game::BehaviorNode::Action(1)]));
         set_field(&mut scene, object, "action.0.order", 2.0);
@@ -185,10 +191,10 @@ fn actor_definitions_and_compositions_are_editable_on_every_producer() {
         assert_eq!(actor.behavior, arpg_game::BehaviorNode::Sequence(vec![arpg_game::BehaviorNode::Action(1), arpg_game::BehaviorNode::Action(0)]));
         set_field(&mut scene, object, "action.1.order", 1.0);
         let projection = document(&scene, Some(object), None, None).unwrap();
-        for key in ["fixed", "character", "interactable", "actor_role", "action.0.speed", "behavior.1.action"] {
+        for key in ["fixed", "character", "interactable", "actor_role", "action.0.speed", "action.0.vary_speed", "behavior.1.action"] {
             assert!(projection["objects"][0]["fields"].as_array().unwrap().iter().any(|f| f["key"] == key));
         }
-        for (field, value) in [("fixed", 1.0), ("action_count", 0.0), ("action_count", 1e9), ("behavior.children", 1e9), ("action.0.speed", -1.0)] {
+        for (field, value) in [("fixed", 1.0), ("action_count", 0.0), ("action_count", 1e9), ("behavior.children", 1e9), ("action.0.speed", -1.0), ("action.0.vary_speed", 2.0), ("action.0.vary_speed", 0.5)] {
             assert!(edit(scene.clone(), Edit::Set { target: object, field: field.into(), value: Number::from_f64(value).unwrap() }).is_err());
         }
     }
