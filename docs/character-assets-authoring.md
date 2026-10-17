@@ -159,13 +159,19 @@ are resolved from the build-time repository location, independently of the launc
 directory. Missing or invalid defaults fail startup explicitly. `character clear`
 and `horde clear` restore their respective default assets; there is no character cube fallback.
 
+The renderer deforms each occupied shared horde pose once per frame, then
+instances its posed geometry across the main and shadow passes. This reuses
+work without reducing geometry, animation phases or influences. The single
+player keeps vertex-shader skinning. See [the renderer](../crates/gfx/src/character.rs)
+and [rendering performance](performance.md#crowd-rendering) for ownership and tradeoffs.
+
 An ordinary horde asset may have a neighboring `<stem>.shadow.glb` file. Both
 the harness and companion load the complete pair before replacing the accepted
 horde. A present but unreadable, invalid or mismatched caster refuses the load;
 an asset without a caster uses its visible geometry for shadows. The asset owner
 requires fewer caster triangles and the same ordered joint names, joint parents,
 local/global bind transforms and inverse binds. The renderer uses only its
-geometry with the visible asset's palette; proxy clips/materials are not uploaded.
+geometry deformed by the visible asset's pose; proxy clips/materials are not uploaded.
 Visible geometry, materials and animation are unchanged. The horde report's
 `shadow_mesh` object identifies which geometry is active. Scene restart clears
 placements and poses through the existing horde lifetime; changing assets replaces

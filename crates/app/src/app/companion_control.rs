@@ -77,6 +77,9 @@ impl App {
                 "default":a.default, "min":a.min, "max":a.max, "step":a.step,
                 "value":tuning.get(field), "saved":self.tuning_saved.get(field)})
         }).collect();
+        let mut performance = arpg_core::Report::default();
+        self.perf.report_latest(&mut performance);
+        let performance: serde_json::Value = serde_json::from_str(&performance.finish()).expect("finite performance report");
         json!({"ok":error.is_none(), "error":error, "state":{
             "session":std::process::id(), "fields":fields, "unsaved":tuning != self.tuning_saved,
             "path":self.tuning_path, "message":self.companion_message, "error":self.companion_error,
@@ -88,6 +91,7 @@ impl App {
                 "view_height":self.camera.as_ref().map(arpg_gfx::OrthoCamera::view_height),
                 "fps":self.clock.fps(), "frame_ms":self.clock.frame_ms(), "enemies":self.game.enemy_count(),
                 "instances":self.render_instance_count(),
+                "performance":performance,
                 "capture":self.capture.report()}
         }}).to_string()
     }

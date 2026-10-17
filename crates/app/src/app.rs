@@ -266,6 +266,11 @@ impl App {
             self.perf.reset();
         }
         self.perf.begin_frame(std::time::Instant::now());
+        let poll_start = std::time::Instant::now();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.collect_gpu_timings(|result| self.perf.record_gpu(result));
+        }
+        let gpu_poll = poll_start.elapsed();
         if self.trial.as_ref().is_some_and(|trial| trial.finished(self.game.tick())) {
             let trial = self.trial.take().expect("completed trial");
             let mut out = arpg_core::Report::default();
@@ -396,7 +401,7 @@ impl App {
             .as_ref()
             .map(|preview| preview.draw(player));
         let horde = self.horde_preview.as_ref().map(LoadedHorde::draw);
-        let presented = match renderer.render(
+        let observation = renderer.render(
             RenderFrame {
                 camera,
                 lights: world_assets.torches.lights(),
@@ -410,7 +415,9 @@ impl App {
                 weather: self.atmosphere.vertices(),
             },
             self.capture.path(),
-        ) {
+            self.perf.frame_id(),
+        );
+        let presented = match observation.outcome {
             FrameOutcome::Presented { capture } => {
                 self.frames += 1;
                 if let Some(result) = capture {
@@ -427,6 +434,7 @@ impl App {
             crowd: crowd.elapsed, crowd_candidates: crowd.candidates,
             crowd_possible_pairs: crowd.possible_pairs,
             simulation, game_step, presentation, render_cpu: render_start.elapsed(),
+            render: observation.cpu, gpu_poll, gpu_sampled: observation.gpu_sampled,
             ticks, end_tick: self.game.tick(), enemies: self.game.enemy_count(),
             crowd_contacts: self.game.crowd_contacts(), presented,
             focused: self.window.as_ref().is_some_and(|window| window.has_focus()),
@@ -472,6 +480,12 @@ impl ApplicationHandler for App {
         self.renderer = Some(pollster::block_on(Renderer::new(
             window.clone(),
             display_handle,
+            match std::env::var("ARPG_GPU_TIMING") {
+                Ok(value) if value == "1" => true,
+                Ok(value) if value == "0" => false,
+                Err(std::env::VarError::NotPresent) => false,
+                _ => panic!("ARPG_GPU_TIMING must be 0 or 1"),
+            },
         )));
         self.world_assets = Some(WorldAssets::load(|mesh| {
             self.renderer.as_ref().expect("renderer was initialized")

@@ -236,7 +236,9 @@ impl App {
     }
 
     pub(super) fn write_perf(&self, out: &mut Report, samples: bool) {
-        out.int("schema_version", 1);
+        out.int("schema_version", 2);
+        out.int("process_id", u64::from(std::process::id()));
+        out.bool("gpu_timing_available", self.renderer.as_ref().is_some_and(Renderer::gpu_timing_available));
         out.bool("debug_build", cfg!(debug_assertions));
         out.int("run_id", self.run_id);
         out.int("current_tick", self.game.tick());
@@ -267,6 +269,7 @@ impl App {
         }
         out.object("horde", |out| report_horde_preview(self.horde_preview.as_ref(), out));
         out.object("character", |out| report_character_preview(self.character_preview.as_ref(), out));
+        out.object("latest", |out| self.perf.report_latest(out));
         self.perf.report(out, samples);
     }
 

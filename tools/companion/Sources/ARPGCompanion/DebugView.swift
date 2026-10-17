@@ -32,6 +32,28 @@ struct DebugView: View {
                     LabeledContent("Scene", value: "\(state.debug.enemies) enemies · \(state.debug.instances) instances · Tick \(state.scenes.tick)")
                 }
             }
+            if let perf = model.state?.debug.performance, let frame = perf.frame_id {
+                Section("CPU frame \(frame)") {
+                    timing("Game steps", perf.game_step_ms)
+                    timing("Presentation preparation", perf.presentation_ms)
+                    timing("Surface acquisition", perf.acquire_ms)
+                    timing("Uploads and packing", perf.upload_ms)
+                    timing("Command encoding", perf.encode_ms)
+                    timing("Submission", perf.submit_ms)
+                    timing("Present", perf.present_ms)
+                }
+                Section("GPU passes") {
+                    if let frame = perf.gpu_frame_id {
+                        Text("Completed GPU frame \(frame)").foregroundStyle(.secondary)
+                        timing("Directional shadow", perf.gpu_directional_shadow_ms)
+                        timing("Fire shadow", perf.gpu_fire_shadow_ms)
+                        timing("Main pass", perf.gpu_main_ms)
+                        timing("Pass span including gaps", perf.gpu_span_ms)
+                    } else {
+                        Text("No completed GPU timing available for this window.").foregroundStyle(.secondary)
+                    }
+                }
+            }
             Section("Game screenshot") {
                 Button("Save screenshot…", systemImage: "camera") { saveScreenshot() }
                     .disabled(!model.editable || model.state?.debug.capture.pending == true || model.state?.debug.vsync == nil)
@@ -47,6 +69,14 @@ struct DebugView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private func timing(_ label: String, _ value: Double?) -> some View {
+        if let value {
+            LabeledContent(label, value: "\(value.formatted(.number.precision(.fractionLength(3)))) ms")
+                .monospacedDigit()
+        }
     }
 
     private func saveScreenshot() {

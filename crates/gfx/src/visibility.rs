@@ -58,15 +58,13 @@ impl Bounds {
             && point.cmple(self.max + Vec3::splat(0.00001)).all()
     }
 
-    pub(crate) fn visible(self, instance: arpg_core::Instance, views: &[Frustum]) -> bool {
+    pub(crate) fn world_sphere(self, instance: arpg_core::Instance) -> (Vec3, f32) {
         let scale = instance.scale();
         let rotation = glam::Quat::from_rotation_y(instance.yaw())
             * glam::Quat::from_rotation_x(instance.pitch());
         let centre = instance.pos() + rotation * ((self.min * 0.5 + self.max * 0.5) * scale);
         let radius = (self.max * 0.5 - self.min * 0.5).length() * scale.abs().max_element();
-        views
-            .iter()
-            .any(|view| view.contains_sphere(centre, radius))
+        (centre, radius)
     }
 }
 
@@ -74,6 +72,12 @@ impl Bounds {
 mod tests {
     use super::*;
     use arpg_core::{Instance, LinearRgb};
+
+    fn visible(bounds: Bounds, instance: Instance, views: &[Frustum]) -> bool {
+        let (centre, radius) = bounds.world_sphere(instance);
+        views.iter().any(|view| view.contains_sphere(centre, radius))
+    }
+
     #[test]
     fn whole_bounds_survive_edges_tilt_scale_and_the_directx_near_plane() {
         let view = Frustum::new(Mat4::IDENTITY);
@@ -82,12 +86,12 @@ mod tests {
             max: Vec3::splat(0.2),
         };
         let instance = |p| Instance::new(p, Vec3::ONE, LinearRgb::WHITE);
-        assert!(bounds.visible(instance(Vec3::new(1.15, 0.0, 0.5)), &[view]));
-        assert!(!bounds.visible(instance(Vec3::new(2.0, 0.0, 0.5)), &[view]));
-        assert!(bounds.visible(instance(Vec3::new(0.0, 0.0, -0.15)), &[view]));
-        assert!(!bounds.visible(instance(Vec3::new(0.0, 0.0, -0.5)), &[view]));
+        assert!(visible(bounds, instance(Vec3::new(1.15, 0.0, 0.5)), &[view]));
+        assert!(!visible(bounds, instance(Vec3::new(2.0, 0.0, 0.5)), &[view]));
+        assert!(visible(bounds, instance(Vec3::new(0.0, 0.0, -0.15)), &[view]));
+        assert!(!visible(bounds, instance(Vec3::new(0.0, 0.0, -0.5)), &[view]));
         assert!(
-            bounds.visible(
+            visible(bounds,
                 Instance::new(Vec3::new(1.5, 0.0, 0.5), Vec3::splat(3.0), LinearRgb::WHITE)
                     .with_yaw(0.9)
                     .with_pitch(1.3),
@@ -96,7 +100,7 @@ mod tests {
         );
         let other = Frustum::new(Mat4::from_translation(Vec3::new(-10.0, 0.0, 0.0)));
         assert!(
-            bounds.visible(instance(Vec3::new(10.0, 0.0, 0.5)), &[view, other]),
+            visible(bounds, instance(Vec3::new(10.0, 0.0, 0.5)), &[view, other]),
             "offscreen shadow casters remain admitted"
         );
     }

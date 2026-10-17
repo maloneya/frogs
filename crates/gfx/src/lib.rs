@@ -15,12 +15,14 @@ mod mesh;
 mod overlay;
 mod quad;
 mod text;
+mod timing;
 
 pub use camera::OrthoCamera;
 pub use arpg_core::PointLight;
 pub use debug::{DebugOutline, OutlineShape};
 pub use effect::{EffectVertex, MAX_EFFECT_VERTICES};
 pub use frame::RenderFrame;
+pub use timing::{GPU_TIMING_SLOTS, GpuCompletion, GpuTimings, RenderTimings};
 pub use character::{
     CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
 };
@@ -41,10 +43,11 @@ use material::MaterialLayout;
 use mesh::MeshPipeline;
 use overlay::QuadPipeline;
 
-/// Depth32Float is the safe universal choice. Under an orthographic camera
-/// depth is linear, so we aren't fighting the precision crush that makes
-/// perspective projections want 24-bit-plus formats.
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// Preserve 32-bit depth precision; stencil lets grounding follow all opaque
+/// geometry while retaining its exclusion from character-covered samples.
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32FloatStencil8;
+// Keep fragment-read scene resources separate for adjacent GPU frames.
+const SCENE_FRAME_SLOTS: usize = 3;
 
 /// GPU device, surface and rendering resources.
 pub struct Renderer {
@@ -57,7 +60,8 @@ pub struct Renderer {
     /// Device identity for comparable benchmark artifacts; no runtime decisions.
     adapter_info: wgpu::AdapterInfo,
     depth: wgpu::TextureView,
-    camera: CameraBinding,
+    cameras: [CameraBinding; SCENE_FRAME_SLOTS],
+    camera_slot: usize,
     static_meshes: MeshPipeline,
     debug: debug::DebugPipeline,
     effects: effect::EffectPipeline,
@@ -76,6 +80,8 @@ pub struct Renderer {
     /// A direct write would desync the two: the HUD would claim one thing while
     /// the surface did another, with no reconfigure to make it true.
     vsync: bool,
+    gpu_timer: Option<timing::GpuTimer>,
+    gpu_timing_requested: bool,
 }
 
 /// Whether rendering presented a frame, and the outcome of a requested PNG write.
@@ -89,6 +95,17 @@ pub enum FrameOutcome {
         /// The synchronous readback and PNG write result.
         capture: Option<Result<(), String>>,
     },
+}
+
+/// Rendering outcome with CPU spans for the same call.
+#[must_use = "frame counts and capture replies must follow the render outcome"]
+pub struct RenderObservation {
+    /// Whether presentation succeeded and any capture result.
+    pub outcome: FrameOutcome,
+    /// CPU timings, which may include waits but never claim GPU duration.
+    pub cpu: RenderTimings,
+    /// Whether this frame acquired a GPU timestamp slot.
+    pub gpu_sampled: bool,
 }
 
 /// The depth buffer must match the colour attachment's dimensions exactly, so
@@ -121,6 +138,7 @@ impl Renderer {
     pub async fn new(
         window: Arc<Window>,
         display_handle: winit::event_loop::OwnedDisplayHandle,
+        gpu_timing_requested: bool,
     ) -> Self {
         let size = window.inner_size();
 
@@ -147,10 +165,16 @@ impl Renderer {
         let info = adapter.get_info();
         log::info!("adapter: {} ({:?}, {:?})", info.name, info.device_type, info.backend);
 
+        let gpu_features = if gpu_timing_requested {
+            adapter.features() & wgpu::Features::TIMESTAMP_QUERY
+        } else { wgpu::Features::empty() };
+        if gpu_timing_requested && gpu_features.is_empty() {
+            log::warn!("GPU pass timestamps are unsupported by this adapter");
+        }
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("device"),
-                required_features: wgpu::Features::empty(),
+                required_features: gpu_features | wgpu::Features::DEPTH32FLOAT_STENCIL8,
                 // Native-only, so take everything this GPU offers rather than
                 // the portable baseline. We'll want the headroom for large
                 // instance buffers later.
@@ -196,7 +220,8 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let depth = create_depth(&device, config.width, config.height);
-        let camera = CameraBinding::new(&device);
+        let cameras = std::array::from_fn(|_| CameraBinding::new(&device));
+        let camera = &cameras[0];
         let material_layout = MaterialLayout::new(&device);
         let static_meshes = MeshPipeline::new(
             &device,
@@ -218,6 +243,7 @@ impl Renderer {
         let font = text::Font::new(&device, &queue);
         let overlay = QuadPipeline::new(&device, &font, config.format, DEPTH_FORMAT);
 
+        let gpu_timer = (!gpu_features.is_empty()).then(|| timing::GpuTimer::new(&device, &queue));
         Self {
             window,
             instance,
@@ -227,7 +253,8 @@ impl Renderer {
             config,
             adapter_info: info,
             depth,
-            camera,
+            cameras,
+            camera_slot: 0,
             static_meshes,
             debug,
             effects,
@@ -237,6 +264,8 @@ impl Renderer {
             overlay,
             uncapped,
             vsync: true,
+            gpu_timer,
+            gpu_timing_requested,
         }
     }
 
@@ -293,7 +322,19 @@ impl Renderer {
         out.text("driver", &self.adapter_info.driver);
         out.text("driver_info", &self.adapter_info.driver_info);
         out.text("present_mode", &format!("{:?}", self.config.present_mode));
+        out.int("desired_maximum_frame_latency", u64::from(self.config.desired_maximum_frame_latency));
         out.text("format", &format!("{:?}", self.config.format));
+        out.bool("timing_requested", self.gpu_timing_requested);
+        out.bool("timing_available", self.gpu_timing_available());
+        if self.gpu_timing_available() { out.num("timestamp_period_ns", self.queue.get_timestamp_period()); }
+    }
+
+    /// Whether optional GPU timestamp queries were enabled on this device.
+    pub fn gpu_timing_available(&self) -> bool { self.gpu_timer.is_some() }
+
+    /// Progresses old readbacks without waiting; callbacks retain their submitting frame ID.
+    pub fn collect_gpu_timings(&mut self, receive: impl FnMut(GpuCompletion)) {
+        if let Some(timer) = &mut self.gpu_timer { timer.collect(&self.device, &self.queue, receive); }
     }
 
     /// Returns whether vsync is on afterwards — unchanged if the surface has no
@@ -325,7 +366,14 @@ impl Renderer {
         &mut self,
         input: RenderFrame<'_>,
         capture_path: Option<&std::path::Path>,
-    ) -> FrameOutcome {
+        frame_id: u64,
+    ) -> RenderObservation {
+        let acquire_start = std::time::Instant::now();
+        let skipped = || RenderObservation {
+            outcome: FrameOutcome::Skipped,
+            cpu: RenderTimings { acquire: acquire_start.elapsed(), ..Default::default() },
+            gpu_sampled: false,
+        };
         let RenderFrame {
             camera, lights, environment, meshes, character, horde, overlay, debug_outlines, effects, weather,
         } = input;
@@ -342,12 +390,12 @@ impl Renderer {
             CurrentSurfaceTexture::Suboptimal(frame) => {
                 drop(frame);
                 self.reconfigure();
-                return FrameOutcome::Skipped;
+                return skipped();
             }
 
             CurrentSurfaceTexture::Outdated => {
                 self.reconfigure();
-                return FrameOutcome::Skipped;
+                return skipped();
             }
 
             // The surface itself is gone and has to be recreated from scratch.
@@ -357,13 +405,13 @@ impl Renderer {
                     .create_surface(self.window.clone())
                     .expect("recreate surface");
                 self.reconfigure();
-                return FrameOutcome::Skipped;
+                return skipped();
             }
 
             // Transient: the compositor isn't ready or we're hidden. Drop the
             // frame; we'll be asked again immediately.
             CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => {
-                return FrameOutcome::Skipped;
+                return skipped();
             }
 
             CurrentSurfaceTexture::Validation => {
@@ -371,6 +419,8 @@ impl Renderer {
             }
         };
 
+        let mut cpu = RenderTimings { acquire: acquire_start.elapsed(), ..Default::default() };
+        let upload_start = std::time::Instant::now();
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -383,31 +433,38 @@ impl Renderer {
                 label: Some("frame"),
             });
 
-        self.camera.upload(&self.queue, camera);
-        self.camera.upload_lights(&self.queue, lights, environment, !weather.is_empty());
+        let scene = &mut self.cameras[self.camera_slot];
+        scene.upload(&self.queue, camera);
+        scene.upload_lights(&self.queue, lights, environment, !weather.is_empty());
         self.static_meshes.upload(&self.queue, meshes);
         let weather_count = self.weather.upload(&self.queue, weather);
         let effect_count = self.effects.upload(&self.queue, effects);
         let debug_count = self.debug.upload(&self.queue, debug_outlines);
-        self.camera.shadows.update(&self.queue, camera, environment, lights);
-        let mut views=[visibility::Frustum::new(camera.view_proj()); 3];
-        let mut count=1;
-        for matrix in self.camera.shadows.matrices() { views[count]=visibility::Frustum::new(matrix); count+=1; }
-        let character_draws = self.character_preview.upload(&self.queue, character, horde, &views[..count]);
+        scene.shadows.update(&self.queue, camera, environment, lights);
+        let mut views = [Some(visibility::Frustum::new(camera.view_proj())), None, None];
+        for (layer, matrix) in scene.shadows.matrices() {
+            views[layer + 1] = Some(visibility::Frustum::new(matrix));
+        }
+        let character_draws = self.character_preview.upload(&self.device, &self.queue, character, horde, &views);
         let quads =
             self.overlay
                 .upload(&self.queue, overlay, self.config.width, self.config.height);
 
+        cpu.upload = upload_start.elapsed();
+        let encode_start = std::time::Instant::now();
+        let gpu_slot = self.gpu_timer.as_mut().and_then(|timer| timer.begin(frame_id));
+
         // Store only shadow depth: the surface pass still discards its depth.
-        for (view, binding) in self.camera.shadows.views() {
+        for (layer, view, binding) in scene.shadows.views() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("scene caster shadows"), color_attachments: &[],
+                label: Some(if layer == 0 { "directional caster shadows" } else { "fire caster shadows" }), color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None,
-                }), timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                }), timestamp_writes: gpu_slot.map(|slot| self.gpu_timer.as_mut().expect("timing slot").writes(slot, layer)),
+                occlusion_query_set: None, multiview_mask: None,
             });
             self.static_meshes.draw_depth(&mut pass, binding, meshes);
-            self.character_preview.draw_depth(&mut pass, binding, character, horde, &character_draws);
+            self.character_preview.draw_depth(&mut pass, binding, character, horde, &character_draws, layer);
         }
 
         {
@@ -437,38 +494,39 @@ impl Renderer {
                         // be pure wasted bandwidth.
                         store: wgpu::StoreOp::Discard,
                     }),
-                    stencil_ops: None,
+                    stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1), store: wgpu::StoreOp::Discard }),
                 }),
-                timestamp_writes: None,
+                timestamp_writes: gpu_slot.map(|slot| self.gpu_timer.as_mut().expect("timing slot").writes(slot, 2)),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
 
-            self.static_meshes.draw_batches(&mut pass, &self.camera, meshes);
-            self.character_preview.draw_shadows(&mut pass, &self.camera, &character_draws);
+            self.static_meshes.draw_batches(&mut pass, scene, meshes);
             if let Some(horde) = horde {
                 self.character_preview.draw_horde(
                     &mut pass,
-                    &self.camera,
+                    scene,
                     horde.mesh(),
-                    &character_draws.horde,
+                    &character_draws,
                 );
             }
             if let Some(character) = character {
                 self.character_preview.draw_player(
                     &mut pass,
-                    &self.camera,
+                    scene,
                     character.mesh(),
-                    character_draws.player,
+                    &character_draws,
                 );
             }
+
+            self.character_preview.draw_shadows(&mut pass, scene, &character_draws);
 
             // After the world and inside the same pass. The overlay neither
             // reads nor writes depth, so joining the pass costs nothing and
             // saves storing and reloading the whole frame between two of them.
-            self.effects.draw(&mut pass, &self.camera, effect_count);
-            self.weather.draw(&mut pass, &self.camera, weather_count);
-            self.debug.draw(&mut pass, &self.camera, debug_count);
+            self.effects.draw(&mut pass, scene, effect_count);
+            self.weather.draw(&mut pass, scene, weather_count);
+            self.debug.draw(&mut pass, scene, debug_count);
             self.overlay.draw(&mut pass, quads);
         }
 
@@ -480,17 +538,29 @@ impl Renderer {
             (readback, path)
         });
 
+        cpu.encode = encode_start.elapsed();
+        let submit_start = std::time::Instant::now();
         self.queue.submit(Some(encoder.finish()));
+        if let Some(slot) = gpu_slot {
+            self.gpu_timer.as_ref().expect("timing slot").submitted(slot, &self.queue);
+        }
+        cpu.submit = submit_start.elapsed();
+        let capture_start = std::time::Instant::now();
 
         let capture = capture.map(|(readback, path)| {
             readback.write_png(&self.device, path).map_err(|error| error.to_string())
         });
 
+        cpu.capture = capture_start.elapsed();
+        let present_start = std::time::Instant::now();
         // Tells winit we're about to present, so it can time its own bookkeeping
         // against the flip instead of guessing.
         self.window.pre_present_notify();
         self.queue.present(frame);
-        FrameOutcome::Presented { capture }
+        cpu.present = present_start.elapsed();
+        // Queued writes preserve GPU ordering when a slot wraps; no CPU wait.
+        self.camera_slot = (self.camera_slot + 1) % SCENE_FRAME_SLOTS;
+        RenderObservation { outcome: FrameOutcome::Presented { capture }, cpu, gpu_sampled: gpu_slot.is_some() }
     }
 }
 
@@ -519,7 +589,7 @@ mod tests {
 
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("headless test device"),
-            required_features: wgpu::Features::empty(),
+            required_features: wgpu::Features::DEPTH32FLOAT_STENCIL8,
             required_limits: adapter.limits(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::Performance,
@@ -535,6 +605,94 @@ mod tests {
             Vec3::new(40.0, 100.0, 30.0), LinearRgb::WHITE, 12_000.0, 1_000.0,
         )], arpg_core::EnvironmentLight::try_new(LinearRgb::WHITE, 0.0, LinearRgb::WHITE, 0.0, Vec3::Y).unwrap(), false);
         binding
+    }
+
+    #[test]
+    fn scene_binding_ring_matches_serialized_frames_across_two_queued_wraps() {
+        const N: u32 = 128;
+        let (device, queue) = headless_device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut ring: [CameraBinding; SCENE_FRAME_SLOTS] = std::array::from_fn(|_| CameraBinding::new(&device));
+        let pipeline = MeshPipeline::new(&device, &ring[0].layout, MaterialLayout::new(&device), TEST_FORMAT, DEPTH_FORMAT);
+        let ground = arpg_assets::import_glb(include_bytes!("../../../assets/world/ground.glb")).unwrap();
+        let prop = arpg_assets::import_glb(include_bytes!("../../../assets/world/prop.glb")).unwrap();
+        let floor = pipeline.upload_mesh(&device, &queue, &ground).unwrap();
+        let caster = pipeline.upload_mesh(&device, &queue, &prop).unwrap();
+        let colour = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("queued scene ring evidence"),
+            size: wgpu::Extent3d { width: N, height: N, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: TEST_FORMAT, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = colour.create_view(&Default::default());
+        let depth = create_depth(&device, N, N);
+        let render = |binding: &mut CameraBinding, frame: usize, cast: bool| {
+            let phase = frame as f32;
+            let mut camera = OrthoCamera::new(N, N);
+            camera.zoom_by(0.30 + phase * 0.012);
+            camera.snap_to(Vec3::new((phase - 3.0) * 0.22, 0.0, phase * 0.08));
+            let environment = arpg_core::EnvironmentLight::try_new(
+                LinearRgb::new(0.75, 0.85, 1.0), 0.1, LinearRgb::WHITE,
+                if frame % 3 == 1 { 0.0 } else { 0.7 }, Vec3::new(-0.6, 0.8, 0.15 + phase * 0.08)).unwrap();
+            let lights = [PointLight::new(Vec3::new(-2.0 + phase * 0.45, 3.0, -1.0 + phase * 0.2),
+                if frame.is_multiple_of(2) { LinearRgb::new(1.0, 0.4, 0.15) } else { LinearRgb::new(0.25, 0.5, 1.0) },
+                35.0, 10.0)];
+            let floor_instances = [Instance::new(Vec3::ZERO, Vec3::new(24.0, 1.0, 24.0), LinearRgb::WHITE)];
+            let caster_instances = [Instance::new(Vec3::new((phase - 3.0) * 0.15, 0.0, 0.0),
+                Vec3::new(2.0, 4.0, 2.0), LinearRgb::WHITE).with_yaw(phase * 0.1)];
+            let batches = [MeshBatch::new(&floor, &floor_instances), MeshBatch::new(&caster, &caster_instances)];
+            binding.upload(&queue, &camera);
+            binding.upload_lights(&queue, &lights, environment, !frame.is_multiple_of(2));
+            binding.shadows.update(&queue, &camera, environment, &lights);
+            pipeline.upload(&queue, &batches);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            for (_, view, shadow_camera) in binding.shadows.views() {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("queued scene shadow"), color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                        stencil_ops: None,
+                    }), timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                });
+                pipeline.draw_depth(&mut pass, shadow_camera, if cast { &batches[..] } else { &batches[..1] });
+            }
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("queued scene main"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view, depth_slice: None, resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                        stencil_ops: None,
+                    }), timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                });
+                // Only the receiver is visible, making the shadow content observable.
+                pipeline.draw_batches(&mut pass, binding, &batches[..1]);
+            }
+            let readback = Readback::new(&device, N, N);
+            readback.record(&mut encoder, &colour);
+            queue.submit(Some(encoder.finish()));
+            readback
+        };
+        let frames = SCENE_FRAME_SLOTS * 2 + 1;
+        // Submit every frame, including both wraps, before the first CPU readback wait.
+        let pending: Vec<_> = (0..frames).map(|frame|
+            render(&mut ring[frame % SCENE_FRAME_SLOTS], frame, true)).collect();
+        let actual: Vec<_> = pending.iter().map(|readback| readback.to_rgba(&device).unwrap()).collect();
+        assert!(actual.windows(2).all(|pair| pair[0] != pair[1]), "test frames must visibly differ");
+        let mut reference = CameraBinding::new(&device);
+        for (frame, actual) in actual.iter().enumerate() {
+            let expected = render(&mut reference, frame, true).to_rgba(&device).unwrap();
+            assert_eq!(*actual, expected, "scene ring mixed frame resources at frame {frame}");
+        }
+        let unshadowed = render(&mut reference, 0, false).to_rgba(&device).unwrap();
+        let shadow_pixels = actual[0].as_chunks::<4>().0.iter().zip(unshadowed.as_chunks::<4>().0)
+            .filter(|(a, b)| a[..3] != b[..3]).count();
+        assert!(shadow_pixels > 20, "queued references must exercise caster shadows");
+        assert!(pollster::block_on(scope.pop()).is_none());
     }
 
     /// What a rendered silhouette looks like: its bounding box, and which way
@@ -997,15 +1155,181 @@ mod tests {
         assert!(centres[0] + 20 < centres[1] && centres[1] + 20 < centres[2], "batch offsets mixed placements: {centres:?}");
     }
 
+    #[test]
+    fn opaque_first_grounding_preserves_coverage_occlusion_and_distant_pixels() {
+        #[derive(Clone, Copy)]
+        enum Grounding { BeforeCharacters, AfterCharacters, Absent }
+        struct Pixels { rgba: Vec<u8>, depth: Vec<u8>, stencil: Vec<u8> }
+        let (device, queue) = headless_device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut binding = CameraBinding::new(&device);
+        let static_pipeline = MeshPipeline::new(&device, &binding.layout, MaterialLayout::new(&device), TEST_FORMAT, DEPTH_FORMAT);
+        let ground = arpg_assets::import_glb(include_bytes!("../../../assets/world/ground.glb")).unwrap();
+        let prop = arpg_assets::import_glb(include_bytes!("../../../assets/world/prop.glb")).unwrap();
+        let floor = static_pipeline.upload_mesh(&device, &queue, &ground).unwrap();
+        let foreground = static_pipeline.upload_mesh(&device, &queue, &prop).unwrap();
+        let asset = arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/wolf/wolf.glb")).unwrap();
+        let mut characters = CharacterPipeline::new(&device, &binding.layout, MaterialLayout::new(&device), TEST_FORMAT, DEPTH_FORMAT);
+        let mesh = characters.upload_character(&device, &queue, &asset).unwrap();
+        let floor_instances = [Instance::new(Vec3::ZERO, Vec3::new(24.0, 1.0, 24.0), LinearRgb::WHITE)];
+        let foreground_instances = [Instance::new(Vec3::new(0.0, 0.0, -0.8), Vec3::new(0.5, 1.8, 0.5), LinearRgb::WHITE)];
+        let batches = [MeshBatch::new(&floor, &floor_instances), MeshBatch::new(&foreground, &foreground_instances)];
+        static_pipeline.upload(&queue, &batches);
+        let lights = [PointLight::new(Vec3::new(-2.0, 3.0, -1.0), LinearRgb::new(1.0, 0.5, 0.1), 35.0, 16.0)];
+        let environment = arpg_core::EnvironmentLight::try_new(LinearRgb::WHITE, 0.2, LinearRgb::WHITE, 0.7,
+            Vec3::new(-0.6, 1.0, -0.3)).unwrap();
+        for (width, height, close) in [(256, 256, false), (256, 256, true), (2560, 1440, false)] {
+            let colour = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("grounding order oracle"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                format: TEST_FORMAT, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = colour.create_view(&Default::default());
+            let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("grounding oracle depth and stencil"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let depth = depth_texture.create_view(&Default::default());
+            let mut camera = OrthoCamera::new(width, height);
+            if close { camera.zoom_by(0.125); }
+            binding.upload(&queue, &camera);
+            for wet in [false, true] {
+                binding.upload_lights(&queue, &lights, environment, wet);
+                binding.shadows.update(&queue, &camera, environment, &lights);
+                let mut views = [Some(visibility::Frustum::new(camera.view_proj())), None, None];
+                for (layer, matrix) in binding.shadows.matrices() { views[layer + 1] = Some(visibility::Frustum::new(matrix)); }
+                for (clip, seconds, root, pitch) in [("Run", 0.0, 0.0, 0.0), ("Run", 0.25, 0.004, 0.0),
+                    ("Run", 0.125, 0.008, 0.0), ("Death", 0.5, 0.0, 0.0),
+                    ("Run", 0.25, 0.8, 0.35), ("Death", 0.5, 0.004, 0.2)] {
+                    let mut pose = asset.bind_pose();
+                    assert!(asset.sample(asset.clip_named(clip).unwrap(), seconds, &mut pose));
+                    let instances: Vec<_> = (0..25).map(|index| {
+                        let position = Vec3::new((index % 5) as f32 * 0.4 - 0.8, root, (index / 5) as f32 * 0.4 - 0.8);
+                        Instance::new(position, Vec3::ONE, LinearRgb::WHITE).with_yaw(index as f32 * 0.3).with_pitch(pitch)
+                    }).collect();
+                    let empty = CharacterBucket::new(&pose, &[]);
+                    let mut buckets = [empty; MAX_HORDE_POSE_BUCKETS];
+                    buckets[0] = CharacterBucket::new(&pose, &instances[..12]);
+                    buckets[7] = CharacterBucket::new(&pose, &instances[12..]);
+                    let horde = CharacterHorde::new(&mesh, buckets);
+                    let player = CharacterPreview::new(&mesh, &pose,
+                        Instance::new(Vec3::new(0.15, root, 0.15), Vec3::ONE, LinearRgb::new(0.4, 1.0, 0.5)).with_pitch(pitch));
+                    let draws = characters.upload(&device, &queue, Some(player), Some(horde), &views);
+                    let render = |order: Grounding| {
+                        let mut encoder = device.create_command_encoder(&Default::default());
+                        for (_, view, _) in binding.shadows.views() {
+                            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("grounding oracle shadow initialization"), color_attachments: &[],
+                                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                    view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None,
+                                }), timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                            });
+                        }
+                        {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("grounding order oracle"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view, depth_slice: None, resolve_target: None,
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                                })],
+                                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                    // Store only for this oracle's exact geometry/coverage readback.
+                                    view: &depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                                    stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1), store: wgpu::StoreOp::Store }),
+                                }), timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                            });
+                            static_pipeline.draw_batches(&mut pass, &binding, &batches);
+                            if matches!(order, Grounding::BeforeCharacters) { characters.draw_shadows(&mut pass, &binding, &draws); }
+                            characters.draw_horde(&mut pass, &binding, &mesh, &draws);
+                            characters.draw_player(&mut pass, &binding, &mesh, &draws);
+                            if matches!(order, Grounding::AfterCharacters) { characters.draw_shadows(&mut pass, &binding, &draws); }
+                        }
+                        let readback = Readback::new(&device, width, height);
+                        readback.record(&mut encoder, &colour);
+                        let copies = [(wgpu::TextureAspect::DepthOnly, 4), (wgpu::TextureAspect::StencilOnly, 1)].map(|(aspect, bytes)| {
+                            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                                label: Some("grounding oracle attachment readback"), size: u64::from(width * height * bytes),
+                                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false,
+                            });
+                            encoder.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &depth_texture,
+                                mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect },
+                                wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout {
+                                    offset: 0, bytes_per_row: Some(width * bytes), rows_per_image: Some(height) } },
+                                wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
+                            buffer
+                        });
+                        queue.submit(Some(encoder.finish()));
+                        let rgba = readback.to_rgba(&device).unwrap();
+                        let [depth, stencil] = copies.map(|buffer| {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            buffer.map_async(wgpu::MapMode::Read, .., move |result| tx.send(result).unwrap());
+                            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                            rx.recv().unwrap().unwrap();
+                            let bytes = buffer.get_mapped_range(..).unwrap().to_vec();
+                            buffer.unmap();
+                            bytes
+                        });
+                        Pixels { rgba, depth, stencil }
+                    };
+                    let before = render(Grounding::BeforeCharacters);
+                    let after = render(Grounding::AfterCharacters);
+                    let absent = render(Grounding::Absent);
+                    assert_eq!(before.depth, after.depth, "draw order changed geometry depth");
+                    assert_eq!(after.depth, absent.depth);
+                    assert_eq!(before.stencil, after.stencil, "draw order changed character coverage");
+                    assert_eq!(after.stencil, absent.stencil);
+                    let mut covered = 0;
+                    let mut grounding = 0;
+                    let mut changed = 0;
+                    let mut maximum = 0;
+                    for (((old, new), no_grounding), stencil) in before.rgba.as_chunks::<4>().0.iter()
+                        .zip(after.rgba.as_chunks::<4>().0).zip(absent.rgba.as_chunks::<4>().0).zip(&after.stencil) {
+                        if *stencil == 0 {
+                            covered += 1;
+                            assert_eq!(new, no_grounding, "grounding changed an opaque character pixel");
+                        } else {
+                            assert_eq!(old, new, "draw order changed uncovered floor/grounding pixels");
+                            grounding += usize::from(old != no_grounding);
+                        }
+                        changed += usize::from(old != new);
+                        maximum = maximum.max(old.iter().zip(new).map(|(a, b)| a.abs_diff(*b)).max().unwrap());
+                    }
+                    assert!(covered > 20, "oracle must exercise foreground character coverage");
+                    if clip == "Run" && root == 0.0 { assert!(grounding > 0, "oracle must exercise visible grounding"); }
+                    if width == 2560 {
+                        // Opaque shading can round differently across orders.
+                        // At the actual distant view, allow
+                        // only sparse one-code-value differences; coverage,
+                        // depth, grounding and character exclusion stay exact.
+                        assert!(maximum <= 1 && changed * 100_000 <= (width * height) as usize,
+                            "distant opaque shading changed: wet={wet} clip={clip} root={root} pitch={pitch} pixels={changed} max={maximum}");
+                    }
+                }
+            }
+        }
+        assert!(pollster::block_on(scope.pop()).is_none());
+    }
+
     /// A sampled pose crosses every character seam through real GPU draws:
     /// Blender's channels, joint indices and weights, CPU sampling, the uniform
     /// upload and WGSL skinning. A missing palette upload collapses these vertices
     /// to the origin, while a layout disagreement reaches the validation scope.
     fn render_character_bucket(bytes: &[u8], white_mix: f32, player: bool, seconds: f32) -> Vec<u8> {
-        render_character_bucket_with_shadow(bytes, white_mix, player, seconds, None)
+        render_character_bucket_with_shadow(bytes, white_mix, player, seconds, None, false)
     }
 
-    fn render_character_bucket_with_shadow(bytes: &[u8], white_mix: f32, player: bool, seconds: f32, shadow: Option<&[u8]>) -> Vec<u8> {
+    fn render_character_bucket_with_shadow(bytes: &[u8], white_mix: f32, player: bool, seconds: f32, shadow: Option<&[u8]>, union: bool) -> Vec<u8> {
+        render_character_case(bytes, player, seconds, shadow, union, "Idle",
+            Instance::new(Vec3::ZERO, Vec3::ONE, LinearRgb::WHITE).with_white_mix(white_mix))
+    }
+
+    fn render_character_case(bytes: &[u8], player: bool, seconds: f32, shadow: Option<&[u8]>,
+        union: bool, clip: &str, instance: Instance) -> Vec<u8> {
         const N: u32 = 256;
         let (device, queue) = headless_device();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1047,21 +1371,22 @@ mod tests {
         camera_binding.upload(&queue, &camera);
         let mut pose = cpu.bind_pose();
         let idle = cpu
-            .clip_named("Idle")
-            .expect("fixture carries its Idle clip");
+            .clip_named(clip)
+            .expect("fixture carries its requested clip");
         assert!(cpu.sample(idle, seconds, &mut pose));
-        let instances = [Instance::new(Vec3::ZERO, Vec3::ONE, LinearRgb::WHITE).with_white_mix(white_mix)];
+        let instances = [instance];
         let empty = CharacterBucket::new(&pose, &[]);
         let mut buckets = [empty; MAX_HORDE_POSE_BUCKETS];
         buckets[3] = CharacterBucket::new(&pose, &instances);
         let horde = CharacterHorde::new(&gpu, buckets);
         let character = CharacterPreview::new(&gpu, &pose, instances[0]);
-        let draws = if player {
-            pipeline.upload(&queue, Some(character), None, &[visibility::Frustum::new(camera.view_proj())])
+        let mut draws = if player {
+            pipeline.upload(&device, &queue, Some(character), None, &[Some(visibility::Frustum::new(camera.view_proj())), None, None])
         } else {
-            pipeline.upload(&queue, None, Some(horde), &[visibility::Frustum::new(camera.view_proj())])
+            pipeline.upload(&device, &queue, None, Some(horde), &[Some(visibility::Frustum::new(camera.view_proj())), None, None])
         };
 
+        if union { draws.union_submissions(); }
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("character pose bucket"),
         });
@@ -1083,16 +1408,16 @@ mod tests {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Discard,
                     }),
-                    stencil_ops: None,
+                    stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1), store: wgpu::StoreOp::Discard }),
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             if player {
-                pipeline.draw_player(&mut pass, &camera_binding, &gpu, draws.player);
+                pipeline.draw_player(&mut pass, &camera_binding, &gpu, &draws);
             } else {
-                pipeline.draw_horde(&mut pass, &camera_binding, &gpu, &draws.horde);
+                pipeline.draw_horde(&mut pass, &camera_binding, &gpu, &draws);
             }
         }
         let readback = Readback::new(&device, N, N);
@@ -1126,7 +1451,9 @@ mod tests {
         let projected: Vec<_> = cpu.vertices().iter().map(|vertex| {
             let skinned = vertex.joints().into_iter().zip(vertex.weights()).fold(Vec3::ZERO, |sum, (joint, weight)|
                 sum + pose.joint_matrices()[usize::from(joint)].matrix().transform_point3(vertex.position()) * weight);
-            camera.view_proj().project_point3(skinned)
+            let world = glam::Quat::from_rotation_y(instance.yaw())
+                * (glam::Quat::from_rotation_x(instance.pitch()) * (skinned * instance.scale())) + instance.pos();
+            camera.view_proj().project_point3(world)
         }).collect();
         for (axis, actual) in [(0, width), (1, height)] {
             let min = projected.iter().map(|p| p[axis]).fold(f32::INFINITY, f32::min);
@@ -1139,12 +1466,48 @@ mod tests {
     }
 
     #[test]
+    fn shared_horde_skinning_matches_gpu_reference_for_materials_motion_and_instance_transforms() {
+        let wolf = include_bytes!("../../../assets/characters/wolf/wolf.glb");
+        let proxy = include_bytes!("../../../assets/characters/wolf/wolf.shadow.glb");
+        let multipart = include_bytes!("../../../assets/fixtures/blender-multipart.glb");
+        let instance = Instance::new(Vec3::new(0.05, 0.1, -0.05), Vec3::new(1.1, 0.9, 0.85), LinearRgb::WHITE)
+            .with_pitch(0.35).with_yaw(0.6).with_white_mix(0.25);
+        for (bytes, shadow, clip) in [(&wolf[..], None, "Run"), (&wolf[..], Some(&proxy[..]), "Run"),
+            (&multipart[..], None, "Idle")] {
+            for seconds in [0.0, 0.125, 0.25] {
+                let reference = render_character_case(bytes, true, seconds, shadow, false, clip, instance);
+                let actual = render_character_case(bytes, false, seconds, shadow, false, clip, instance);
+                let changed = actual.iter().zip(&reference).filter(|(a, b)| a != b).count();
+                let maximum = actual.iter().zip(&reference).map(|(&a, &b)| a.abs_diff(b)).max().unwrap();
+                // CPU and Metal can contract floating-point operations differently.
+                // Permit sparse one-code-value quantization changes, with exact silhouette coverage.
+                for (a, b) in actual.as_chunks::<4>().0.iter().zip(reference.as_chunks::<4>().0) {
+                    assert_eq!(a[..3] != [0; 3], b[..3] != [0; 3], "CPU skinning moved a silhouette edge");
+                }
+                assert!(maximum <= 1 && changed * 10_000 <= actual.len(),
+                    "CPU/GPU difference exceeded numerical contract: clip={clip} t={seconds} proxy={} changed={changed} max={maximum}", shadow.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn character_main_pixels_match_the_previous_union_submissions() {
+        let enemy = include_bytes!("../../../assets/characters/wolf/wolf.glb");
+        for player in [false, true] {
+            for seconds in [0.0, 0.25] {
+                assert_eq!(render_character_bucket(enemy, 0.0, player, seconds),
+                    render_character_bucket_with_shadow(enemy, 0.0, player, seconds, None, true));
+            }
+        }
+    }
+
+    #[test]
     fn coarse_caster_keeps_the_visible_character_pixels_identical() {
         let enemy = include_bytes!("../../../assets/characters/wolf/wolf.glb");
         let shadow = include_bytes!("../../../assets/characters/wolf/wolf.shadow.glb");
         for seconds in [0.0, 0.5] {
             assert_eq!(render_character_bucket(enemy, 0.0, false, seconds),
-                render_character_bucket_with_shadow(enemy, 0.0, false, seconds, Some(shadow)));
+                render_character_bucket_with_shadow(enemy, 0.0, false, seconds, Some(shadow), false));
         }
     }
 

@@ -12,3 +12,8 @@ observations, not automatically eligible baselines for other source trees.
 
 See [performance policy](../../docs/performance.md) for selection,
 absolute versus relative results, and the command to collect new evidence.
+
+The [2026-10-17 accepted ceiling](accepted-20261017.md) records the current
+user-approved renderer, final workload trials, GPU diagnostics and explicit
+baseline selection for these historical dirty-source measurements. It preserves
+variance and does not certify every frame at 60 FPS.

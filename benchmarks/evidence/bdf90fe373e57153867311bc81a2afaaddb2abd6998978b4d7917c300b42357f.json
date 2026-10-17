@@ -1,0 +1,69 @@
+{
+  "schema_version": 6,
+  "artifact": "bdf90fe373e57153867311bc81a2afaaddb2abd6998978b4d7917c300b42357f.json.gz",
+  "sha256": "bdf90fe373e57153867311bc81a2afaaddb2abd6998978b4d7917c300b42357f",
+  "source": {
+    "revision": "163e858f6f7b9f05da90bee3cea0eb1743666ce0",
+    "dirty": true,
+    "digest": "3a3e20bc80e94845b510c96c5630a21dbf0fb4c2d313536a941e130ad1351c6d"
+  },
+  "conditions": {
+    "machine": "Mac16,10",
+    "cpu": "Apple M4",
+    "memory_bytes": "17179869184",
+    "os": "macOS-27.0-arm64-arm-64bit",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)\nbinary: rustc\ncommit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea\ncommit-date: 2026-08-18\nhost: aarch64-apple-darwin\nrelease: 1.98.0\nLLVM version: 22.1.8",
+    "build": "cargo build --release -p arpg",
+    "build_environment": {}
+  },
+  "workload_digest": "89c57a5049ce060d506c5c3bbfd827fa308d7d769ad0d61bf50981acc76c35b6",
+  "asset_digests": {
+    "assets/characters/basic-player/basic-player.glb": "c506c86736fd9f2655240c257103f7c6039fb1ca8f21a2141319d98c342e8487",
+    "assets/characters/basic-player/reference/cleave-source.glb": "7f0612ce1ae2776c62b2be632c4feb1e7fb7e40975fc9614a25301a307dafd13",
+    "assets/characters/basic-player/reference/idle-source.glb": "e93dbd054a509529ad4d02aff39533d66817972444bef5e0ca5beadfabd526bf",
+    "assets/characters/basic-player/reference/jog-source.glb": "08c54fdd7db54ce51c9e403b18df65dfb8e0a7db7df30f51f5e37fe23cbb8bb8",
+    "assets/characters/basic-player/reference/locomotion-source.glb": "be2223068bfde1872c00cb4587f34256cbf35f3877dc27e8351b3cd611a0fa5b",
+    "assets/characters/basic-player/reference/slam-source.glb": "9093cc940d1f4500b01baab924525f441e86122a593016d8db0efaee70ea49a9",
+    "assets/characters/wolf/wolf.glb": "b163366f2ec364ba3b185029b432afd73a6d07ed19a460747c64f537ab316688",
+    "assets/characters/wolf/wolf.shadow.glb": "217c85065ce8d6a9313c75fb7c8999e1a481c1b5269e351ab867553a98454e8c",
+    "assets/fixtures/blender-bind-pose.glb": "71c29df51adbb1867cf81bde9abf70e4f6b86f8af06dbf3e7a5c56cf8206c68d",
+    "assets/fixtures/blender-multipart-reference.glb": "a494cf6cd8078f802782b2d7c1f1b1aefb78c4edec1ef701376b9455bee2536f",
+    "assets/fixtures/blender-multipart.glb": "620981fbe0993a6311ed9a9b71ef844a22fd2a530574436ac83270df974c1850",
+    "assets/fixtures/blender-static-preview.glb": "f1cc764a9e07d2e248a8fcf18ac24b1bf5c096f0b991efcbe303c1a176b5ee7e",
+    "assets/fixtures/static-preview.glb": "54c5a26c0bf57928712afc32b943fafbaf7046a08e00d58a4838b9b3e8caf805",
+    "assets/weapons/thornbound-staff/equipped/large-talon/player.glb": "7ea8ab7e560863bd176116b0c5e9a3c0124a44bed4f46214262eb90f6235a6f7",
+    "assets/weapons/thornbound-staff/equipped/sword-glaive/player.glb": "dac978e237faf048a71425330f61661399db8aa57d723f663b98cf879ab1d5f6",
+    "assets/weapons/thornbound-staff/variants/large-talon/thornbound-staff.glb": "4fbb95823a9fa1cf4a23aaa76b517d7a68090d5fcdafffdcfaf20f2ad617a1b6",
+    "assets/weapons/thornbound-staff/variants/sword-glaive/thornbound-staff.glb": "d0bda0cf08594b2f4571e311fd3321daa3618e2a15d5c039e1550118cec661f5",
+    "assets/world/chest/closed.glb": "fd8eb767b19fe0b929d49dac451c0a95f9375fd0142557a4f8d13db13443174b",
+    "assets/world/chest/open.glb": "8511ee013484f1900eb861a29e45b8bc4d655b0dc4367cac8b75b43f719717ec",
+    "assets/world/ground.glb": "550eb411b3e4c372d6543e7973665452c12bec453eb895d64b61ca8ed4456dc6",
+    "assets/world/prop.glb": "3065bb5684b5a614fc06dab8b88b1e2a76d8474fbdf64ae52b3f358df8a0526d",
+    "assets/world/wall/wall.glb": "9db9c6ba4f5c56f3edec1b0809127b8b50ea22e6a9af619cb100ef750a7d5378",
+    "assets/world/woodland/bare.glb": "10a03f657a5c0be12be592954080da89a4fb339bba3c48e8fd511e7e6c622bdd",
+    "assets/world/woodland/broadleaf.glb": "b604277eaacb0c34bdebaa922baa9a68f63d5aa0e17194e7eb3baf4d388f9d56",
+    "assets/world/woodland/campfire.glb": "718937080c442336cf09bcd9122a569ae2f07f2ad9ed7d9378ef3b3484bbc61f",
+    "assets/world/woodland/pine.glb": "83ddd78a1f824e712d43b7c6011a716b87d19eb6b9cbb159dd31640cfd876ad9"
+  },
+  "created_utc": "2026-10-17T17:36:10.759360+00:00",
+  "suite": {
+    "version": 1,
+    "repetitions": 3,
+    "relative_tolerance": 0.1,
+    "max_trial_spread": 0.15,
+    "workloads": [
+      {
+        "name": "animation",
+        "scene": "benchmarks/animation.ron",
+        "warmup_ticks": 120,
+        "sample_ticks": 180,
+        "input": "idle",
+        "animation": "run",
+        "budgets_ms": {
+          "mean_step_ms": 13.0,
+          "frame_ms.p99": 25.0
+        }
+      }
+    ]
+  }
+}

@@ -181,16 +181,18 @@ impl ShadowMaps {
         }
     }
 
-    pub(crate) fn matrices(&self) -> impl Iterator<Item=Mat4> {
-        self.matrices.into_iter().zip(self.enabled).filter_map(|(matrix,enabled)| enabled.then_some(matrix))
+    pub(crate) fn matrices(&self) -> impl Iterator<Item=(usize, Mat4)> {
+        self.matrices.into_iter().zip(self.enabled).enumerate()
+            .filter_map(|(layer, (matrix, enabled))| enabled.then_some((layer, matrix)))
     }
 
-    pub(crate) fn views(&self) -> impl Iterator<Item = (&wgpu::TextureView, &wgpu::BindGroup)> {
+    pub(crate) fn views(&self) -> impl Iterator<Item = (usize, &wgpu::TextureView, &wgpu::BindGroup)> {
         self.layers
             .iter()
             .zip(&self.bindings)
             .zip(self.enabled)
-            .filter_map(|((view, binding), enabled)| enabled.then_some((view, binding)))
+            .enumerate()
+            .filter_map(|(layer, ((view, binding), enabled))| enabled.then_some((layer, view, binding)))
     }
 }
 
@@ -199,6 +201,7 @@ pub(crate) fn pipeline(
     shader: &wgpu::ShaderModule,
     materials_and_joints: &[&wgpu::BindGroupLayout],
     buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+    entry: &str,
 ) -> wgpu::RenderPipeline {
     let camera = camera_layout(device);
     let layouts: Vec<_> = std::iter::once(Some(&camera))
@@ -214,7 +217,7 @@ pub(crate) fn pipeline(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(entry),
             compilation_options: Default::default(),
             buffers,
         },
@@ -266,6 +269,10 @@ mod tests {
 
     #[test]
     fn coarse_horde_caster_moves_fire_and_directional_shadows_with_the_visible_pose() {
+        for proxy in [false, true] { horde_caster_reference_case(proxy); }
+    }
+
+    fn horde_caster_reference_case(proxy: bool) {
         use crate::{CharacterBucket, CharacterHorde, MAX_HORDE_POSE_BUCKETS, character::CharacterPipeline};
         const N: u32 = 256;
         let (device, queue) = crate::tests::headless_device();
@@ -276,7 +283,7 @@ mod tests {
         let ground = arpg_assets::import_glb(include_bytes!("../../../assets/world/ground.glb")).unwrap();
         let floor = floor_pipeline.upload_mesh(&device, &queue, &ground).unwrap();
         let mut asset = arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/wolf/wolf.glb")).unwrap();
-        asset.attach_shadow(arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/wolf/wolf.shadow.glb")).unwrap()).unwrap();
+        if proxy { asset.attach_shadow(arpg_assets::import_character_glb(include_bytes!("../../../assets/characters/wolf/wolf.shadow.glb")).unwrap()).unwrap(); }
         let mut characters = CharacterPipeline::new(&device, &binding.layout, MaterialLayout::new(&device), format, crate::DEPTH_FORMAT);
         let mesh = characters.upload_character(&device, &queue, &asset).unwrap();
         let mut camera = OrthoCamera::new(N, N);
@@ -291,7 +298,7 @@ mod tests {
         });
         let view = colour.create_view(&Default::default());
         let depth = crate::create_depth(&device, N, N);
-        let mut render = |present: bool, seconds: f32, lights: &[PointLight], environment: EnvironmentLight| {
+        let mut render = |present: bool, seconds: f32, lights: &[PointLight], environment: EnvironmentLight, union: bool, gpu_reference: bool| {
             let floor_instances = [Instance::new(Vec3::ZERO, Vec3::new(12.0, 1.0, 12.0), LinearRgb::WHITE)];
             let batches = [MeshBatch::new(&floor, &floor_instances)];
             floor_pipeline.upload(&queue, &batches);
@@ -299,14 +306,24 @@ mod tests {
             binding.shadows.update(&queue, &camera, environment, lights);
             let mut pose = asset.bind_pose();
             asset.sample(asset.clip_named("Run").unwrap(), seconds, &mut pose);
-            let instances = [Instance::new(Vec3::ZERO, Vec3::ONE, LinearRgb::WHITE)];
+            let instances = [Vec3::ZERO, Vec3::new(12.0, 0.0, 0.0), Vec3::new(-14.0, 0.0, -5.0),
+                Vec3::new(2.0, 0.0, 12.0), Vec3::new(-2.0, 0.0, 2.0)]
+                .map(|position| Instance::new(position, Vec3::new(1.1, 0.9, 0.85), LinearRgb::WHITE)
+                    .with_yaw(0.6).with_pitch(0.2));
             let empty = CharacterBucket::new(&pose, &[]);
             let mut buckets = [empty; MAX_HORDE_POSE_BUCKETS];
             if present { buckets[2] = CharacterBucket::new(&pose, &instances); }
             let horde = CharacterHorde::new(&mesh, buckets);
-            let draws = characters.upload(&queue, None, Some(horde), &[crate::visibility::Frustum::new(camera.view_proj())]);
+            let mut views = [Some(crate::visibility::Frustum::new(camera.view_proj())), None, None];
+            for (layer, matrix) in binding.shadows.matrices() {
+                views[layer + 1] = Some(crate::visibility::Frustum::new(matrix));
+            }
+            let player = crate::CharacterPreview::new(&mesh, &pose, instances[0]);
+            let mut draws = characters.upload(&device, &queue, Some(player), Some(horde), &views);
+            if gpu_reference { draws.player_from_horde(2); }
+            if union { draws.union_submissions(); }
             let mut encoder = device.create_command_encoder(&Default::default());
-            for (view, camera) in binding.shadows.views() {
+            for (layer, view, camera) in binding.shadows.views() {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: None, color_attachments: &[],
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -314,7 +331,8 @@ mod tests {
                     }), timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                 });
                 floor_pipeline.draw_depth(&mut pass, camera, &batches);
-                characters.draw_depth(&mut pass, camera, None, Some(horde), &draws);
+                characters.draw_depth(&mut pass, camera, gpu_reference.then_some(player),
+                    (!gpu_reference).then_some(horde), &draws, layer);
             }
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -340,13 +358,17 @@ mod tests {
         let fire = [PointLight::new(Vec3::new(-2.0, 3.0, -1.0), LinearRgb::WHITE, 35.0, 16.0)];
         let difference = |a: &[u8], b: &[u8]| a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0).filter(|(a,b)| a[..3] != b[..3]).count();
         for (lights, environment) in [(&fire[..], dark), (&[][..], moon)] {
-            let clean = render(false, 0.0, lights, environment);
-            let start = render(true, 0.0, lights, environment);
-            let moved = render(true, 0.25, lights, environment);
+            let clean = render(false, 0.0, lights, environment, false, false);
+            let start = render(true, 0.0, lights, environment, false, false);
+            let moved = render(true, 0.25, lights, environment, false, false);
             assert!(difference(&clean, &start) > 20, "coarse caster must interrupt light");
             assert!(difference(&start, &moved) > 10, "shadow must follow the sampled moving limbs");
-            assert_eq!(start, render(true, 0.0, lights, environment));
-            assert_eq!(clean, render(false, 0.25, lights, environment), "removed instance leaves no stale shadow");
+            assert_eq!(start, render(true, 0.0, lights, environment, false, false));
+            assert_eq!(start, render(true, 0.0, lights, environment, false, true), "CPU caster must match GPU reference: proxy={proxy}");
+            assert_eq!(moved, render(true, 0.25, lights, environment, false, true), "animated CPU caster must match GPU reference: proxy={proxy}");
+            assert_eq!(start, render(true, 0.0, lights, environment, true, false), "per-view submissions must match the full union shadow output");
+            assert_eq!(moved, render(true, 0.25, lights, environment, true, false), "animated culling must match the full union shadow output");
+            assert_eq!(clean, render(false, 0.25, lights, environment, false, false), "removed instance leaves no stale shadow");
         }
         assert!(pollster::block_on(scope.pop()).is_none());
     }
@@ -407,7 +429,7 @@ mod tests {
             binding.upload_lights(&queue, lights, environment, false);
             binding.shadows.update(&queue, &camera, environment, lights);
             let mut encoder = device.create_command_encoder(&Default::default());
-            for (view, camera) in binding.shadows.views() {
+            for (_, view, camera) in binding.shadows.views() {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: None,
                     color_attachments: &[],

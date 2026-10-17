@@ -125,7 +125,7 @@ impl MeshPipeline {
                     }),
                     Some(instance_layout()),
                 ];
-        let depth_pipeline = crate::shadow::pipeline(device, &shader, &[material_layout.raw()], &buffers);
+        let depth_pipeline = crate::shadow::pipeline(device, &shader, &[material_layout.raw()], &buffers, "vs_main");
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("static mesh pipeline"),
             layout: Some(&layout),

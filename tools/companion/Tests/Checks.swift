@@ -9,7 +9,7 @@ private func reply(value: Double = 9, session: UInt32 = 1, ok: Bool = true) thro
     "session":\(session),"fields":[{"key":"future_field","group":"Future type","label":"Speed","unit":"m/s","default":9,"min":0,"max":60,"step":0.1,"value":\(value),"saved":9}],
     "unsaved":\(value != 9),"path":"tuning.ron","message":"Ready","error":false,"busy":false,
     "scenes":{"files":[{"path":"scenes/a.ron","label":"a.ron"}],"error":null,"current":"Test","run":1,"tick":42},
-    "debug":{"collision":false,"vsync":true,"view_height":30,"fps":60,"frame_ms":16.67,"enemies":3,"instances":4,
+    "debug":{"collision":false,"vsync":true,"view_height":30,"fps":60,"frame_ms":16.67,"enemies":3,"instances":4,"performance":{},
     "capture":{"pending":false,"path":null,"error":null}}}}
     """.data(using: .utf8)!
     return try JSONDecoder().decode(Reply.self, from: data)

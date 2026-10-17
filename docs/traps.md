@@ -137,6 +137,28 @@ see the [audit](physics-scalability-audit.md) for measurements. If a solver
 change regresses cost, profile it (see [performance](performance.md#detailed-physics-investigation))
 before loosening anything; increasing performance budgets is not a substitute.
 
+## Metal advertises timestamps but later render passes return zeros
+
+**Symptom:** a depth pass returns valid times while a subsequent color pass in
+the same submission returns zero start/end values.
+**Cause:** on the tested M4/macOS 27/wgpu 30.0.1 combination, query resolution
+committed before host-observed sampling completion loses counters (2026-10-17).
+Separate query sets per pass and resolving only written ranges did not fix the
+live workload. This matches the narrower lifecycle reproduction in
+[wgpu#9414](https://github.com/gfx-rs/wgpu/issues/9414), rather than its original
+claim that all legacy Metal counters are broken.
+**Fix:** observe sampling completion, then encode/submit resolution asynchronously
+in a later frame. Retain query ownership until mapping completes. Four slots
+dropped about 20% of observations with this two-stage lifecycle; eight eliminated
+mid-window drops in the retained live trials. Never wait for GPU completion in
+the production frame loop.
+**Check:** the [GPU timing test](../crates/gfx/src/timing.rs) submits actual depth
+and color draws together, requires valid counters in all 128 submissions,
+exhausts the readback ring and checks reuse and explicit partial availability.
+Live trials must report completed/pending/dropped counts. Never interpret zero/missing
+timestamps as zero GPU cost. Valid times from other passes remain usable with
+their own coverage counts.
+
 ## Retargeted motion leans backward or silently keeps its old facing
 
 **Cause:** confusing handedness with facing can turn the reference's forward

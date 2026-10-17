@@ -1,14 +1,23 @@
 # Performance telemetry
 
-## Temporary branch exception
+## Accepted performance ceiling
 
-While working on branch `physical-joints`, performance-specific requirements are
-temporarily paused. This includes mandatory before/after measurements, benchmark
-cadence and completion gates, the feature-work stop and handoff rule, and separate
-user authorization for performance investigation or optimization. Feature work may
-continue after a performance concern. Preserve existing evidence and report known
-performance issues and omitted coverage accurately; correctness requirements remain
-in force. Other branches follow the normal policy below.
+Performance monitoring, benchmark cadence, completion gates and the stop/handoff
+policy apply on every branch. The user accepted the optimized renderer's current
+performance as the new ceiling on 2026-10-17. The
+[accepted measurement record](../benchmarks/evidence/accepted-20261017.md) owns
+final release measurements, source identity, raw evidence and remaining uncertainty.
+Use those workload-specific observations as the reference for subsequent changes,
+with the suite's existing 10% relative tolerance, 15% stability rule and absolute
+budgets. Do not replace this reference or widen gates without a user decision.
+
+This acceptance preserves the current gameplay, authored assets, lighting,
+shadows and weather. It does not certify every frame below the 60 Hz budget of
+16.67 ms. Inconclusive measurements remain inconclusive; acceptance is a product
+decision, not a timing pass. The retained dirty measurements require explicit
+`--baseline` selection when the source changes, as described under
+[evidence and baselines](#evidence-and-baselines). A future clean-source checkpoint
+can seed automatic discovery without rewriting this historical evidence.
 
 ## Feature work: stop and handoff
 
@@ -81,6 +90,13 @@ remains pending until the next start.
 | `crowd_ms` | Grid rebuilding and contact resolution for the tick; part of game_step_ms |
 | `presentation_ms` | Camera, animation, geometry preparation and HUD |
 | `render_cpu_ms` | Surface acquisition, uploads, submission, present and capture |
+| `acquire_ms` | Surface texture acquisition, including any drawable wait |
+| `upload_ms` | Renderer staging, visibility, occupied-pose deformation, instance/palette packing and uploads |
+| `encode_ms` | Render command recording |
+| `submit_ms` | Command buffer finish and submission, including any backpressure |
+| `present_ms` | Presentation notification and surface presentation |
+| `capture_ms` | Optional synchronous screenshot readback and PNG write |
+| `gpu_poll_ms` | Nonblocking progress/readback of earlier GPU observations; part of `other_ms` |
 | `other_ms` | Remaining interval, including event handling and waits |
 
 Summaries provide mean, nearest-rank p50/p95/p99 and maximum in milliseconds.
@@ -99,8 +115,132 @@ deadlines. `over_budget` uses a fixed 60 Hz target; `over_1_5_budget` counts
 intervals over 25 ms. Neither proves physical display delivery.
 
 **Renderer CPU time is not GPU time.** It can include waits for vsync, a surface
-or GPU work. GPU execution is unmeasured. Use headless benchmarks to isolate
-simulation cost from presentation.
+or GPU work. The renderer spans above are subsets of `render_cpu_ms`; `gpu_poll_ms`
+is outside that call. Use headless benchmarks to isolate simulation cost from
+presentation. Optional GPU observations are described below.
+
+### Crowd rendering
+
+[Character rendering](../crates/gfx/src/character.rs) classifies conservative
+animated bounds separately against the main, directional and fire views. A
+placement is uploaded once into a visibility-mask group; each pass submits only
+its relevant groups. The soft grounding pass retains the union because a
+footprint can be visible while its character is offscreen or airborne. This
+adds bounded mask storage and sometimes draw ranges, rather than duplicating
+all instance uploads. The transformed sphere is shared across view tests.
+
+Horde deformation is performed once per occupied shared pose, then reused across
+placements and render passes. The [posed geometry owner](../crates/gfx/src/character/posed.rs)
+retains fixed-capacity vertex outputs and one-pose CPU staging. Every admitted
+occupied pose is rewritten before use; removing the horde or replacing its asset
+drops its resources. This is per-frame work reuse, with no pose approximation or
+cross-frame invalidation policy. Geometry, influences, materials, proxy choice
+and the existing pose budget are preserved. The single player stays GPU-skinned.
+The tradeoff is CPU deformation and uploads proportional to occupied poses and
+source vertices, plus bounded memory proportional to the admitted mesh. Measure
+`upload_ms` alongside GPU savings; population alone does not bound a large asset's
+preparation cost. This follows the established
+[skin-cache mechanism](https://dev.epicgames.com/documentation/en-us/unreal-engine/skeletal-mesh-rendering-paths-in-unreal-engine),
+using CPU preparation for this engine's already-shared crowd poses.
+
+Lighting skips comparison sampling when its contribution is exactly zero,
+without changing attenuation, filtering or light ranges. GPU reference tests
+cover wet/dry shading, range boundaries and shadow states. Per-view GPU tests
+compare union submissions, and posed-geometry tests compare the original
+vertex-skinned player path; CPU/Metal rounding is reported separately from
+geometry or animation changes.
+
+Opaque static geometry and characters precede blended grounding, so Apple's
+hidden-surface removal can reject the floor hidden by characters before shading
+it. Character depth-pass samples clear a one-bit stencil mask; grounding draws
+only on the remaining samples. That preserves the former late-character
+overwrite even where feet intersect the grounding plane above the floor.
+The main attachment uses explicit 32-bit depth plus stencil, with both discarded
+after the pass; shadow maps remain depth-only. The extra attachment/tile storage
+can offset the ordering benefit and needs measurement. GPU reference comparisons
+include overlapping characters, contact heights, collapsed/airborne poses,
+wet/dry lighting and close views. They require identical depth/stencil, unchanged
+uncovered grounding pixels, and character pixels matching the opaque-only draw.
+At benchmark resolution/distance, the full image comparison allows only sparse
+one-code-value colour differences; close views expose larger isolated colour
+differences from the former draw order. An HSR/quad numerical interaction is a
+hypothesis, not an established cause. These are recorded separately from
+geometry, contact-mask correctness and perceptual judgement. See
+[Apple's opaque-first guidance](https://developer.apple.com/videos/play/wwdc2020/10602/).
+
+The renderer rotates three complete camera/light/shadow binding sets. Rewriting
+the single light/filter uniform or shadow map would otherwise depend on the
+preceding frame's fragment reads. Separate sets let the next frame's shadow work
+overlap those reads when the backend can schedule it. Queue-ordered writes still
+protect reuse when the ring wraps; no CPU mapped-memory writes or completion
+waits are introduced. Slots advance only after a submitted/presented frame.
+The cost is two additional copies of the shadow maps (64 MiB with the current
+owner's dimensions). Other shared resources may still constrain overlap; measure
+redraw intervals and waits rather than adding per-pass GPU intervals. See
+[Apple's resource-overlap example](https://developer.apple.com/videos/play/wwdc2021/10148/).
+
+The configured maximum frame-latency hint is recorded in GPU context and must
+match across compatible benchmark results. The renderer retains wgpu's default
+hint of two (three Metal drawables). It is a configuration hint, not a
+measurement of physical display latency. A lower hint can reduce queued-ahead
+latency while hurting overlap, throughput and frame pacing; do not infer a
+60 FPS improvement from that setting alone. See
+[wgpu's presentation-queue contract](https://wgpu.rs/doc/wgpu/api/surface/type.SurfaceConfiguration.html#structfield.desired_maximum_frame_latency).
+
+### GPU pass observations
+
+Use `--gpu-timing` with the existing live runner, or launch with
+`ARPG_GPU_TIMING=1`. Timing is off by default (`0`); other values are refused.
+The renderer requests timestamp queries only for an enabled launch, checks adapter
+support and reports requested/available state plus the timestamp period in `gpu`.
+
+```sh
+python3 scripts/perf.py run --mode live --gpu-timing --workload storm_fire --output target/perf/storm-gpu.json
+```
+
+The eight-slot readback ring never waits for the current submission. Full slots
+leave that frame unsampled. Callbacks only signal completion; the frame loop polls
+without waiting. Sampling completion must be observed before query resolution is
+encoded and submitted: committing the resolve early can produce zero counters on
+Metal, even in queue order ([upstream reproduction](https://github.com/gfx-rs/wgpu/issues/9414)).
+Readback completes in a second asynchronous stage. `gpu_poll_ms` includes encoding
+and submitting these old observations; it is outside `render_cpu_ms`. Fixed
+query/resolve/readback buffers are reused after unmapping. The GPU test requires
+all active counters in 128 real depth/color submissions, including full-ring
+refusal and reuse. Separate pass query sets alone did not make live samples reliable.
+The main render pass remains intact and still discards its depth attachment.
+
+`gpu_directional_shadow_ms`, `gpu_fire_shadow_ms` and `gpu_main_ms` measure pass
+boundaries. `gpu_span_ms` measures earliest pass start to latest end, including
+gaps; it is neither a sum of pass costs nor end-to-end presentation latency.
+Individual passes can overlap. The main pass includes geometry, grounding, effects,
+weather and HUD; these observations do not isolate individual shaders or draws.
+
+Every redraw has a monotonic `frame_id` that survives resets. Delayed GPU results
+join that frame rather than the frame that received the callback. Reset discards
+old rows/results and refuses previous-window completions. Summaries use only
+results whose original frame remains in the retained window. `gpu_samples`,
+`gpu_partial`, `gpu_pending`, `gpu_failed` and `gpu_unsampled` expose coverage; the last few
+submitted frames can still be pending when a trial ends. Pass summaries include
+their own sample counts. Raw rows omit unavailable GPU durations and report
+`gpu_status`; absent passes never become zero-cost samples. Partial readbacks retain
+valid individual pass times and omit the full span. `gpu_unavailable_passes` is a
+bit mask for directional/fire/main passes (bits 0/1/2). Missing/discontinuous pairs
+set their bit and omit their duration; zero and Metal's all-ones error sentinel are
+invalid. Map/readback failures invalidate diagnostic
+evidence. Per-pass coverage must accompany any attribution, since missing samples
+can bias the available subset. Empty Metal passes can omit an end
+timestamp, so even an advertised feature does not guarantee every observation.
+
+Telemetry schema 2 and benchmark evidence schema 6 include this instrumentation
+context. Instrumented/ordinary live runs cannot be compared as equivalent settings.
+Run the same workload both ways to estimate GPU instrumentation overhead, including
+noise. CPU clock reads remain in both modes; this comparison does not establish
+their overhead. Timings never feed simulation, replay or hash state.
+
+`perf`/`perf samples` share these fields. Their `latest` object and the companion's
+Debug readout show the last completed CPU frame and latest available GPU frame
+with separate IDs. Companion polling is still excluded from benchmark sessions.
 
 ## Reset and lifetime
 
@@ -271,7 +411,23 @@ instrumented capture as ordinary benchmark evidence.
 1. Check tool availability with `xcrun --find xctrace` and
    `xcrun xctrace list templates`. Full Xcode/Instruments is required; command-line
    tools alone may not provide them. If unavailable, record GPU attribution as
-   unconfirmed and include the missing capture in the decision brief.
+   unconfirmed beyond available pass observations and include the missing capture
+   in the decision brief. On macOS 27, `metalperftrace collect --last 5m <directory>`
+   can recover system Metal metrics without Instruments. Enable detailed signposts
+   on the owned process before measurement with
+   `metalperftrace setup --enable per-frame-metrics --pid <pid>` and disable them
+   afterwards. This can substantially increase trace size. Export with
+   `metalperftrace overview --json --json-include-timeline --predicate 'processName == "arpg"' <trace>`.
+   Correlate PID/time boundaries with the controlled trial; unlabelled lookbacks
+   cannot establish scene/source identity. Aggregate windows cannot reconstruct
+   frame percentiles when per-frame rows are absent. On the tested macOS 27 CLI,
+   `--json-include-timeline` still exported one-second `Stats Timeline` aggregates
+   after enabling those signposts. Retain the trace for Instruments; do not claim
+   per-frame on-glass coverage from that JSON. Trial request/reply UTC brackets
+   can select conservative interior aggregate bins, but cannot join individual
+   Metal frames to app frame IDs. Extra profiling submissions can also change
+   system command-buffer/frame association: use an ordinary-run control for
+   end-to-end presentation latency, and report that observer effect.
 2. Launch through the [harness](../.claude/skills/playtest/SKILL.md) with private
    sockets and a reserved foreground session. Load the selected benchmark scene
    and use its exact `perf trial` schedule. Record source/binary/asset identities,

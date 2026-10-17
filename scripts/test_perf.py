@@ -19,10 +19,11 @@ def fixture():
                 "sample_ticks": 60, "input": "idle", "animation": "idle",
                 "budgets_ms": {"mean_step_ms": 13, "frame_ms.p99": 25}}
     observation = {
-        "schema_version": 1, "debug_build": False, "collision_debug": False,
+        "schema_version": 2, "debug_build": False, "collision_debug": False,
         "vsync": True, "width": 1280, "height": 720, "scale_factor": 1,
         "view_height": 32,
-        "refresh_millihertz": 60000, "gpu": {"name": "test"},
+        "refresh_millihertz": 60000, "gpu": {"name": "test", "timing_requested": False, "timing_available": False, "desired_maximum_frame_latency": 2},
+        "gpu_timing_available": False, "gpu_samples": 0, "gpu_partial": 0, "gpu_failed": 0, "gpu_pending": 0, "gpu_unsampled": 60,
         "surface_skipped": 0, "unfocused_frames": 0, "occluded_frames": 0,
         "overwritten": 0, "samples": 60, "presented": 60, "ticks": 60,
         "window_ms": 1020, "current_tick": 180, "current_enemies": 100, "current_corpses": 0,
@@ -30,7 +31,10 @@ def fixture():
         "horde": {"instances": 100, "idle_instances": 100, "run_instances": 0, "attack_instances": 0, "recoiling_instances": 0, "corpse_instances": 0},
         "frames": {str(i): {"ticks": 1, "end_tick": 121 + i, "enemies": 100,
                             "presented": True, "focused": True, "occluded": False, "frame_ms": 17,
-                            "game_step_ms": 10, "presentation_ms": 1}
+                            "game_step_ms": 10, "presentation_ms": 1, "render_cpu_ms": 2,
+                            "acquire_ms": 1, "upload_ms": 0.5, "encode_ms": 0.25,
+                            "submit_ms": 0.2, "present_ms": 0.05, "capture_ms": 0,
+                            "gpu_poll_ms": 0, "frame_id": i + 1, "gpu_status": "not_sampled"}
                    for i in range(60)},
     }
     for asset in ("horde", "character"):
@@ -67,6 +71,82 @@ def set_frame_ms(trial, milliseconds):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_surface_latency_is_mandatory_integer_gpu_context(self):
+        for latency in (1, 2):
+            with self.subTest(latency=latency):
+                result = fixture()
+                for trial in result["workloads"]["sparse"]:
+                    trial["perf"]["gpu"]["desired_maximum_frame_latency"] = latency
+                perf.validate_result(result)
+        for latency in (None, False, True, 0, -1, 3, 1.0, 1.5, "1", [], {}):
+            with self.subTest(invalid_latency=latency):
+                result = fixture()
+                result["workloads"]["sparse"][0]["perf"]["gpu"]["desired_maximum_frame_latency"] = latency
+                with self.assertRaisesRegex(ValueError, "desired_maximum_frame_latency"):
+                    perf.validate_result(result)
+        missing = fixture()
+        del missing["workloads"]["sparse"][0]["perf"]["gpu"]["desired_maximum_frame_latency"]
+        with self.assertRaisesRegex(ValueError, "desired_maximum_frame_latency"):
+            perf.validate_result(missing)
+
+    def test_different_surface_latencies_preserve_absolute_but_refuse_relative_comparison(self):
+        baseline = fixture()
+        candidate = copy.deepcopy(baseline)
+        for trial in candidate["workloads"]["sparse"]:
+            trial["perf"]["gpu"]["desired_maximum_frame_latency"] = 1
+        self.assertNotEqual(perf.environment(candidate["workloads"]["sparse"][0]["perf"]),
+                            perf.environment(baseline["workloads"]["sparse"][0]["perf"]))
+        verdict = perf.assess(candidate, baseline)
+        self.assertEqual(verdict["absolute_status"], "pass")
+        self.assertEqual(verdict["relative_status"], "inconclusive")
+        self.assertTrue(all(row["relative"] == "incompatible" for row in verdict["metrics"]))
+
+    def test_prior_schema_without_surface_latency_is_rejected(self):
+        retired = fixture()
+        retired["schema_version"] = 5
+        for trial in retired["workloads"]["sparse"]:
+            del trial["perf"]["gpu"]["desired_maximum_frame_latency"]
+        with self.assertRaisesRegex(ValueError, "unsupported schema"):
+            perf.validate_result(retired)
+
+    def test_gpu_mode_and_raw_coverage_are_part_of_validated_evidence(self):
+        ordinary = fixture()
+        observed = copy.deepcopy(ordinary)
+        for trial in observed["workloads"]["sparse"]:
+            p = trial["perf"]
+            p["gpu"].update(timing_requested=True, timing_available=True)
+            p.update(gpu_timing_available=True, gpu_samples=60, gpu_unsampled=0)
+            for frame in p["frames"].values():
+                frame.update(gpu_status="ready", gpu_unavailable_passes=0, gpu_span_ms=2, gpu_main_ms=1, gpu_directional_shadow_ms=0.5)
+            for name, value, count in (("gpu_span_ms", 2, 60), ("gpu_main_ms", 1, 60),
+                                        ("gpu_directional_shadow_ms", .5, 60), ("gpu_fire_shadow_ms", 0, 0)):
+                p[name] = dict(mean=value, p50=value, p95=value, p99=value, max=value, samples=count)
+        perf.validate_result(observed)
+        self.assertNotEqual(perf.environment(ordinary["workloads"]["sparse"][0]["perf"]),
+                            perf.environment(observed["workloads"]["sparse"][0]["perf"]))
+        partial = copy.deepcopy(observed)
+        p = partial["workloads"]["sparse"][0]["perf"]
+        p.update(gpu_samples=59, gpu_partial=1)
+        frame = p["frames"]["0"]
+        frame.update(gpu_status="partial", gpu_unavailable_passes=1)
+        del frame["gpu_directional_shadow_ms"], frame["gpu_span_ms"]
+        p["gpu_directional_shadow_ms"]["samples"] = 59
+        p["gpu_span_ms"]["samples"] = 59
+        perf.validate_result(partial)
+        frame["gpu_directional_shadow_ms"] = 0
+        with self.assertRaisesRegex(ValueError, "unavailable GPU pass"):
+            perf.validate_result(partial)
+        for mutate in [lambda p: p.update(gpu_samples=59),
+                       lambda p: p["frames"]["1"].update(frame_id=1),
+                       lambda p: p["frames"]["0"].update(gpu_status="pending"),
+                       lambda p: p["frames"]["0"].update(gpu_main_ms=3),
+                       lambda p: p["frames"]["0"].update(acquire_ms=100),
+                       lambda p: p["gpu_main_ms"].update(mean=2)]:
+            bad = copy.deepcopy(observed)
+            mutate(bad["workloads"]["sparse"][0]["perf"])
+            with self.assertRaises(ValueError):
+                perf.validate_result(bad)
+
     def test_failed_build_preserves_rendered_cargo_diagnostics_without_raw_json(self):
         rendered = "error[E0308]: mismatched types\n  --> crates/core/src/instance.rs:172:4\n"
         messages = [
@@ -228,7 +308,7 @@ class EvidenceTests(unittest.TestCase):
             manifest = {key: current[key] for key in
                         ("schema_version", "source", "conditions", "suite", "workload_digest", "asset_digests")}
             manifest.update(artifact="missing.json.gz", sha256="a" * 64)
-            retired = {**manifest, "schema_version": 1}
+            retired = {**manifest, "schema_version": 5}
             perf.save(store / "retired.json", retired)
             unversioned = {k: v for k, v in retired.items() if k != "schema_version"}
             perf.save(store / "unversioned.json", unversioned)
@@ -459,7 +539,7 @@ class EvidenceTests(unittest.TestCase):
              patch.object(perf, "request", side_effect=["vsync true", "ok", "ready tick=0", json.dumps(trial)]) as request, \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(perf.MeasurementStopped, "unfocused_frames"):
-                perf.collect_live("socket", argparse.Namespace(vsync="on"), result, None)
+                perf.collect_live("socket", argparse.Namespace(vsync="on", gpu_timing=False), result, None)
         self.assertEqual(len(result["workloads"]["sparse"]), 1)
         self.assertEqual(request.call_count, 4)
 
@@ -476,7 +556,7 @@ class EvidenceTests(unittest.TestCase):
              patch.object(perf, "request", side_effect=["vsync true", "ok", "ready tick=0", *map(json.dumps, trials)]), \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(perf.MeasurementStopped, "confirmed performance failure"):
-                perf.collect_live("socket", argparse.Namespace(vsync="on"), result, None)
+                perf.collect_live("socket", argparse.Namespace(vsync="on", gpu_timing=False), result, None)
         self.assertNotIn("never-started", result["workloads"])
         verdict = perf.assess(result)
         self.assertEqual(verdict["status"], "inconclusive")

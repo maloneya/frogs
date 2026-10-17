@@ -65,8 +65,10 @@ fn wet_highlight(normal: vec3<f32>, direction: vec3<f32>) -> f32 {
 fn surface_colour(base: vec3<f32>, world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     let unit_normal = normalize(normal);
     let wet = scene_lights.direction.w != 0.0;
-    let directional_shadow = visibility(0u, world_pos, unit_normal);
     let facing = max(dot(unit_normal, scene_lights.direction.xyz), 0.0);
+    var directional_shadow = 1.0;
+    // Diffuse and wet sheen both vanish on the unlit side.
+    if facing > 0.0 { directional_shadow = visibility(0u, world_pos, unit_normal); }
     // Sky fill favors upward surfaces; undersides stay dark enough to read form.
     let sky = 0.35 + 0.65 * max(unit_normal.y, 0.0);
     var total = scene_lights.ambient.rgb * scene_lights.ambient.w * sky
@@ -84,10 +86,15 @@ fn surface_colour(base: vec3<f32>, world_pos: vec3<f32>, normal: vec3<f32>) -> v
         // Squared range fade reaches black without a hard ring.
         let range = light.position_range.w;
         let fade = max(1.0-d2/max(range*range,0.0001),0.0);
+        // Preserve the attenuation equation at the boundary, then reject its zero contribution.
+        if fade == 0.0 { continue; }
         let direction = offset*inverseSqrt(max(d2,0.0001));
+        let point_facing = max(dot(unit_normal,direction),0.0);
+        // Diffuse and wet sheen both vanish on this light's unlit side.
+        if point_facing == 0.0 { continue; }
         let emission = light.colour_intensity.rgb*light.colour_intensity.w;
         let shadow = point_visibility(i,world_pos,unit_normal);
-        total += emission * max(dot(unit_normal,direction),0.0) * fade * fade / (1.0+d2) * shadow;
+        total += emission * point_facing * fade * fade / (1.0+d2) * shadow;
         if wet {
             sheen += emission * fade * fade / (1.0+d2) * wet_highlight(normal,direction) * shadow;
         }

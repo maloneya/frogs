@@ -46,6 +46,23 @@ struct DebugSnapshot: Decodable, Sendable {
     let enemies: UInt64
     let instances: UInt64
     let capture: CaptureSnapshot
+    let performance: PerformanceSnapshot
+}
+
+struct PerformanceSnapshot: Decodable, Sendable {
+    let frame_id: UInt64?
+    let game_step_ms: Double?
+    let presentation_ms: Double?
+    let acquire_ms: Double?
+    let upload_ms: Double?
+    let encode_ms: Double?
+    let submit_ms: Double?
+    let present_ms: Double?
+    let gpu_frame_id: UInt64?
+    let gpu_span_ms: Double?
+    let gpu_directional_shadow_ms: Double?
+    let gpu_fire_shadow_ms: Double?
+    let gpu_main_ms: Double?
 }
 
 struct Snapshot: Decodable, Sendable {

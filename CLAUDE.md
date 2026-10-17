@@ -30,10 +30,9 @@ Start with [README](README.md) for build, play and controls.
 - Behaviour changes need predicted outcomes through Game, including relevant
   intermediate ticks, interactions, refusals and stale IDs. Tests and benchmarks
   own their setups; never load playable `scenes/` files as test fixtures.
-- Temporary branch exception: performance-specific requirements are paused while
-  working on `physical-joints`, as defined in the
-  [branch exception](docs/performance.md#temporary-branch-exception). Correctness
-  checks and honest reporting still apply.
+- Performance monitoring applies on every branch. Preserve the
+  [accepted performance ceiling](docs/performance.md#accepted-performance-ceiling)
+  using the normal benchmark cadence and regression checks.
 - On a performance regression or credible performance concern, stop feature
   work and flag it immediately. Preserve changes and evidence; do not optimize,
   retry toward a pass or expand scope. Follow the [stop and handoff policy](docs/performance.md#feature-work-stop-and-handoff).

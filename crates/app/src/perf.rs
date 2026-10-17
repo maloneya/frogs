@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 use arpg_core::Report;
 
 const CAPACITY: usize = 1024;
+const GPU_CAPACITY: usize = CAPACITY + arpg_gfx::GPU_TIMING_SLOTS;
+const GPU_PASS_METRICS: [&str; 3] = ["gpu_directional_shadow_ms", "gpu_fire_shadow_ms", "gpu_main_ms"];
 /// Diagnostic target, independent of the simulation tick rate and display refresh rate.
 const TARGET_HZ: u32 = 60;
 const FRAME_BUDGET: Duration = Duration::from_nanos(1_000_000_000 / TARGET_HZ as u64);
@@ -44,6 +46,9 @@ pub(crate) struct FrameWork {
     pub(crate) presentation: Duration,
     /// Includes surface acquisition, uploads, submission and present; not GPU execution time.
     pub(crate) render_cpu: Duration,
+    pub(crate) render: arpg_gfx::RenderTimings,
+    pub(crate) gpu_poll: Duration,
+    pub(crate) gpu_sampled: bool,
     pub(crate) ticks: u32,
     pub(crate) end_tick: u64,
     pub(crate) enemies: usize,
@@ -56,6 +61,7 @@ pub(crate) struct FrameWork {
 
 #[derive(Clone, Copy)]
 struct Sample {
+    frame_id: u64,
     interval: Duration,
     work: FrameWork,
 }
@@ -65,7 +71,10 @@ pub(crate) struct Recorder {
     next: usize,
     overwritten: u64,
     started: Option<Instant>,
-    pending: Option<FrameWork>,
+    pending: Option<(u64, FrameWork)>,
+    frame_id: u64,
+    first_frame_id: u64,
+    gpu: Vec<Option<arpg_gfx::GpuCompletion>>,
 }
 
 impl Default for Recorder {
@@ -73,6 +82,7 @@ impl Default for Recorder {
         Self {
             samples: Vec::with_capacity(CAPACITY), next: 0, overwritten: 0,
             started: None, pending: None,
+            frame_id: 0, first_frame_id: 1, gpu: vec![None; GPU_CAPACITY],
         }
     }
 }
@@ -81,8 +91,8 @@ impl Recorder {
     /// Complete the previous frame before starting this one. The first start
     /// after reset establishes a baseline, excluding loading or the previous run.
     pub(crate) fn begin_frame(&mut self, now: Instant) {
-        if let (Some(start), Some(work)) = (self.started, self.pending.take()) {
-            let sample = Sample { interval: now.duration_since(start), work };
+        if let (Some(start), Some((frame_id, work))) = (self.started, self.pending.take()) {
+            let sample = Sample { frame_id, interval: now.duration_since(start), work };
             if self.samples.len() < CAPACITY {
                 self.samples.push(sample);
             } else {
@@ -92,12 +102,13 @@ impl Recorder {
             self.next = (self.next + 1) % CAPACITY;
         }
         self.started = Some(now);
+        self.frame_id = self.frame_id.checked_add(1).expect("performance frame ID exhausted");
     }
 
     pub(crate) fn finish_frame(&mut self, work: FrameWork) {
         assert!(self.started.is_some(), "a frame must start before it finishes");
         assert!(self.pending.is_none(), "a frame finishes only once");
-        self.pending = Some(work);
+        self.pending = Some((self.frame_id, work));
     }
 
     /// Retain allocated storage, but discard both old samples and the unfinished interval.
@@ -107,11 +118,47 @@ impl Recorder {
         self.overwritten = 0;
         self.started = None;
         self.pending = None;
+        self.first_frame_id = self.frame_id + 1;
+        self.gpu.fill(None);
     }
 
-    fn ordered(&self) -> impl Iterator<Item = &Sample> {
+    pub(crate) fn frame_id(&self) -> u64 { self.frame_id }
+
+    pub(crate) fn record_gpu(&mut self, completion: arpg_gfx::GpuCompletion) {
+        if completion.frame_id < self.first_frame_id || completion.frame_id > self.frame_id { return; }
+        let index = completion.frame_id as usize % GPU_CAPACITY;
+        // An unusually late readback must not replace a newer frame after wrapping.
+        if self.gpu[index].is_none_or(|old| old.frame_id < completion.frame_id) {
+            self.gpu[index] = Some(completion);
+        }
+    }
+
+    fn gpu_result(&self, sample: &Sample) -> Option<Result<arpg_gfx::GpuTimings, &'static str>> {
+        self.gpu[sample.frame_id as usize % GPU_CAPACITY]
+            .filter(|result| result.frame_id == sample.frame_id).map(|result| result.result)
+    }
+
+    fn ordered(&self) -> impl DoubleEndedIterator<Item = &Sample> {
         let first = if self.samples.len() == CAPACITY { self.next } else { 0 };
         self.samples[first..].iter().chain(self.samples[..first].iter())
+    }
+
+    /// Last CPU frame and most recent completed GPU frame, without sorting or world access.
+    pub(crate) fn report_latest(&self, out: &mut Report) {
+        if let Some(sample) = self.ordered().next_back() {
+            out.int("frame_id", sample.frame_id);
+            for (name, get) in METRICS { out.num(name, millis(get(sample))); }
+        }
+        if let Some((frame_id, gpu)) = self.ordered().rev().find_map(|sample| {
+            let gpu = self.gpu_result(sample)?.ok()?;
+            gpu.passes.iter().any(Option::is_some).then_some((sample.frame_id, gpu))
+        }) {
+            out.int("gpu_frame_id", frame_id);
+            if let Some(span) = gpu.span { out.num("gpu_span_ms", millis(span)); }
+            for (index, name) in GPU_PASS_METRICS.into_iter().enumerate() {
+                if let Some(value) = gpu.passes[index] { out.num(name, millis(value)); }
+            }
+        }
     }
 
     /// Reports only the bounded window; no world traversal, hashing or mutation.
@@ -121,7 +168,21 @@ impl Recorder {
         out.int("overwritten", self.overwritten);
         out.int("target_hz", u64::from(TARGET_HZ));
         out.num("budget_ms", millis(FRAME_BUDGET));
-        out.bool("gpu_timing_available", false);
+        let completed = self.samples.iter().filter(|s| self.gpu_result(s).is_some_and(|r| r.is_ok_and(|g| g.span.is_some()))).count();
+        let partial = self.samples.iter().filter(|s| self.gpu_result(s).is_some_and(|r| r.is_ok_and(|g| g.span.is_none()))).count();
+        let failed = self.samples.iter().filter(|s| matches!(self.gpu_result(s), Some(Err(_)))).count();
+        let sampled = self.samples.iter().filter(|s| s.work.gpu_sampled).count();
+        out.int("gpu_samples", completed as u64);
+        out.int("gpu_partial", partial as u64);
+        out.int("gpu_failed", failed as u64);
+        out.int("gpu_pending", sampled.saturating_sub(completed + partial + failed) as u64);
+        out.int("gpu_unsampled", (self.samples.len() - sampled) as u64);
+        for (index, name) in GPU_PASS_METRICS.into_iter().enumerate() {
+            let values: Vec<_> = self.samples.iter().filter_map(|s| self.gpu_result(s)?.ok()?.passes[index]).collect();
+            out.object(name, |out| { out.int("samples", values.len() as u64); distribution(out, values); });
+        }
+        let values: Vec<_> = self.samples.iter().filter_map(|s| self.gpu_result(s)?.ok()?.span).collect();
+        out.object("gpu_span_ms", |out| { out.int("samples", values.len() as u64); distribution(out, values); });
         let total: Duration = self.samples.iter().map(|s| s.interval).sum();
         let ticks: u64 = self.samples.iter().map(|s| u64::from(s.work.ticks)).sum();
         let presented = self.samples.iter().filter(|s| s.work.presented).count();
@@ -155,7 +216,20 @@ impl Recorder {
                 for (i, sample) in self.ordered().enumerate() {
                     out.object(&i.to_string(), |out| {
                         for (name, get) in METRICS { out.num(name, millis(get(sample))); }
+                        out.int("frame_id", sample.frame_id);
                         let work = sample.work;
+                        out.text("gpu_status", match self.gpu_result(sample) {
+                            Some(Ok(gpu)) if gpu.span.is_some() => "ready", Some(Ok(_)) => "partial", Some(Err(error)) => error,
+                            None if work.gpu_sampled => "pending", None => "not_sampled",
+                        });
+                        if let Some(Ok(gpu)) = self.gpu_result(sample) {
+                            out.int("gpu_unavailable_passes", gpu.unavailable.into_iter().enumerate()
+                                .fold(0, |mask, (index, missing)| mask | (u64::from(missing) << index)));
+                            if let Some(span) = gpu.span { out.num("gpu_span_ms", millis(span)); }
+                            for (index, name) in GPU_PASS_METRICS.into_iter().enumerate() {
+                                if let Some(value) = gpu.passes[index] { out.num(name, millis(value)); }
+                            }
+                        }
                         out.int("ticks", u64::from(work.ticks));
                         out.int("end_tick", work.end_tick);
                         out.int("enemies", work.enemies as u64);
@@ -175,13 +249,20 @@ impl Recorder {
 /// Shared vocabulary for summaries and raw observations. `game_step` is nested
 /// inside simulation; other_ms covers HUD title work, event processing and waiting.
 type Metric = (&'static str, fn(&Sample) -> Duration);
-const METRICS: [Metric; 7] = [
+const METRICS: [Metric; 14] = [
     ("frame_ms", |s| s.interval),
     ("simulation_ms", |s| s.work.simulation),
     ("game_step_ms", |s| s.work.game_step),
     ("crowd_ms", |s| s.work.crowd),
     ("presentation_ms", |s| s.work.presentation),
     ("render_cpu_ms", |s| s.work.render_cpu),
+    ("acquire_ms", |s| s.work.render.acquire),
+    ("upload_ms", |s| s.work.render.upload),
+    ("encode_ms", |s| s.work.render.encode),
+    ("submit_ms", |s| s.work.render.submit),
+    ("capture_ms", |s| s.work.render.capture),
+    ("present_ms", |s| s.work.render.present),
+    ("gpu_poll_ms", |s| s.work.gpu_poll),
     ("other_ms", |s| s.interval.saturating_sub(s.work.simulation + s.work.presentation + s.work.render_cpu)),
 ];
 
@@ -260,6 +341,51 @@ mod tests {
         let mut out = Report::default();
         distribution(&mut out, (1..=100).rev().map(Duration::from_millis).collect());
         assert_eq!(out.finish(), r#"{"mean":50.5000,"p50":50.0000,"p95":95.0000,"p99":99.0000,"max":100.0000}"#);
+    }
+
+    #[test]
+    fn delayed_gpu_results_join_the_original_frame_and_reset_rejects_old_ids() {
+        let mut recorder = Recorder::default();
+        let start = Instant::now();
+        recorder.begin_frame(start);
+        let first = recorder.frame_id();
+        recorder.finish_frame(FrameWork { gpu_sampled: true, ..Default::default() });
+        recorder.begin_frame(start + Duration::from_millis(16));
+        recorder.finish_frame(FrameWork { gpu_sampled: true, ..Default::default() });
+        recorder.begin_frame(start + Duration::from_millis(32));
+        let gpu = arpg_gfx::GpuCompletion { frame_id: first, result: Ok(arpg_gfx::GpuTimings {
+            passes: [None, Some(Duration::from_millis(2)), Some(Duration::from_millis(3))],
+            unavailable: [false; 3], span: Some(Duration::from_millis(6)),
+        }) };
+        recorder.record_gpu(gpu);
+        let json = report(&recorder, true);
+        for value in ["\"gpu_samples\":1", "\"gpu_pending\":1", "\"frame_id\":1,\"gpu_status\":\"ready\"", "\"gpu_fire_shadow_ms\":2.0000", "\"frame_id\":2,\"gpu_status\":\"pending\""] {
+            assert!(json.contains(value), "{value}: {json}");
+        }
+        recorder.record_gpu(arpg_gfx::GpuCompletion { frame_id: first + 1, result: Ok(arpg_gfx::GpuTimings {
+            passes: [None, None, Some(Duration::from_millis(3))],
+            unavailable: [true, false, false], span: None,
+        }) });
+        let json = report(&recorder, true);
+        for value in ["\"gpu_partial\":1", "\"gpu_pending\":0", "\"gpu_status\":\"partial\",\"gpu_unavailable_passes\":1", "\"gpu_main_ms\":{\"samples\":2"] {
+            assert!(json.contains(value), "{value}: {json}");
+        }
+        recorder.reset();
+        recorder.begin_frame(start + Duration::from_secs(1));
+        assert!(recorder.frame_id() > first);
+        recorder.record_gpu(gpu);
+        assert!(recorder.gpu.iter().all(Option::is_none));
+        assert!(report(&recorder, true).contains("\"gpu_samples\":0"));
+    }
+
+    #[test]
+    fn stale_wrapped_readback_cannot_overwrite_a_newer_completion() {
+        let mut recorder = Recorder { frame_id: GPU_CAPACITY as u64 + 1, ..Default::default() };
+        let old = arpg_gfx::GpuCompletion { frame_id: 1, result: Err("map_failed") };
+        let new = arpg_gfx::GpuCompletion { frame_id: recorder.frame_id, result: Err("readback_failed") };
+        recorder.record_gpu(new);
+        recorder.record_gpu(old);
+        assert_eq!(recorder.gpu[1].unwrap().frame_id, new.frame_id);
     }
 
     #[test]

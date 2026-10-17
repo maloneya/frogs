@@ -25,8 +25,8 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "benchmarks/suite.json"
-# Workload and asset identities are separate; old artifacts cannot establish both.
-SCHEMA = 4
+# Surface latency is mandatory context; earlier evidence cannot establish it.
+SCHEMA = 6
 EVIDENCE = ROOT / "benchmarks/evidence"
 LOCAL_EVIDENCE = ROOT / "target/perf/evidence"
 METRICS = ("mean_step_ms", "presentation_ms.mean", "frame_ms.p99")
@@ -160,6 +160,78 @@ def validate_timings(perf, frames):
             raise ValueError("summary contradicts raw timings: " + name)
 
 
+def validate_render_observations(perf, frames):
+    """Instrumentation coverage is explicit and durations remain tied to frame IDs."""
+    available = perf["gpu_timing_available"]
+    context = perf["gpu"]
+    if not isinstance(available, bool) or context["timing_available"] is not available or not isinstance(context["timing_requested"], bool):
+        raise ValueError("invalid GPU timing context")
+    if available and not context["timing_requested"]:
+        raise ValueError("GPU timestamps enabled without request")
+    latency = context.get("desired_maximum_frame_latency")
+    if isinstance(latency, bool) or not isinstance(latency, int) or latency not in (1, 2):
+        raise ValueError("missing or invalid desired_maximum_frame_latency")
+    counts = {"ready": 0, "partial": 0, "pending": 0, "not_sampled": 0}
+    previous_id = 0
+    for frame in frames:
+        frame_id = number(frame["frame_id"], "frame ID", positive=True)
+        if frame_id <= previous_id or frame_id != int(frame_id):
+            raise ValueError("non-increasing frame identity")
+        previous_id = frame_id
+        cpu = math.fsum(number(frame[key + "_ms"], key) for key in
+                        ("acquire", "upload", "encode", "submit", "capture", "present"))
+        if cpu > number(frame["render_cpu_ms"], "render_cpu_ms") + 0.001:
+            raise ValueError("renderer CPU spans exceed their enclosing call")
+        number(frame["gpu_poll_ms"], "gpu_poll_ms")
+        status = frame["gpu_status"]
+        if status not in counts:
+            raise ValueError("GPU timing readback failed: " + str(status))
+        counts[status] += 1
+        if not available and status != "not_sampled":
+            raise ValueError("GPU observations without enabled timestamps")
+        gpu_keys = ("gpu_span_ms", "gpu_main_ms", "gpu_directional_shadow_ms", "gpu_fire_shadow_ms")
+        if status in ("ready", "partial"):
+            missing = number(frame["gpu_unavailable_passes"], "unavailable GPU passes")
+            if missing != int(missing) or missing > 7 or (missing == 0) != (status == "ready"):
+                raise ValueError("GPU availability contradicts status")
+            for index, key in enumerate(("gpu_directional_shadow_ms", "gpu_fire_shadow_ms", "gpu_main_ms")):
+                if key in frame:
+                    number(frame[key], key)
+                    if int(missing) & (1 << index):
+                        raise ValueError("unavailable GPU pass reported as a duration")
+            if "gpu_main_ms" not in frame and not int(missing) & 4:
+                raise ValueError("main pass must be measured or explicitly unavailable")
+            if status == "ready":
+                span = number(frame["gpu_span_ms"], "GPU span")
+                if any(number(frame[key], key) > span + 0.0002 for key in gpu_keys if key in frame):
+                    raise ValueError("GPU pass exceeds measured span")
+            elif "gpu_span_ms" in frame:
+                raise ValueError("partial GPU result cannot establish full pass span")
+        elif any(key in frame for key in (*gpu_keys, "gpu_unavailable_passes")):
+            raise ValueError("missing GPU result reported as a duration")
+    for key, expected in (("gpu_samples", counts["ready"]), ("gpu_partial", counts["partial"]), ("gpu_pending", counts["pending"]),
+                          ("gpu_unsampled", counts["not_sampled"]), ("gpu_failed", 0)):
+        if perf[key] != expected:
+            raise ValueError("GPU coverage contradicts raw frames: " + key)
+    if available and not any(any(key in frame for key in
+            ("gpu_main_ms", "gpu_directional_shadow_ms", "gpu_fire_shadow_ms")) for frame in frames):
+        raise ValueError("no usable GPU pass timing samples")
+    if available:
+        for name in ("gpu_directional_shadow_ms", "gpu_fire_shadow_ms", "gpu_main_ms", "gpu_span_ms"):
+            values = sorted(frame[name] for frame in frames if name in frame)
+            summary = perf[name]
+            if summary["samples"] != len(values):
+                raise ValueError("GPU pass coverage contradicts raw frames")
+            checks = {"mean": math.fsum(values) / len(values) if values else 0,
+                      "p50": values[math.ceil(len(values) * .50) - 1] if values else 0,
+                      "p95": values[math.ceil(len(values) * .95) - 1] if values else 0,
+                      "p99": values[math.ceil(len(values) * .99) - 1] if values else 0,
+                      "max": values[-1] if values else 0}
+            for key, expected in checks.items():
+                if not math.isclose(number(summary[key], name + "." + key), expected, abs_tol=0.0002, rel_tol=2e-6):
+                    raise ValueError("GPU summary contradicts raw frames: " + name + "." + key)
+
+
 def validate_trial(trial, workload):
     if "step_ns" in trial:
         if trial["debug_build"] is not False or trial["finite"] is not True or trial["schedule_version"] != 1:
@@ -191,7 +263,7 @@ def validate_trial(trial, workload):
         raise ValueError("non-finite simulation outcome")
     if info["invalid"]:
         raise ValueError(info["invalid"])
-    if info["schedule_version"] != 1 or perf["schema_version"] != 1:
+    if info["schedule_version"] != 1 or perf["schema_version"] != 2:
         raise ValueError("unsupported trial/telemetry version")
     for key in ("warmup_ticks", "sample_ticks", "input"):
         if info[key] != workload[key]:
@@ -223,6 +295,7 @@ def validate_trial(trial, workload):
     if tick != info["warmup_ticks"] + info["sample_ticks"] or perf["current_tick"] != tick:
         raise ValueError("wrong trial endpoint")
     validate_timings(perf, frames)
+    validate_render_observations(perf, frames)
     start = number(info["start_enemies"], "start population", positive=True)
     end = number(perf["current_enemies"], "end population", positive=True)
     if start != info["initial_enemies"]:
@@ -468,13 +541,14 @@ def stop(process):
 
 
 @contextlib.contextmanager
-def app(binary, output):
+def app(binary, output, gpu_timing):
     # Private short socket path: never touch another process's harness or files.
     with tempfile.TemporaryDirectory(prefix="arpg-perf-", dir="/tmp") as directory:
         path = Path(directory) / "control.sock"
         with Path(str(output) + ".app.log").open("x") as log:
             process = subprocess.Popen([str(binary)], cwd=ROOT, stdout=log, stderr=log,
-                                       env={**os.environ, "ARPG_HARNESS": str(path), "RUST_LOG": "info"})
+                                       env={**os.environ, "ARPG_HARNESS": str(path), "RUST_LOG": "info",
+                                            "ARPG_GPU_TIMING": "1" if gpu_timing else "0"})
             awake = None
             try:
                 awake = subprocess.Popen(["caffeinate", "-d", "-i", "-w", str(process.pid)])
@@ -524,6 +598,8 @@ def prepare(args, result):
     result["source"] = source_identity(output_paths(args.output))
     result["conditions"] = host_conditions()
     build_args = ["cargo", "build", "--release", "-p", "scenario", "--bin", "perf-headless"] if headless else ["cargo", "build", "--release", "-p", "arpg"]
+    if headless and args.gpu_timing:
+        raise ValueError("--gpu-timing requires live mode")
     result["conditions"]["build"] = " ".join(build_args)
     workload_files += [ROOT / "benchmarks/driver.rs"]
     result["workload_digest"] = digest(json.dumps({str(p.relative_to(ROOT)): file_digest(p) for p in workload_files}, sort_keys=True).encode())
@@ -575,6 +651,10 @@ def collect_live(path, args, result, baseline):
             trials.append(trial)
             try:
                 validate_trial(trial, workload)
+                if trial["perf"]["gpu"]["timing_requested"] != args.gpu_timing:
+                    raise ValueError("GPU instrumentation mode differs from request")
+                if args.gpu_timing and not trial["perf"]["gpu_timing_available"]:
+                    raise ValueError("GPU timestamps requested but unavailable")
                 if outcome(trial) != outcome(trials[0]):
                     raise ValueError("repeated inputs produced different outcomes")
                 if environment(trial["perf"]) != environment(trials[0]["perf"]):
@@ -631,7 +711,7 @@ def run(args, result, baseline=None):
             if source_identity(outputs) != before or file_digest(binary) != result["binary_sha256"]:
                 raise ValueError("source or executable changed during measurement")
             return result
-        with app(binary, args.output) as path:
+        with app(binary, args.output, args.gpu_timing) as path:
             collect_live(path, args, result, baseline)
         if other_games():
             raise ValueError("another game started during measurement")
@@ -739,6 +819,7 @@ def main():
     live.add_argument("--output", type=Path, required=True)
     live.add_argument("--baseline", type=Path)
     live.add_argument("--workload", action="append", help="select workload; may repeat (default: full suite)")
+    live.add_argument("--gpu-timing", action="store_true", help="diagnostic asynchronous GPU pass timestamps; live only")
     live.add_argument("--vsync", choices=("on", "off"), default="on")
     compare = sub.add_parser("compare", help="revalidate and compare saved results without launching the game")
     compare.add_argument("baseline", type=Path)
