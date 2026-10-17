@@ -94,13 +94,16 @@ rotation limit, a hinge's spin is capped so its corner never outruns one pass.
 
 ## Measuring and limits
 
-Start **Crowd stress — 10,000 pursuing actors** and wait for compression before
-following [performance telemetry](performance.md), or profile the benchmark crowd
-headlessly. On an M4, the compressed 10,000-body crowd costs about 3.7 ms per tick
-on one thread: about 29,000 contact rows, one collision pass, four substeps.
+Use the benchmark-owned compressed workload through the
+[performance runner](performance.md#repeatable-benchmark-suite), or its
+[headless profiler](performance.md#detailed-physics-investigation). The
+[2026-09-27 audit](physics-scalability-audit.md) records the soft-step change's
+historical measurements; the [accepted ceiling](performance.md#accepted-performance-ceiling)
+owns the current performance reference. For a playable crowd, open
+[`horde_1000.ron`](../scenes/horde_1000.ron); it is separate from benchmark inputs.
 
 Dense coincident piles still produce every pair in a cell; there is no contact
 cap. Formations refuse spacing below a body diameter, so only explicit
 placements or queued births can stack bodies. Overlap correction disperses a
-pile at the push speed. 900 coincident bodies produce about 400,000 contact rows
-on their worst tick (36 ms); the pile disperses within half a second.
+pile at the push speed. The audit records the coincident-pile stress case and
+its remaining quadratic contact cost.

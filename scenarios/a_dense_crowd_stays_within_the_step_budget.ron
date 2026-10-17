@@ -1,5 +1,5 @@
-// No attacks: population must remain constant while seekers compress the pack.
-// Mean Game step budget leaves room within 16.67 ms for presentation and spikes.
+// No attacks: population must remain constant while pursuing actors compress the pack.
+// Mean Game step budget is a smoke check; it does not certify live frame pacing.
 // Use release builds for performance conclusions; the gate also runs optimized sim.
 (
     description: "Ten thousand pursuing actors remain finite and deterministic while stepping within a 10 ms mean budget.",

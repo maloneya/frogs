@@ -7,10 +7,12 @@ rather than removed.
 
 ## Measurements
 
-Exploratory release runs on one M4 thread use the benchmark-owned `sparse.ron`
-and `compressed.ron`, with 10,000 enemies retained. No live rendering was
-measured; the headless performance gate passes, and live capacity still needs a
-foreground session.
+These exploratory release measurements were collected on 2026-09-27 on one M4
+thread using the benchmark-owned `sparse.ron` and `compressed.ron`, with 10,000
+enemies retained. They established no live rendering coverage. They predate
+subsequent actor, asset and renderer changes and do not certify the current
+checkout; use the [accepted ceiling](performance.md#accepted-performance-ceiling)
+and [verification reports](verification.md) for current evidence.
 
 | Workload | Before | After |
 |---|---:|---:|

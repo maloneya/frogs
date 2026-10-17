@@ -1,6 +1,6 @@
 // Slam closes at 14. Final reach is 1.6+2.6+.25-.001=4.449m.
 // With bounded motor acceleration (each tick's change ramped over four
-// substeps), a seeker at 4.95m is at 4.483711 after tick 13, then 4.442044
+// substeps), a pursuing actor at 4.95m is at 4.483711 after tick 13, then 4.442044
 // after tick 14: inside reach only after shutdown.
 (
     description: "A chaser that comes into range on the tick the hitbox shuts is not hit.",

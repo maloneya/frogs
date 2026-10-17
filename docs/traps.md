@@ -7,14 +7,14 @@ advice that the new safeguard makes unnecessary; retain operational limitations.
 
 ## Sword passes grip checks but crosses the wrist above an open hand
 
-**Cause:** the player compiler uses `RightHand.head`, the wrist joint, as the
+**Cause:** the former player compiler used `RightHand.head`, the wrist joint, as the
 weapon origin. A constant hand/weapon transform preserves that misplaced
-attachment. The relaxed pose leaves the finger and thumb joints open; neither
-the importer nor the motion checks require anatomical grasp contact (2026-10-14).
+attachment. The relaxed pose left the finger and thumb joints open; neither
+the importer nor the motion checks then required anatomical grasp contact (2026-10-14).
 **Check:** inspect a hand close-up, then compare the handle axis with the posed
 palm and fingers. The faulty idle has zero wrist/weapon separation while the
 hand-bone midpoint is about 5 cm from the handle axis. Existing rigid-attachment
-tests therefore pass despite the visible defect.
+tests therefore passed despite the visible defect.
 **Safeguard:** [the grasp compiler](../assets/characters/basic-player/grasp.py)
 derives palm/weapon alignment, finger closure and supporting reach, then refuses
 failed skinned contact or forearm clearance across intermediate samples. Player
@@ -133,9 +133,10 @@ resolve the active-set churn (2026-09-27).
 time. A long one-dimensional chain tests momentum transmission, but does not
 establish cost for a packed two-dimensional crowd.
 **Fix:** the solver now uses a fixed-budget soft step with warm starting (Box2D v3);
-see the [audit](physics-scalability-audit.md) for measurements. If a solver
-change regresses cost, profile it (see [performance](performance.md#detailed-physics-investigation))
-before loosening anything; increasing performance budgets is not a substitute.
+see the [historical audit](physics-scalability-audit.md) for measurements. A new
+regression triggers the [stop and handoff policy](performance.md#feature-work-stop-and-handoff).
+Profiling belongs to a user-triggered investigation; the
+[physics profiler](performance.md#detailed-physics-investigation) is the existing tool.
 
 ## Metal advertises timestamps but later render passes return zeros
 

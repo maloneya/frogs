@@ -2,8 +2,11 @@
 
 Openly licensed character bodies and authored motions to reuse as references.
 Scope: player **model, walk, Cleave**; wolf **model, walk, run, bite, leap**.
-Researched on **2026-10-12**. These are research inputs, with no new game assets,
-retargeting, combat timing changes or runtime imports.
+The source survey dates to **2026-10-12**. Native previews retain original
+motions; production compilers now adapt selected sources into the
+[player foundation](../../assets/characters/basic-player/README.md) and
+[wolf](../../assets/characters/wolf/README.md). Those asset READMEs own the
+shipped adaptations and their review status.
 
 Start with the realistic human body and Quaternius motions for the player.
 Compare KayKit's equipped Knight when studying a more stylized
@@ -28,11 +31,11 @@ retiming. A named clip establishes availability; quality remains a visual judgme
 | Wolf walk | tomek `wolf_walk` — 1.000 s | Mesh2Motion `Walk` — 1.000 s | Four-foot support, foot order and shoulder/hip movement. Review foot contact and hock articulation before adaptation. |
 | Wolf run | tomek `wolf_run` — 1.000 s | Mesh2Motion `Run` — 0.583 s | Gather/extension, suspension, spinal movement and leg recovery. These are useful comparison cycles, not approval of a natural wolf gait. |
 | Wolf bite | tomek `wolf_attack01` — 1.000 s | Mesh2Motion `Bite` — 0.833 s | Forward body/head movement and jaw opening/closing. `wolf_attack01` is an attack name; identifying it as a bite/lunge is our interpretation of the inspected poses and jaw curves. |
-| Wolf leap | tomek `wolf_jump`, `wolf_fly`, `wolf_land` — 1.000 s each | Mesh2Motion `Jump` — 2.167 s | Takeoff, airborne shape and landing compression. The fox provides a complete high jump. A forward attack leap with bite contact and recovery remains unselected. |
+| Wolf leap | tomek `wolf_jump`, `wolf_fly`, `wolf_land` — 1.000 s each | Mesh2Motion `Jump` — 2.167 s | Takeoff, airborne shape and landing compression. The fox provides a complete high jump. Production assembly and remaining visual questions belong to the wolf README. |
 
-The wolf's three leap ingredients are displayed separately. Joining them is a
-future choreography choice; this catalog does not imply the creator supplied a
-finished three-second leap attack. Likewise, a jump is not automatically a pounce.
+The native gallery displays the wolf's three leap ingredients separately. The
+production wolf compiler assembles and retimes them; the creator did not supply
+a finished three-second leap attack. A jump is not automatically a pounce.
 
 ## Retained libraries and models
 
@@ -230,8 +233,8 @@ the generated outputs. Gallery building refuses changed source files or linked
 rigs. These are source previews, not captures through the game renderer.
 
 Pose sequences were inspected to distinguish the motions and catch framing or
-equipment problems. Visual quality, naturalism, retargeted deformation and game
-feel remain provisional; none of the newly sourced candidates is approved for
-integration. A later asset task should use the
+equipment problems. Native previews establish source availability, not approval
+of every candidate or adaptation. Use the production asset READMEs for integrated
+checkpoints, and review further adaptations through the
 [character workflow](../../.claude/skills/character-workflow/SKILL.md) and
 [motion acceptance principles](../../docs/character-motion.md).

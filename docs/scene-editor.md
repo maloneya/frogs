@@ -93,10 +93,10 @@ remap on deletion. Manual file reordering must preserve those references.
 direction and elevation. Colours are stored as linear RGB. Adding a campfire
 does not change the environment; **Save & play** applies the authored lighting.
 
-**Duplicate** copies placement, attributes and any door/chest or attack component
-with at least a one-metre offset. Names and encounter links stay with the original. **Delete** refuses encounter endpoints; remove their
-links first. Otherwise it removes attached components and remaps surviving links
-and names. Deletion clears selection so inspector drafts cannot target a shifted
+**Duplicate** copies placement, actor definitions and attached door/chest
+components with at least a one-metre offset. Names and encounter links stay with
+the original. **Delete** refuses encounter endpoints; remove their links first.
+Otherwise it removes attached components and remaps surviving links and names. Deletion clears selection so inspector drafts cannot target a shifted
 index. **Undo / Redo** retain 32 accepted edits. Accepted drafts and history
 survive disconnects. Browsing, editing, validation and saving work offline;
 playing, tuning and diagnostics require the game.
@@ -146,9 +146,6 @@ see [scene handoff](../.claude/skills/create-scene/SKILL.md#verify-and-hand-off)
 See the [authoring API](scene-authoring.md) for offline agent edits and
 [capture and checks](companion.md#checks-and-capture) for native view inspection.
 
-The storm option follows the active scene's environment through additive loads,
-eviction and restart. Rain, wet highlights, fire flicker and lightning change
-presentation only. The directional light and nearest campfire cast shadows from
-static and posed geometry; additional fires still illuminate surfaces. Try
-[`storm_watch.ron`](../scenes/storm_watch.ron) for a dark clearing with one fire
-and approaching monsters. Fire is a visual refuge rather than a gameplay ward.
+[Lighting](lighting.md) owns environment selection across scene loads, shadows
+and storm effects. Try [`storm_watch.ron`](../scenes/storm_watch.ron) for the
+night clearing; fire is a visual refuge rather than a gameplay ward.

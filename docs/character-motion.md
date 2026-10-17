@@ -56,55 +56,29 @@ valid source data does not certify finished deformation.
    such as phase alignment, front-facing reach, torso movement and attachment
    continuity with checks. Passing structural tests does not establish beauty.
 
-The current compiler lives in
-[`authored_cleave.py`](../assets/characters/basic-player/authored_cleave.py).
-It compiles the user's edited [five-pose Cleave source](../assets/characters/basic-player/cleave-poses.blend),
-derived from the approved CC0 descending slash. Authoring-only hip and foot IK
-are baked onto the existing 54-joint player. The loaded poses raise the hips and
-moderate the torso fold. The rear leg loads in a shorter stance, extends while
-the heel rises, and drives roughly 21 cm of forward hip travel through contact.
-The front foot stays planted as the body follows through; foot arcs clear the
-floor during the step back and return. A moving wind-up and eased release
-preserve the 6/6/10 gameplay schedule and do not move the simulation body.
-The user's five-pose checkpoint from 2026-10-15 remains the editable foundation;
-the subsequent weight-transfer refinement awaits their judgement of feel.
-Stationary attacks use the whole bracing pose; moving attacks retain directional
-leg locomotion under the attack's articulated upper body. The shared importer,
-mask and phase contract remain in
-[character asset authoring](character-assets-authoring.md).
+## Production checkpoints
 
-The retained sword-foundation Slam is compiled by
-[`authored_slam.py`](../assets/characters/basic-player/authored_slam.py) from the
-CC0 `Sword_Regular_C` overhead segment. Its airborne, one-handed source is
-adapted into a planted two-handed strike on the same production rig, retaining
-compression, wrist motion and moving recovery. The 9/5/16 tick schedule remains
-unchanged. Quarter-frame keys and continuous quaternion signs keep both grips
-consistent between authored poses; Blender motion checks also inspect
-intermediate samples. The user accepted this motion checkpoint on 2026-10-12.
+The [player foundation](../assets/characters/basic-player/README.md#authored-motion)
+owns the current Cleave, sword Slam, directional locomotion and relaxed idle
+adaptations, with editable source and review commands. Its
+[source README](../assets/characters/basic-player/reference/README.md) owns
+licences and native clip provenance. Keep compiler details there rather than
+maintaining another motion catalog here.
 
-The playable [staff compiler](../assets/weapons/thornbound-staff/equip.py)
-replaces that weapon path with a one-handed right-hand lift and butt-first plant.
-The free left arm counterbalances to the side without touching the shaft.
-Its grounded body reference is retimed to receive the plant on the first active
-sample (authored frame 14.2); the staff stays planted through the force release.
-The shared 9/5/16 gameplay schedule remains unchanged. The app captures the
-sampled butt at that contact for the [magic wave](attack-effects.md), independently
-of gameplay geometry. This visual checkpoint awaits user judgement of feel.
+The user's five-pose Cleave checkpoint from 2026-10-15 remains the editable
+foundation; the subsequent rear-foot drive and weight-transfer refinement awaits
+judgement of feel. The grounded sword Slam was accepted on 2026-10-12.
+Directional locomotion and idle remain visual checkpoints whose structural
+checks do not establish finished deformation or feel.
 
-Directional locomotion uses the compatible Quaternius humanoid jog for arm
-counter-swing and KayKit's authored backward/strafe support on the same human
-rig. Strafing hips turn toward travel while the head stays on mouse aim. The
-compiler moderates torso lean and twist and preserves a rigid sword grip. Moving
-ability layers compensate at the top masked joint for the locomotion parent's
-rotation: hip articulation must not rotate committed attacks away from aim.
-See [`authored_locomotion.py`](../assets/characters/basic-player/authored_locomotion.py)
-and the [preview commands](../assets/characters/basic-player/README.md#review-motion).
+The playable default is the
+[Thornbound sword glaive](../assets/weapons/thornbound-staff/README.md), compiled
+from that body and rig. Its compiler adapts the ready guard and replaces the
+sword Slam with a one-handed lift and butt-first ground plant. The staff Slam
+and [magic wave](attack-effects.md) await user judgement of feel; the retained
+weapon playtest record predates those changes. The same gameplay phase schedule
+remains authoritative.
 
-The relaxed idle adapts the retained Quaternius `Sword_Idle` into a 3.2-second
-loop on the same rig. Both arms rest lower with soft elbows; relative torso,
-pelvis and wrist motion supplies a small weight shift while the feet stay planted.
-Melee recovery meets its opening pose. The sword foundation rests slightly above
-horizontal; the equipped staff compiler turns its grasp upright beside the body
-and adapts melee ready seams while preserving the active stroke. Locomotion
-retains its elevated forward carry for stride clearance. This is a visual checkpoint awaiting user judgement of feel,
-with compilation, grip/support and in-game presentation checked separately.
+The [wolf README](../assets/characters/wolf/README.md) owns its anatomy, source
+motion adaptations, clip mapping and review commands. Review its native sources
+and retimed production clips as separate evidence.

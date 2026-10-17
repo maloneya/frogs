@@ -1,9 +1,10 @@
 # Props and interaction
 
-In Scenes, open `soul_trial.ron` and **Save & play**. Press E beside the blue
-block: it turns green once and starts the [encounter](encounters.md).
-Restart restores Ready. The [plinth](../assets/world/README.md) has circular
-collision independent of its visible mesh.
+Place a **Switch** in the [scene editor](scene-editor.md), then **Save & play**.
+Press E beside the blue plinth: it turns green once. Bind it as an
+[encounter](encounters.md) activation body to start an objective. Restart restores
+Ready. The [plinth](../assets/world/README.md) has circular collision independent
+of its visible mesh.
 
 A scene body can grant interaction independently of fixed physics:
 

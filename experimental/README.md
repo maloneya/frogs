@@ -1,7 +1,8 @@
 # Experiments
 
-Independent laboratories for exploring ideas before deciding whether they belong
-in the game. Each experiment owns its build and has no dependency on game crates.
+Research tools and retained inputs. Their tooling has no dependency on game
+crates. The level-generation experiment owns an independent build; the character
+reference catalog also supplies versioned source assets to production compilers.
 For playable content, use the [shared scene authoring tools](../docs/scene-authoring.md).
 
 - [levelgen](levelgen/README.md): ASCII map generation, limited-view navigation

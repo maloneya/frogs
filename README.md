@@ -32,7 +32,9 @@ The scene catalog contains five starting points:
 - `scenes/single_enemy.ron`: one stationary, attackable enemy with no pursuit or attacks.
 - `scenes/enemy_group.ron`: twelve enemies with the same passive behavior.
 - `scenes/three_enemy_spawners.ron`: three sources emitting pursuing enemies,
-  once per second each, up to sixty enemies in total.
+  once per second each while the world has fewer than sixty hostiles. The
+  [population gate](docs/source-enablement.md) can admit simultaneous emissions
+  above that threshold and refills losses.
 - `scenes/horde_1000.ron`: exactly 1,000 pursuing enemies, with no reinforcements.
 - `scenes/storm_watch.ron`: the storm-night clearing described above.
 

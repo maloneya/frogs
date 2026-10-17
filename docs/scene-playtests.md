@@ -2,8 +2,9 @@
 
 Use the [scene editor](scene-editor.md) to build playable content. This page owns
 its loading, restart and identity contracts. Both the app and headless scenario
-runner drive `Game`; content extracts the same `GameScene` from the
-[authoring document](scene-authoring.md#document-and-runtime-boundary) for either caller.
+runner drive `Game`. The app extracts `GameScene` from an
+[authoring document](scene-authoring.md#document-and-runtime-boundary); scenarios
+provide their own `GameScene` values directly.
 
 ## Start, restart and startup
 
@@ -56,30 +57,40 @@ is not save-game persistence or streaming residency.
 
 ## Content and admission
 
-[GameScene](../crates/game/src/scene.rs) wraps physical
-[Scene](../crates/sim/src/scene.rs) content under `engine` and adds trees,
-[lighting](lighting.md), [encounters, doors and chests](encounters.md), and enemy
-attack relationships. The content crate decodes these owning types directly.
+[GameScene](../crates/game/src/scene.rs) stores game-owned
+[placements, formations and sources](../crates/game/src/population.rs) under
+`engine`, plus trees, [lighting](lighting.md), and
+[encounters, doors and chests](encounters.md). Each birth carries a complete
+[actor definition](behaviors.md), including its actions. Admission projects these
+definitions into sim-owned physical content; files do not use sim templates
+directly. The content crate decodes these owning types.
 
 ```ron
 (
     scene: (
         engine: (
             name: "Small encounter",
-            bodies: [(pos: (0.0, 4.0), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))],
-            grids: [(origin: (-6.0, 8.0), columns: 8, rows: 4, spacing: 0.7,
-                     what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))],
-            sources: [(pos: (12.0, 0.0), radius: 3.0, every: 60,
-                       when: FewerThan(12), what: (physical: (health: Some(3), character: true), role: Hostile, actions: [Move((destination: Target(Player), speed: 2.5, acceleration: 30.0, stop_distance: 0.55))], behavior: Action(0)))],
+            bodies: [(
+                pos: (0.0, 4.0),
+                what: (
+                    physical: (health: Some(3), character: true),
+                    role: Hostile,
+                    actions: [Move((destination: Target(Player), speed: 2.5,
+                                   acceleration: 30.0, stop_distance: 0.55))],
+                    behavior: Action(0),
+                ),
+            )],
         ),
     ),
 )
 ```
 
-Coordinates are world `(x, z)` in metres. Source population conditions count
-all world enemies. `BodyGrid` expands once through ordinary placement: explicit
-bodies first, then grids in list order, columns along +X fastest and rows along
-+Z. Placement order matters to scenario `nth` bindings and deterministic hashes.
+Coordinates are world `(x, z)` in metres. Source population conditions use the
+[world hostile count](source-enablement.md), shared by every source in that tick.
+`BodyGrid` expands once through ordinary placement: explicit bodies first, then
+[tree trunks](felled-trees.md#observation-and-lifetime), then grids in list order,
+columns along +X fastest and rows along +Z. Placement order matters to scenario
+`nth` bindings and deterministic hashes.
 Grid validation checks nonzero dimensions, finite positive spacing, far-corner
 arithmetic and capacity before expansion. Use grids for regular crowds instead
 of thousands of generated body entries.

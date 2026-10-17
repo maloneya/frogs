@@ -39,7 +39,5 @@ The mesh origin is the fall pivot: a falling tree is pitched about it. App
 batches each kind in one draw. `state.sim.trees` exposes ownership, trunk body
 and state; `state.world_assets.trees` reports imported meshes and per-kind
 instance counts.
-The Soul trial bakes a random scatter (seed 73129) into 96 authored placements:
-24 near the trial and 72 across the arena. Trees are at least 3.5 m apart, with
-the central objectives and source spawn discs left clear. Coordinates are saved
-in the scene, so load and restart never reroll the layout.
+For a playable composition, open [`storm_watch.ron`](../../../scenes/storm_watch.ron).
+Tree coordinates are authored scene data; loading and restarting do not reroll them.

@@ -63,7 +63,7 @@ Ordinary startup and `character clear` select the sword glaive. In an
 [ARPG_HARNESS](../../../.claude/skills/playtest/SKILL.md) session:
 
 ```text
-scene start scenes/combat_feel.ron
+scene start scenes/enemy_group.ron
 character show assets/weapons/thornbound-staff/equipped/large-talon/player.glb
 character clear
 ```

@@ -1,5 +1,6 @@
 // Kite enemies arriving from three directions and compare crowd control.
-// Each source emits once per second, up to sixty enemies across the scene.
+// Each source emits once per second while the world has fewer than sixty hostiles.
+// Simultaneous emissions can exceed that threshold; defeated enemies are replaced.
 (
     scene: (
         environment: (

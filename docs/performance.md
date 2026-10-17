@@ -307,9 +307,10 @@ ordinary baseline. They retain the suite's existing step/frame limits.
 ### Comparing intentional asset changes
 
 Ordinary comparisons still require identical asset fingerprints and presentation
-settings. Schema 3 records benchmark scene/driver identity separately from every
-live `.glb` asset identity; previous schemas cannot reconstruct that separation
-and are excluded. Capture fresh evidence rather than relabeling old artifacts.
+settings. Current evidence records benchmark scene/driver identity separately
+from every live `.glb` asset identity. The [runner](../scripts/perf.py) admits only
+its current evidence schema; capture fresh evidence rather than relabeling old
+artifacts.
 
 For a user-triggered asset investigation, measure the same focused workload in
 isolated before/after source states, then declare every changed asset explicitly:

@@ -33,8 +33,9 @@ Repeated redraws do not refresh it. Damage observations also select three shared
 without interrupting gameplay movement or attacks. Recoil faces against observed
 displacement, falling back to the player direction for stationary targets; this
 is presentation inference. Melee contact bursts include survivors and lethal
-outcomes. Defeated characters fall over 15 ticks into one shared bent-limb corpse
-pose; scene replacement and eviction use the existing corpse lifetime.
+outcomes. Defeated characters play their authored collapse immediately, while
+physical momentum can still carry them. The [corpse owner](corpses.md) describes
+the shared collapse poses, final pose and death-clock lifetime.
 [Enemy feedback](../crates/app/src/enemy_feedback.rs) owns timing and history;
 `state.horde_preview.flashing_instances` reports prepared flashing instances.
 
@@ -67,8 +68,9 @@ entry and release. Visual durations and geometry stay with their app owners.
 
 ## Enemy swipe
 
-Each marked melee attacker brakes within striking distance, leans back
-for a 0.6-second windup, then snaps forward for a short directional swipe.
+An actor with a Swipe action brakes within striking distance, leans back, then
+snaps forward for a short directional strike. With the default action settings,
+the windup lasts 0.6 seconds.
 An amber disc fills toward impact; red marks the active damage window.
 The direction commits at windup, so sidestepping can avoid it. Each swipe can
 remove only one health, followed by 0.65 seconds of recovery before pursuit
@@ -76,7 +78,8 @@ resumes. Each contacted body also receives its authored physical impulse,
 including neutral and healthless objects. Physical knockback still moves the
 attacker, and walls or jointed bodies can shield targets.
 The marker uses the strike radius; the player's collision radius also counts
-for overlap. The animation reuses the bounded crowd poses with an instance tilt.
+for overlap. The wolf plays its authored `Bite` clip through the committed phases,
+using bounded shared attack poses.
 
 [Action definitions and execution](behaviors.md) own timing and geometry.
 `actors` reports phase, elapsed/duration ticks, committed direction and hit state;
@@ -84,7 +87,8 @@ restart and scene eviction clear commitments.
 
 ## Enemy leap
 
-Marked attackers also leap from 3–7 metres away. A purple landing disc and
+An actor with a Leap action uses its authored range and timing. At the defaults,
+it leaps from 3–7 metres away. A purple landing disc and
 backward lean warn for 0.7 seconds; the target point locks immediately. The
 0.6-second jump follows that point, not the moving player, and can deal one
 health only on landing. The disc flashes red on impact, followed by 0.9 seconds

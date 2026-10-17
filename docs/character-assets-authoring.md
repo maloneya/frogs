@@ -121,13 +121,11 @@ neutral again. Runtime maps startup to normalized `0.0..0.4`, active to
 `0.4..0.6`, and recovery to `0.6..1.0`; tests sample the exported weapon motion
 at those edges so moving a key pose into the wrong phase fails visibly.
 
-The swordsman player uses a 54-joint rig fitted to the accepted CC0 authored
-human surface, with a separate fitted hooded cloak and a rigid sword,
-and a Cleave compiled from the edited five-pose source, including weight transfer
-and an articulated wrist. Its authoring controls are baked onto the original rig
-before export. [Motion acceptance](character-motion.md) records the
-visual principles. Authoring exports ordinary transform clips; runtime uses the
-same importer and pose sampler.
+The [player foundation](../assets/characters/basic-player/README.md) owns the
+body, rig and editable motion inputs. The playable
+[staff-equipped variant](../assets/weapons/thornbound-staff/README.md) is compiled
+from that foundation. [Motion acceptance](character-motion.md) owns visual review
+principles and checkpoint status; both assets use this same importer and sampler.
 
 Anatomical right is `-X` for a character facing Blender `-Y` or runtime `+Z`.
 The player compiler checks the named limbs against that physical side; names
@@ -198,13 +196,11 @@ blender --background --factory-startup --python-exit-code 1 \
   --python assets/fixtures/generate-blender-multipart.py
 ```
 
-The basic placeholder player and its editable Blender source live in
-[`assets/characters/basic-player`](../assets/characters/basic-player/README.md).
-The dedicated horde asset lives in
-[`assets/characters/wolf`](../assets/characters/wolf/README.md).
-Each generator produces its checked-in `.blend` and `.glb` artifacts.
-The wolf compiler imports retained CC0 anatomy and motions; its README records
-the source contract, phase mapping and review commands. Presentation retains
-eight shared gait poses, four attack poses, three recoil poses and one corpse
-pose. Game bounds simultaneous combat commitments to four, so each committed
-attacker samples its exact phase without expanding pose storage with crowd size.
+The [player foundation](../assets/characters/basic-player/README.md) and
+[wolf](../assets/characters/wolf/README.md) READMEs own generation and review
+commands. Each compiler produces its checked-in `.blend` and `.glb` artifacts.
+Horde pose storage is fixed independently of crowd size. The
+[presentation owner](../crates/app/src/presentation.rs) partitions it among
+locomotion, committed attacks, recoil, collapse and the frozen final corpse pose;
+[corpse presentation](corpses.md) owns the death sequence and lifetime. Combat
+coordination bounds committed attack poses without limiting ordinary locomotion.

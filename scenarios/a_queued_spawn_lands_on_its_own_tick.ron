@@ -1,7 +1,7 @@
 // The spawn receipt identifies each request; exact Placed events assert latency.
-// A seeker and a bystander in one batch also prove template grants stay distinct.
-// Movement on the first tick is checked numerically by the scenario CLI checkpoint
-// test and gait scenarios, so this fixture does not depend on chase-speed tuning.
+// A pursuing actor and a passive actor in one batch retain distinct definitions.
+// Birth-tick displacement is checked by the scenario CLI checkpoint test and
+// actor_speeds_accelerate_independently.ron; this case asserts admission timing.
 (
     description: "Mixed templates requested at tick 10 appear on that tick with their own capabilities.",
     spawns: [

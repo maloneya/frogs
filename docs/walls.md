@@ -70,9 +70,11 @@ The shared [wall asset](../assets/world/wall/README.md) supplies height and
 appearance. App scales its unit footprint to the authoritative rectangle and
 uses its exact yaw. The simulation never reads the mesh. Ordinary body and
 attack-disc outlines remain circular; walls and panels have rectangular footprints.
-Walls do not occlude lighting, and pursuit actions have no route planning. They can pile up
-against a wall until the player goes around it.
+Wall meshes cast [directional and nearest-fire shadows](lighting.md); the physical
+rectangle supplies gameplay cover independently of those meshes. Pursuit actions
+have no route planning, so actors can pile up against a wall.
 
-Open `walls.ron` in Scenes and **Save & play**. Walk toward the long wall,
-slide along it, try all three attacks, and go around its right end. The enemy
-behind it should remain shielded. Try diagonal sliding at the rotated wall.
+For a playtest, draw a long wall and a rotated wall in a new scene and place an
+enemy behind each. **Save & play**, walk and slide along the faces, then try all
+three attacks. Shielded enemies should remain unharmed until you go around the
+wall. Judge lighting and visible clearance in the game.

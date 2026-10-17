@@ -41,7 +41,7 @@ whole-number precision; send JSON integers without converting through floating p
 A batch applies edits in order and returns only a fully accepted result; it
 never writes files. A rejected batch returns no partial draft. Each intermediate
 edit must be valid; even an empty batch validates its input. Complete encounters
-and Actor definitions each have a typed replacement operation for changes that
+and actor definitions each have a typed replacement operation for changes that
 need several fields to become valid together.
 
 The Door placement preset creates a movable prop with a [hinged panel](physical-doors.md).

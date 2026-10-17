@@ -7,9 +7,8 @@ description: Write, run and update headless scenarios for simulation and gamepla
 
 Playable scenes are game content; scenarios own their setups and test rules
 and a small set of complex test-only compositions. They never load `scenes/` files.
-They drive
-`Game::step` without a GPU, window or wall-clock pacing. They
-assert checkpoints, final state and optional golden traces. Every run also
+They drive `Game::step` without a GPU, window or wall-clock pacing, asserting
+checkpoints, final state and optional golden traces. Every run also
 replays and compares Game hashes tick by tick. Repeatability alone does not
 prove the intended behaviour, so explicit predictions are required.
 
@@ -36,7 +35,7 @@ A minimal movement example:
     inputs: [(at: 0, ticks: 30, dir: (1.0, 0.0))],
     budget: (ticks: 30),
     expect: (
-        player_pos: (x: 3.5141285, z: 0.0, tol: 0.001),
+        player_pos: (x: 3.4578785, z: 0.0, tol: 0.001),
         facing: (value: 1.5708, tol: 0.0001),
         contacts: 0,
     ),
