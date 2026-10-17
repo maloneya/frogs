@@ -190,21 +190,15 @@ fn companion(app: &mut App, mut command: serde_json::Value) -> serde_json::Value
 fn companion_uses_the_fresh_start_boundary_and_survives_bad_files() {
     use serde_json::json;
     let directory = std::env::temp_dir().join(format!("arpg-companion-scenes-{}", std::process::id()));
-    std::fs::create_dir_all(directory.join("directory.ron")).unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("a scene.ron");
     std::fs::write(&path, "(scene: (engine: (name: \"first\", bodies: [(pos: (20.0, 0.0))])))").unwrap();
     std::fs::write(directory.join("b.ron"), "broken RON").unwrap();
-    std::fs::write(directory.join("ignored.txt"), "ignored").unwrap();
-    let paths = scene_catalog(&directory).unwrap();
-    assert_eq!(paths, vec![path.clone(), directory.join("b.ron")]);
-    assert!(scene_catalog(&directory.join("missing")).is_err());
-
-    let mut app = App { scene_catalog: Some(Ok(paths)), ..Default::default() };
+    let mut app = App::default();
     app.start_playtest(pair()).unwrap();
     app.input.on_key(KeyCode::KeyW, true, false);
     let response = companion(&mut app, json!({"op":"start_scene", "path":path}));
     assert_eq!(response["ok"], true);
-    assert_eq!(response["state"]["scenes"]["files"][0]["label"], "a scene.ron");
     assert_eq!(response["state"]["scenes"]["current"], "first");
     let initial = app.game.hash();
     assert_eq!(initial, Game::from_scene(&arpg_content::load_scene(&path).unwrap()).unwrap().hash());
@@ -287,8 +281,7 @@ fn restart_resets_the_complete_playtest_boundary() {
     app.attack_effects.rebuild(
         &app.game, Alpha::ZERO, Some(crate::attack_effects::BeamEmitter { tip: glam::Vec3::Y * 0.85, direction: glam::Vec3::Z }));
     assert!(!app.attack_effects.vertices().is_empty());
-    app.game
-        .set_attack_recovery(arpg_sim::RecoveryTicks::try_from(1).unwrap());
+    app.game.set_attack_profile(arpg_game::AttackProfile::Slam);
     assert!(app.game.apply_impulse(
         app.game.player_id(),
         arpg_sim::Impulse::try_from((6.0, 0.0)).unwrap()
@@ -510,7 +503,7 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
     app.start_playtest(scene.clone()).unwrap();
     let dt = arpg_sim::Accumulator::default().pending(arpg_sim::Dt::SECS).next().unwrap();
     let hit = |app: &mut App| {
-        app.game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
+        app.game.set_attack_profile(arpg_game::AttackProfile::Disintegrate);
         app.game.step(dt, Intent::new(MoveDir::NONE, arpg_core::AimDir::FORWARD, false)
             .with_attack_held(true));
         app.enemy_feedback.observe(&app.game, |_, _| {});
@@ -535,7 +528,7 @@ fn contact_history_survives_rejected_loads_and_clears_on_restart_and_eviction() 
 #[test]
 fn tuning_edits_save_restore_and_restart_through_the_shared_app_boundary() {
     use crate::companion::Edit;
-    use arpg_sim::{Tuning, TuningField};
+    use arpg_game::{Tuning, TuningField};
     let directory = std::env::temp_dir().join(format!("arpg-tuning-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("tuning.ron");
@@ -575,7 +568,7 @@ fn tuning_edits_save_restore_and_restart_through_the_shared_app_boundary() {
 #[test]
 fn companion_catalog_edits_errors_and_harness_changes_share_authority() {
     use crate::companion::{Command, Edit};
-    use arpg_sim::TuningField;
+    use arpg_game::TuningField;
     let (requests, receiver) = std::sync::mpsc::channel();
     let mut app = App { harness: Some(receiver), ..Default::default() };
     let read = |app: &mut App, command| -> serde_json::Value {
@@ -670,7 +663,7 @@ fn companion_controls_refuse_stale_sessions_and_performance_trials() {
     let commands = [
         json!({"op":"restart"}),
         json!({"op":"start_scene", "path":"missing.ron"}),
-        json!({"op":"refresh_scenes"}), json!({"op":"collision", "enabled":true}),
+        json!({"op":"collision", "enabled":true}),
         json!({"op":"vsync", "enabled":false}), json!({"op":"zoom", "direction":"in"}),
         json!({"op":"capture", "path":"unused.png"}),
     ];
@@ -757,7 +750,7 @@ fn scene_file_start_is_transactional_and_preserves_tuning() {
     let _ = std::fs::remove_file(&path);
     let mut app = App::default();
     app.start_playtest(pair()).unwrap();
-    let tuning = app.game.tuning().with(arpg_sim::TuningField::SlamImpulse, 42.0).unwrap();
+    let tuning = app.game.tuning().with(arpg_game::TuningField::SlamImpulse, 42.0).unwrap();
     app.game.set_tuning(tuning);
     let before = app.game.hash(); let run = app.run_id;
     let refused = companion(&mut app, json!({"op":"start_scene", "path":path}));

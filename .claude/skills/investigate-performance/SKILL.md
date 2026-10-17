@@ -6,11 +6,13 @@ description: Investigate an arpg performance alert when the user requests diagno
 # Investigate Performance
 
 Use only when the user triggers a performance investigation. A feature agent
-detecting a concern follows the [stop and handoff policy](../../../docs/performance.md#feature-work-stop-and-handoff)
-and ends its work. This workflow produces a decision brief; it does not implement
-an optimization or change feature scope. The user chooses the next action.
+detecting a concern follows the [record and continue policy](../../../docs/performance.md#feature-work-record-and-continue)
+and completes its assigned task. This workflow produces a decision brief; it
+does not implement an optimization or change feature scope. The user chooses
+the next action.
 
-Read [repository rules](../../../CLAUDE.md), the alert, relevant evidence,
+Read [repository rules](../../../CLAUDE.md), the relevant
+[follow-up entry](../../../docs/performance-follow-ups.md), retained evidence,
 [performance measurement policy](../../../docs/performance.md), and symptom
 matches in [traps](../../../docs/traps.md). Follow the current telemetry, workload
 and baseline owners rather than inventing a parallel benchmark framework.
@@ -93,10 +95,11 @@ Deliver a concise brief with linked raw artifacts and source identities:
 End by asking which approach the user wants. Diagnosis ends there. Do not choose
 on their behalf, automatically start another agent or continue implementing.
 The boundary comes from the user's requested process, recorded in the repository
-stop policy. Further investigation also requires the user's direction.
+performance policy. Further investigation also requires the user's direction.
 
 Once the user selects a path, implement only that scope. Agree on observable
 acceptance criteria before edits, retain the failing evidence, and validate
 correctness plus affected performance under compatible conditions. Do not relax
 gates or replace baselines without an explicit user decision about requirements.
-A new regression triggers the feature-work stop rule again.
+A new regression is recorded under the record-and-continue policy; finish the
+authorized scope and report the remaining issue without expanding into another fix.

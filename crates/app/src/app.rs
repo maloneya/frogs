@@ -38,12 +38,11 @@ use crate::time::Clock;
 #[derive(Default)]
 pub(crate) struct App {
     window: Option<Arc<Window>>,
-    tuning_saved: arpg_sim::Tuning,
+    tuning_saved: arpg_game::Tuning,
     companion_message: String,
     companion_error: bool,
     companion_server: Option<crate::companion::Server>,
     tuning_path: std::path::PathBuf,
-    scene_catalog: Option<Result<Vec<std::path::PathBuf>, String>>,
     /// Local launch preference; never part of Game or replay state.
     scene_session_path: Option<std::path::PathBuf>,
     renderer: Option<Renderer>,
@@ -108,24 +107,6 @@ struct Deferred {
 /// Preserve the file identity in diagnostics from either caller.
 fn read_scene(path: &std::path::Path) -> Result<Scene, String> {
     arpg_content::load_scene(path).map_err(|error| format!("{}: {error}", path.display()))
-}
-
-/// Discovery happens at startup and explicit refresh. Do not parse here: a broken
-/// file remains selectable so its load error can be shown without losing a run.
-fn scene_catalog(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
-    let read = || -> std::io::Result<Vec<std::path::PathBuf>> {
-        let mut paths = Vec::new();
-        for entry in std::fs::read_dir(directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "ron") && entry.file_type()?.is_file() {
-                paths.push(path);
-            }
-        }
-        paths.sort();
-        Ok(paths)
-    };
-    read().map_err(|error| format!("Cannot list {}: {error}", directory.display()))
 }
 
 impl App {
@@ -487,7 +468,7 @@ impl ApplicationHandler for App {
                 _ => panic!("ARPG_GPU_TIMING must be 0 or 1"),
             },
         )));
-        self.world_assets = Some(WorldAssets::load(|mesh| {
+        self.world_assets = Some(WorldAssets::load(&crate::runtime_assets::root().join("world"), |mesh| {
             self.renderer.as_ref().expect("renderer was initialized")
                 .upload_mesh(mesh).map_err(|error| error.to_string())
         }).expect("load default world assets"));
@@ -507,7 +488,6 @@ impl ApplicationHandler for App {
         self.camera = Some(camera);
         self.window = Some(window);
         self.harness = harness::start();
-        self.scene_catalog = Some(scene_catalog(std::path::Path::new("scenes")));
         match crate::companion::Server::start(crate::companion::socket_path()) {
             Ok(server) => self.companion_server = Some(server),
             Err(error) => log::error!("companion socket: {error}"),

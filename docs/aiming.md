@@ -5,8 +5,8 @@ WASD/arrows control travel; the cursor controls aim. Attack buttons use the
 per press. Holding its button does not repeat it, and presses during a swing
 are dropped. Beam attacks instead channel while their button is held. A new swing immediately takes the current aim and holds that
 direction through recovery. Walking and external impulses continue normally.
-Between attacks the character turns toward the current aim at the facing
-pass's rate.
+Between attacks the character turns toward the current aim at the
+[player control owner's](../crates/game/src/player.rs) rate.
 
 `core::Intent` requires a validated `AimDir` on every tick. Zero, vertical and
 non-finite directions are rejected at construction. `app::input` projects

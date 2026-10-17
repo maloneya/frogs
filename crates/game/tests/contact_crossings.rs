@@ -1,7 +1,8 @@
 //! A slam-speed impact carries through bodies it did not touch before the tick.
 use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::{ActorDefinition, Game, GameScene, Placed};
-use arpg_sim::{Accumulator, Dt, Impulse, Template, TuningField};
+use arpg_sim::{Accumulator, Dt, Impulse, Template};
+use arpg_game::{TuningField};
 use glam::Vec2;
 
 fn setup() -> GameScene {

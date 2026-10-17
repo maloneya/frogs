@@ -3,7 +3,8 @@ use super::*;
 use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::{ChestState, DoorState, EncounterAction as Action, EncounterPhase, };
 use arpg_content::SceneObjectLabel;
-use arpg_sim::{Accumulator, AttackProfile, Dt};
+use arpg_sim::{Accumulator, Dt};
+use arpg_game::{AttackProfile};
 
 fn target(kind: Kind, index: usize) -> Target { Target { kind, index } }
 fn apply(scene: &mut SceneDocument, operation: Edit) {

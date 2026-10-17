@@ -357,9 +357,8 @@ impl Actors {
     pub(crate) fn effects(&self) -> &[ActionEffect] {
         &self.effects
     }
-    pub(crate) fn targets(&self) -> &[EntityId] {
-        &self.targets.ids
-    }
+    pub(crate) fn player_target(&self, id: EntityId) -> bool { self.targets.contains(id) }
+
     pub(crate) fn status(&self, id: EntityId, view: ActorView<'_>) -> Option<ActionStatus> {
         self.index(id).and_then(|row| self.rows[row].status(view))
     }
@@ -548,9 +547,10 @@ impl Actors {
                     if phase != AttackPhase::Recovery || elapsed != 0 { continue; }
                     // A displaced landing impacts its actual location; the committed
                     // destination remains part of selected-target damage admission.
-                    let reach = settings.radius + target_radius(view, target);
-                    let target_reached = view.position(target).is_some_and(|destination|
-                        running.destination.distance_squared(destination) <= reach * reach);
+                    let target_reached = view.position(target).zip(view.radius(target)).is_some_and(|(destination, radius)| {
+                        let reach = settings.radius + radius;
+                        running.destination.distance_squared(destination) <= reach * reach
+                    });
                     for (body, point) in view.disc_contacts(origin, origin, settings.radius) {
                         if body == actor.body || !self.coordination.strike(actor.body, body) { continue; }
                         let direction = (view.position(body).expect("contact is live") - origin)
@@ -785,10 +785,7 @@ fn execution(action: &ActionDefinition) -> ActionExecution {
     };
     ActionExecution::new(schedule, controls, interruption)
 }
-fn target_radius(view: ActorView<'_>, target: EntityId) -> f32 {
-    view.radius(target)
-        .expect("effect target position was resolved")
-}
+
 fn target(
     selection: TargetSelection,
     actor: EntityId,

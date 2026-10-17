@@ -5,14 +5,16 @@ use arpg_core::{Intent, Report};
 use crate::torch::{Torches, TorchSpec};
 use crate::chest::{self, Chests};
 use crate::door::Doors;
-use crate::encounter::{self, Encounters, EncounterEvent};
+use crate::encounter::{self, Encounters};
+use crate::GameplayEvent;
 use crate::behavior::{Actors, ActionEffect};
 use crate::population::Births;
-use crate::{ActorDefinition, Source};
+use crate::{ActorDefinition, Source, AttackProfile, AttackStatus, Tuning, TuningField};
+use crate::player::Player;
 use std::sync::Arc;
 use arpg_sim::{
-    Alpha, AttackProfile, AttackStatus, Dt, EntityId, Fnv, Impulse, InteractionState, Motion,
-    RecoveryTicks, SceneId, SourceId, Trace, World,
+    Alpha, Dt, EntityId, Fnv, Impulse, InteractionState, Motion,
+    SceneId, SourceId, Trace, World,
 };
 use glam::{Vec2, Vec3};
 
@@ -29,6 +31,8 @@ use glam::{Vec2, Vec3};
 /// ```
 pub struct Game {
     world: World,
+    player: Player,
+    tuning: Tuning,
     restart: Option<RestartScene>,
     trees: Trees,
     torches: Torches,
@@ -36,7 +40,7 @@ pub struct Game {
     doors: Doors,
     chests: Chests,
     encounters: Encounters,
-    encounter_trace: Trace<EncounterEvent>,
+    gameplay_trace: Trace<GameplayEvent>,
     actors: Actors,
     births: Births,
     corpses: crate::corpse::Corpses,
@@ -52,7 +56,9 @@ impl Game {
     #[must_use]
     pub fn empty() -> Self {
         Self {
-            world: World::empty(),
+            world: tuned_world(World::empty(), Tuning::default()),
+            player: Player::default(),
+            tuning: Tuning::default(),
             restart: None,
             trees: Trees::default(),
             torches: Torches::default(),
@@ -60,7 +66,7 @@ impl Game {
             doors: Doors::default(),
             chests: Chests::default(),
             encounters: Encounters::default(),
-            encounter_trace: Trace::default(),
+            gameplay_trace: Trace::default(),
             actors: Actors::default(),
             births: Births::default(),
             corpses: crate::corpse::Corpses::default(),
@@ -71,7 +77,9 @@ impl Game {
     pub fn from_scene(scene: &GameScene) -> Result<Self, SceneError> {
         let crate::scene::PreparedScene { world, trees, torches, environments, doors, chests, encounters, actors, births, restart } = RestartScene::prepare(scene)?;
         Ok(Self {
-            world,
+            world: tuned_world(world, Tuning::default()),
+            player: Player::default(),
+            tuning: Tuning::default(),
             restart: Some(restart),
             trees,
             torches,
@@ -79,7 +87,7 @@ impl Game {
             doors,
             chests,
             encounters,
-            encounter_trace: Trace::default(),
+            gameplay_trace: Trace::default(),
             actors,
             births,
             corpses: crate::corpse::Corpses::default(),
@@ -95,7 +103,7 @@ impl Game {
     /// Type-wide runtime tuning is preserved.
     pub fn start_scene(&mut self, scene: &GameScene) -> Result<(), SceneError> {
         let mut replacement = Self::from_scene(scene)?;
-        replacement.world.set_tuning(self.world.tuning());
+        replacement.set_tuning(self.tuning);
         *self = replacement;
         Ok(())
     }
@@ -107,7 +115,7 @@ impl Game {
         let snapshot = self.restart.as_ref().ok_or(RestartError::NoScene)?;
         let mut replacement = Self::from_scene(snapshot.description())
             .map_err(RestartError::InvalidScene)?;
-        replacement.world.set_tuning(self.world.tuning());
+        replacement.set_tuning(self.tuning);
         *self = replacement;
         Ok(())
     }
@@ -130,6 +138,8 @@ impl Game {
     pub fn step_observed(&mut self, dt: Dt, intent: Intent, observer: &mut impl arpg_sim::StepObserver) {
         let Self {
             world,
+            player,
+            tuning,
             restart: _,
             trees,
             torches: _,
@@ -137,23 +147,29 @@ impl Game {
             doors,
             chests,
             encounters,
-            encounter_trace,
+            gameplay_trace,
             actors,
             births,
             corpses,
         } = self;
         let tick = world.tick();
         let (mut access, _) = world.encounter_access();
-        let mut trace = encounter_trace.sink(tick);
+        let mut trace = gameplay_trace.sink(tick);
         chest::advance(chests, &access, &mut trace);
         encounter::begin(encounters, doors, chests, &mut access, &mut trace);
         actors.retire(world.actor_view());
         // Structural births are complete before decisions, including source emissions.
         // All decisions see the same start-of-tick physical snapshot.
-        let prepared = world.begin_step(dt, intent, actors.population());
+        let player_motor = player.prepare(world.player_id(), intent, dt, *tuning);
+        let prepared = world.begin_step(dt, actors.population());
         births.admit(prepared.spawn_outcomes(), actors);
         actors.prepare(prepared.view(), dt, tick);
-        let mut resolved = prepared.advance(actors.drives(), actors.targets(), observer);
+        let mut resolved = prepared.advance(player_motor.iter().chain(actors.drives()), observer);
+        // Player effects use final physical positions, then autonomous effects see
+        // resulting health. The shared sink rejects defeated actors before a trade.
+        let facing = player.facing();
+        crate::player::attack(&mut player.attack, facing, intent, |id| actors.player_target(id), &mut resolved, trace.reborrow());
+        if intent.interact() { let actor = resolved.view().player_id(); resolved.interact_nearest(actor); }
         // Falling trees met bodies during physics; the player's attack has already
         // resolved, so a body it defeated is refused here.
         trees.crush(&mut resolved);
@@ -191,6 +207,8 @@ impl Game {
     pub fn hash(&self) -> u64 {
         let Self {
             world,
+            player,
+            tuning,
             restart,
             trees,
             torches,
@@ -198,7 +216,7 @@ impl Game {
             doors,
             chests,
             encounters,
-            encounter_trace: _,
+            gameplay_trace: _,
             actors,
             births,
             corpses,
@@ -206,6 +224,8 @@ impl Game {
         let mut hash = Fnv::default();
         hash.u64(fingerprint(world, (torches, trees, environments), doors, chests, encounters, actors, births));
         corpses.hash(&mut hash);
+        player.hash(&mut hash);
+        tuning.hash(&mut hash);
         hash.usize(usize::from(restart.is_some()));
         if let Some(snapshot) = restart {
             snapshot.hash(&mut hash);
@@ -214,10 +234,19 @@ impl Game {
     }
 
     /// Accepted type-wide simulation tuning.
-    pub fn tuning(&self) -> arpg_sim::Tuning { self.world.tuning() }
+    pub fn tuning(&self) -> Tuning { self.tuning }
 
     /// Applies complete validated settings between ticks; survives scene replacement.
-    pub fn set_tuning(&mut self, tuning: arpg_sim::Tuning) { self.world.set_tuning(tuning); }
+    pub fn set_tuning(&mut self, tuning: Tuning) {
+        for field in TuningField::ALL {
+            if self.tuning.get(field) != tuning.get(field) {
+                self.gameplay_trace.sink(self.world.tick()).emit(GameplayEvent::TuningChanged { field, value: tuning.get(field) });
+            }
+        }
+        apply_physical_tuning(&mut self.world, tuning);
+        self.player.attack.retune(tuning);
+        self.tuning = tuning;
+    }
 
     /// Engine-only fingerprint for comparing physical state independently of restart.
     #[must_use]
@@ -229,6 +258,8 @@ impl Game {
     pub fn report(&self, out: &mut Report) {
         let Self {
             world,
+            player,
+            tuning,
             restart,
             trees,
             torches,
@@ -236,12 +267,14 @@ impl Game {
             doors,
             chests,
             encounters,
-            encounter_trace,
+            gameplay_trace,
             actors,
             births,
             corpses,
         } = self;
         world.report(out);
+        player.report(world.actor_view(), out);
+        out.object("tuning", |out| tuning.report(out));
         trees.report(world, out);
         torches.report(out);
         environments.report(out);
@@ -251,7 +284,7 @@ impl Game {
         actors.report(out, world.tick().saturating_sub(1));
         births.report(out);
         corpses.report(out);
-        out.int("encounter_events_dropped", encounter_trace.dropped() as u64);
+        out.int("gameplay_events_dropped", gameplay_trace.dropped() as u64);
         out.object("restart", |out| {
             out.bool("available", restart.is_some());
             if let Some(snapshot) = restart {
@@ -264,6 +297,8 @@ impl Game {
     pub fn load_scene(&mut self, scene: &GameScene) -> Result<SceneId, SceneError> {
         let Self {
             world,
+            player: _,
+            tuning: _,
             restart: _,
             trees,
             torches,
@@ -271,7 +306,7 @@ impl Game {
             doors,
             chests,
             encounters,
-            encounter_trace: _,
+            gameplay_trace: _,
             actors,
             births,
             corpses: _, // Additive loads retain existing corpses.
@@ -285,6 +320,8 @@ impl Game {
         // Both owners retire at this boundary; callers cannot omit one cleanup.
         let Self {
             world,
+            player: _,
+            tuning: _,
             restart: _,
             trees,
             torches,
@@ -292,7 +329,7 @@ impl Game {
             doors,
             chests,
             encounters,
-            encounter_trace: _,
+            gameplay_trace: _,
             actors,
             births,
             corpses,
@@ -432,12 +469,9 @@ impl Game {
 
     /// Selects the profile for the next swing without changing a committed swing.
     pub fn set_attack_profile(&mut self, profile: AttackProfile) {
-        self.world.set_attack_profile(profile);
-    }
-
-    /// Sets validated recovery for the next swing through the shared tuning door.
-    pub fn set_attack_recovery(&mut self, recovery: RecoveryTicks) {
-        self.world.set_attack_recovery(recovery);
+        if self.player.attack.set_profile(profile, self.tuning) {
+            self.gameplay_trace.sink(self.world.tick()).emit(GameplayEvent::AttackProfileChanged { profile });
+        }
     }
 
     /// Configure engine diagnostic history; zero disables recent history.
@@ -445,7 +479,7 @@ impl Game {
     pub fn set_trace_retention(&mut self, capacity: usize) -> Result<(), &'static str> {
         Trace::<arpg_sim::Event>::validate_limit(capacity)?;
         self.world.set_trace_retention(capacity)?;
-        self.encounter_trace.set_retention(capacity)
+        self.gameplay_trace.set_retention(capacity)
     }
 
     /// Collect all diagnostic streams independently of their retention rings.
@@ -453,23 +487,21 @@ impl Game {
     pub fn capture_trace(&mut self, limit: usize) -> Result<(), &'static str> {
         Trace::<arpg_sim::Event>::validate_limit(limit)?;
         self.world.capture_trace(limit)?;
-        self.encounter_trace.capture(limit, |_| true)
+        self.gameplay_trace.capture_all(limit)
     }
 
     /// Render complete captured streams, or fail closed on any overflow.
     pub fn render_captured_trace(&self) -> Option<String> {
         Some(render_events(
-            self.world.trace().captured()?.iter().copied(),
-            self.encounter_trace.captured()?.iter().copied(),
+            self.world.trace().full_capture()?.iter().copied(),
+            self.gameplay_trace.full_capture()?.iter().copied(),
         ))
     }
 
-    /// Collect selected engine transitions separately from recent history.
-    pub fn capture_events(&mut self, limit: usize, kinds: Vec<arpg_sim::EventKind>) -> Result<(), &'static str> {
+    /// Collect selected physical and gameplay transitions independently of recent history.
+    pub fn capture_events(&mut self, limit: usize, kinds: Vec<arpg_sim::EventKind>, gameplay_kinds: Vec<crate::GameplayEventKind>) -> Result<(), &'static str> {
         self.world.capture_events(limit, kinds)?;
-        // A filtered engine stream cannot be rendered as a complete multi-stream log.
-        self.encounter_trace.stop_capture();
-        Ok(())
+        self.gameplay_trace.capture_selected(limit, move |event| gameplay_kinds.contains(&event.kind()))
     }
 
     /// Complete selected evidence, or `None` if its bound was exceeded.
@@ -477,10 +509,13 @@ impl Game {
         self.world.trace().captured()
     }
 
+    /// Complete selected gameplay evidence, independently bounded from physical events.
+    pub fn captured_gameplay_events(&self) -> Option<&[(u64, GameplayEvent)]> { self.gameplay_trace.captured() }
+
     /// Clears diagnostic history without changing simulation state or its hash.
     pub fn clear_trace(&mut self) {
         self.world.clear_trace();
-        self.encounter_trace.clear();
+        self.gameplay_trace.clear();
     }
 
     /// Reads tick-stamped engine events; observation cannot mutate them.
@@ -522,19 +557,19 @@ impl Game {
     /// Current attack configuration and committed swing state.
     #[must_use]
     pub fn attack_status(&self) -> AttackStatus {
-        self.world.attack_status()
+        self.player.attack.status()
     }
 
     /// Whether the current swing has an active hitbox.
     #[must_use]
     pub fn hitbox_is_live(&self) -> bool {
-        self.world.hitbox_is_live()
+        self.player.attack.hitbox_is_live()
     }
 
     /// Number of bodies struck by the current or most recent swing.
     #[must_use]
     pub fn struck(&self) -> usize {
-        self.world.struck()
+        self.player.attack.struck()
     }
 
     /// Player simulation position in world metres.
@@ -545,8 +580,9 @@ impl Game {
 
     /// Immutable player facts for asset-driven presentation.
     #[must_use]
-    pub fn player_presentation(&self, alpha: Alpha) -> arpg_sim::PlayerPresentation {
-        self.world.player_presentation(alpha)
+    pub fn player_presentation(&self, alpha: Alpha) -> crate::PlayerPresentation {
+        let physical = self.world.player_presentation(alpha);
+        crate::PlayerPresentation::new(physical.id(), physical.ground_position(), self.player.drawn_facing(alpha), physical.displacement(), self.player.attack.status())
     }
 
     /// Immutable, allocation-free presentation facts for live enemies.
@@ -561,7 +597,10 @@ impl Game {
     pub fn walls(&self) -> impl Iterator<Item = (SceneId, usize, arpg_sim::Wall)> + '_ { self.world.walls() }
 
     /// Active beam clipped to the first wall or jointed body at the completed tick.
-    pub fn beam(&self) -> Option<arpg_sim::Beam> { self.world.beam() }
+    pub fn beam(&self) -> Option<arpg_sim::Beam> {
+        let view = self.world.actor_view();
+        self.player.attack.beam(view.position(view.player_id()).expect("persistent player body"), self.player.facing()).map(|beam| view.clip_beam(beam))
+    }
 
     /// Read-only nearest wall or jointed-body contact, using the shared physical geometry.
     pub fn solid_hit(
@@ -573,11 +612,11 @@ impl Game {
     }
 
     /// Completed-tick beam damage positions, including targets defeated that tick.
-    pub fn beam_hits(&self) -> &[Vec2] { self.world.beam_hits() }
+    pub fn beam_hits(&self) -> &[Vec2] { self.player.attack.beam_hits() }
 
     /// Committed swing discs; beam geometry has its own read-only observation.
     pub fn attack_discs(&self) -> impl Iterator<Item = arpg_sim::AttackDisc> + '_ {
-        self.world.attack_discs()
+        self.player.attack.debug_discs(self.world.actor_view().position(self.world.player_id()).expect("persistent player body"), self.player.facing())
     }
 
     /// Authoritative collision geometry, without presentation interpolation.
@@ -593,7 +632,7 @@ impl Game {
     /// Player simulation facing in radians.
     #[must_use]
     pub fn player_facing(&self) -> f32 {
-        self.world.player_facing()
+        self.player.facing()
     }
 
     /// Stable identity of the player body.
@@ -686,7 +725,7 @@ impl Game {
     /// Dropped events across all bounded diagnostic streams.
     #[must_use]
     pub fn trace_dropped(&self) -> usize {
-        self.world.trace().dropped() + self.encounter_trace.dropped()
+        self.world.trace().dropped() + self.gameplay_trace.dropped()
     }
 
     /// Engine diagnostics followed by a labelled gameplay stream. Each stream
@@ -694,7 +733,7 @@ impl Game {
     /// a chronology between external commands and the gameplay pass.
     #[must_use]
     pub fn render_trace_since(&self, since: u64) -> String {
-        render_events(self.world.trace().since(since), self.encounter_trace.since(since))
+        render_events(self.world.trace().since(since), self.gameplay_trace.since(since))
     }
 }
 
@@ -715,8 +754,8 @@ impl Game {
     pub fn door_state(&self, scene: SceneId, nth: usize) -> Option<crate::DoorState> { self.doors.state(scene, nth, &self.world) }
     /// Lossless combat outcomes of the latest completed engine tick.
     pub fn defeats(&self) -> &[arpg_sim::Defeat] { self.world.defeats() }
-    /// Encounter, door and chest diagnostics, separate from authoritative progression.
-    pub fn encounter_trace(&self) -> &Trace<EncounterEvent> { &self.encounter_trace }
+    /// Gameplay transitions, separate from authoritative actions and progression.
+    pub fn gameplay_trace(&self) -> &Trace<GameplayEvent> { &self.gameplay_trace }
 }
 
 impl Game {
@@ -733,17 +772,23 @@ impl Game {
 /// Streams have an explicit order, rather than inventing cross-stream chronology.
 fn render_events(
     engine: impl Iterator<Item = (u64, arpg_sim::Event)>,
-    encounters: impl Iterator<Item = (u64, EncounterEvent)>,
+    gameplay: impl Iterator<Item = (u64, GameplayEvent)>,
 ) -> String {
         use std::fmt::Write as _;
         let mut out = String::new();
         for (tick, event) in engine {
             let _ = writeln!(out, "{tick} {event}");
         }
-        let mut encounters = encounters.peekable();
-        if encounters.peek().is_some() {
-            out.push_str("# encounters\n");
-            for (tick, event) in encounters { let _ = writeln!(out, "{tick} {event}"); }
+        let mut gameplay = gameplay.peekable();
+        if gameplay.peek().is_some() {
+            out.push_str("# gameplay\n");
+            for (tick, event) in gameplay { let _ = writeln!(out, "{tick} {event}"); }
         }
         out
 }
+
+fn apply_physical_tuning(world: &mut World, tuning: Tuning) {
+    world.set_contact_material(tuning.contact_material());
+    assert!(world.set_mass(world.player_id(), arpg_sim::Mass::try_from(tuning.get(TuningField::PlayerMass)).expect("validated player mass")));
+}
+fn tuned_world(mut world: World, tuning: Tuning) -> World { apply_physical_tuning(&mut world, tuning); world }

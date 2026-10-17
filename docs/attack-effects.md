@@ -50,7 +50,8 @@ uses the player-centred capsule, independently of animation. It pierces enemies
 until a wall or physical panel, pulses eligible damage, and applies a forward
 impulse to each unshielded contacted body on every touching tick, independently
 of its health or allegiance.
-Release resets cadence. [Beam](../crates/sim/src/beam.rs) owns reach, width and timing.
+Release resets cadence. [Disintegrate](../crates/game/src/player.rs) owns reach, width and timing;
+[simulation geometry](../crates/sim/src/beam.rs) owns capsule contact and clipping.
 There is no resource cost or damage ramp.
 
 `Game::beam` and `state.sim.beam` expose endpoints, tuning, channel state, pulse

@@ -111,7 +111,7 @@ fn walls_block_startup_and_a_defeated_attacker_cannot_finish_its_swing() {
     }
     scene.engine.walls.clear();
     game.start_scene(&scene).unwrap();
-    game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
+    game.set_attack_profile(arpg_game::AttackProfile::Disintegrate);
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
     for tick in 0..84 {
         game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_attack_held(true));

@@ -2,7 +2,8 @@
 //! by the push speed, conserving momentum, and ending at rest.
 use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::{ActorDefinition, Game, Placed, Scene};
-use arpg_sim::{Accumulator, Dt, EntityId, TuningField};
+use arpg_sim::{Accumulator, Dt, EntityId};
+use arpg_game::{TuningField};
 use glam::Vec2;
 
 fn step(game: &mut Game) {

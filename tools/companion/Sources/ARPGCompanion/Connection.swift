@@ -16,16 +16,7 @@ struct Attribute: Decodable, Identifiable, Sendable {
     var id: String { key }
 }
 
-struct SceneFile: Decodable, Identifiable, Sendable {
-    let path: String
-    let label: String
-    var id: String { path }
-}
-
 struct SceneSnapshot: Decodable, Sendable {
-    let directory: String?
-    let files: [SceneFile]
-    let error: String?
     let current: String?
     let run: UInt64
     let tick: UInt64
@@ -88,7 +79,6 @@ struct Reply: Decodable, Sendable {
 
 enum Operation: String, Encodable, Sendable {
     case state, set, save, revert, defaults, restart, collision, vsync, zoom, capture
-    case refreshScenes = "refresh_scenes"
     case startScene = "start_scene"
 }
 

@@ -5,7 +5,8 @@ use arpg_game::{
     DefeatObjective, DoorSpec, DoorState, EncounterAction as Action, EncounterObjective,
     EncounterPhase as Phase, EncounterSpec, EncounterStart, Game, GameScene,
 };
-use arpg_sim::{Accumulator, AttackProfile, Condition, Dt, };
+use arpg_sim::{Accumulator, Condition, Dt};
+use arpg_game::{AttackProfile};
 use glam::{Vec2, Vec3};
 
 fn source(pos: (f32, f32)) -> SourceSpec {

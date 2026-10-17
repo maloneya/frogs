@@ -1,70 +1,10 @@
-//! Authored attack content and the validated runtime values swings consume.
+//! Validated resolved values and physical paths consumed by gameplay attack producers.
 
 use glam::Vec2;
 use core::num::NonZeroU8;
 use serde::Deserialize;
 
 use crate::swing::Swing;
-
-/// Authored attacks available to the player today.
-///
-/// Gameplay input and scenario commands share these identities.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-pub enum AttackProfile {
-    /// A broad, fast arc with a short shove that keeps survivors in follow-up reach.
-    #[default]
-    Cleave,
-    /// An expanding omnidirectional slam with enough impulse to clear a crowd.
-    Slam,
-    /// A held, piercing beam that follows aim.
-    Disintegrate,
-}
-
-impl AttackProfile {
-    /// The complete authored catalog. Presentation may choose how to lay it out.
-    pub const ALL: [Self; 3] = [Self::Cleave, Self::Slam, Self::Disintegrate];
-
-    /// The authored name, shared by state, traces, and selection surfaces.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Cleave => "Cleave",
-            Self::Slam => "Slam",
-            Self::Disintegrate => "Disintegrate",
-        }
-    }
-
-    /// Resolves this authored profile into the complete runtime value a swing
-    /// captures. Channels return `None`; their capsule and cadence belong to [`crate::Beam`].
-    #[must_use]
-    pub fn resolve(self, tuning: crate::Tuning) -> Option<ResolvedAttack> {
-        let (startup, active, recovery, shape, knockback) = match self {
-            Self::Disintegrate => return None,
-            // Melee deals two of an ordinary enemy's three health points.
-            // Cleave keeps survivors nearby; Slam launches them through the crowd.
-            // Crowd-control content uses the same impulse and swept-disc doors
-            // as other physical producers. At unit enemy mass and 0.9 retention, free travel is
-            // roughly impulse / 6 metres; contacts distribute it through the rank.
-            Self::Cleave => (6, 6, 10, shape((-1.8, 1.2, 1.1), (1.8, 1.2, 1.1)), tuning.get(crate::TuningField::CleaveImpulse)),
-            Self::Slam => (9, 5, 16, shape((0.0, 0.0, 1.4), (0.0, 0.0, 4.2)), tuning.get(crate::TuningField::SlamImpulse)),
-        };
-        Some(ResolvedAttack::try_new(
-            startup,
-            active,
-            RecoveryTicks::try_from(recovery).expect("profile recovery is supported"),
-            shape,
-            knockback,
-            NonZeroU8::new(2).expect("melee deals positive damage"),
-        )
-        .expect("built-in attack profile is valid"))
-    }
-}
-
-impl core::fmt::Display for AttackProfile {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.label())
-    }
-}
 
 /// The path and size of a hitbox before timing or force are attached.
 ///
@@ -87,8 +27,8 @@ impl AttackShape {
         end: Vec2,
         end_radius: f32,
     ) -> Result<Self, AttackResolveError> {
-        if !start.is_finite() || !end.is_finite() {
-            return Err(AttackResolveError::NonFiniteShape);
+        if !crate::valid_position(start) || !crate::valid_position(end) {
+            return Err(AttackResolveError::InvalidShapePosition);
         }
         if (start == Vec2::ZERO) != (end == Vec2::ZERO) {
             return Err(AttackResolveError::DirectionlessShape);
@@ -97,6 +37,8 @@ impl AttackShape {
             || !end_radius.is_finite()
             || start_radius <= 0.0
             || end_radius <= 0.0
+            || start_radius > crate::MAX_POSITION_COMPONENT
+            || end_radius > crate::MAX_POSITION_COMPONENT
         {
             return Err(AttackResolveError::InvalidRadius);
         }
@@ -109,11 +51,11 @@ impl AttackShape {
 pub enum AttackResolveError {
     /// Startup or active duration lies outside the supported tick range.
     InvalidTiming,
-    /// A path endpoint contains NaN or infinity.
-    NonFiniteShape,
-    /// Only one path endpoint is at the player origin, leaving its arc undefined.
+    /// A path endpoint lies outside the finite geometric arithmetic domain.
+    InvalidShapePosition,
+    /// Only one path endpoint is at the producer origin, leaving its arc undefined.
     DirectionlessShape,
-    /// A hitbox radius is non-finite or non-positive.
+    /// A hitbox radius is non-positive or outside the finite geometric domain.
     InvalidRadius,
     /// Knockback cannot produce a finite impulse.
     InvalidKnockback,
@@ -125,9 +67,9 @@ impl core::fmt::Display for AttackResolveError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::InvalidTiming => "attack timing is outside the supported range",
-            Self::NonFiniteShape => "attack path must be finite",
+            Self::InvalidShapePosition => "attack path must be within the finite geometric domain",
             Self::DirectionlessShape => "attack path must be centred throughout or have two directed endpoints",
-            Self::InvalidRadius => "attack radii must be finite and positive",
+            Self::InvalidRadius => "attack radii must be positive and within the finite geometric domain",
             Self::InvalidKnockback => "attack knockback must have a finite magnitude",
             Self::UncoveredPath => "attack path can skip a body between ticks",
         })
@@ -151,7 +93,8 @@ pub struct ResolvedAttack {
 }
 
 impl ResolvedAttack {
-    pub(crate) const MAX_ACTIVE_TICKS: u32 = 120;
+    /// Maximum supported active duration and committed sample count.
+    pub const MAX_ACTIVE_TICKS: u32 = 120;
     const MIN_TICKS: u32 = 1;
     const MAX_TICKS: u32 = 120;
 
@@ -197,7 +140,7 @@ impl ResolvedAttack {
         self.recovery
     }
 
-    /// Local X/Y: right of facing, then ahead of the player.
+    /// Local X/Y: right of facing, then ahead of the producer.
     #[must_use]
     pub fn start(self) -> Vec2 {
         self.shape.start
@@ -209,7 +152,7 @@ impl ResolvedAttack {
         self.shape.start_radius
     }
 
-    /// Local X/Y: right of facing, then ahead of the player.
+    /// Local X/Y: right of facing, then ahead of the producer.
     #[must_use]
     pub fn end(self) -> Vec2 {
         self.shape.end
@@ -221,7 +164,7 @@ impl ResolvedAttack {
         self.shape.end_radius
     }
 
-    /// Impulse magnitude: Slam pushes radially; Cleave pushes along facing.
+    /// Impulse magnitude; the producer chooses its direction.
     #[must_use]
     pub fn knockback(self) -> f32 {
         self.knockback
@@ -233,15 +176,8 @@ impl ResolvedAttack {
         self.damage
     }
 
-    /// A semantic runtime modifier already used by the recovery playtest.
-    /// It preserves the profile identity while changing the resolved value.
-    #[must_use]
-    pub(crate) fn with_recovery(mut self, recovery: RecoveryTicks) -> Self {
-        self.recovery = recovery;
-        self
-    }
-
-    pub(crate) fn hash(self, h: &mut crate::hash::Fnv) {
+    /// Feed the complete admitted value into deterministic replay state.
+    pub fn hash_into(self, h: &mut crate::hash::Fnv) {
         let Self { startup, active, recovery, shape, knockback, damage } = self;
         h.u64(u64::from(damage.get()));
         h.u64(u64::from(startup));
@@ -276,38 +212,24 @@ impl ResolvedAttack {
         out.num("knockback", knockback);
     }
 
-    /// Consecutive per-tick discs must overlap enough that an enemy centre
-    /// cannot sit between them without touching either. Runtime resolution cannot
-    /// use the old const assertion, so the validating edit door owns the rule.
+    /// Generate committed physical samples from this fully validated value.
+    /// Refuses storage smaller than the active window without partial output.
+    pub fn hitbox<const N: usize>(self) -> Option<crate::Hitbox<N>> {
+        if self.active as usize > N { return None; }
+        Some(Swing::new(self.shape.start, self.shape.end, (self.shape.start_radius, self.shape.end_radius))
+            .generate(self.active as usize))
+    }
+
+    /// Consecutive samples must overlap enough to cover every supported body.
     fn path_covers_every_body(self) -> bool {
-        let path = Swing::new(
-            self.shape.start,
-            self.shape.end,
-            (self.shape.start_radius, self.shape.end_radius),
-        );
-        let hitbox = path.generate::<{ Self::MAX_ACTIVE_TICKS as usize }>(self.active as usize);
+        let hitbox = self.hitbox::<{ Self::MAX_ACTIVE_TICKS as usize }>()
+            .expect("validated active window fits committed sample storage");
         hitbox.discs().windows(2).all(|pair| {
             let (from, from_radius) = pair[0].place(Vec2::ZERO, 0.0);
             let (to, to_radius) = pair[1].place(Vec2::ZERO, 0.0);
             from.distance(to) <= from_radius + to_radius + 2.0 * crate::ENEMY_RADIUS
         })
     }
-}
-
-impl Default for ResolvedAttack {
-    fn default() -> Self {
-        AttackProfile::default().resolve(crate::Tuning::default()).expect("default is a swing")
-    }
-}
-
-fn shape(start: (f32, f32, f32), end: (f32, f32, f32)) -> AttackShape {
-    AttackShape::try_new(
-        Vec2::new(start.0, start.1),
-        start.2,
-        Vec2::new(end.0, end.1),
-        end.2,
-    )
-    .expect("built-in attack shape is valid")
 }
 
 /// Recovery duration in simulation ticks. Construction and deserialization share
@@ -326,12 +248,6 @@ impl RecoveryTicks {
     /// Duration in simulation ticks.
     pub fn get(self) -> u32 {
         self.0
-    }
-}
-
-impl Default for RecoveryTicks {
-    fn default() -> Self {
-        Self::try_from(10).expect("default recovery lies within its supported range")
     }
 }
 
@@ -371,76 +287,15 @@ impl core::fmt::Display for AttackPhase {
     }
 }
 
-/// A read-only snapshot. Changing it cannot change the simulation.
-#[derive(Clone, Copy, Debug)]
-pub struct AttackStatus {
-    /// Shared lifecycle of the committed swing or held channel.
-    pub execution: Option<crate::ActionExecution>,
-    /// Current phase.
-    pub phase: AttackPhase,
-    /// Elapsed ticks in the current swing, or zero when idle.
-    pub elapsed: u32,
-    /// Authored attack selected for the next swing.
-    pub profile: AttackProfile,
-    /// Authored attack captured by the swing in flight.
-    pub swing_profile: Option<AttackProfile>,
-    /// Configuration used by the next swing.
-    pub resolved: Option<ResolvedAttack>,
-    /// Whether the held beam is active at the completed tick.
-    pub channeling: bool,
-    /// Completed tick within the active channel damage cadence, absent when idle.
-    pub channel_tick: Option<u32>,
-    /// Configuration captured by the swing in flight.
-    pub swing_resolved: Option<ResolvedAttack>,
-    /// Recovery used by the next swing; absent for a channel.
-    pub recovery: Option<RecoveryTicks>,
-    /// Recovery committed to by the swing already in flight.
-    pub swing_recovery: Option<RecoveryTicks>,
-    /// Bodies struck by the current or most recent swing.
-    pub struck: usize,
-}
-
-impl AttackStatus {
-    pub(crate) fn report(self, out: &mut arpg_core::Report) {
-        let Self {
-            execution,
-            phase,
-            channeling,
-            channel_tick,
-            elapsed,
-            profile,
-            swing_profile,
-            resolved,
-            swing_resolved,
-            recovery,
-            swing_recovery,
-            struck,
-        } = self;
-        out.object("action_execution", |out| { if let Some(execution) = execution { execution.report(out); } });
-        out.bool("channeling", channeling);
-        out.int("channel_tick", u64::from(channel_tick.unwrap_or(0)));
-        out.bool("swinging", phase != AttackPhase::Idle && !channeling);
-        out.bool("startup", phase == AttackPhase::Startup);
-        out.bool("hitbox", phase == AttackPhase::Active);
-        out.bool("recovering", phase == AttackPhase::Recovery);
-        out.int("swing_tick", u64::from(elapsed));
-        out.int("recovery_ticks", u64::from(recovery.map_or(0, RecoveryTicks::get)));
-        out.int("swing_recovery_ticks", u64::from(swing_recovery.map_or(0, RecoveryTicks::get)));
-        out.int("struck", struck as u64);
-        out.text("attack_profile", profile.label());
-        out.text("swing_profile", swing_profile.map_or("", AttackProfile::label));
-        out.object("resolved_attack", |out| { if let Some(resolved) = resolved { resolved.report(out); } });
-        out.object("swing_resolved_attack", |out| {
-            if let Some(resolved) = swing_resolved {
-                resolved.report(out);
-            }
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn shape(start: (f32, f32, f32), end: (f32, f32, f32)) -> AttackShape {
+        AttackShape::try_new(Vec2::new(start.0, start.1), start.2, Vec2::new(end.0, end.1), end.2).unwrap()
+    }
+    fn resolved() -> ResolvedAttack {
+        ResolvedAttack::try_new(2, 3, RecoveryTicks::try_from(4).unwrap(), shape((-1.0, 1.0, 0.5), (1.0, 1.0, 0.5)), 2.0, NonZeroU8::new(2).unwrap()).unwrap()
+    }
 
     #[test]
     fn recovery_bounds_cannot_be_bypassed() {
@@ -449,32 +304,37 @@ mod tests {
         assert!(RecoveryTicks::try_from(RecoveryTicks::MAX).is_ok());
         assert!(RecoveryTicks::try_from(RecoveryTicks::MAX + 1).is_err());
         assert!(RecoveryTicks::try_from(u32::MAX).is_err());
-        assert!(RecoveryTicks::try_from(RecoveryTicks::default().get()).is_ok());
-    }
-
-    #[test]
-    fn every_authored_profile_resolves_to_a_distinct_valid_attack() {
-        let attacks: Vec<_> = AttackProfile::ALL.into_iter().filter_map(|profile| profile.resolve(crate::Tuning::default())).collect();
-        assert_eq!(attacks.len(), 2);
-        assert!(AttackProfile::Disintegrate.resolve(crate::Tuning::default()).is_none());
-        for (index, resolved) in attacks.iter().enumerate() {
-            assert!(attacks[index + 1..].iter().all(|other| other != resolved));
-        }
     }
 
     #[test]
     fn damage_is_captured_hashed_and_reported() {
-        let attack = ResolvedAttack::default();
+        let attack = resolved();
         let weaker = ResolvedAttack::try_new(attack.startup, attack.active, attack.recovery,
             attack.shape, attack.knockback, NonZeroU8::MIN).unwrap();
         let mut a = crate::hash::Fnv::default();
         let mut b = crate::hash::Fnv::default();
-        attack.hash(&mut a);
-        weaker.hash(&mut b);
+        attack.hash_into(&mut a);
+        weaker.hash_into(&mut b);
         assert_ne!(a.finish(), b.finish());
         let mut report = arpg_core::Report::default();
         attack.report(&mut report);
         assert!(report.finish().contains("\"damage\":2"));
+    }
+
+    #[test]
+    fn geometry_admission_prevents_nonfinite_samples_and_sampling_refuses_small_storage() {
+        for invalid in [f32::NAN, f32::INFINITY, f32::MAX] {
+            assert_eq!(AttackShape::try_new(Vec2::splat(invalid), 1.0, Vec2::Y, 1.0), Err(AttackResolveError::InvalidShapePosition));
+            assert_eq!(AttackShape::try_new(Vec2::Y, invalid, Vec2::Y, 1.0), Err(AttackResolveError::InvalidRadius));
+        }
+        let extreme = AttackShape::try_new(Vec2::splat(crate::MAX_POSITION_COMPONENT), crate::MAX_POSITION_COMPONENT,
+            Vec2::splat(crate::MAX_POSITION_COMPONENT), crate::MAX_POSITION_COMPONENT).unwrap();
+        let attack = ResolvedAttack::try_new(1, 1, RecoveryTicks::try_from(1).unwrap(), extreme, 1.0, NonZeroU8::MIN).unwrap();
+        let samples = attack.hitbox::<1>().unwrap();
+        let (centre, radius) = samples.at(0).place(Vec2::splat(-crate::MAX_POSITION_COMPONENT), 0.75);
+        assert!(centre.is_finite() && radius.is_finite());
+        assert!(resolved().hitbox::<2>().is_none());
+        assert_eq!(resolved().hitbox::<3>().unwrap().discs().len(), 3);
     }
 
     #[test]
@@ -487,7 +347,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            ResolvedAttack::try_new(1, 2, RecoveryTicks::default(), narrow, 1.0, NonZeroU8::MIN),
+            ResolvedAttack::try_new(1, 2, RecoveryTicks::try_from(10).unwrap(), narrow, 1.0, NonZeroU8::MIN),
             Err(AttackResolveError::UncoveredPath)
         );
         assert!(AttackShape::try_new(Vec2::ZERO, 1.4, Vec2::ZERO, 4.2).is_ok());
@@ -503,7 +363,7 @@ mod tests {
             ResolvedAttack::try_new(
                 0,
                 1,
-                RecoveryTicks::default(),
+                RecoveryTicks::try_from(10).unwrap(),
                 shape((0.0, 1.0, 0.5), (0.0, 1.0, 0.5)),
                 1.0,
                 NonZeroU8::MIN,

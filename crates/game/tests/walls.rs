@@ -2,7 +2,8 @@
 use arpg_game::{Scene, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene};
-use arpg_sim::{Accumulator, AttackProfile, Beam, Dt, ENEMY_RADIUS, Impulse, MAX_WALLS, PLAYER_RADIUS, Wall};
+use arpg_sim::{Accumulator, Dt, ENEMY_RADIUS, Impulse, MAX_WALLS, PLAYER_RADIUS, Wall};
+use arpg_game::{AttackProfile, Disintegrate};
 use glam::{Vec2, Vec3};
 
 fn wall(centre: Vec2, size: Vec2, yaw: f32) -> Wall {
@@ -230,7 +231,7 @@ fn beam_endpoint_uses_nearest_rotated_wall_and_survives_origin_inside_a_wall() {
             .unwrap()
             .start()
             .distance(game.beam().unwrap().end())
-            <= Beam::LENGTH
+            <= Disintegrate::LENGTH
     );
 }
 

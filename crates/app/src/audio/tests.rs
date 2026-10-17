@@ -27,7 +27,7 @@ fn committed_swings_sound_at_activation_and_misses_have_no_impact() {
         let mut game = Game::empty();
         let mut audio = Audio::default();
         game.set_attack_profile(profile);
-        let attack = profile.resolve(arpg_sim::Tuning::default()).unwrap();
+        let attack = profile.resolve(arpg_game::Tuning::default()).unwrap();
         for elapsed in 0..attack.startup() + attack.active() + attack.recovery().get() + 2 {
             step(&mut game, &mut audio, intent(Vec3::ZERO, elapsed == 0));
             if elapsed == 1 { game.set_attack_profile(AttackProfile::Disintegrate); }
@@ -50,7 +50,7 @@ fn a_slam_hitting_multiple_enemies_produces_one_contact_cue() {
     let mut game = Game::from_scene(&scene).unwrap();
     game.set_attack_profile(AttackProfile::Slam);
     let mut audio = Audio::default();
-    let resolved = AttackProfile::Slam.resolve(arpg_sim::Tuning::default()).unwrap();
+    let resolved = AttackProfile::Slam.resolve(arpg_game::Tuning::default()).unwrap();
     for elapsed in 0..resolved.startup() + resolved.active() + 1 {
         step(&mut game, &mut audio, intent(Vec3::ZERO, elapsed == 0));
         assert_eq!(audio.cues[Cue::Impact as usize], u64::from(elapsed >= resolved.startup()));
@@ -119,7 +119,7 @@ fn beam_pulses_sound_once_for_many_targets_including_defeat_and_misses_are_silen
     game.set_attack_profile(AttackProfile::Disintegrate);
     for tick in 0..30 {
         step(&mut game, &mut audio, intent(Vec3::ZERO, false).with_attack_held(true));
-        assert_eq!(audio.cues[Cue::Impact as usize], (tick / arpg_sim::Beam::HIT_EVERY + 1).min(3) as u64);
+        assert_eq!(audio.cues[Cue::Impact as usize], (tick / arpg_game::Disintegrate::HIT_EVERY + 1).min(3) as u64);
         assert_eq!(audio.cues[Cue::Cleave as usize], 0);
     }
     assert_eq!(game.enemy_count(), 0);

@@ -1,30 +1,40 @@
-//! Authoritative capsule used by Disintegrate damage and presentation.
+//! Validated ground-plane capsule geometry shared by effect producers and presentation.
 use glam::Vec2;
 
-/// A completed tick's beam, from the player to its maximum reach.
+/// A finite capsule with an optional clipping face. Authored reach and damage
+/// cadence belong to its producer.
 #[derive(Clone, Copy, Debug)]
 pub struct Beam {
     start: Vec2,
     end: Vec2,
     end_normal: Option<Vec2>,
+    radius: f32,
 }
 
 impl Beam {
-    /// Reach in metres from the player centre.
-    pub const LENGTH: f32 = 12.0;
-    /// Half width in metres; enemy body radius also counts for contact.
-    pub const RADIUS: f32 = 1.2;
-    /// Momentum added along the beam every touching simulation tick.
-    pub const KNOCKBACK: f32 = 0.15;
-    /// One damage point immediately, then every twelve ticks while held.
-    pub const HIT_EVERY: u32 = 12;
-
-    pub(crate) fn new(start: Vec2, facing: f32) -> Self {
-        Self {
-            start,
-            end: start + Vec2::new(facing.sin(), facing.cos()) * Self::LENGTH,
-            end_normal: None,
+    /// Construct a capsule within the shared geometric arithmetic domain.
+    /// A zero-length axis produces no contacts.
+    pub fn new(start: Vec2, end: Vec2, radius: f32) -> Result<Self, &'static str> {
+        if !crate::valid_position(start)
+            || !crate::valid_position(end)
+            || !radius.is_finite()
+            || radius <= 0.0
+            || radius > crate::MAX_POSITION_COMPONENT
+        {
+            return Err(
+                "beam geometry must fit the finite geometric domain with a positive radius",
+            );
         }
+        Ok(Self {
+            start,
+            end,
+            end_normal: None,
+            radius,
+        })
+    }
+    /// Half width in world metres.
+    pub fn radius(self) -> f32 {
+        self.radius
     }
     pub(crate) fn clipped(mut self, hit: Option<crate::WallHit>) -> Self {
         if let Some(hit) = hit {
@@ -57,16 +67,34 @@ impl Beam {
         }
         let t = ((centre - self.start).dot(axis) / axis.length_squared()).clamp(0.0, 1.0);
         let nearest = self.start + axis * t;
-        if centre.distance_squared(nearest) > (Self::RADIUS + radius).powi(2) {
+        if centre.distance_squared(nearest) > (self.radius + radius).powi(2) {
             return None;
         }
         Some(centre + (nearest - centre).normalize_or(-axis.normalize()) * radius)
     }
 }
-const _: () = assert!(
-    Beam::LENGTH > 0.0
-        && Beam::RADIUS > 0.0
-        && Beam::HIT_EVERY > 0
-        && Beam::KNOCKBACK > 0.0
-        && Beam::KNOCKBACK.is_finite()
-);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capsules_validate_the_complete_numeric_domain_and_zero_length_has_no_contacts() {
+        for invalid in [f32::NAN, f32::INFINITY, f32::MAX] {
+            assert!(Beam::new(Vec2::splat(invalid), Vec2::Y, 1.0).is_err());
+            assert!(Beam::new(Vec2::ZERO, Vec2::Y, invalid).is_err());
+        }
+        for invalid in [0.0, -1.0] {
+            assert!(Beam::new(Vec2::ZERO, Vec2::Y, invalid).is_err());
+        }
+        let beam = Beam::new(Vec2::ZERO, Vec2::ZERO, 1.0).unwrap();
+        assert!(beam.contact(Vec2::ZERO, 0.3).is_none());
+        let extreme = Beam::new(
+            Vec2::splat(-crate::MAX_POSITION_COMPONENT),
+            Vec2::splat(crate::MAX_POSITION_COMPONENT),
+            crate::MAX_POSITION_COMPONENT,
+        )
+        .unwrap();
+        assert!(extreme.contact(Vec2::ZERO, 0.3).unwrap().is_finite());
+    }
+}

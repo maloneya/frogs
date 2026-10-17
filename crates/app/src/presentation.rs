@@ -5,12 +5,13 @@ use arpg_gfx::{
     CharacterBucket, CharacterHorde, CharacterMesh, CharacterPreview, MAX_HORDE_POSE_BUCKETS,
     MeshAsset, MeshBatch,
 };
-use arpg_sim::{Alpha, AttackPhase, AttackProfile, CharacterPresentation, Fnv, PlayerPresentation, TICK_HZ, };
+use arpg_sim::{Alpha, AttackPhase, CharacterPresentation, Fnv, TICK_HZ};
+use arpg_game::{AttackProfile, PlayerPresentation};
 use glam::Vec3;
 
 // Static placements include an all-prop world, the ground and one campfire per light and bounded trees.
-// This also covers an all-enemy world plus the player in the character buffer.
-const _: () = assert!(arpg_sim::MAX_BODIES + arpg_game::MAX_CORPSES + arpg_sim::MAX_WALLS + 1 + arpg_core::MAX_POINT_LIGHTS + arpg_game::MAX_TREES <= arpg_core::MAX_INSTANCES);
+// Characters use a growing renderer buffer because timed remains can outlive reused body slots.
+const _: () = assert!(arpg_sim::MAX_BODIES + arpg_sim::MAX_WALLS + 1 + arpg_core::MAX_POINT_LIGHTS + arpg_game::MAX_TREES <= arpg_core::MAX_INSTANCES);
 
 struct LoadedMesh<T> {
     path: std::path::PathBuf,
@@ -58,8 +59,7 @@ pub(super) struct WorldAssets<T> {
 }
 
 impl<T> WorldAssets<T> {
-    pub(super) fn load(mut upload: impl FnMut(&arpg_assets::StaticMesh) -> Result<T, String>) -> Result<Self, String> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/world");
+    pub(super) fn load(root: &std::path::Path, mut upload: impl FnMut(&arpg_assets::StaticMesh) -> Result<T, String>) -> Result<Self, String> {
         let ground = load_static(root.join("ground.glb"), &mut upload)?;
         let prop = load_static(root.join("prop.glb"), &mut upload)?;
         let chest_closed = load_static(root.join("chest/closed.glb"), &mut upload)?;
@@ -1149,16 +1149,14 @@ fn load_static<T>(
     })
 }
 
-/// The checked-in playable asset is resolved independently of the launch directory.
+/// The playable asset is resolved under the shared runtime asset root.
 pub(super) fn default_character_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/weapons/thornbound-staff/equipped/sword-glaive/player.glb")
+    crate::runtime_assets::root().join("weapons/thornbound-staff/equipped/sword-glaive/player.glb")
 }
 
-/// The checked-in enemy asset is resolved independently of the launch directory.
+/// The enemy asset is resolved under the shared runtime asset root.
 pub(super) fn default_horde_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/characters/wolf/wolf.glb")
+    crate::runtime_assets::root().join("characters/wolf/wolf.glb")
 }
 
 const PLAYER_DIGITS: [&str; 5] = ["Little", "Ring", "Middle", "Index", "Thumb"];

@@ -3,18 +3,15 @@
 use crate::{
     ActorView, Dt, EntityId, Event, MotorCommand, SpawnOutcome, StepObserver, World, pass,
 };
-use arpg_core::Intent;
 use core::num::NonZeroU8;
-use glam::Vec3Swizzles;
 
 /// Births are visible; gameplay chooses motors from the shared start-of-tick pose.
 #[must_use = "advance and finish the admitted tick"]
 pub struct PreparedStep<'a> {
     world: Option<&'a mut World>,
     dt: Dt,
-    intent: Intent,
 }
-/// Physics and the player's attack have resolved; gameplay may apply explicit effects.
+/// Physics has resolved; gameplay may apply explicit effects.
 #[must_use = "finish the tick after resolving gameplay effects"]
 pub struct ResolvedStep<'a> {
     world: Option<&'a mut World>,
@@ -23,7 +20,7 @@ pub struct ResolvedStep<'a> {
 impl World {
     /// Admits all births for this tick before gameplay binds and evaluates actions.
     /// Population is supplied by gameplay, independently of body/health counts.
-    pub fn begin_step(&mut self, dt: Dt, intent: Intent, population: usize) -> PreparedStep<'_> {
+    pub fn begin_step(&mut self, dt: Dt, population: usize) -> PreparedStep<'_> {
         let mut trace = self.trace.sink(self.tick);
         pass::source::trigger(
             &mut self.sources,
@@ -39,15 +36,12 @@ impl World {
             trace.reborrow(),
         );
         pass::remember::remember(
-            self.player.facing,
-            &mut self.player.prev_facing,
             &self.bodies.pos,
             &mut self.bodies.prev_pos,
         );
         PreparedStep {
             world: Some(self),
             dt,
-            intent,
         }
     }
 }
@@ -60,64 +54,13 @@ impl<'a> PreparedStep<'a> {
     pub fn spawn_outcomes(&self) -> &[SpawnOutcome] {
         self.world.as_ref().expect("prepared tick").spawn_outcomes()
     }
-    /// Apply one motor per actor, shared physics, then player attack effects.
-    /// Target identities are a gameplay decision; only those identities can take health damage.
-    pub fn advance(
-        mut self,
-        motors: &[MotorCommand],
-        player_targets: &[EntityId],
-        observer: &mut impl StepObserver,
-    ) -> ResolvedStep<'a> {
-        let world = self.world.as_mut().expect("prepared tick");
-        world.player_targets.clear();
-        for &id in player_targets {
-            if id != world.player_id() {
-                world.player_targets.add(id);
-            }
-        }
-        self.advance_inner(motors, observer)
-    }
-    pub(crate) fn advance_standalone(
-        mut self,
-        observer: &mut impl StepObserver,
-    ) -> ResolvedStep<'a> {
-        // Include births admitted by this tick in the standalone target set.
-        let world = self.world.as_mut().expect("prepared tick");
-        let player = world.player_id();
-        for &id in world.bodies.health.ids() {
-            if id != player {
-                world.player_targets.add(id);
-            }
-        }
-        self.advance_inner(&[], observer)
-    }
-    fn advance_inner(
-        mut self,
-        motors: &[MotorCommand],
-        observer: &mut impl StepObserver,
-    ) -> ResolvedStep<'a> {
+    /// Apply all actor motors and resolve shared physics before gameplay effects.
+    pub fn advance<'m>(mut self, motors: impl IntoIterator<Item = &'m MotorCommand>, observer: &mut impl StepObserver) -> ResolvedStep<'a> {
         let world = self.world.take().expect("prepared tick");
         let dt = self.dt;
-        let intent = self.intent;
-        // Releasing input requests bounded braking. A channel disables the motor
-        // entirely, so control suppression does not erase carried knockback.
-        if !world.player.attack.channels(intent.attack_held()) {
-            world.bodies.physics.drive().toward(
-                world.bodies.slots.ids()[0],
-                intent.move_dir().as_vec3().xz()
-                    * world.tuning.get(crate::TuningField::PlayerSpeed),
-                dt,
-                world.tuning.get(crate::TuningField::PlayerAcceleration),
-            );
-        }
         for command in motors {
-            if command.actor != world.player_id() && world.actor_view().movable(command.actor) {
-                world.bodies.physics.drive().toward(
-                    command.actor,
-                    command.velocity,
-                    dt,
-                    command.acceleration,
-                );
+            if world.actor_view().movable(command.actor) {
+                world.bodies.physics.drive().toward(command.actor, command.velocity, dt, command.acceleration);
             }
         }
         let mut trace = world.trace.sink(world.tick);
@@ -126,7 +69,7 @@ impl<'a> PreparedStep<'a> {
             crate::solver::Geometry {
                 ids: world.bodies.slots.ids(),
                 walls: &world.scenes.walls,
-                material: world.tuning.contact_material(),
+                material: world.material,
             },
             &mut world.bodies.pos,
             &mut world.bodies.physics,
@@ -150,39 +93,6 @@ impl<'a> PreparedStep<'a> {
             &world.scenes.walls,
             &mut world.crowd_grid,
             dt,
-            trace.reborrow(),
-        );
-        pass::face::aim(&mut world.player.facing, &world.player.attack, intent, dt);
-
-        // **After `face`.** The hitbox is oriented by the facing this
-        // tick ended with, and it is tested against where the bodies actually
-        // ended up — after motors and the shared contact solve. Running
-        // it earlier would swing at positions that no longer exist by the time
-        // the tick is over.
-        pass::attack::attack(
-            &mut world.player.attack,
-            pass::attack::Pose {
-                actor: world.bodies.slots.ids()[0],
-                pos: world.bodies.pos[0],
-                facing: world.player.facing,
-            },
-            intent,
-            &world.bodies.slots.ids()[1..],
-            &world.bodies.pos[1..],
-            world.bodies.physics.sink(world.bodies.slots.ids()[0]),
-            world.bodies.health.sink_for(&world.player_targets),
-            &world.scenes.walls,
-            trace.reborrow(),
-        );
-        pass::interact::interact(
-            &mut world.bodies.interactions,
-            &world.bodies.slots,
-            &world.bodies.pos,
-            world.bodies.slots.ids()[0],
-            intent.interact(),
-            &world.bodies.health,
-            &world.scenes.walls,
-            &world.bodies.physics,
             trace.reborrow(),
         );
         ResolvedStep { world: Some(world) }
@@ -212,7 +122,7 @@ impl ResolvedStep<'_> {
             &mut world.trace.sink(world.tick),
         )
     }
-    /// Final positions and health after physics and the player's attack.
+    /// Final positions and current health while explicit effects resolve.
     pub fn view(&self) -> ActorView<'_> {
         self.world.as_ref().expect("resolved tick").actor_view()
     }
@@ -260,6 +170,11 @@ impl ResolvedStep<'_> {
             &mut world.trace.sink(world.tick),
         )
     }
+    /// Activate the nearest eligible endpoint using shared reach and cover admission.
+    pub fn interact_nearest(&mut self, actor: EntityId) {
+        let world = self.world.as_mut().expect("resolved tick");
+        pass::interact::interact(&mut world.bodies.interactions, &world.bodies.slots, &world.bodies.pos, actor, true, &world.bodies.health, &world.scenes.walls, &world.bodies.physics, world.trace.sink(world.tick));
+    }
     /// Publish death immediately; moving characters retire once their physical motion rests.
     pub fn finish(mut self) {
         let world = self.world.take().expect("resolved tick");
@@ -275,7 +190,7 @@ impl ResolvedStep<'_> {
 impl World {
     /// Remove health and trace the hit; callers own eligibility.
     fn hit(&mut self, actor: EntityId, target: EntityId, amount: NonZeroU8) -> Option<u8> {
-        let remaining = self.bodies.health.sink().hit(target, amount)?;
+        let remaining = self.bodies.health.hit(target, amount)?;
         self.trace.sink(self.tick).emit(Event::Damaged { actor, target, remaining });
         Some(remaining)
     }

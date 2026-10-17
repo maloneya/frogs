@@ -1,8 +1,9 @@
 //! Corpse admission and scene lifecycle through the public Game boundary.
 use arpg_game::{Placed, Scene, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
-use arpg_game::{Game, GameScene, MAX_CORPSES, CORPSE_LIFETIME_TICKS};
-use arpg_sim::{Accumulator, AttackProfile, Dt, };
+use arpg_game::{Game, GameScene, CORPSE_LIFETIME_TICKS};
+use arpg_sim::{Accumulator, Dt};
+use arpg_game::{AttackProfile};
 use glam::Vec2;
 
 fn step(game: &mut Game, held: bool) {
@@ -27,20 +28,75 @@ fn scene() -> GameScene {
 }
 
 #[test]
-fn full_budget_skips_deaths_and_expiry_reopens_admission() {
+fn every_death_gets_its_own_timeout_across_reused_slots() {
     let mut game = Game::empty();
-    for batch in 0..=MAX_CORPSES / 8 {
-        for i in 0..8 { game.place(Vec2::new(0.0, 2.0 + i as f32), stationary_enemy()).unwrap(); }
-        kill_line(&mut game);
-        assert_eq!(game.corpses().len(), ((batch + 1) * 8).min(MAX_CORPSES));
+    let mut generations = Vec::new();
+    game.set_attack_profile(AttackProfile::Disintegrate);
+    for wave in 0..2 {
+        let ids: Vec<_> = (0..80).map(|_| game.place(Vec2::new(0.0, 3.0), ActorDefinition {
+            physical: arpg_sim::Template::BLOCK.character().with_health(std::num::NonZeroU8::MIN),
+            ..ActorDefinition::passive_hostile()
+        }).unwrap()).collect();
+        step(&mut game, true);
+        assert!(ids.iter().all(|&id| !game.is_alive(id)));
+        assert_eq!(game.corpses().len(), (wave + 1) * 80);
+        assert!(ids.iter().all(|id| game.corpses().iter().any(|corpse|
+            corpse.id() == *id && corpse.remaining_ticks() == CORPSE_LIFETIME_TICKS)));
+        generations.push(ids);
+        if wave == 0 { step(&mut game, false); }
     }
-    let newest = game.corpses().last().unwrap().remaining_ticks();
-    for _ in 0..newest { step(&mut game, false); }
+    assert!(generations[0].iter().all(|id| !generations[1].contains(id)));
+    for _ in 0..CORPSE_LIFETIME_TICKS - 2 { step(&mut game, false); }
+    assert_eq!(game.corpses().len(), 80);
+    assert!(game.corpses().iter().all(|corpse|
+        generations[1].contains(&corpse.id()) && corpse.remaining_ticks() == 2));
+    step(&mut game, false);
+    assert_eq!(game.corpses().len(), 80);
+    step(&mut game, false);
     assert!(game.corpses().is_empty());
-    game.place(Vec2::new(0.0, 3.0), stationary_enemy()).unwrap();
-    kill_line(&mut game);
-    assert_eq!(game.corpses().len(), 1);
-    assert_eq!(game.corpses()[0].remaining_ticks(), CORPSE_LIFETIME_TICKS - 1);
+}
+
+#[test]
+fn existing_remains_cannot_discard_a_new_deaths_momentum() {
+    let mut empty = Game::empty();
+    let mut crowded = Game::empty();
+    for _ in 0..256 {
+        crowded.place(Vec2::new(0.0, 3.0), ActorDefinition {
+            physical: arpg_sim::Template::BLOCK.character().with_health(std::num::NonZeroU8::MIN),
+            ..ActorDefinition::passive_hostile()
+        }).unwrap();
+    }
+    crowded.set_attack_profile(AttackProfile::Disintegrate);
+    step(&mut crowded, true);
+    step(&mut crowded, false);
+    assert_eq!(crowded.corpses().len(), 256);
+    let mut pairs = Vec::new();
+    for game in [&mut empty, &mut crowded] {
+        let victim = game.place(Vec2::new(0.0, 1.0), ActorDefinition {
+            physical: arpg_sim::Template::BODY.character().with_health(std::num::NonZeroU8::MIN),
+            ..ActorDefinition::passive_hostile()
+        }).unwrap();
+        let neighbor = game.place(Vec2::new(0.0, 1.9), ActorDefinition {
+            physical: arpg_sim::Template::BODY,
+            ..ActorDefinition::prop()
+        }).unwrap();
+        pairs.push((victim, neighbor));
+        game.set_attack_profile(AttackProfile::Slam);
+        let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
+        game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, true));
+        for _ in 0..9 { step(game, false); }
+        assert_eq!(game.health(victim), Some(0));
+        assert_eq!(game.motion(victim).unwrap().velocity(), Vec2::new(0.0, 72.0));
+    }
+    for _ in 0..5 {
+        step(&mut empty, false);
+        step(&mut crowded, false);
+        for (a, b) in [(pairs[0].0, pairs[1].0), (pairs[0].1, pairs[1].1)] {
+            assert_eq!(empty.body_pos(a), crowded.body_pos(b));
+            assert_eq!(empty.motion(a).unwrap().velocity(), crowded.motion(b).unwrap().velocity());
+        }
+    }
+    assert!((crowded.body_pos(pairs[1].1).unwrap().z - 8.283863).abs() < 0.0001);
 }
 
 #[test]
@@ -211,7 +267,7 @@ fn killing_impacts_still_meet_walls_and_transfer_momentum() {
         let mut game = Game::from_scene(&lethal_scene(wall)).unwrap();
         let owner = game.scene_instances().next().unwrap().0;
         let body = game.scene_bodies(owner).unwrap()[0];
-        let tuning = game.tuning().with(arpg_sim::TuningField::CleaveImpulse, 72.0).unwrap();
+        let tuning = game.tuning().with(arpg_game::TuningField::CleaveImpulse, 72.0).unwrap();
         game.set_tuning(tuning);
         lethal_cleave(&mut game);
         let neighbor = (!wall).then(|| game.place(Vec2::new(-2.8, 1.8), ActorDefinition::passive_hostile()).unwrap());

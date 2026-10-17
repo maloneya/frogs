@@ -6,13 +6,23 @@ use arpg_game::Game;
 use arpg_sim::Accumulator;
 
 fn character_fixture_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/fixtures/blender-bind-pose.glb")
+    fixture_path("assets/fixtures/blender-bind-pose.glb")
 }
 
 fn multipart_fixture_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/fixtures/blender-multipart.glb")
+    fixture_path("assets/fixtures/blender-multipart.glb")
+}
+
+fn fixture_path(path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(path)
+}
+
+fn default_character_path() -> std::path::PathBuf {
+    fixture_path(super::default_character_path())
+}
+
+fn default_horde_path() -> std::path::PathBuf {
+    fixture_path(super::default_horde_path())
 }
 
 #[test]
@@ -434,7 +444,7 @@ fn idle_through_game_moves_the_relaxed_body_without_sliding_support_or_changing_
 fn recovery_tuning_cannot_move_an_active_phase_sample() {
     let mut character = loaded_character_from(default_character_path());
     for profile in AttackProfile::ALL {
-        let Some(base) = profile.resolve(arpg_sim::Tuning::default()) else { continue };
+        let Some(base) = profile.resolve(arpg_game::Tuning::default()) else { continue };
         let longer = arpg_sim::ResolvedAttack::try_new(
             base.startup(),
             base.active(),
@@ -474,10 +484,10 @@ fn recovery_tuning_cannot_move_an_active_phase_sample() {
 fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
     let mut character = loaded_character_from(default_character_path());
     let tip = |character: &mut LoadedCharacter<()>, profile, phase, elapsed, alpha| {
-        weapon_tip_at(character, profile, phase, elapsed, alpha, profile.resolve(arpg_sim::Tuning::default()).unwrap())
+        weapon_tip_at(character, profile, phase, elapsed, alpha, profile.resolve(arpg_game::Tuning::default()).unwrap())
     };
     for profile in AttackProfile::ALL {
-        let Some(resolved) = profile.resolve(arpg_sim::Tuning::default()) else { continue };
+        let Some(resolved) = profile.resolve(arpg_game::Tuning::default()) else { continue };
         let ready = tip(
             &mut character,
             profile,
@@ -533,7 +543,7 @@ fn checked_in_attack_poses_put_the_strike_inside_the_active_phase() {
     }
 
     let profile = AttackProfile::Cleave;
-    let resolved = profile.resolve(arpg_sim::Tuning::default()).unwrap();
+    let resolved = profile.resolve(arpg_game::Tuning::default()).unwrap();
     let wound = tip(
         &mut character, profile, AttackPhase::Active,
         resolved.startup(), Alpha::ZERO,
@@ -572,7 +582,7 @@ fn character_time_is_the_continuous_tick_plus_alpha_clock() {
 
 #[test]
 fn world_assets_follow_prop_membership_and_authored_geometry() {
-    let mut world = WorldAssets::load(|mesh| {
+    let mut world = WorldAssets::load(&fixture_path(crate::runtime_assets::root().join("world")), |mesh| {
         if mesh.vertex_count() == 4 {
             assert_eq!(mesh.index_count(), 6);
             for vertex in mesh.vertices() {
@@ -627,7 +637,7 @@ fn door_presentation_follows_the_hinge_and_survives_breach_without_a_prop_duplic
     let mut game = Game::from_scene(&scene).unwrap();
     let owner = game.scene_instances().next().unwrap().0;
     let id = game.scene_bodies(owner).unwrap()[0];
-    let mut view = WorldAssets::load(|_| Ok(())).unwrap();
+    let mut view = WorldAssets::load(&fixture_path(crate::runtime_assets::root().join("world")), |_| Ok(())).unwrap();
     view.rebuild(game.prop_presentations(Alpha::ONE), |_| None);
     view.rebuild_doors(game.door_presentations(Alpha::ONE));
     assert!(view.props.as_slice().is_empty());
@@ -736,7 +746,7 @@ fn chest_presentation_follows_opening_and_eviction_without_drawing_a_plinth() {
         on_start: vec![], on_success: vec![], on_failure: vec![EncounterAction::UnlockChest(0)] }];
     let mut game = Game::from_scene(&scene).unwrap();
     let owner = game.scene_instances().next().unwrap().0;
-    let mut view = WorldAssets::load(|_| Ok(())).unwrap();
+    let mut view = WorldAssets::load(&fixture_path(crate::runtime_assets::root().join("world")), |_| Ok(())).unwrap();
     view.rebuild(game.prop_presentations(Alpha::ONE), |id| game.chest_state_for_body(id));
     assert_eq!(view.props.as_slice().len(), 1);
     assert_eq!(view.closed_chests.len(), 1);
@@ -779,7 +789,7 @@ fn contact_flash_reaches_instances_without_changing_pose_buckets() {
 
 #[test]
 fn wall_instances_follow_authoritative_footprints_and_scene_lifetime() {
-    let mut view = WorldAssets::load(|_| Ok(())).unwrap();
+    let mut view = WorldAssets::load(&fixture_path(crate::runtime_assets::root().join("world")), |_| Ok(())).unwrap();
     let wall = arpg_sim::Wall::new(glam::Vec2::new(3.0, 4.0), glam::Vec2::new(6.0, 0.2), 0.7).unwrap();
     let mut game = Game::from_scene(&arpg_game::Scene { walls: vec![wall], ..Default::default() }.into()).unwrap();
     let owner = game.walls().next().unwrap().0;
@@ -1094,7 +1104,7 @@ fn varied_ground_speeds_use_three_cadences_within_the_existing_pose_budget() {
 
 #[test]
 fn tree_batches_follow_scene_lifetime_and_keep_game_unchanged() {
-    let mut view = WorldAssets::load(|_| Ok(())).unwrap();
+    let mut view = WorldAssets::load(&fixture_path(crate::runtime_assets::root().join("world")), |_| Ok(())).unwrap();
     let mut game = Game::empty();
     let scene = game.load_scene(&arpg_game::GameScene {
         trees: vec![

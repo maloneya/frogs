@@ -17,6 +17,7 @@ mod enemy_feedback;
 mod input;
 mod local_socket;
 mod presentation;
+mod runtime_assets;
 mod torch;
 mod atmosphere;
 mod time;

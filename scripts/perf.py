@@ -2,11 +2,12 @@
 """Release performance trials. Standard library only; see docs/performance.md.
 
 Exit 0: pass, 1: regression, 2: inconclusive (including invalid evidence).
-Baselines are immutable results, selected explicitly or from compatible archived evidence.
+The accepted ceiling is the default reference; investigations can select explicit evidence.
 """
 import argparse
 import contextlib
 import datetime
+from dataclasses import dataclass
 import hashlib
 import gzip
 import json
@@ -25,6 +26,7 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "benchmarks/suite.json"
+ACCEPTED_REFERENCES = ROOT / "benchmarks/accepted-ceiling.json"
 # Surface latency is mandatory context; earlier evidence cannot establish it.
 SCHEMA = 6
 EVIDENCE = ROOT / "benchmarks/evidence"
@@ -102,7 +104,7 @@ def merge_status(states):
 
 def confirmed_regressions(assessment):
     """A failed gate stays actionable even when another gate lacks coverage."""
-    metrics = assessment.get("metrics", [])
+    metrics = assessment.get("metrics", []) if isinstance(assessment, dict) else []
     return [row for row in metrics if isinstance(row, dict) and
             any(row.get(key) == "regression" for key in ("absolute", "relative", "status"))] if isinstance(metrics, list) else []
 
@@ -382,10 +384,10 @@ def selected(result, workload):
     return part
 
 
-def assess(current, baseline=None, asset_changes=()):
+def assess(current, baselines=None, asset_changes=()):
     """Revalidate raw evidence; absolute budgets survive missing relative evidence."""
-    result = {"status": "inconclusive", "scope": "relative_and_absolute" if baseline else "absolute_only",
-              "reasons": [], "metrics": [], "relative_status": "missing" if baseline is None else "pass",
+    result = {"status": "inconclusive", "scope": "relative_and_absolute" if baselines else "absolute_only",
+              "reasons": [], "metrics": [], "relative_status": "missing" if not baselines else "pass",
               "rerun_workloads": []}
     states, relative_states = [], []
     try:
@@ -403,11 +405,13 @@ def assess(current, baseline=None, asset_changes=()):
             except (KeyError, TypeError, ValueError, IndexError) as error:
                 result["reasons"].append(label + ": " + str(error))
                 states.append("inconclusive")
+                relative_states.append("inconclusive")
                 invalid_workloads = True
                 result["rerun_workloads"].append(label)
                 continue
             trials = current["workloads"][label]
             previous, mismatch = None, None
+            baseline = baselines[label].result if baselines and label in baselines else None
             if baseline is not None:
                 try:
                     old_work = next(w for w in baseline["suite"]["workloads"] if w["name"] == label)
@@ -428,6 +432,9 @@ def assess(current, baseline=None, asset_changes=()):
                     previous = None
                     relative_states.append("inconclusive")
                     result["reasons"].append(label + ": " + mismatch)
+            else:
+                relative_states.append("inconclusive")
+                result["reasons"].append(label + ": missing relative reference")
             names = ("mean_step_ms",) if "step_ns" in trials[0] else METRICS
             for name in names:
                 values = [trial_metric(t, name) for t in trials]
@@ -452,15 +459,15 @@ def assess(current, baseline=None, asset_changes=()):
                                change_percent=100 * (statistics.median(values) / statistics.median(old) - 1))
                     checks.append(state)
                     relative_states.append(state)
-                elif mismatch:
+                else:
                     checks.append("inconclusive")
-                row["status"] = merge_status(checks) if checks else "observed"
+                row["status"] = merge_status(checks)
                 states.extend(checks)
                 result["metrics"].append(row)
                 if row["status"] == "inconclusive" and not mismatch and label not in result["rerun_workloads"]:
                     result["rerun_workloads"].append(label)
         result["status"] = merge_status(states)
-        if relative_states:
+        if relative_states and baselines:
             result["relative_status"] = merge_status(relative_states)
         result["absolute_status"] = merge_status([row["absolute"] for row in result["metrics"] if "absolute" in row] +
                                                   (["inconclusive"] if invalid_workloads or len(result["metrics"]) == 0 else []))
@@ -629,7 +636,7 @@ def completed_workload(result, workload, baseline):
     verdict = assess(selected(result, workload), baseline)
     if verdict["review_required"]:
         state = "confirmed performance failure" if verdict["confirmed_regressions"] else "measurement uncertainty"
-        raise MeasurementStopped(workload["name"] + ": " + state + "; stop and hand off retained evidence")
+        print(workload["name"] + ": " + state + "; retain evidence for the performance follow-up", flush=True)
 
 
 def collect_live(path, args, result, baseline):
@@ -752,13 +759,65 @@ def archive_result(result, directory=None):
     return artifact
 
 
-def eligible(current, offered, automatic=True):
-    """Metadata-only filter; never parse trials from an unrelated benchmark."""
-    if automatic and offered["source"]["dirty"] and offered["source"]["digest"] != current["source"]["digest"]:
-        return False
+@dataclass(frozen=True)
+class Reference:
+    result: dict
+    path: str
+    sha256: str
+
+    def provenance(self):
+        return {"path": self.path, "sha256": self.sha256, "source": self.result["source"],
+                "binary_sha256": self.result["binary_sha256"]}
+
+
+def references(result, path="", identity=None):
+    """One raw measurement can supply one or several workload references."""
+    validate_result(result)
+    reference = Reference(result, str(path), identity or digest(json.dumps(result, sort_keys=True, allow_nan=False).encode()))
+    return {workload["name"]: reference for workload in result["suite"]["workloads"]}
+
+
+def read_archive(manifest_path):
+    manifest = load(manifest_path)
+    fingerprint(manifest["sha256"], 64)
+    if manifest_path.name != manifest["sha256"] + ".json" or manifest["artifact"] != manifest["sha256"] + ".json.gz":
+        raise ValueError("invalid evidence artifact path")
+    raw = gzip.decompress((manifest_path.parent / manifest["artifact"]).read_bytes())
+    if digest(raw) != manifest["sha256"]:
+        raise ValueError("corrupt archived evidence: " + str(manifest_path))
+    result = json.loads(raw)
+    for key in ("schema_version", "source", "conditions", "workload_digest", "asset_digests", "suite"):
+        if manifest[key] != result[key]:
+            raise ValueError("manifest contradicts raw evidence: " + key)
+    return references(result, manifest_path, manifest["sha256"])
+
+
+def accepted_references(mode):
+    """Pinned policy, never replaced by a newer local or ancestor measurement."""
+    policy = load(ACCEPTED_REFERENCES)
+    if set(policy) != {"headless", "live"} or mode not in policy:
+        raise ValueError("accepted ceiling must declare headless and live references")
+    identities = policy[mode]
+    if not isinstance(identities, list) or not identities or len(set(identities)) != len(identities):
+        raise ValueError("accepted ceiling requires distinct immutable evidence identities")
+    baselines = {}
+    for identity in identities:
+        fingerprint(identity, 64)
+        offered = read_archive(EVIDENCE / (identity + ".json"))
+        for name, reference in offered.items():
+            if ("perf-headless" in reference.result["conditions"]["build"]) != (mode == "headless"):
+                raise ValueError("accepted reference build mode differs: " + name)
+            if name in baselines:
+                raise ValueError("duplicate accepted workload reference: " + name)
+            baselines[name] = reference
+    return baselines
+
+
+def compatible(current, offered, workloads):
+    """Source changes are expected; measurement and workload policy must match."""
     if any(current[key] != offered[key] for key in ("conditions", "workload_digest", "asset_digests")):
         return False
-    wanted = {w["name"]: w for w in current["suite"]["workloads"]}
+    wanted = {w["name"]: w for w in workloads}
     available = {w["name"]: w for w in offered["suite"]["workloads"]}
     return (all(available.get(k) == v for k, v in wanted.items()) and
             all(current["suite"][k] == offered["suite"][k]
@@ -766,48 +825,30 @@ def eligible(current, offered, automatic=True):
 
 
 def evidence_identity():
-    """Changes to local baseline inputs must release a deferred infrastructure failure."""
-    return digest(json.dumps({str(p): file_digest(p)
-                              for store in (EVIDENCE, LOCAL_EVIDENCE)
-                              for p in sorted(store.glob("*.json*"))}, sort_keys=True).encode())
+    """Accepted policy and published evidence changes release deferred preflight failures."""
+    paths = [ACCEPTED_REFERENCES, *sorted(EVIDENCE.glob("*.json*"))]
+    return digest(json.dumps({str(p): file_digest(p) if p.is_file() else "missing" for p in paths},
+                             sort_keys=True).encode())
 
 
-def discover(current, directory=None, exclusions=None):
-    """Preflight nearest eligible ancestor; validate raw evidence only after filtering."""
-    best = None
-    stores = (Path(directory),) if directory is not None else (EVIDENCE, LOCAL_EVIDENCE)
-    manifests = sorted(path for store in stores for path in store.glob("*.json"))
-    for manifest_path in manifests:
-        manifest = load(manifest_path)
-        if manifest.get("schema_version") != SCHEMA:
-            if exclusions is not None:
-                exclusions.append({"path": str(manifest_path), "reason": "unsupported evidence schema"})
-            continue
-        if not eligible(current, manifest):
-            continue
-        revision = manifest["source"]["revision"]
-        ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", revision, current["source"]["revision"]], cwd=ROOT, capture_output=True)
-        if ancestor.returncode:
-            continue
-        fingerprint(manifest["sha256"], 64)
-        if manifest["artifact"] != manifest["sha256"] + ".json.gz":
-            raise ValueError("invalid evidence artifact path")
-        raw = gzip.decompress((manifest_path.parent / manifest["artifact"]).read_bytes())
-        if digest(raw) != manifest["sha256"]:
-            raise ValueError("corrupt archived evidence: " + str(manifest_path))
-        result = json.loads(raw)
-        for key in ("schema_version", "source", "conditions", "workload_digest", "asset_digests", "suite"):
-            if manifest[key] != result[key]:
-                raise ValueError("manifest contradicts raw evidence: " + key)
-        validate_result(result)
-        distance = int(command(["git", "rev-list", "--count", revision + ".." + current["source"]["revision"]]))
-        # Keep only the winner's raw frame dictionaries, not the entire history.
-        rank = (-distance, manifest.get("created_utc", ""), str(manifest_path))
-        if best is None or rank > best[0]:
-            best = (rank, result)
-    if best is None:
-        return None, None
-    return best[1], best[0][2]
+def accepted_pass(result, mode):
+    """Completion/cadence admission rechecks the complete suite against its ceiling."""
+    assessment = result.get("assessment", {})
+    if not isinstance(assessment, dict) or any(assessment.get(key) != value for key, value in
+           (("status", "pass"), ("scope", "relative_and_absolute"), ("relative_status", "pass"))):
+        return False
+    if result["suite"] != load(SUITE):
+        return False
+    baselines = accepted_references(mode)
+    wanted = {w["name"] for w in result["suite"]["workloads"]}
+    if set(result["baselines"]) != wanted:
+        return False
+    for name in wanted:
+        recorded = result["baselines"][name]
+        reference = baselines[name]
+        if any(recorded[key] != reference.provenance()[key] for key in ("sha256", "source", "binary_sha256")):
+            return False
+    return assess(result, baselines)["status"] == "pass"
 
 
 def main():
@@ -837,15 +878,8 @@ def main():
         except (OSError, ValueError, KeyError, TypeError) as error:
             print("inconclusive: " + str(error), file=sys.stderr)
             return 2
-    if args.command == "run" and args.rerun:
-        if args.workload:
-            parser.error("choose --rerun or --workload")
-        previous = load(args.rerun)
-        if confirmed_regressions(assess(previous)):
-            parser.error("previous evidence contains a confirmed failure; hand it off before selecting further measurements")
-        args.workload = assess(previous)["rerun_workloads"]
-        if not args.workload:
-            parser.error("no uncertain workloads to rerun")
+    if args.command == "run" and args.rerun and args.workload:
+        parser.error("choose --rerun or --workload")
     # Fail before expensive work if the immutable destination is already used.
     if args.output.exists():
         parser.error("output exists; choose a new result path")
@@ -861,43 +895,46 @@ def main():
                 if os.path.lexists(path):
                     raise ValueError("output exists; choose a new result path: " + str(path))
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        baseline = load(args.baseline) if args.baseline else None
-        if baseline is not None:
-            validate_result(baseline)
+        baselines = references(load(args.baseline), args.baseline.resolve()) if args.baseline else None
         if args.command == "run":
+            if baselines is None:
+                baselines = accepted_references(args.mode)
+            if args.rerun:
+                previous_result = load(args.rerun)
+                previous = assess(previous_result, baselines)
+                if previous["confirmed_regressions"] or confirmed_regressions(previous_result.get("assessment", {})):
+                    raise ValueError("previous evidence contains a confirmed failure; hand it off before selecting further measurements")
+                args.workload = previous["rerun_workloads"]
+                if not args.workload:
+                    raise ValueError("no uncertain workloads to rerun")
             prepare(args, result)
-            baseline_path = str(args.baseline.resolve()) if args.baseline else None
-            result["baseline_exclusions"] = []
-            if baseline is None:
-                baseline, baseline_path = discover(result, exclusions=result["baseline_exclusions"])
-            elif not eligible(result, baseline, automatic=False):
-                # Explicit dirty baselines are allowed, but known workload/mode mismatches are not.
-                raise ValueError("explicit baseline conditions or workload differ")
-            if result["baseline_exclusions"]:
-                print(f"Retired {len(result['baseline_exclusions'])} incompatible evidence manifests (schema {SCHEMA} required).", flush=True)
-            result["baseline"] = baseline_path
+            wanted = {w["name"] for w in result["suite"]["workloads"]}
+            baselines = {name: reference for name, reference in baselines.items() if name in wanted}
+            for workload in result["suite"]["workloads"]:
+                reference = baselines.get(workload["name"])
+                if reference is None:
+                    raise ValueError("missing relative reference: " + workload["name"])
+                if not compatible(result, reference.result, [workload]):
+                    raise ValueError("reference conditions or workload differ: " + workload["name"])
+            result["baselines"] = {name: reference.provenance() for name, reference in baselines.items()}
             stage = "measurement"
-            run(args, result, baseline)
+            run(args, result, baselines)
             stage = "assessment"
-            verdict = assess(result, baseline)
+            verdict = assess(result, baselines)
             result["assessment"] = verdict
-            result["baseline"] = baseline_path
         else:
             candidate = load(args.candidate)
             if args.asset_change:
                 validate_result(candidate)
-                differences = asset_differences(candidate, baseline, args.asset_change)
-            result = verdict = assess(candidate, baseline, args.asset_change)
+                differences = asset_differences(candidate, next(iter(baselines.values())).result, args.asset_change)
+            result = verdict = assess(candidate, baselines, args.asset_change)
             if args.asset_change:
                 result.update(comparison_kind="feature_assets", asset_changes=differences,
                               baseline_eligible=False, candidate_source=candidate["source"],
                               candidate_binary_sha256=candidate["binary_sha256"],
                               attribution_limit="Asset differences and conditions are checked; unrelated source edits can still confound attribution.")
-            result["baseline"] = str(args.baseline.resolve())
+            result["baselines"] = {name: reference.provenance() for name, reference in baselines.items()}
             result["candidate"] = str(args.candidate.resolve())
-        if baseline is not None:
-            result["baseline_digest"] = digest(json.dumps(baseline, sort_keys=True).encode())
-            result["baseline_source"] = baseline.get("source") if isinstance(baseline, dict) else None
         stage = "archive"
         if args.command == "run":
             try:
@@ -922,8 +959,9 @@ def main():
             pass  # Never overwrite an existing result, including after a race.
         return 2
     if verdict["review_required"]:
-        print("STOP: confirmed performance failure" if verdict["confirmed_regressions"] else "STOP: performance evidence needs review", flush=True)
-        print("Preserve evidence and flag the user; further investigation requires their direction.", flush=True)
+        print("Performance observation: confirmed performance failure" if verdict["confirmed_regressions"] else "Performance observation: evidence needs review", flush=True)
+        print("Record the task, changed source and evidence in docs/performance-follow-ups.md; "
+              "continue the assigned task and report the note at completion. Investigation and fixes need the user's explicit scope.", flush=True)
     print(verdict["status"] + ": " + verdict["scope"], flush=True)
     if result.get("measurement_stop"):
         print("  " + result["measurement_stop"])

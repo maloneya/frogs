@@ -78,6 +78,10 @@ pub struct MotorCommand {
     pub(crate) acceleration: f32,
 }
 impl MotorCommand {
+    /// Maximum accepted target speed, in metres per second.
+    pub const MAX_SPEED: f32 = MAX_MOTOR_SPEED;
+    /// Maximum accepted motor acceleration, in metres per second squared.
+    pub const MAX_ACCELERATION: f32 = MAX_MOTOR_ACCELERATION;
     /// Shared admission for action definitions and emitted commands.
     pub fn validate(velocity: Vec2, acceleration: f32) -> Result<(), &'static str> {
         if !velocity.is_finite()
@@ -179,12 +183,6 @@ pub(crate) struct Physics {
     pub(crate) solver: crate::solver::Solver,
 }
 
-/// A producer can add momentum, but cannot integrate, grant, revoke or set mass.
-pub(crate) struct ImpulseSink<'a> {
-    physics: &'a mut Physics,
-    source: EntityId,
-}
-
 /// A locomotion producer may accelerate existing movable bodies, never teleport,
 /// replace velocity, grant physics or change mass.
 pub(crate) struct DriveSink<'a> {
@@ -243,51 +241,6 @@ pub fn motor_speed_limit(acceleration: f32) -> f32 {
     acceleration * Dt::SECS / (1.0 - RETAIN)
 }
 
-impl ImpulseSink<'_> {
-    pub(crate) fn disc_contact(
-        &self,
-        id: EntityId,
-        position: Vec2,
-        body_radius: f32,
-        centre: Vec2,
-        radius: f32,
-    ) -> Option<Vec2> {
-        self.physics
-            .disc_contact(id, position, body_radius, centre, radius)
-    }
-    pub(crate) fn beam_contact(
-        &self,
-        id: EntityId,
-        position: Vec2,
-        body_radius: f32,
-        beam: crate::Beam,
-    ) -> Option<Vec2> {
-        self.physics.beam_contact(id, position, body_radius, beam)
-    }
-    pub(crate) fn obstructs(
-        &self,
-        walls: &crate::wall::Walls,
-        start: Vec2,
-        end: Vec2,
-        except: Option<EntityId>,
-    ) -> bool {
-        self.physics.obstructs(walls, start, end, except)
-    }
-    pub(crate) fn clip_beam(&self, beam: crate::Beam, walls: &crate::wall::Walls) -> crate::Beam {
-        self.physics.clip_beam(beam, walls)
-    }
-    pub(crate) fn push_at(
-        &mut self,
-        id: EntityId,
-        point: Vec2,
-        impulse: Impulse,
-        trace: &mut TraceSink<'_>,
-    ) {
-        self.physics
-            .impulse_at(id, point, impulse, Some(self.source), trace);
-    }
-}
-
 impl Physics {
     /// Bodies whose collision is their joint's box rather than a disc.
     pub(crate) fn articulated(&self, id: EntityId) -> bool {
@@ -314,13 +267,6 @@ impl Physics {
     pub(crate) fn len(&self) -> usize {
         self.rows.len()
     }
-    pub(crate) fn sink(&mut self, source: EntityId) -> ImpulseSink<'_> {
-        ImpulseSink {
-            physics: self,
-            source,
-        }
-    }
-
     pub(crate) fn grant(&mut self, id: EntityId, inverse_mass: f32) {
         assert!(inverse_mass.is_finite() && inverse_mass >= 0.0);
         if let Some(row) = self.who.add(id) {
@@ -396,12 +342,12 @@ impl Physics {
             return None;
         }
         if let Some(shape) = self.shape(id) {
-            if let Some((normal, depth)) = shape.penetration(beam.start(), crate::Beam::RADIUS) {
-                return Some(beam.start() + normal * (depth - crate::Beam::RADIUS));
+            if let Some((normal, depth)) = shape.penetration(beam.start(), beam.radius()) {
+                return Some(beam.start() + normal * (depth - beam.radius()));
             }
             return shape
-                .sweep(beam.start(), axis, crate::Beam::RADIUS)
-                .map(|hit| hit.point() - hit.normal() * crate::Beam::RADIUS);
+                .sweep(beam.start(), axis, beam.radius())
+                .map(|hit| hit.point() - hit.normal() * beam.radius());
         }
         beam.contact(position, body_radius)
     }

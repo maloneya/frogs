@@ -144,19 +144,16 @@ fn scenarios_reject_external_scene_files_in_setup_and_timeline() {
 }
 
 #[test]
-fn recovery_commands_reject_invalid_values_and_unreachable_ticks() {
-    for command in [
-        "(at: 0, recovery: 0)",
-        "(at: 0, recovery: 4294967295)",
-        "(at: 0, recovery: -1)",
-        "(at: 0, recovery: 1.5)",
-        "(at: 1, recovery: 1)",
+fn removed_recovery_edit_surface_is_rejected_by_the_schema() {
+    for text in [
+        "(attack_recovery: [(at: 0, recovery: 1)], budget: (ticks: 1))",
+        "(budget: (ticks: 1), expect: (recovery_ticks: 1))",
+        "(budget: (ticks: 1), expect: (swing_recovery_ticks: 1))",
     ] {
-        let fixture = Fixture::new(&format!(
-            "(attack_recovery: [{command}], budget: (ticks: 1), expect: ())"
-        ));
+        let fixture = Fixture::new(text);
         let (output, text) = fixture.run(&[]);
-        assert!(!output.status.success(), "invalid command {command} passed: {text}");
+        assert!(!output.status.success(), "removed recovery surface passed: {text}");
+        assert!(text.contains("parse"));
     }
 }
 
@@ -298,19 +295,21 @@ fn checkpoint_traces_are_rejected_instead_of_silently_ignored() {
     );
     let (output, text) = fixture.run(&["--bless"]);
     assert_eq!(output.status.code(), Some(1), "{text}");
-    assert!(text.contains("transition evidence belongs in final expect.events or expect.trace"), "{text}");
+    assert!(text.contains("transition evidence belongs in final expect.events, expect.gameplay_events or expect.trace"), "{text}");
     assert!(!fixture.0.join("ignored.trace").exists());
 }
 
 #[test]
 fn checkpoint_event_contracts_are_rejected_instead_of_ignored() {
-    let fixture = Fixture::new(r#"(
-        checkpoints: [(at: 0, expect: (events: (kinds: [Hit], sequence: [])))],
-        budget: (ticks: 1),
-    )"#);
-    let (output, text) = fixture.run(&["--bless"]);
-    assert_eq!(output.status.code(), Some(1), "{text}");
-    assert!(text.contains("transition evidence belongs in final"), "{text}");
+    for evidence in [
+        "events: (kinds: [Damaged], sequence: [])",
+        "gameplay_events: (kinds: [Swung], sequence: [])",
+    ] {
+        let fixture = Fixture::new(&format!("(checkpoints: [(at: 0, expect: ({evidence}))], budget: (ticks: 1))"));
+        let (output, text) = fixture.run(&["--bless"]);
+        assert_eq!(output.status.code(), Some(1), "{text}");
+        assert!(text.contains("transition evidence belongs in final"), "{text}");
+    }
 }
 
 #[test]
@@ -477,7 +476,6 @@ fn every_timeline_command_must_be_reachable() {
             ("spawns", format!("(at: {at}, pos: (20.0, 0.0))")),
             ("impulses", format!("(at: {at}, target: Player, value: (1.0, 0.0))")),
             ("aims", format!("(at: {at}, dir: (1.0, 0.0))")),
-            ("attack_recovery", format!("(at: {at}, recovery: 1)")),
             ("attack_profiles", format!("(at: {at}, profile: Slam)")),
             ("scenes", format!("(at: {at}, action: Evict(0))")),
             ("despawns", format!("(at: {at}, body: 0)")),

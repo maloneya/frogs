@@ -4,7 +4,6 @@ use glam::Vec2;
 
 /// Snapshots every body, including stationary ones, before movement.
 /// Copy rather than swap: in-place solvers need current positions as their input.
-pub(crate) fn remember(facing: f32, prev_facing: &mut f32, pos: &[Vec2], prev_pos: &mut [Vec2]) {
-    *prev_facing = facing;
+pub(crate) fn remember(pos: &[Vec2], prev_pos: &mut [Vec2]) {
     prev_pos.copy_from_slice(pos);
 }

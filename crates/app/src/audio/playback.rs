@@ -17,8 +17,7 @@ fn fade(milliseconds: u64) -> Tween {
     Tween { duration: Duration::from_millis(milliseconds), ..Default::default() }
 }
 
-fn bank() -> Result<[StaticSoundData; Cue::ALL.len()], String> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/audio");
+fn bank(root: &std::path::Path) -> Result<[StaticSoundData; Cue::ALL.len()], String> {
     let mut sounds = Vec::with_capacity(Cue::ALL.len());
     for cue in Cue::ALL {
         let path = root.join(format!("{}.wav", cue.name()));
@@ -45,7 +44,7 @@ pub(super) struct Playback<B: Backend = DefaultBackend> {
 
 impl Playback {
     pub(super) fn open(muted: bool) -> Result<Self, String> {
-        let clips = bank()?;
+        let clips = bank(&crate::runtime_assets::root().join("audio"))?;
         let manager = AudioManager::<DefaultBackend>::new(settings(muted)).map_err(|error| error.to_string())?;
         Ok(Self::new(manager, clips))
     }
@@ -149,6 +148,14 @@ mod tests {
     }
 
     #[test]
+    fn relocated_package_decodes_the_complete_audio_bank() {
+        let audio = crate::runtime_assets::root().join("audio");
+        let fixture = crate::runtime_assets::tests::extract(&[&audio]);
+        let clips = super::bank(&fixture.directory.join(audio)).unwrap();
+        assert_eq!(clips.len(), Cue::ALL.len());
+    }
+
+    #[test]
     fn muted_mix_is_silent_but_voices_advance_and_unmute_without_restarting() {
         let manager = AudioManager::<OutputBackend>::new(settings(true)).unwrap();
         let mut player = Playback::new(manager, bank().unwrap());
@@ -166,6 +173,10 @@ mod tests {
         assert_eq!(player.manager.backend_mut().energy(30), 0.0);
         assert_eq!(player.started, 3);
         assert_eq!(player.refused, 0);
+    }
+
+    fn bank() -> Result<[StaticSoundData; Cue::ALL.len()], String> {
+        super::bank(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/audio"))
     }
 
     fn player() -> Playback<MockBackend> {

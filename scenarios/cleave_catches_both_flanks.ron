@@ -43,18 +43,23 @@
             (nth: 4, health: 3, pos: (x: 4.0, z: 1.2, tol: 0.0)),
         ],
         events: (
-        kinds: [Swung, HitboxOpened, Hit, Impulsed, HitboxClosed],
-        sequence: [
-            (0, Swung),
-            (6, HitboxOpened),
-            (6, Hit(id: (1, 1), remaining: 1)),
-            (6, Impulsed(id: (1, 1), value: (0.0000,6.0000), source: Some((0, 1)), tolerance: 0.00005)),
-            (8, Hit(id: (2, 1), remaining: 1)),
-            (8, Impulsed(id: (2, 1), value: (0.0000,6.0000), source: Some((0, 1)), tolerance: 0.00005)),
-            (11, Hit(id: (3, 1), remaining: 1)),
-            (11, Impulsed(id: (3, 1), value: (0.0000,6.0000), source: Some((0, 1)), tolerance: 0.00005)),
-            (12, HitboxClosed),
-        ],
-    ),
+            kinds: [Damaged, Impulsed],
+            sequence: [
+                (6, Damaged(actor: (0, 1), target: (1, 1), remaining: 1)),
+                (6, Impulsed(id: (1, 1), value: (0.0000,6.0000), source: Some((0, 1)), tolerance: 0.00005)),
+                (8, Damaged(actor: (0, 1), target: (2, 1), remaining: 1)),
+                (8, Impulsed(id: (2, 1), value: (0.0000,6.0000), source: Some((0, 1)), tolerance: 0.00005)),
+                (11, Damaged(actor: (0, 1), target: (3, 1), remaining: 1)),
+                (11, Impulsed(id: (3, 1), value: (0.0000,6.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            ],
+        ),
+        gameplay_events: (
+            kinds: [Swung, HitboxOpened, HitboxClosed],
+            sequence: [
+                (0, Swung),
+                (6, HitboxOpened),
+                (12, HitboxClosed),
+            ],
+        ),
     ),
 )

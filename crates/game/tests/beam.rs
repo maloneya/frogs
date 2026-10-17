@@ -2,8 +2,8 @@
 use arpg_game::{Placed, Scene, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene};
-use arpg_sim::{
-    Accumulator, AttackPhase, AttackProfile, Beam, Dt, Impulse, };
+use arpg_sim::{Accumulator, AttackPhase, Dt, Impulse};
+use arpg_game::{AttackProfile, Disintegrate};
 use glam::{Vec2, Vec3};
 
 fn step(game: &mut Game, held: bool) {
@@ -72,7 +72,7 @@ fn scene_eviction_and_slot_reuse_do_not_leave_beam_target_memory() {
     assert_eq!(game.beam_hits(), &[Vec2::new(0.0, 4.0)], "historical outcome survives removal");
     let new = game.place(Vec2::new(0.0, 4.0), ActorDefinition::passive_hostile()).unwrap();
     assert_ne!(old, new);
-    for _ in 1..Beam::HIT_EVERY {
+    for _ in 1..Disintegrate::HIT_EVERY {
         step(&mut game, true);
     }
     assert_eq!(game.health(new), Some(3));
@@ -91,7 +91,7 @@ fn beam_waits_for_the_entire_committed_swing_and_release_resets_cadence() {
     let mut game = Game::empty();
     let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
     game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, true));
-    let swing = AttackProfile::Cleave.resolve(arpg_sim::Tuning::default()).unwrap();
+    let swing = AttackProfile::Cleave.resolve(arpg_game::Tuning::default()).unwrap();
     let duration = swing.startup() + swing.active() + swing.recovery().get();
     game.set_attack_profile(AttackProfile::Disintegrate);
     for _ in 1..duration {

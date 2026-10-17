@@ -525,7 +525,6 @@ impl crate::World {
 mod tests {
     use super::*;
     use crate::{Accumulator, Dt, Impulse, World};
-    use arpg_core::Intent;
 
     fn scene() -> Scene {
         Scene {
@@ -550,10 +549,8 @@ mod tests {
 
     fn step(world: &mut World) {
         for dt in Accumulator::default().pending(Dt::SECS) {
-            world.step(
-                dt,
-                Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false),
-            );
+            let population = world.damageable_count();
+            world.begin_step(dt, population).advance(&[], &mut ()).finish();
         }
     }
 
@@ -745,11 +742,10 @@ mod tests {
     }
 
     #[test]
-    fn fresh_playtests_reset_player_tuning_time_and_content() {
+    fn fresh_playtests_reset_physical_motion_time_and_content() {
         let content = scene();
         let mut played = World::from_scene(&content).unwrap();
         assert!(played.apply_impulse(played.player_id(), Impulse::try_from((6.0, 0.0)).unwrap()));
-        played.set_attack_recovery(crate::RecoveryTicks::try_from(1).unwrap());
         step(&mut played);
         let fresh = World::from_scene(&content).unwrap();
         assert_ne!(played.hash(), fresh.hash());

@@ -12,10 +12,10 @@
 
 use glam::{Vec2, Vec3};
 
-use arpg_core::{Intent, Report};
+use arpg_core::Report;
 
 mod action_execution;
-mod angle;
+pub mod angle;
 mod attack;
 pub use action_execution::{
     ActionControls, ActionExecution, ActionOutcome, ActionSchedule, ActionTimeline, Interruption,
@@ -41,11 +41,12 @@ mod presentation;
 mod scene;
 mod slots;
 mod swing;
+pub use swing::{Disc, Hitbox};
 mod time;
 mod trace;
 
 pub use attack::{
-    AttackPhase, AttackProfile, AttackResolveError, AttackShape, AttackStatus, RecoveryTicks,
+    AttackPhase, AttackResolveError, AttackShape, RecoveryTicks,
     ResolvedAttack,
 };
 pub use hash::Fnv;
@@ -68,7 +69,7 @@ use pass::spawn::SpawnQueue;
 /// [`crate::pass::spawn`] for why spawning is a queue rather than a call.
 pub use pass::spawn::{SpawnOutcome, SpawnTicket, Template};
 pub use presentation::{
-    AttackDisc, CharacterPresentation, CollisionDisc, PlayerPresentation, PropPresentation,
+    AttackDisc, CharacterPresentation, CollisionDisc, PropPresentation,
 };
 use scene::Scenes;
 pub use scene::{BodyGrid, Placed, Scene, SceneError, SceneId};
@@ -85,12 +86,7 @@ pub use step::{PreparedStep, ResolvedStep};
 pub const PLAYER_MAX_HEALTH: u8 = 5;
 
 mod tuning;
-pub use tuning::{Tuning, TuningAttribute, TuningField};
-
-/// Interpolates the shortest arc, avoiding a full turn at the ±π wrap.
-fn blend_angle(from: f32, to: f32, alpha: Alpha) -> f32 {
-    angle::wrap(from + angle::shortest_arc(from, to) * alpha.get())
-}
+pub use tuning::ContactMaterial;
 
 /// Converts ground X/Z to world XYZ at the supplied height.
 fn on_ground(p: Vec2, height: f32) -> Vec3 {
@@ -137,12 +133,14 @@ pub(crate) fn reserve_capacity<T>(buffer: &mut Vec<T>, capacity: usize) {
     }
 }
 
+const MAX_POSITION_COMPONENT: f32 = 4.0e18;
+
 /// Numeric position admission shared by body placement and gameplay destinations.
 /// The conservative component bound keeps the squared separation of any two
 /// admitted positions below f32::MAX (8 * (4e18)^2), before arena containment.
 /// This is an arithmetic domain, not a restriction to the playable arena.
 pub fn valid_position(position: Vec2) -> bool {
-    position.is_finite() && position.abs().max_element() <= 4.0e18
+    position.is_finite() && position.abs().max_element() <= MAX_POSITION_COMPONENT
 }
 
 /// Shared body storage. Row zero is the persistent player.
@@ -172,8 +170,7 @@ impl Default for Bodies {
             pos: Vec::new(),
             prev_pos: Vec::new(),
         };
-        let mass = Mass::try_from(Tuning::default().get(TuningField::PlayerMass))
-            .expect("validated player mass");
+        let mass = Mass::UNIT;
         bodies
             .spawn(Vec2::ZERO, Template::BODY.with_mass(mass))
             .expect("the initial player fits");
@@ -290,24 +287,11 @@ impl Bodies {
     }
 }
 
-/// Player-only behaviour. Its body is row zero of `Bodies`; deleting any
-/// other row cannot move it, and `Bodies::despawn` refuses that row.
-#[derive(Default)]
-struct Player {
-    /// Yaw 0 faces world +Z; positive turns toward +X, as in the renderer.
-    facing: f32,
-    /// Previous tick's facing, for presentation interpolation only.
-    prev_facing: f32,
-    /// One player's swing state; no enemy pays for this payload.
-    attack: pass::attack::Attack,
-}
-
 /// What exists: the horde, the player, and the bookkeeping the two seams —
 /// [`World::player_presentation`] and [`World::trace`] — hand out.
 pub struct World {
-    tuning: Tuning,
+    material: ContactMaterial,
     bodies: Bodies,
-    player: Player,
     /// Simulation ticks completed since this world was created.
     ///
     /// The index everything an agent needs to observe is keyed by: trace
@@ -325,7 +309,7 @@ pub struct World {
     /// be unavailable to the scenario runner, which is the consumer that
     /// matters most.
     trace: Trace,
-    /// Player-against-horde contacts resolved by the last [`World::step`].
+    /// Player-against-horde contacts resolved by the last physical tick.
     ///
     /// The instrument the collision work is measured with. A body is nine
     /// pixels across at this zoom and a contact displaces it by a fraction of
@@ -334,8 +318,6 @@ pub struct World {
     /// a grid that resolves different contacts than brute force is wrong,
     /// and this is what catches it.
     contacts: usize,
-    /// Rebuilt target eligibility, excluded from replay state.
-    player_targets: Members,
     /// What has been asked for and not yet made.
     ///
     /// **The seam that lets anything ask for a spawn without being able to
@@ -353,7 +335,7 @@ pub struct World {
     scenes: Scenes,
     /// Lossless outcomes of the latest tick, replaced only by the next step.
     defeats: Vec<Defeat>,
-    /// Non-player pairs overlapping in the last [`World::step`].
+    /// Non-player pairs overlapping in the last physical tick.
     ///
     /// Kept apart from `contacts` rather than summed into it: one number
     /// covering both cannot distinguish the player wading into a pack from the
@@ -371,16 +353,14 @@ impl Default for World {
 }
 
 impl World {
-    /// A fresh player and no content, at tick zero with default tuning.
+    /// A fresh player and no content, at tick zero with default contact response.
     #[must_use]
     pub fn empty() -> Self {
         Self {
-            tuning: Tuning::default(),
+            material: ContactMaterial::default(),
             bodies: Bodies::default(),
-            player: Player::default(),
             tick: 0,
             trace: Trace::default(),
-            player_targets: Members::with_capacity(MAX_BODIES + 1),
             queue: SpawnQueue::default(),
             sources: Sources::default(),
             scenes: Scenes::default(),
@@ -514,18 +494,16 @@ impl World {
         // being retired here.
         let Self {
             bodies,
-            player_targets: _,
             trace,
             tick,
             queue: _,
             sources: _,
             scenes,
             defeats,
-            player: _,
             contacts: _,
             crowd_contacts: _,
             crowd_grid: _,
-            tuning: _,
+            material: _,
         } = self;
 
         let _ = defeats; // Between-tick removals never manufacture combat outcomes.
@@ -550,70 +528,13 @@ impl World {
         self.bodies.interactions.get(id)
     }
 
-    /// Whether the hitbox exists right now.
-    #[must_use]
-    pub fn hitbox_is_live(&self) -> bool {
-        self.player.attack.hitbox_is_live()
-    }
-
-    /// Derived attack state for UI and tools, with no renderer dependency.
-    pub fn attack_status(&self) -> AttackStatus {
-        self.player.attack.status()
-    }
-
-    /// Current type-wide gameplay settings.
-    pub fn tuning(&self) -> Tuning {
-        self.tuning
-    }
-
-    /// Applies a validated complete edit between ticks. Movement uses it on the
-    /// next tick; in-flight attacks retain their captured values.
-    pub fn set_tuning(&mut self, tuning: Tuning) {
-        if self.tuning == tuning {
-            return;
-        }
-        for field in TuningField::ALL {
-            if self.tuning.get(field) != tuning.get(field) {
-                self.trace.sink(self.tick).emit(Event::TuningChanged {
-                    field,
-                    value: tuning.get(field),
-                });
-            }
-        }
-        let mass =
-            Mass::try_from(tuning.get(TuningField::PlayerMass)).expect("validated player mass");
-        self.bodies.physics.set_mass(self.player_id(), mass);
-        self.tuning = tuning;
-        self.player.attack.retune(tuning);
-    }
-
-    /// Selects authored attack content for subsequent swings. The profile is
-    /// resolved before entering the attack state; an in-flight swing keeps the
-    /// profile and complete runtime value it captured when it began.
-    pub fn set_attack_profile(&mut self, profile: AttackProfile) {
-        if self.player.attack.set_profile(profile, self.tuning) {
-            self.trace
-                .sink(self.tick)
-                .emit(Event::AttackProfileChanged { profile });
-        }
-    }
-
-    /// Sets recovery for subsequent swings. Call before the tick whose inputs
-    /// should see it; an in-flight swing retains its committed duration.
-    /// The scenario command uses this same validated door, demonstrating a
-    /// runtime modifier without changing authored attack content.
-    pub fn set_attack_recovery(&mut self, recovery: RecoveryTicks) {
-        if self.player.attack.set_recovery(recovery) {
-            self.trace
-                .sink(self.tick)
-                .emit(Event::AttackRecoveryChanged { recovery });
-        }
-    }
-
-    /// How many bodies the current or most recent swing struck.
-    #[must_use]
-    pub fn struck(&self) -> usize {
-        self.player.attack.struck()
+    /// Replace validated global contact response between ticks.
+    pub fn set_contact_material(&mut self, material: ContactMaterial) { self.material = material; }
+    /// Change an existing body's mass through the shared validated physical type.
+    pub fn set_mass(&mut self, body: EntityId, mass: Mass) -> bool {
+        if !self.actor_view().movable(body) { return false; }
+        self.bodies.physics.set_mass(body, mass);
+        true
     }
 
     /// Where a named body stands, lifted to world space, or `None` if it is
@@ -644,9 +565,7 @@ impl World {
     pub fn report(&self, out: &mut Report) {
         let Self {
             bodies,
-            player,
             tick,
-            player_targets: _,
             queue,
             sources,
             scenes,
@@ -654,16 +573,15 @@ impl World {
             contacts,
             crowd_contacts,
             crowd_grid: _,
-            tuning,
+            material,
             trace,
         } = self;
-        let Player {
-            facing,
-            prev_facing,
-            attack,
-        } = player;
 
-        out.object("tuning", |out| tuning.report(out));
+        out.object("contact_material", |out| {
+            out.num("frequency_hz", material.frequency_hz());
+            out.num("damping_ratio", material.damping_ratio());
+            out.num("push_speed", material.push_speed());
+        });
         bodies.physics.report(&bodies.pos, &bodies.slots, out);
         bodies.health.report(out);
         bodies.interactions.report(out);
@@ -683,7 +601,6 @@ impl World {
         });
         out.int("tick", *tick);
         out.vec3("player_pos", on_ground(bodies.pos[0], PLAYER_HALF_HEIGHT));
-        out.num("facing", *facing);
         out.int("contacts", *contacts as u64);
         out.int("crowd_contacts", *crowd_contacts as u64);
 
@@ -725,25 +642,6 @@ impl World {
         out.int("scene_count", scenes.len() as u64);
         out.object("scenes", |out| scenes.report(out));
 
-        // The swing, as derived facts. `state` is a point sample and
-        // cannot show a window, so these say where in the window the sample
-        // fell; `trace` is what shows the window itself.
-        attack.status().report(out);
-        out.object("beam", |out| {
-            if let Some(beam) = self.beam() {
-                out.vec3("start", on_ground(beam.start(), 0.0));
-                out.vec3("end", on_ground(beam.end(), 0.0));
-                out.num("radius", Beam::RADIUS);
-                out.num("knockback_per_tick", Beam::KNOCKBACK);
-                out.int("hits", self.beam_hits().len() as u64);
-                out.object("hit_positions", |out| {
-                    for (index, point) in self.beam_hits().iter().enumerate() {
-                        out.vec3(&index.to_string(), on_ground(*point, 0.0));
-                    }
-                });
-                out.int("hit_every_ticks", u64::from(Beam::HIT_EVERY));
-            }
-        });
         out.int("trace_events", trace.len() as u64);
         out.int("trace_dropped", trace.dropped() as u64);
 
@@ -754,7 +652,6 @@ impl World {
             "player_prev_pos",
             on_ground(bodies.prev_pos[0], PLAYER_HALF_HEIGHT),
         );
-        out.num("prev_facing", *prev_facing);
     }
 
     /// Discards the trace so far. See [`Trace::clear`] for when that is right.
@@ -769,7 +666,7 @@ impl World {
 
     /// Capture all engine events for diagnostic serialization checks.
     pub fn capture_trace(&mut self, limit: usize) -> Result<(), &'static str> {
-        self.trace.capture(limit, |_| true)
+        self.trace.capture_all(limit)
     }
 
     /// Capture selected engine transitions independently of diagnostic history.
@@ -779,7 +676,7 @@ impl World {
         kinds: Vec<EventKind>,
     ) -> Result<(), &'static str> {
         self.trace
-            .capture(limit, move |event| kinds.contains(&event.kind()))
+            .capture_selected(limit, move |event| kinds.contains(&event.kind()))
     }
 
     /// What the simulation has done recently, oldest first.
@@ -787,23 +684,6 @@ impl World {
     #[must_use]
     pub fn trace(&self) -> &Trace {
         &self.trace
-    }
-
-    /// Runs the physical schedule without gameplay actions. All nonplayer health
-    /// members are eligible player targets; population gates count those members.
-    pub fn step(&mut self, dt: Dt, intent: Intent) {
-        self.step_observed(dt, intent, &mut ());
-    }
-
-    /// The physical test/benchmark entry point with read-only timing observation.
-    pub fn step_observed(&mut self, dt: Dt, intent: Intent, observer: &mut impl StepObserver) {
-        let population = self.damageable_count();
-        // The standalone engine has no allegiance policy. Its damageable members
-        // are the explicit target set for mechanism-level tests.
-        self.player_targets.clear();
-        self.begin_step(dt, intent, population)
-            .advance_standalone(observer)
-            .finish();
     }
 
     /// Authoritative combat outcomes from the latest completed tick.
@@ -826,9 +706,7 @@ impl World {
         // Exhaustive on purpose — see above. Do not replace with `..`.
         let Self {
             bodies,
-            player,
             tick,
-            player_targets: _,
             queue,
             sources,
             scenes,
@@ -836,17 +714,12 @@ impl World {
             contacts,
             crowd_contacts,
             crowd_grid: _,
-            tuning,
+            material,
             trace,
         } = self;
 
         // Diagnostic retention must not affect the simulation fingerprint.
         let _ = trace;
-        let Player {
-            facing,
-            prev_facing,
-            attack,
-        } = player;
         let Bodies {
             slots,
             physics,
@@ -857,7 +730,7 @@ impl World {
             prev_pos: enemy_prev,
         } = bodies;
         let mut h = Fnv::default();
-        tuning.hash(&mut h);
+        material.hash(&mut h);
         h.usize(defeats.len());
         for defeat in defeats {
             defeat.body.hash_into(&mut h);
@@ -877,7 +750,6 @@ impl World {
         characters.hash(&mut h);
 
         h.u64(*tick);
-        h.f32(*facing);
         h.usize(*contacts);
         h.usize(*crowd_contacts);
 
@@ -894,17 +766,11 @@ impl World {
         sources.hash(&mut h);
         scenes.hash(&mut h);
 
-        // The swing is simulation state with a *window*, which is exactly the
-        // kind a point-sample hash is worst at describing — but leaving it out
-        // would let a replay diverge on attack timing and call it agreement.
-        attack.hash(&mut h);
-
         // The previous tick goes in too. It is derived — it is just last tick's
         // values — so it adds no information to a comparison of two runs, and
         // it is included anyway, because the rule is *every field* and an
         // exception is how that rule stops being checkable. The compile error
         // that brought you here is the guard working.
-        h.f32(*prev_facing);
 
         // Identity, not just geometry. Two hordes standing in identical places
         // are still different worlds if their bodies have different names —
@@ -931,17 +797,9 @@ impl World {
         on_ground(self.bodies.pos[0], PLAYER_HALF_HEIGHT)
     }
 
-    /// Immutable player facts for animation and other presentation systems.
-    #[must_use]
-    pub fn player_presentation(&self, alpha: Alpha) -> PlayerPresentation {
-        let (position, facing) = self.drawn_player(alpha);
-        PlayerPresentation::new(
-            self.player_id(),
-            on_ground(position, 0.0),
-            facing,
-            self.bodies.pos[0] - self.bodies.prev_pos[0],
-            self.attack_status(),
-        )
+    /// Immutable physical pose of the persistent player body.
+    pub fn player_presentation(&self, alpha: Alpha) -> CharacterPresentation {
+        CharacterPresentation::new(self.player_id(), on_ground(self.bodies.prev_pos[0].lerp(self.bodies.pos[0], alpha.get()), 0.0), self.bodies.pos[0] - self.bodies.prev_pos[0])
     }
 
     /// Immutable, allocation-free presentation facts for every character member.
@@ -971,27 +829,6 @@ impl World {
                     self.bodies.pos[row] - self.bodies.prev_pos[row],
                 ))
             })
-    }
-
-    /// Damage positions from the completed tick, preserved across target removal.
-    /// These are historical points, not live entity references. The next step clears them.
-    pub fn beam_hits(&self) -> &[Vec2] {
-        self.player.attack.beam_hits()
-    }
-
-    /// Active channel capsule at the last completed tick, absent after release.
-    pub fn beam(&self) -> Option<Beam> {
-        self.player
-            .attack
-            .beam(self.bodies.pos[0], self.player.facing)
-            .map(|beam| self.bodies.physics.clip_beam(beam, &self.scenes.walls))
-    }
-
-    /// Committed swing discs (channels expose a capsule through `beam`).
-    pub fn attack_discs(&self) -> impl Iterator<Item = AttackDisc> + '_ {
-        self.player
-            .attack
-            .debug_discs(self.bodies.pos[0], self.player.facing)
     }
 
     /// Read-only collision discs at the last completed simulation tick.
@@ -1034,20 +871,6 @@ impl World {
                     self.bodies.interactions.get(id),
                 ))
             })
-    }
-
-    /// Interpolated position and shortest-arc facing shared by camera and character presentation.
-    fn drawn_player(&self, alpha: Alpha) -> (Vec2, f32) {
-        (
-            self.bodies.prev_pos[0].lerp(self.bodies.pos[0], alpha.get()),
-            blend_angle(self.player.prev_facing, self.player.facing, alpha),
-        )
-    }
-
-    /// Which way the character is pointing, in radians. The attack state
-    /// machine will orient its hitbox by this.
-    pub fn player_facing(&self) -> f32 {
-        self.player.facing
     }
 
     /// The player's stable identity, usable by every physical interaction.

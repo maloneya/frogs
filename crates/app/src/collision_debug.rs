@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn attack_outlines_follow_committed_samples_and_completed_tick_pose() {
         let mut game = Game::empty();
-        game.set_attack_profile(arpg_sim::AttackProfile::Slam);
+        game.set_attack_profile(arpg_game::AttackProfile::Slam);
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         let mut debug = CollisionDebug::default();
         debug.set_enabled(true, &game);
@@ -157,7 +157,7 @@ mod tests {
                 ),
             );
             if elapsed == 1 {
-                game.set_attack_profile(arpg_sim::AttackProfile::Cleave);
+                game.set_attack_profile(arpg_game::AttackProfile::Cleave);
             }
             let before = game.hash();
             debug.rebuild(&game);
@@ -304,7 +304,7 @@ mod tests {
         );
         debug.rebuild(&game);
         // The motor's first-tick change ramps in over four substeps: 5/8 of a dt².
-        let travel = arpg_sim::Tuning::default().get(arpg_sim::TuningField::PlayerAcceleration)
+        let travel = arpg_game::Tuning::default().get(arpg_game::TuningField::PlayerAcceleration)
             * arpg_sim::Dt::SECS
             * arpg_sim::Dt::SECS
             * 5.0

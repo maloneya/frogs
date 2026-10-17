@@ -60,7 +60,7 @@ mod tests {
     }
 
     #[test]
-    fn visibility_groups_pack_each_intersection_once_and_reset_with_a_bounded_capacity() {
+    fn visibility_groups_pack_each_intersection_once_and_reset_without_truncation() {
         use glam::{Mat4, Vec3};
         use crate::visibility::{Bounds, Frustum};
         let views = [Some(Frustum::new(Mat4::IDENTITY)),
@@ -74,7 +74,7 @@ mod tests {
         for (mask, instance) in placements { assert_eq!(visibility_mask(bounds, instance, &views), mask); }
         let instances: Vec<_> = placements.into_iter().rev().flat_map(|(_, instance)| [instance; 2]).collect();
         let mut staging = CharacterInstances::default();
-        let ranges = staging.pack(&instances, bounds, &views, MAX_INSTANCES);
+        let ranges = staging.pack(&instances, bounds, &views);
         assert_eq!(staging.instances.len(), 14, "intersections must not duplicate an upload");
         assert!(ranges[0].is_empty());
         for (mask, range) in ranges.iter().enumerate().skip(1) {
@@ -83,12 +83,12 @@ mod tests {
                 assert_eq!(visibility_mask(bounds, *instance, &views), mask);
             }
         }
-        let ranges = staging.pack(&instances, bounds, &views, 3);
-        assert_eq!(staging.instances.len(), 3);
-        assert_eq!(ranges.iter().map(Range::len).sum::<usize>(), 3);
-        assert!(staging.pack(&[], bounds, &views, MAX_INSTANCES).iter().all(Range::is_empty));
+        let many = vec![placements[0].1; MAX_INSTANCES + 1];
+        let ranges = staging.pack(&many, bounds, &views);
+        assert_eq!(staging.instances.len(), many.len());
+        assert_eq!(ranges.iter().map(Range::len).sum::<usize>(), many.len());
+        assert!(staging.pack(&[], bounds, &views).iter().all(Range::is_empty));
         assert!(staging.instances.is_empty());
-        assert!(staging.pack(&instances, bounds, &views, 0).iter().all(Range::is_empty));
     }
 
     #[test]
@@ -123,6 +123,20 @@ mod tests {
         assert_eq!(draws.end, MAX_HORDE_POSE_BUCKETS as u32);
         assert!(pipeline.posed_horde.as_ref().unwrap().fits(&replacement, &later));
         assert!(!pipeline.posed_horde.as_ref().unwrap().fits(&mesh, &pose));
+        let many = vec![instances[0]; MAX_INSTANCES + 1];
+        let mut buckets = [CharacterBucket::new(&later, &[]); MAX_HORDE_POSE_BUCKETS];
+        buckets[0] = CharacterBucket::new(&later, &many);
+        buckets[MAX_HORDE_POSE_BUCKETS - 1] = CharacterBucket::new(&later, &instances);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let draws = pipeline.upload(&device, &queue,
+            Some(CharacterPreview::new(&replacement, &later, instances[0])),
+            Some(CharacterHorde::new(&replacement, buckets)), &view);
+        assert_eq!(draws.end as usize, many.len() + 2,
+            "timed remains, another occupied pose, and the player all survive buffer growth");
+        assert!(pipeline.instance.size() >= ((many.len() + 2) * size_of::<Instance>()) as u64);
+        queue.submit([]);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert!(pollster::block_on(scope.pop()).is_none());
         assert_eq!(pipeline.upload(&device, &queue, None, None, &view).end, 0);
         assert!(pipeline.posed_horde.is_none());
     }
@@ -447,12 +461,11 @@ impl Default for CharacterInstances {
 
 impl CharacterInstances {
     fn pack(&mut self, instances: &[Instance], bounds: crate::visibility::Bounds,
-        views: &CharacterViews, limit: usize) -> [Range<u32>; VISIBILITY_GROUPS] {
+        views: &CharacterViews) -> [Range<u32>; VISIBILITY_GROUPS] {
         self.instances.clear();
         self.masks.clear();
         let mut counts = [0; VISIBILITY_GROUPS];
         for &instance in instances {
-            if self.instances.len() == limit { break; }
             let mask = visibility_mask(bounds, instance, views);
             if mask == 0 { continue; }
             self.instances.push(instance);
@@ -460,7 +473,12 @@ impl CharacterInstances {
             counts[mask] += 1;
         }
         let mut end = 0;
-        let ranges = counts.map(|count| { let start = end; end += count; start as u32..end as u32 });
+        let ranges = counts.map(|count| {
+            let start = end;
+            end += count;
+            u32::try_from(start).expect("character draw range fits GPU addressing")
+                ..u32::try_from(end).expect("character draw range fits GPU addressing")
+        });
         let mut next = ranges.clone().map(|range| range.start as usize);
         // Counting partition keeps one copy of each placement. Each pass can
         // skip entire irrelevant groups without growing the instance budget.
@@ -661,6 +679,13 @@ impl CharacterPipeline {
     ) -> CharacterDraws {
         assert!(views[0].is_some(), "character upload requires the main view");
         let instance_bytes = size_of::<Instance>() as u64;
+        let required = horde.map_or(0, |horde| horde.buckets.iter()
+            .try_fold(0_usize, |count, bucket| count.checked_add(bucket.instances.len()))
+            .expect("character placement count fits address space"))
+            .checked_add(usize::from(player.is_some())).expect("character placement count fits address space");
+        // Timed remains can outlive recycled body slots. Keep the ordinary
+        // allocation, growing only when actual placements need more space.
+        self.reserve_instances(device, required);
         let mut draws = CharacterDraws::default();
         let mut next_instance = 0_usize;
 
@@ -682,8 +707,7 @@ impl CharacterPipeline {
                 let joints = bucket.pose.joint_matrices();
                 debug_assert!(!joints.is_empty());
                 debug_assert!(joints.len() <= arpg_assets::MAX_JOINTS);
-                let ranges = self.staging.pack(bucket.instances, horde.mesh.bounds(joints),
-                    views, MAX_INSTANCES - next_instance);
+                let ranges = self.staging.pack(bucket.instances, horde.mesh.bounds(joints), views);
                 let count = self.staging.instances.len();
                 if count == 0 { continue; }
                 queue.write_buffer(&self.instance, next_instance as u64 * instance_bytes,
@@ -699,6 +723,21 @@ impl CharacterPipeline {
         if horde.is_none() { self.posed_horde = None; }
         draws.end = next_instance as u32;
         draws
+    }
+
+    fn reserve_instances(&mut self, device: &wgpu::Device, required: usize) {
+        assert!(u32::try_from(required).is_ok(), "character placements exceed GPU draw addressing");
+        let maximum = device.limits().max_buffer_size / size_of::<Instance>() as u64;
+        let required = u64::try_from(required).expect("character count fits GPU addressing");
+        if required <= self.instance.size() / size_of::<Instance>() as u64 { return; }
+        assert!(required <= maximum, "character instances exceed this GPU's buffer capacity");
+        let capacity = required.next_power_of_two().min(maximum);
+        self.instance = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("character instances"),
+            size: capacity * size_of::<Instance>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
     }
 
     pub(crate) fn draw_shadows(&self, pass: &mut wgpu::RenderPass<'_>, camera: &CameraBinding, draws: &CharacterDraws) {

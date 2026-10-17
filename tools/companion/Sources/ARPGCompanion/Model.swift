@@ -1,6 +1,13 @@
 import Foundation
 import Combine
 
+struct SceneFile: Identifiable, Sendable {
+    let path: String
+    let label: String
+    var id: String { path }
+}
+
+
 @MainActor
 final class Model: ObservableObject {
     @Published private(set) var state: Snapshot?
@@ -31,7 +38,7 @@ final class Model: ObservableObject {
     private let exchange: @Sendable (Request) async throws -> Reply
 
     private let author: @Sendable (EditorRequest) async throws -> AuthoringReply
-    init(path: String, exchange: (@Sendable (Request) async throws -> Reply)? = nil,
+    init(path: String, sceneDirectory: URL? = nil, exchange: (@Sendable (Request) async throws -> Reply)? = nil,
          author: (@Sendable (EditorRequest) async throws -> AuthoringReply)? = nil) {
         socketPath = path
         let connection = Connection(path: path)
@@ -40,7 +47,7 @@ final class Model: ObservableObject {
         self.author = author ?? { try await authoring.exchange($0) }
         let args = CommandLine.arguments
         let path = args.firstIndex(of: "--scenes").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
-        sceneDirectory = URL(fileURLWithPath: path ?? "scenes", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)).standardizedFileURL
+        self.sceneDirectory = sceneDirectory ?? URL(fileURLWithPath: path ?? "scenes", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)).standardizedFileURL
         refreshSceneFiles()
     }
 

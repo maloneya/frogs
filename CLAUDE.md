@@ -30,14 +30,16 @@ Start with [README](README.md) for build, play and controls.
 - Behaviour changes need predicted outcomes through Game, including relevant
   intermediate ticks, interactions, refusals and stale IDs. Tests and benchmarks
   own their setups; never load playable `scenes/` files as test fixtures.
-- Performance monitoring applies on every branch. Preserve the
-  [accepted performance ceiling](docs/performance.md#accepted-performance-ceiling)
-  using the normal benchmark cadence and regression checks.
-- On a performance regression or credible performance concern, stop feature
-  work and flag it immediately. Preserve changes and evidence; do not optimize,
-  retry toward a pass or expand scope. Follow the [stop and handoff policy](docs/performance.md#feature-work-stop-and-handoff).
-  Investigation starts only when the user requests it; implementation waits for
-  the user's choice of approach.
+- Observe performance on every branch using the normal benchmark cadence and
+  the [accepted reference](docs/performance.md#accepted-performance-ceiling).
+  When work regresses performance or raises a credible concern, record it in
+  [performance follow-ups](docs/performance-follow-ups.md), link the task, changed
+  source and evidence, then continue the assigned task. Mention the note in the
+  final report; distinguish measured regressions from suspected causes and gaps.
+- Performance observations do not block task completion or authorize investigation,
+  optimization, scope changes or baseline replacement. Do not retry toward a pass.
+  Follow the [record and continue policy](docs/performance.md#feature-work-record-and-continue);
+  investigate or fix performance only when the user includes that work in scope.
 - Search [traps](docs/traps.md) when diagnosing. Record symptom, cause and check
   after a misleading failure costs ten minutes; replace recurring advice with checks.
 - No compatibility shims, aliases, legacy readers or migration fallbacks without
@@ -56,7 +58,7 @@ python3 scripts/verify.py full --snapshot  # verify captured inputs while edits 
 Rust may need `. "$HOME/.cargo/env"`. Use release builds for performance.
 Follow [verification policy](docs/verification.md) for check selection and evidence;
 report failures, uncertainty and omitted coverage. Never relax a lint, dependency
-rule, test or performance gate just to pass. Use justified `#[expect]` exceptions.
+rule, test or performance threshold just to pass. Use justified `#[expect]` exceptions.
 
 Drive live checks through `ARPG_HARNESS`, not OS key injection or desktop capture;
 see [playtesting](.claude/skills/playtest/SKILL.md).

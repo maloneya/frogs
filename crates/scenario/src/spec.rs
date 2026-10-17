@@ -4,9 +4,9 @@
 //! written against today; a field that only *describes* an intention is a field
 //! that will drift away from what the runner actually checks.
 
-use arpg_sim::{AttackPhase, AttackProfile, Impulse, RecoveryTicks};
+use arpg_sim::{AttackPhase, Impulse};
 use serde::Deserialize;
-use arpg_game::{ActorDefinition, Source};
+use arpg_game::{ActorDefinition, AttackProfile, Source};
 
 /// One scenario: a world, an input stream, a tick budget, and what is expected
 /// at checkpoints and at the end of it.
@@ -51,10 +51,6 @@ pub(crate) struct Scenario {
     /// Ticks on which the interaction button is pressed.
     #[serde(default)]
     pub(crate) interactions: Vec<u64>,
-
-    /// Validated recovery edits, applied before the named tick in file order.
-    #[serde(default)]
-    pub(crate) attack_recovery: Vec<RecoveryAt>,
 
     /// Authored attack selections, applied before the named tick.
     #[serde(default)]
@@ -140,14 +136,6 @@ pub(crate) struct BehaviorAt {
     pub(crate) at: u64,
     pub(crate) body: usize,
     pub(crate) actor: ActorDefinition,
-}
-
-/// A tuning command uses sim's value type, including its deserialization guard.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RecoveryAt {
-    pub(crate) at: u64,
-    pub(crate) recovery: RecoveryTicks,
 }
 
 /// A bounded hold; validated against the scenario budget before setup.
@@ -299,11 +287,6 @@ pub(crate) struct Expect {
     pub(crate) attack_phase: Option<AttackPhase>,
     #[serde(default)]
     pub(crate) swing_tick: Option<u32>,
-    #[serde(default)]
-    pub(crate) recovery_ticks: Option<u32>,
-    /// Zero when no swing is in flight.
-    #[serde(default)]
-    pub(crate) swing_recovery_ticks: Option<u32>,
     /// Authored attack selected for the next swing.
     #[serde(default)]
     pub(crate) attack_profile: Option<AttackProfile>,
@@ -363,7 +346,10 @@ pub(crate) struct Expect {
     pub(crate) trace: Option<String>,
     /// Exact sequence among explicitly selected event kinds; other diagnostics do not matter.
     #[serde(default)]
-    pub(crate) events: Option<crate::events::Events>,
+    pub(crate) events: Option<crate::events::PhysicalEvents>,
+    /// Exact gameplay transitions, with their own selected scope and emission order.
+    #[serde(default)]
+    pub(crate) gameplay_events: Option<crate::events::GameplayEvents>,
 }
 
 /// A predicted scalar and how far off it may be.
@@ -562,5 +548,5 @@ pub(crate) struct ChestExpect {
 #[serde(deny_unknown_fields)]
 pub(crate) struct TuningAt {
     pub(crate) at: u64,
-    pub(crate) values: arpg_sim::Tuning,
+    pub(crate) values: arpg_game::Tuning,
 }

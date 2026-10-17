@@ -8,12 +8,12 @@ use glam::{FloatExt, Vec2};
 use crate::angle;
 use crate::hash::Fnv;
 
-/// One polar hitbox disc relative to the player.
+/// One polar hitbox disc relative to its producer.
 #[derive(Clone, Copy)]
-pub(crate) struct Disc {
+pub struct Disc {
     /// Off the facing direction, in radians. Zero is straight ahead.
     angle: f32,
-    /// From the player's centre, in world units.
+    /// From the producer's centre, in world units.
     distance: f32,
     /// The disc's own radius.
     radius: f32,
@@ -21,13 +21,13 @@ pub(crate) struct Disc {
 
 impl Disc {
     /// World centre and radius. Yaw zero faces +Z; positive yaw turns toward +X.
-    pub(crate) fn place(self, origin: Vec2, facing: f32) -> (Vec2, f32) {
+    pub fn place(self, origin: Vec2, facing: f32) -> (Vec2, f32) {
         let (sin, cos) = (facing + self.angle).sin_cos();
         (origin + Vec2::new(sin, cos) * self.distance, self.radius)
     }
 }
 
-/// Hitbox endpoints and radii in the player's frame: X is right, Y is forward.
+/// Validated hitbox endpoints in the producer's frame: X is right, Y is forward.
 pub(crate) struct Swing {
     start: Vec2,
     end: Vec2,
@@ -54,7 +54,7 @@ impl Swing {
         let (from_angle, from_distance) = polar(self.start);
         let (to_angle, to_distance) = polar(self.end);
 
-        // The short way round, for the same reason `blend_angle` needs it: a
+        // The short way round, as in facing interpolation: a
         // swing whose ends straddle the `±PI` branch cut is a small turn that
         // naive subtraction reports as an almost-full revolution the other way.
         let turn = angle::shortest_arc(from_angle, to_angle);
@@ -85,19 +85,19 @@ impl Swing {
 ///
 /// **The value both readers share.** See the module docs for why it is stored
 /// rather than recomputed.
-pub(crate) struct Hitbox<const N: usize> {
+pub struct Hitbox<const N: usize> {
     discs: [Disc; N],
     len: usize,
 }
 
 impl<const N: usize> Hitbox<N> {
     /// The disc live on tick `i` of the active window.
-    pub(crate) fn at(&self, i: usize) -> Disc {
-        self.discs[i]
+    pub fn at(&self, i: usize) -> Disc {
+        self.discs()[i]
     }
 
     /// Every disc the swing occupies, in the order it occupies them.
-    pub(crate) fn discs(&self) -> &[Disc] {
+    pub fn discs(&self) -> &[Disc] {
         &self.discs[..self.len]
     }
 
@@ -106,7 +106,7 @@ impl<const N: usize> Hitbox<N> {
     /// The hitbox is the difference between two configurations, and a hash that
     /// skipped it would let a replay swing a different shape and call that
     /// agreement.
-    pub(crate) fn hash(&self, h: &mut Fnv) {
+    pub fn hash_into(&self, h: &mut Fnv) {
         h.usize(self.len);
         // Hash the reserved tail as well as the live prefix. It is derived and
         // cannot affect behavior, but the replay rule is deliberately every
@@ -137,6 +137,12 @@ mod tests {
 
     fn placed<const N: usize>(hitbox: &Hitbox<N>) -> Vec<(Vec2, f32)> {
         hitbox.discs().iter().map(|d| d.place(Vec2::ZERO, 0.0)).collect()
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn inactive_reserved_samples_cannot_be_read_as_live_geometry() {
+        Swing::new(Vec2::Y, Vec2::Y, (0.5, 0.5)).generate::<4>(1).at(1);
     }
 
     /// The configuration means what it says: the window opens on `start` and
@@ -201,7 +207,7 @@ mod tests {
         }
     }
 
-    /// The hitbox is in the player's frame, so turning carries it round. The
+    /// The hitbox is in the producer's frame, so turning carries it round. The
     /// mistake this catches is a mirrored placement, which at facing 0 is
     /// indistinguishable from a correct one.
     #[test]

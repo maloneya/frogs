@@ -2,8 +2,9 @@
 
 ## Accepted performance ceiling
 
-Performance monitoring, benchmark cadence, completion gates and the stop/handoff
-policy apply on every branch. The user accepted the optimized renderer's current
+Performance monitoring, benchmark cadence and the record-and-continue policy
+apply on every branch. Performance results are observations, not task completion
+gates. The user accepted the optimized renderer's current
 performance as the new ceiling on 2026-10-17. The
 [accepted measurement record](../benchmarks/evidence/accepted-20261017.md) owns
 final release measurements, source identity, raw evidence and remaining uncertainty.
@@ -14,49 +15,61 @@ budgets. Do not replace this reference or widen gates without a user decision.
 This acceptance preserves the current gameplay, authored assets, lighting,
 shadows and weather. It does not certify every frame below the 60 Hz budget of
 16.67 ms. Inconclusive measurements remain inconclusive; acceptance is a product
-decision, not a timing pass. The retained dirty measurements require explicit
-`--baseline` selection when the source changes, as described under
-[evidence and baselines](#evidence-and-baselines). A future clean-source checkpoint
-can seed automatic discovery without rewriting this historical evidence.
+decision, not a timing pass. The [accepted-reference policy](../benchmarks/accepted-ceiling.json)
+pins those immutable results for both direct runs and normal verification. Each
+workload keeps its own source/binary provenance, including the historical dirty
+source state; source changes do not prevent comparison. No later local or
+published measurement replaces this ceiling automatically.
 
-## Feature work: stop and handoff
+## Feature work: record and continue
 
-Before changing a feature likely to affect crowd cost, animation, assets or
-rendering, identify the representative workload and retain compatible release
-evidence for the pre-feature state. Measure a small coherent increment before
-stacking further expensive changes; benchmark cadence is not a reason to defer
-that check. Use existing gates and workloads. If live conditions or a compatible
-baseline are unavailable, flag the missing coverage before proceeding with
-performance-sensitive work.
+Complete the assigned task when a performance regression, budget breach or
+credible concern appears. Make a brief observation, retain the available evidence
+and continue implementation and correctness checks. Performance alone is never
+a reason to pause, abandon or revert the task, request permission to continue,
+or withhold completion. Correctness failures still follow the verification rules.
 
-At the first stable absolute-budget breach, relative regression or credible
-performance concern, immediately stop feature work and notify the user. Read
-individual workload/metric results: an overall `inconclusive` result can contain
-a stable `regression`. Missing baselines do not erase absolute failures, and an
-absolute breach alone does not prove the new feature caused it. A debug timing
-failure or invalid window is a concern to flag, not proof of release performance.
+Use the normal [benchmark cadence](verification.md), existing release workloads
+and comparisons. For performance-sensitive work, identify the relevant workload
+and retain any available pre-change evidence and source identity. There is no
+extra per-increment measurement gate. If a baseline or foreground session is
+unavailable, record the gap and continue; do not seize the desktop or start a
+diagnostic measurement cycle to fill it.
 
-Preserve the candidate, source identity, raw trials and previous evidence. Report
-only what is already available; do not spend another measurement cycle proving
-the alert. The short handoff gives:
+Read individual workload/metric results: an overall `inconclusive` result can
+contain a stable `regression`. Missing baselines do not erase absolute failures,
+and an absolute breach alone does not prove the current task caused it. Debug
+timings and invalid windows are concerns, not proof of release performance.
 
-- The feature and last coherent change being implemented, and current state.
-- The affected workload and metric, measured trial values, limit and compatible
-  before-change values if available; distinguish failure from uncertainty.
-- Evidence paths, source/snapshot identity and the reproduction command with
-  its working directory and required conditions.
-- What is known about cause, what remains unmeasured, and completed/omitted checks.
+Before finishing, add or update a durable entry in
+[performance follow-ups](performance-follow-ups.md) containing:
 
-Do not tune, cull, approximate, simplify assets, change algorithms, loosen gates,
-replace baselines or keep rerunning until green. Do not launch an investigation
-or another agent automatically. A feature stopped here is unfinished; preserve
-the work without reverting it or claiming completion. Reading the existing
-report and safely ending an owned measurement session are sufficient wrap-up.
+- The date, task/feature and changed files or commits that could account for the
+  observation. Identify the measured revision and dirty source digest or snapshot;
+  a commit name alone cannot identify dirty work. State when unrelated edits or
+  missing pre-change evidence prevent attribution to this task.
+- The workload/metric, observed trial values, baseline and limit when available.
+  Label the entry as a measured regression, a suspected concern or missing coverage;
+  separate known causes from hypotheses and unknowns.
+- Links to retained raw evidence and source snapshots, plus the reproduction
+  command, working directory and required conditions. Use existing artifacts;
+  an unmeasured concern can name the relevant code and conditions instead.
+- Completed and omitted coverage and the deferred question for later investigation.
 
-The user triggers [investigate-performance](../.claude/skills/investigate-performance/SKILL.md)
-in this chat or another one. That workflow separates measurement, attribution
-and published alternatives from implementation, then returns a decision brief.
-Only the user's selected approach authorizes a fix or a change in feature scope.
+Keep one entry per issue and append new task/source observations to it so later
+work does not obscure when the regression first appeared. Preserve failing and
+inconclusive results. Mention the entry and its practical impact briefly in the
+final task report, even when the assigned work is complete. Recording a regression
+does not accept it: the pinned reference, budgets and thresholds stay unchanged,
+and a failed measurement never becomes a pass or advances a passing checkpoint.
+
+Do not divert into profiling, research, ablations, optimization, asset reductions,
+algorithm changes or repeated measurements to seek a pass. Do not automatically
+start another agent or investigation. Such work needs the user's explicit scope;
+a note does not expand the current task. When requested,
+[investigate-performance](../.claude/skills/investigate-performance/SKILL.md)
+uses the retained evidence to produce a decision brief. Implement only the
+performance work the user authorizes.
 
 ## Measuring
 
@@ -289,10 +302,10 @@ or becoming occluded during warm-up also invalidates the trial. Readiness
 observation never repeatedly activates the app. A reserved foreground session
 is still required; agents do not use ad hoc desktop activation scripts.
 
-Validate each trial before collecting another. At the first invalid trial or
-completed workload needing review, collection stops and preserves raw evidence.
-Unfinished workloads/repetitions remain inconclusive. A stable failing metric
-is prominently reported even when aggregate coverage is inconclusive. No
+Validate each trial before collecting another. An invalid trial stops collection
+and preserves raw evidence; a measured regression does not skip the other selected
+workloads. Unfinished workloads/repetitions remain inconclusive. A stable failing
+metric is prominently reported even when aggregate coverage is inconclusive. No
 automatic retries occur, and `--rerun` refuses evidence containing a confirmed
 failure; the user's investigation can explicitly select a workload instead.
 
@@ -341,24 +354,27 @@ Structurally valid runs, including noisy ones, automatically enter ignored
 provenance to [benchmarks/evidence](../benchmarks/evidence/README.md) for other
 checkouts. Commit both files. There is no automatic baseline replacement or bless.
 
-Without `--baseline`, the runner selects the nearest compatible ancestor from
-both stores before measuring. It validates raw artifacts, not just manifest
-verdicts. Corrupt eligible evidence fails preflight; incompatible schemas are
-excluded. Dirty evidence is reusable automatically only for an identical source
-digest; otherwise select it explicitly. A dirty measurement does not become clean
-evidence merely because its source is committed later.
+Without `--baseline`, the runner loads the pinned accepted references for the
+requested mode. A full suite can use separately captured workload results; no
+synthetic measurement combines their source or binary identities. Every pinned
+artifact is checked against its content address, manifest and raw measurements
+before building. Missing references, corrupt artifacts, changed workload policy
+or incompatible measurement conditions refuse collection. Missing relative
+coverage cannot become an absolute-only pass.
 
-To seed reusable evidence, measure a clean commit, then archive and commit the
-artifacts separately. Their provenance identifies the measured source, not the
-later evidence commit. Evidence storage is excluded from source fingerprints.
-Failed/incomplete runs remain at their requested path without becoming baselines.
-Collected trials survive assessment/archive failures and can be compared again.
+Use `--baseline RESULT.json` for an explicit investigation comparison. A dirty
+measurement retains its original source identity even after those edits are
+committed. Publishing or collecting newer evidence does not change the accepted
+reference; that requires a user decision. Evidence storage is excluded from
+source fingerprints, while the accepted-reference policy is a source input.
+Failed/incomplete runs remain at their requested path. Collected trials survive
+assessment/archive failures and can be compared again.
 
 ### Interpreting the result
 
 | Exit | Status | Meaning |
 |---|---|---|
-| 0 | `pass` | Applicable budgets and comparisons passed |
+| 0 | `pass` | Absolute budgets and every required relative comparison passed |
 | 1 | `regression` | Stable evidence exceeded an absolute or relative limit |
 | 2 | `inconclusive` | Missing, invalid, incompatible, unstable or borderline evidence |
 
@@ -379,7 +395,7 @@ Game::step cost and cannot establish rendering capacity.
 
 Inspect `absolute_status`, `relative_status`, individual metrics and
 `rerun_workloads`. Missing/incompatible baselines can leave absolute budgets
-passing while relative coverage remains inconclusive. A noisy metric does not
+passing while relative coverage and the overall result remain inconclusive. A noisy metric does not
 erase healthy metrics; invalid raw evidence invalidates its workload.
 
 All repetitions must be below an absolute budget to pass, or above it to regress.
@@ -387,7 +403,8 @@ A relative pass requires the candidate's slowest trial within tolerance of the
 baseline's fastest; regression requires the candidate's fastest beyond tolerance
 of the baseline's slowest. Overlap or excessive spread is inconclusive. Rerun
 uncertain workloads under stable conditions, preserving previous samples, within
-a user-triggered investigation. Feature agents follow the stop rule above.
+a user-triggered investigation. Feature agents record the observation and continue
+their assigned work without diagnostic retries.
 
 ## Agent maintenance contract
 

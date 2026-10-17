@@ -15,6 +15,10 @@ owned by [verify.py](../scripts/verify.py); Markdown is excluded from benchmark
 cadence. Dirty edits are checked but do not increment the commit counter; their
 eventual commit does. Successful modes advance their own checkpoint only if
 source stayed unchanged. Headless evidence cannot certify rendering performance.
+Both modes use the [pinned accepted ceiling](../benchmarks/accepted-ceiling.json).
+Completion and cadence admission revalidate the complete raw suite against those
+references; old absolute-only passes, focused runs and noisy comparisons cannot
+advance a checkpoint.
 
 ## Choosing checks
 
@@ -48,11 +52,18 @@ not repeatedly seize the desktop. Rendering/frame-pacing performance claims stil
 require live evidence, even if cadence has not made it due.
 
 Results live in `target/verify/run-*/verification.json`. Read `coverage`,
-`omitted`, `complete` and source identity. Exit 0 means requested checks passed,
-1 means failure, 2 means inconclusive. A partial pass cannot certify omitted
-checks. Preserve failures and uncertainty; never widen a budget or bless a trace
-to clear a gate. [Performance policy](performance.md#agent-maintenance-contract)
-owns measurement and baseline requirements.
+`omitted`, `complete`, `performance_issues` and source identity. Exit 0 means the
+requested correctness checks passed; performance issues alone exit 0 with status
+`performance_warning`, remain in `failures`/`omitted`, and leave `complete` false.
+Exit 1 means a correctness failure, 2 means inconclusive correctness or a runner
+integrity failure. A partial pass or warning cannot certify omitted checks or
+claim a performance pass. Performance checks keep their raw exit codes, evidence
+and unchanged checkpoint admission. Preserve failures and uncertainty; never
+widen a budget or bless a trace to clear a gate.
+[Performance policy](performance.md#feature-work-record-and-continue) owns
+recording observations, measurement and baseline requirements. Task completion
+can include a recorded performance warning; `complete` describes verification
+coverage, not whether the assigned task is finished.
 
 ## Verify while work continues
 
@@ -90,11 +101,12 @@ and other heavy work. Live benchmarks still require their explicit foreground fl
 
 ## Reuse and retry
 
-For feature work, a performance failure or concern triggers the
-[immediate stop and handoff](performance.md#feature-work-stop-and-handoff).
-Retry commands and diagnostic next steps below do not authorize an agent to
-investigate or optimize automatically. Further performance measurements belong
-to a user-triggered investigation; ordinary correctness retry rules still apply.
+For feature work, record a performance failure or concern in
+[performance follow-ups](performance-follow-ups.md) and continue the assigned task
+under the [record and continue policy](performance.md#feature-work-record-and-continue).
+Retry commands are reproduction details for later work; they do not authorize
+an automatic investigation, optimization or retries to seek a pass. Normal
+benchmark cadence and correctness retry rules still apply.
 
 Failed checks print a bounded diagnostic as soon as they finish and save it in
 the report's `failures` array. Each summary identifies the check, supported failure
@@ -105,11 +117,12 @@ come from structured measurement evidence. Unknown failures stay `unclassified`.
 Full logs and existing pass/fail, cache and benchmark retry rules remain authoritative.
 
 Confirmed absolute or relative performance failures print first, even when
-other metrics or workloads are inconclusive. Aggregate exit/coverage semantics
-remain unchanged. A failed or inconclusive performance check ends the current
-verification sequence; later checks remain omitted. Performance retry commands
-are reproduction details for the user's chosen investigation, not instructions
-to automatically rerun or optimize.
+other metrics or workloads are inconclusive. Benchmark verdicts and uncertified
+coverage remain visible. A failed or inconclusive performance check does not skip later
+selected checks or block the assigned task. Invalid trials can still end that
+measurement session; unmeasured workloads remain uncertified. Record the issue
+with its task/source identity and report it at completion. Investigation and
+fixes require the user's explicit scope.
 
 For source drift, `source_changes` lists changed inputs without their contents.
 Summaries show at most ten paths and 1,200 diagnostic characters; follow the
@@ -135,7 +148,7 @@ reruns the check. Failures and checks spanning source changes never cache as pas
 
 Performance samples are fresh whenever a mode is selected. An explicitly
 classified infrastructure failure can defer automatic retries for identical
-source, command, environment and baseline-store contents. Correctness still runs;
+source, command, environment and accepted-policy/published-evidence contents. Correctness still runs;
 the result remains inconclusive, with no benchmark checkpoint or timing pass.
 Changed inputs or damaged evidence trigger a retry. Use `--performance`, `--live`
 or `--only performance-headless|performance-live` after repairing the condition.

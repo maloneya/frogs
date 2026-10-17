@@ -1,7 +1,8 @@
 //! Contact imparts momentum independently from combat eligibility and health.
 use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::{DoorPanel, ActionDefinition, ActionTiming, ActorDefinition, ActorRole, BehaviorNode, Game, GameScene, Placed, Scene, SwipeAction};
-use arpg_sim::{Accumulator, AttackProfile, Dt, EntityId, Event, Template};
+use arpg_sim::{Accumulator, Dt, EntityId, Event, Template};
+use arpg_game::{AttackProfile};
 use glam::Vec2;
 use std::num::NonZeroU8;
 

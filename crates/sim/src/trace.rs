@@ -20,13 +20,6 @@ const _: () = assert!(CAPACITY > 0, "a zero-length trace silently records nothin
 /// Diagnostic transitions. Aggregate repetitive contacts; retain identities for hits.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    /// Accepted type-wide edit before the named tick.
-    TuningChanged {
-        /// Attribute edited.
-        field: crate::TuningField,
-        /// Accepted value.
-        value: f32,
-    },
     /// An explicit action applied damage to a live target.
     Damaged {
         /// Actor responsible for the effect.
@@ -50,16 +43,6 @@ pub enum Event {
     SceneEvicted {
         /// Retired runtime instance.
         id: crate::SceneId,
-    },
-    /// Recovery tuning changed before this tick. In-flight swings keep theirs.
-    AttackRecoveryChanged {
-        /// Validated duration used by subsequent swings.
-        recovery: crate::RecoveryTicks,
-    },
-    /// Authored attack content changed between ticks.
-    AttackProfileChanged {
-        /// Profile used by subsequent swings.
-        profile: crate::AttackProfile,
     },
     /// A physical impulse was applied; source is absent for external commands.
     Impulsed {
@@ -141,32 +124,6 @@ pub enum Event {
         /// resolve to nothing rather than to whichever body took its row.
         id: EntityId,
     },
-    /// A swing began.
-    ///
-    /// The three attack events exist because the *interval* is the thing worth
-    /// checking, and no point sample can see one. A hitbox that opens a tick
-    /// early leaves final state indistinguishable from a correct swing; the
-    /// only place the mistake exists is between two samples.
-    Swung,
-    /// A held beam began.
-    ChannelStarted,
-    /// Release or selection change ended a beam.
-    ChannelStopped,
-    /// The hitbox came into existence. Startup is over.
-    HitboxOpened,
-    /// The hitbox stopped existing. Anything arriving now is too late.
-    HitboxClosed,
-    /// A body was struck by the hitbox.
-    ///
-    /// Per body rather than summarised, which is the exception the trace's own
-    /// rule allows for: a hit is rare, and *which* body was hit is the whole
-    /// content of the event.
-    Hit {
-        /// The body the swing connected with.
-        id: EntityId,
-        /// Hits left after the connection; zero is removed later in this tick.
-        remaining: u8,
-    },
     /// Player pairs overlapping more than a millimetre when this tick's
     /// contacts were first collided.
     Contacts {
@@ -201,18 +158,12 @@ pub enum Event {
 pub enum EventKind {
     /// Explicit action damage.
     Damaged,
-    /// A runtime tuning edit.
-    TuningChanged,
     /// The `Activated` transition.
     Activated,
     /// The `SceneLoaded` transition.
     SceneLoaded,
     /// The `SceneEvicted` transition.
     SceneEvicted,
-    /// The `AttackRecoveryChanged` transition.
-    AttackRecoveryChanged,
-    /// The `AttackProfileChanged` transition.
-    AttackProfileChanged,
     /// The `Impulsed` transition.
     Impulsed,
     /// The `LockBroken` transition.
@@ -237,18 +188,6 @@ pub enum EventKind {
     Refused,
     /// The `Removed` transition.
     Removed,
-    /// The `Swung` transition.
-    Swung,
-    /// The `ChannelStarted` transition.
-    ChannelStarted,
-    /// The `ChannelStopped` transition.
-    ChannelStopped,
-    /// The `HitboxOpened` transition.
-    HitboxOpened,
-    /// The `HitboxClosed` transition.
-    HitboxClosed,
-    /// The `Hit` transition.
-    Hit,
     /// The `Contacts` transition.
     Contacts,
     /// The `Crowded` transition.
@@ -265,12 +204,9 @@ impl Event {
     pub fn kind(self) -> EventKind {
         match self {
             Self::Damaged { .. } => EventKind::Damaged,
-            Self::TuningChanged { .. } => EventKind::TuningChanged,
             Self::Activated { .. } => EventKind::Activated,
             Self::SceneLoaded { .. } => EventKind::SceneLoaded,
             Self::SceneEvicted { .. } => EventKind::SceneEvicted,
-            Self::AttackRecoveryChanged { .. } => EventKind::AttackRecoveryChanged,
-            Self::AttackProfileChanged { .. } => EventKind::AttackProfileChanged,
             Self::Impulsed { .. } => EventKind::Impulsed,
             Self::LockBroken { .. } => EventKind::LockBroken,
             Self::Toppled { .. } => EventKind::Toppled,
@@ -283,12 +219,6 @@ impl Event {
             Self::Fired { .. } => EventKind::Fired,
             Self::Refused { .. } => EventKind::Refused,
             Self::Removed { .. } => EventKind::Removed,
-            Self::Swung => EventKind::Swung,
-            Self::ChannelStarted => EventKind::ChannelStarted,
-            Self::ChannelStopped => EventKind::ChannelStopped,
-            Self::HitboxOpened => EventKind::HitboxOpened,
-            Self::HitboxClosed => EventKind::HitboxClosed,
-            Self::Hit { .. } => EventKind::Hit,
             Self::Contacts { .. } => EventKind::Contacts,
             Self::Crowded { .. } => EventKind::Crowded,
             Self::WallContacts { .. } => EventKind::WallContacts,
@@ -304,16 +234,9 @@ impl fmt::Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Damaged { actor, target, remaining } => write!(f, "damaged actor={actor} target={target} remaining={remaining}"),
-            Self::TuningChanged { field, value } => write!(f, "tuning {}={value}", field.attribute().key),
             Self::Activated { id } => write!(f, "activated id={id}"),
             Self::SceneLoaded { id } => write!(f, "scene loaded id={id}"),
             Self::SceneEvicted { id } => write!(f, "scene evicted id={id}"),
-            Self::AttackRecoveryChanged { recovery } => {
-                write!(f, "attack recovery ticks={}", recovery.get())
-            }
-            Self::AttackProfileChanged { profile } => {
-                write!(f, "attack profile={}", profile.label())
-            }
             Self::Impulsed { id, source, impulse } => {
                 write!(f, "impulse id={id} value={impulse} source=")?;
                 match source {
@@ -334,12 +257,6 @@ impl fmt::Display for Event {
             Self::Fired { source } => write!(f, "fired source={source}"),
             Self::Refused { count } => write!(f, "refused count={count}"),
             Self::Removed { id } => write!(f, "removed id={id}"),
-            Self::ChannelStarted => write!(f, "channel started"),
-            Self::ChannelStopped => write!(f, "channel stopped"),
-            Self::Swung => write!(f, "swung"),
-            Self::HitboxOpened => write!(f, "hitbox opened"),
-            Self::HitboxClosed => write!(f, "hitbox closed"),
-            Self::Hit { id, remaining } => write!(f, "hit id={id} remaining={remaining}"),
             Self::Contacts { count } => write!(f, "contacts count={count}"),
             Self::Crowded { count } => write!(f, "crowded count={count}"),
             Self::WallContacts { count } => write!(f, "wall contacts count={count}"),
@@ -374,7 +291,8 @@ struct Capture<E> {
     events: Vec<(u64, E)>,
     limit: usize,
     overflowed: bool,
-    accepts: Box<dyn Fn(E) -> bool + Send + Sync>,
+    /// Absence means the entire stream, never an inferred property of a predicate.
+    accepts: Option<Box<dyn Fn(E) -> bool + Send + Sync>>,
 }
 
 impl<E: Copy + fmt::Display> Trace<E> {
@@ -395,25 +313,35 @@ impl<E: Copy + fmt::Display> Trace<E> {
         if limit > MAX_TRACE_EVENTS { Err("trace event capacity exceeds MAX_TRACE_EVENTS") } else { Ok(()) }
     }
 
-    /// Start a bounded, filtered observation capture independent of the live
-    /// ring. Exhaustion is explicit and never overwrites required evidence.
-    /// Limits above [`MAX_TRACE_EVENTS`] preserve any current capture.
-    pub fn capture(&mut self, limit: usize, accepts: impl Fn(E) -> bool + Send + Sync + 'static) -> Result<(), &'static str> {
+    /// Capture the entire stream independently of the live retention ring.
+    /// Unsupported limits preserve any accepted capture and its completeness.
+    pub fn capture_all(&mut self, limit: usize) -> Result<(), &'static str> {
+        self.start_capture(limit, None)
+    }
+
+    /// Capture selected events independently of live history. Even a predicate
+    /// accepting every observed event cannot certify the entire stream.
+    pub fn capture_selected(&mut self, limit: usize, accepts: impl Fn(E) -> bool + Send + Sync + 'static) -> Result<(), &'static str> {
+        self.start_capture(limit, Some(Box::new(accepts)))
+    }
+
+    fn start_capture(&mut self, limit: usize, accepts: Option<Box<dyn Fn(E) -> bool + Send + Sync>>) -> Result<(), &'static str> {
         Self::validate_limit(limit)?;
-        self.capture = Some(Capture {
-            events: Vec::with_capacity(limit), limit, overflowed: false,
-            accepts: Box::new(accepts),
-        });
+        self.capture = Some(Capture { events: Vec::with_capacity(limit), limit, overflowed: false, accepts });
         Ok(())
     }
 
-    /// Stop independent observation collection and release its storage.
-    pub fn stop_capture(&mut self) { self.capture = None; }
-
-    /// Complete captured evidence, or `None` if not enabled or exhausted.
+    /// Evidence complete within its requested selection, or `None` when absent
+    /// or overflowed. Selected evidence does not certify full-stream coverage.
     pub fn captured(&self) -> Option<&[(u64, E)]> {
         self.capture.as_ref().filter(|capture| !capture.overflowed)
             .map(|capture| capture.events.as_slice())
+    }
+
+    /// Entire-stream evidence, refused after any filtered capture or overflow.
+    pub fn full_capture(&self) -> Option<&[(u64, E)]> {
+        let capture = self.capture.as_ref()?;
+        (!capture.overflowed && capture.accepts.is_none()).then_some(capture.events.as_slice())
     }
 
     /// Hands out the only thing a pass may write through.
@@ -476,7 +404,7 @@ impl<E: Copy + fmt::Display> Trace<E> {
 
     fn push(&mut self, tick: u64, event: E) {
         if let Some(capture) = &mut self.capture
-            && (capture.accepts)(event) {
+            && capture.accepts.as_ref().is_none_or(|accepts| accepts(event)) {
             if capture.events.len() < capture.limit {
                 capture.events.push((tick, event));
             } else {
@@ -528,17 +456,17 @@ mod tests {
     fn rejected_capacity_preserves_history_and_capture() {
         let mut trace = Trace::default();
         trace.set_retention(1).unwrap();
-        trace.capture(2, |_| true).unwrap();
-        trace.sink(0).emit(Event::Swung);
+        trace.capture_all(2).unwrap();
+        trace.sink(0).emit(Event::Refused { count: 1 });
         for invalid in [MAX_TRACE_EVENTS + 1, usize::MAX] {
             assert!(trace.set_retention(invalid).is_err());
-            assert!(trace.capture(invalid, |_| false).is_err());
-            assert_eq!(trace.iter().collect::<Vec<_>>(), vec![(0, Event::Swung)]);
-            assert_eq!(trace.captured(), Some(&[(0, Event::Swung)][..]));
+            assert!(trace.capture_selected(invalid, |_| false).is_err());
+            assert_eq!(trace.iter().collect::<Vec<_>>(), vec![(0, Event::Refused { count: 1 })]);
+            assert_eq!(trace.captured(), Some(&[(0, Event::Refused { count: 1 })][..]));
         }
-        trace.sink(1).emit(Event::HitboxOpened);
-        assert_eq!(trace.iter().collect::<Vec<_>>(), vec![(1, Event::HitboxOpened)]);
-        assert_eq!(trace.captured(), Some(&[(0, Event::Swung), (1, Event::HitboxOpened)][..]));
+        trace.sink(1).emit(Event::Rested { count: 1 });
+        assert_eq!(trace.iter().collect::<Vec<_>>(), vec![(1, Event::Rested { count: 1 })]);
+        assert_eq!(trace.captured(), Some(&[(0, Event::Refused { count: 1 }), (1, Event::Rested { count: 1 })][..]));
     }
 
     #[test]
@@ -546,17 +474,37 @@ mod tests {
         for retention in [0, 1, 4] {
             let mut trace = Trace::default();
             trace.set_retention(retention).unwrap();
-            trace.capture(2, |event| matches!(event, Event::Swung)).unwrap();
-            trace.sink(0).emit(Event::Swung);
+            trace.capture_selected(2, |event| matches!(event, Event::Refused { count: 1 })).unwrap();
+            trace.sink(0).emit(Event::Refused { count: 1 });
             for tick in 1..10 { trace.sink(tick).emit(Event::Contacts { count: 1 }); }
             trace.clear();
-            trace.sink(10).emit(Event::Swung);
-            assert_eq!(trace.captured(), Some(&[(0, Event::Swung), (10, Event::Swung)][..]));
-            trace.sink(11).emit(Event::Swung);
+            trace.sink(10).emit(Event::Refused { count: 1 });
+            assert_eq!(trace.captured(), Some(&[(0, Event::Refused { count: 1 }), (10, Event::Refused { count: 1 })][..]));
+            trace.sink(11).emit(Event::Refused { count: 1 });
             assert!(trace.captured().is_none(), "required evidence cannot silently truncate");
             trace.clear();
             assert!(trace.captured().is_none(), "clearing history cannot bless lost evidence");
         }
+    }
+
+    #[test]
+    fn only_explicit_entire_stream_capture_can_certify_completeness() {
+        let mut trace = Trace::default();
+        trace.capture_selected(2, |_| true).unwrap();
+        trace.sink(0).emit(Event::Refused { count: 1 });
+        assert!(trace.captured().is_some());
+        assert!(trace.full_capture().is_none(), "observed contents cannot prove a predicate accepted every event");
+        trace.capture_all(1).unwrap();
+        trace.sink(1).emit(Event::Rested { count: 1 });
+        assert_eq!(trace.full_capture(), trace.captured());
+        for invalid in [MAX_TRACE_EVENTS + 1, usize::MAX] {
+            assert!(trace.capture_selected(invalid, |_| false).is_err());
+            assert!(trace.capture_all(invalid).is_err());
+            assert!(trace.full_capture().is_some(), "refusal preserves accepted full-stream evidence");
+        }
+        trace.sink(2).emit(Event::Refused { count: 1 });
+        assert!(trace.captured().is_none());
+        assert!(trace.full_capture().is_none());
     }
 
     #[test]

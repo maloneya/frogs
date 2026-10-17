@@ -6,7 +6,7 @@
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 use arpg_core::{Action, ActionMask, Actions, InputState};
-use arpg_sim::AttackProfile;
+use arpg_game::AttackProfile;
 use crate::companion::ZoomDirection;
 
 /// Fixed attacks, in deterministic input priority order. HUD and input use

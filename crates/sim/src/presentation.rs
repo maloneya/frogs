@@ -2,21 +2,7 @@
 
 use glam::{Vec2, Vec3};
 
-use crate::{AttackStatus, EntityId, InteractionState};
-
-/// One frame's immutable view of the player.
-///
-/// Position and facing are interpolated presentation values. Displacement and
-/// attack state come from the latest completed simulation tick. The snapshot
-/// owns copies only, so animation cannot write anything back into the world.
-#[derive(Clone, Copy, Debug)]
-pub struct PlayerPresentation {
-    id: EntityId,
-    ground_position: Vec3,
-    facing: f32,
-    displacement: Vec2,
-    attack: AttackStatus,
-}
+use crate::{EntityId, InteractionState};
 
 /// One frame's immutable view of a nonplayer character.
 ///
@@ -55,55 +41,6 @@ impl CharacterPresentation {
     pub fn displacement(self) -> Vec2 {
         self.displacement
     }
-}
-
-impl PlayerPresentation {
-    pub(crate) fn new(
-        id: EntityId,
-        ground_position: Vec3,
-        facing: f32,
-        displacement: Vec2,
-        attack: AttackStatus,
-    ) -> Self {
-        Self {
-            id,
-            ground_position,
-            facing,
-            displacement,
-            attack,
-        }
-    }
-
-    /// Stable simulation identity represented by this snapshot.
-    #[must_use]
-    pub fn id(self) -> EntityId {
-        self.id
-    }
-
-    /// Interpolated asset origin on the ground plane.
-    #[must_use]
-    pub fn ground_position(self) -> Vec3 {
-        self.ground_position
-    }
-
-    /// Interpolated yaw using the engine's `+Z`-forward convention.
-    #[must_use]
-    pub fn facing(self) -> f32 {
-        self.facing
-    }
-
-    /// Actual ground-plane displacement over the latest completed tick.
-    #[must_use]
-    pub fn displacement(self) -> Vec2 {
-        self.displacement
-    }
-
-    /// Authoritative attack state derived from the in-flight swing.
-    #[must_use]
-    pub fn attack(self) -> AttackStatus {
-        self.attack
-    }
-
 }
 
 /// Immutable physical facts for a body without character presentation.
@@ -156,7 +93,7 @@ impl CollisionDisc {
     pub fn radius(self) -> f32 { self.radius }
 }
 
-/// One committed attack sample placed at the completed tick's player pose.
+/// One committed attack sample placed at its producer's completed-tick pose.
 #[derive(Clone, Copy, Debug)]
 pub struct AttackDisc {
     centre: Vec3,
@@ -168,7 +105,8 @@ impl AttackDisc {
     /// Maximum number of samples a committed swing can contain.
     pub const MAX_SAMPLES: usize = crate::ResolvedAttack::MAX_ACTIVE_TICKS as usize;
 
-    pub(crate) fn new(centre: Vec3, radius: f32, sample: usize) -> Self {
+    /// Place one committed sample for read-only presentation.
+    pub fn new(centre: Vec3, radius: f32, sample: usize) -> Self {
         Self { centre, radius, sample }
     }
 

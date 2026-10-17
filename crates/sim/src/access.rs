@@ -75,7 +75,7 @@ impl ActorView<'_> {
             .copied()
             .enumerate()
             .filter_map(move |(row, id)| {
-                if !origin.is_finite() || !centre.is_finite() || !radius.is_finite() || radius < 0.0
+                if !crate::valid_position(origin) || !crate::valid_position(centre) || !radius.is_finite() || radius < 0.0 || radius > crate::MAX_POSITION_COMPONENT
                 {
                     return None;
                 }
@@ -94,6 +94,17 @@ impl ActorView<'_> {
                 }
                 Some((id, point))
             })
+    }
+    /// Clip a capsule to the nearest blocking wall or jointed body.
+    pub fn clip_beam(&self, beam: crate::Beam) -> crate::Beam {
+        self.bodies.physics.clip_beam(beam, self.walls)
+    }
+    /// Capsule contacts in stable body order, using the same shape and cover as other effects.
+    pub fn beam_contacts(&self, beam: crate::Beam) -> impl Iterator<Item = (EntityId, glam::Vec2)> + '_ {
+        self.bodies.slots.ids().iter().copied().enumerate().filter_map(move |(row, id)| {
+            let point = self.bodies.physics.beam_contact(id, self.bodies.pos[row], crate::body_radius(row), beam)?;
+            (!self.bodies.physics.obstructs(self.walls, beam.start(), point, Some(id))).then_some((id, point))
+        })
     }
     /// Current interaction state for a live endpoint.
     pub fn interaction(&self, id: EntityId) -> Option<InteractionState> {

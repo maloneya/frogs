@@ -2,7 +2,7 @@
 
 use crate::input::ATTACK_BINDINGS;
 use arpg_gfx::{Glyphs, Quad, QuadSink};
-use arpg_sim::{AttackProfile, AttackStatus};
+use arpg_game::{AttackProfile, AttackStatus};
 use core::fmt::Write as _;
 use arpg_core::LinearRgba;
 use glam::{Vec2, Vec4};

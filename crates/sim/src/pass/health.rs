@@ -36,37 +36,14 @@ pub(crate) struct Health {
     announced: Vec<bool>,
 }
 
-/// A hit producer may subtract positive damage, but cannot grant health, heal, or
-/// remove a body while it is iterating the world's dense body slices.
-pub(crate) struct DamageSink<'a> {
-    health: &'a mut Health,
-    eligible: Option<&'a Members>,
-}
-
-impl DamageSink<'_> {
-    /// Whether this identity has health and satisfies this producer’s target filter.
-    pub(crate) fn contains(&self, id: EntityId) -> bool {
-        self.health.who.index(id).is_some() && self.eligible.is_none_or(|members| members.contains(id))
-    }
-
-    /// Subtracts positive damage, clamped at zero, from a damageable entity; absent membership is immune.
+impl Health {
+    /// Subtract positive damage once from a live health member; immunity and defeat refuse it.
     pub(crate) fn hit(&mut self, id: EntityId, amount: core::num::NonZeroU8) -> Option<u8> {
-        if !self.contains(id) { return None; }
-        let row = self.health.who.index(id)?;
-        let remaining = &mut self.health.remaining[row];
+        let row = self.who.index(id)?;
+        let remaining = &mut self.remaining[row];
         if *remaining == 0 { return None; }
         *remaining = remaining.saturating_sub(amount.get());
         Some(*remaining)
-    }
-}
-
-impl Health {
-    pub(crate) fn sink(&mut self) -> DamageSink<'_> {
-        DamageSink { health: self, eligible: None }
-    }
-
-    pub(crate) fn sink_for<'a>(&'a mut self, eligible: &'a Members) -> DamageSink<'a> {
-        DamageSink { health: self, eligible: Some(eligible) }
     }
 
     pub(crate) fn grant(&mut self, id: EntityId, initial: core::num::NonZeroU8) {

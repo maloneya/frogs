@@ -1,7 +1,8 @@
 //! Runtime settings compose with movement, captured attacks, identity and restart.
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{ActorDefinition, ActionDefinition, Game, GameScene};
-use arpg_sim::{Accumulator, Dt, Event, Tuning, TuningField, AttackProfile};
+use arpg_sim::{Accumulator, Dt};
+use arpg_game::{GameplayEvent, Tuning, TuningField, AttackProfile};
 use glam::Vec2;
 
 fn step(game: &mut Game, attack: bool) {
@@ -21,8 +22,8 @@ fn every_attribute_changes_hash_and_report_and_invalid_edits_preserve_pending_wo
         let mut out = Report::default();
         game.report(&mut out);
         assert!(out.finish().contains(&format!("\"{}\":{value}", field.attribute().key)));
-        assert!(game.trace().iter().any(|(tick, event)| tick == 0 &&
-            event == Event::TuningChanged { field, value }));
+        assert!(game.gameplay_trace().iter().any(|(tick, event)| tick == 0 &&
+            event == GameplayEvent::TuningChanged { field, value }));
         let ticket = game.request_spawn(Vec2::new(20.0, 0.0), ActorDefinition::passive_hostile()).unwrap();
         let before = (game.hash(), game.trace().render());
         for invalid in [f32::NAN, f32::INFINITY, -1.0, field.attribute().max + 1.0] {

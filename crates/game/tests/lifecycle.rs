@@ -3,9 +3,8 @@
 use arpg_game::{Placed, Scene, BodyGrid, SourceSpec, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{Game, GameScene, RestartError, SceneError};
-use arpg_sim::{
-    Accumulator, AttackProfile, Condition, Dt, Impulse, InteractionState,
-    RecoveryTicks, SourceId, SourceState, };
+use arpg_sim::{Accumulator, Condition, Dt, Impulse, InteractionState, SourceId, SourceState};
+use arpg_game::{AttackProfile};
 use glam::{Vec2, Vec3};
 
 fn scene() -> GameScene {
@@ -84,7 +83,6 @@ fn restart_uses_its_snapshot_and_replaces_all_live_state_and_pending_work() {
         ..Scene::default()
     }.into()).unwrap();
     game.set_attack_profile(AttackProfile::Slam);
-    game.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
     assert!(game.apply_impulse(game.player_id(), Impulse::try_from((6.0, 0.0)).unwrap()));
     step(&mut game, Intent::new(MoveDir::new(Vec3::Z), AimDir::new(Vec3::Z).unwrap(), true));
     assert!(game.request_spawn(Vec2::new(-50.0, 0.0), ActorDefinition::passive_hostile()).is_some());
@@ -253,7 +251,7 @@ fn switching_to_scoped_capture_cannot_claim_complete_golden_evidence() {
     step(&mut game, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
     assert!(game.render_captured_trace().unwrap().contains("placed"));
     let before = game.hash();
-    game.capture_events(8, vec![arpg_sim::EventKind::Placed]).unwrap();
+    game.capture_events(8, vec![arpg_sim::EventKind::Placed], vec![]).unwrap();
     assert_eq!(game.hash(), before);
     assert_eq!(game.render_captured_trace(), None, "a filtered engine stream is not a complete trace");
     assert_eq!(game.captured_events(), Some([].as_slice()));
@@ -271,12 +269,12 @@ fn switching_to_scoped_capture_cannot_claim_complete_golden_evidence() {
 fn rejected_trace_limits_preserve_complete_game_capture() {
     let mut game = Game::empty();
     game.capture_trace(8).unwrap();
-    game.set_attack_profile(arpg_sim::AttackProfile::Slam);
+    game.set_attack_profile(arpg_game::AttackProfile::Slam);
     let before = game.render_captured_trace().unwrap();
     let history = game.render_trace_since(0);
     for invalid in [arpg_sim::MAX_TRACE_EVENTS + 1, usize::MAX] {
         assert!(game.capture_trace(invalid).is_err());
-        assert!(game.capture_events(invalid, vec![arpg_sim::EventKind::Hit]).is_err());
+        assert!(game.capture_events(invalid, vec![arpg_sim::EventKind::Damaged], vec![]).is_err());
         assert!(game.set_trace_retention(invalid).is_err());
         assert_eq!(game.render_captured_trace().as_deref(), Some(before.as_str()));
         assert_eq!(game.render_trace_since(0), history);

@@ -164,19 +164,19 @@ mod tests {
     }
 }
 
-/// Reads a complete runtime tuning file through sim's validated schema.
-pub fn load_tuning(path: &Path) -> Result<arpg_sim::Tuning, LoadError> {
+/// Reads a complete runtime tuning file through game's validated schema.
+pub fn load_tuning(path: &Path) -> Result<arpg_game::Tuning, LoadError> {
     let source = std::fs::read_to_string(path).map_err(LoadError::Read)?;
     parse_tuning(&source).map_err(LoadError::Parse)
 }
 
 /// Decodes complete settings without mutating a running game.
-pub fn parse_tuning(source: &str) -> Result<arpg_sim::Tuning, ron::error::SpannedError> {
+pub fn parse_tuning(source: &str) -> Result<arpg_game::Tuning, ron::error::SpannedError> {
     ron::from_str(source)
 }
 
 /// Atomically replaces a tuning file; failed writes preserve its previous contents.
-pub fn save_tuning(path: &Path, tuning: arpg_sim::Tuning) -> Result<(), String> {
+pub fn save_tuning(path: &Path, tuning: arpg_game::Tuning) -> Result<(), String> {
     use std::io::Write;
     let text = ron::ser::to_string_pretty(&tuning, ron::ser::PrettyConfig::default())
         .map_err(|error| error.to_string())?;
@@ -195,7 +195,7 @@ pub fn save_tuning(path: &Path, tuning: arpg_sim::Tuning) -> Result<(), String> 
 #[cfg(test)]
 mod tuning_tests {
     use super::*;
-    use arpg_sim::{Tuning, TuningField};
+    use arpg_game::{Tuning, TuningField};
 
     #[test]
     fn complete_files_round_trip_and_invalid_inputs_are_rejected() {

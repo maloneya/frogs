@@ -11,9 +11,10 @@ shared collapse palettes advance the clip; its final pose stays frozen until
 expiration. No locomotion clip is selected for a dead body. The collider remains
 the existing ground-plane proxy; this is authored animation, not a ragdoll.
 
-[The corpse owner](../crates/game/src/corpse.rs) defines lifetime and capacity.
+[The corpse owner](../crates/game/src/corpse.rs) defines each corpse's lifetime.
 The ten-second lifetime starts at death and also bounds bodies kept moving by
-continued forces. At capacity, later deaths leave no remains and their physical
-bodies retire immediately. Expiration frees space before new admission.
+continued forces. Every death receives that full lifetime; existing corpses do
+not suppress new remains or discard their momentum. Character instance storage
+grows with visible placements while the shared animation pose count stays fixed.
 Administrative despawn creates no corpse and removes an existing moving corpse's
 record. Scene eviction removes its remains, and restart clears all remains.

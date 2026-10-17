@@ -11,8 +11,9 @@ writing the file. **Restart scene** repeats the cached layout with current tunin
 Scene files do not contain these type-wide settings; see the
 [editor state model](scene-editor.md#build-play-adjust).
 
-[Sim's catalog](../crates/sim/src/tuning.rs) owns keys, units, ranges, defaults and
-validation. Swift and the harness consume that catalog rather than copying it.
+[Game's catalog](../crates/game/src/tuning.rs) owns gameplay keys, units, defaults and validation.
+Physical contact ranges and defaults come from the shared
+[contact material validator](../crates/sim/src/tuning.rs). Swift and the harness consume that catalog rather than copying it.
 The Contacts group sets the global [contact response](crowd-collision.md#contact-response):
 frequency, damping ratio and overlap push speed. These settings apply to every
 contacting body; actors and gameplay roles do not override them. The defaults are

@@ -26,7 +26,8 @@ playtest policy of allowing player input.
 The [Game schedule](../crates/game/src/game.rs) applies prior interactions, admits
 births, and binds their complete definitions before decisions. Decisions observe
 every actor at its start-of-tick position.
-Player input and autonomous actions use the same [execution lifecycle](../crates/sim/src/action_execution.rs)
+[Player input and ability policy](../crates/game/src/player.rs) belongs to Game, alongside autonomous behavior.
+Both use the same [execution lifecycle](../crates/sim/src/action_execution.rs)
 for phase timing, control ownership, completion and cancellation.
 Player control and autonomous actions submit one bounded motor request per actor.
 Releasing movement brakes through the motor; channeling disables the player motor

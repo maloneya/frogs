@@ -28,13 +28,18 @@
             (nth: 0, action: Move, health: 3),
         ],
         events: (
-        kinds: [AttackProfileChanged, Swung, HitboxOpened, HitboxClosed, Hit],
-        sequence: [
-            (0, AttackProfileChanged(profile: Slam)),
-            (0, Swung),
-            (9, HitboxOpened),
-            (14, HitboxClosed),
-        ],
-    ),
+            kinds: [Damaged],
+            sequence: [
+            ],
+        ),
+        gameplay_events: (
+            kinds: [AttackProfileChanged, Swung, HitboxOpened, HitboxClosed],
+            sequence: [
+                (0, AttackProfileChanged(profile: Slam)),
+                (0, Swung),
+                (9, HitboxOpened),
+                (14, HitboxClosed),
+            ],
+        ),
     ),
 )

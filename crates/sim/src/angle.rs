@@ -11,7 +11,7 @@ pub(crate) const GOLDEN_ANGLE: f32 = 2.399_963_2;
 ///
 /// Applied after every turn, so a character spinning for an hour cannot walk
 /// its facing out toward the precision limit.
-pub(crate) fn wrap(radians: f32) -> f32 {
+pub fn wrap(radians: f32) -> f32 {
     let wrapped = radians.rem_euclid(TAU);
     if wrapped > PI { wrapped - TAU } else { wrapped }
 }
@@ -32,7 +32,7 @@ pub(crate) fn yaw_of(direction: Vec2) -> f32 {
 /// **Wraps the difference, not the endpoints.** Crossing the `±PI` branch cut
 /// is a small step that naive subtraction reports as an almost-full revolution
 /// the other way: `-3.13 - 3.13` is `-6.26`, when the real turn is `+0.02`.
-pub(crate) fn shortest_arc(from: f32, to: f32) -> f32 {
+pub fn shortest_arc(from: f32, to: f32) -> f32 {
     wrap(to - from)
 }
 

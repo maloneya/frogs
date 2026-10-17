@@ -6,20 +6,18 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Events {
-    pub(crate) kinds: Vec<EventKind>,
-    pub(crate) sequence: Vec<(u64, ExpectedEvent)>,
+pub(crate) struct Events<K, E> {
+    pub(crate) kinds: Vec<K>,
+    pub(crate) sequence: Vec<(u64, E)>,
 }
+
+pub(crate) type PhysicalEvents = Events<EventKind, ExpectedEvent>;
+pub(crate) type GameplayEvents = Events<arpg_game::GameplayEventKind, ExpectedGameplayEvent>;
 
 /// Typed transition payloads. Identities are read-only diagnostic values.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum ExpectedEvent {
-    TuningChanged {
-        field: arpg_sim::TuningField,
-        #[serde(deserialize_with = "crate::spec::tolerance")]
-        value: f32,
-    },
     SceneLoaded { id: String },
     SceneEvicted { id: String },
     Impulsed {
@@ -45,21 +43,12 @@ pub(crate) enum ExpectedEvent {
     Crowded { count: usize },
     WallContacts { count: usize },
     Clamped { count: usize },
-    Swung,
-    ChannelStarted,
-    ChannelStopped,
-    HitboxOpened,
-    HitboxClosed,
     Damaged { actor: (u32, u32), target: (u32, u32), remaining: u8 },
-    Hit { id: (u32, u32), remaining: u8 },
-    AttackRecoveryChanged { recovery: arpg_sim::RecoveryTicks },
-    AttackProfileChanged { profile: arpg_sim::AttackProfile },
 }
 
 impl ExpectedEvent {
     pub(crate) fn kind(&self) -> EventKind {
         match self {
-            Self::TuningChanged { .. } => EventKind::TuningChanged,
             Self::SceneLoaded { .. } => EventKind::SceneLoaded,
             Self::SceneEvicted { .. } => EventKind::SceneEvicted,
             Self::Impulsed { .. } => EventKind::Impulsed,
@@ -79,22 +68,12 @@ impl ExpectedEvent {
             Self::Crowded { .. } => EventKind::Crowded,
             Self::WallContacts { .. } => EventKind::WallContacts,
             Self::Clamped { .. } => EventKind::Clamped,
-            Self::Swung => EventKind::Swung,
-            Self::ChannelStarted => EventKind::ChannelStarted,
-            Self::ChannelStopped => EventKind::ChannelStopped,
-            Self::HitboxOpened => EventKind::HitboxOpened,
-            Self::HitboxClosed => EventKind::HitboxClosed,
             Self::Damaged { .. } => EventKind::Damaged,
-            Self::Hit { .. } => EventKind::Hit,
-            Self::AttackRecoveryChanged { .. } => EventKind::AttackRecoveryChanged,
-            Self::AttackProfileChanged { .. } => EventKind::AttackProfileChanged,
         }
     }
 
     pub(crate) fn matches(&self, actual: Event) -> bool {
         match (self, actual) {
-            (Self::TuningChanged { field, value }, Event::TuningChanged { field: actual, value: changed }) =>
-                *field == actual && *value == changed,
             (Self::SceneLoaded { id }, Event::SceneLoaded { id: actual })
             | (Self::SceneEvicted { id }, Event::SceneEvicted { id: actual }) => arpg_sim::SceneId::parse(id) == Some(actual),
             (Self::Impulsed { id, source, value, tolerance }, Event::Impulsed { id: actual, source: origin, impulse }) => {
@@ -109,7 +88,6 @@ impl ExpectedEvent {
             | (Self::LockBroken { id }, Event::LockBroken { id: actual })
             | (Self::Toppled { id }, Event::Toppled { id: actual }) => *id == actual.diagnostic_identity(),
             (Self::Damaged { actor, target, remaining }, Event::Damaged { actor: a, target: t, remaining: r }) => *actor == a.diagnostic_identity() && *target == t.diagnostic_identity() && *remaining == r,
-            (Self::Hit { id, remaining }, Event::Hit { id: actual, remaining: value }) => *id == actual.diagnostic_identity() && *remaining == value,
             (Self::SourceAdded { id }, Event::SourceAdded { id: actual })
             | (Self::SourceRemoved { id }, Event::SourceRemoved { id: actual }) => arpg_sim::SourceId::parse(id) == Some(actual),
             (Self::SourceEnablementChanged { id, enabled }, Event::SourceEnablementChanged { id: actual, enabled: value }) => arpg_sim::SourceId::parse(id) == Some(actual) && *enabled == value,
@@ -121,11 +99,59 @@ impl ExpectedEvent {
             | (Self::Crowded { count }, Event::Crowded { count: actual })
             | (Self::WallContacts { count }, Event::WallContacts { count: actual })
             | (Self::Clamped { count }, Event::Clamped { count: actual }) => *count == actual,
-            (Self::AttackRecoveryChanged { recovery }, Event::AttackRecoveryChanged { recovery: actual }) => *recovery == actual,
+            _ => false,
+        }
+    }
+}
+
+/// Gameplay predictions retain their own scope and order, separate from physics.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) enum ExpectedGameplayEvent {
+    TuningChanged {
+        field: arpg_game::TuningField,
+        #[serde(deserialize_with = "crate::spec::tolerance")]
+        value: f32,
+    },
+    AttackProfileChanged { profile: arpg_game::AttackProfile },
+    Swung,
+    ChannelStarted,
+    ChannelStopped,
+    HitboxOpened,
+    HitboxClosed,
+    Progress { scene: String, index: usize, state: arpg_game::EncounterState },
+    Chest { scene: String, index: usize, state: arpg_game::ChestState },
+    Door { scene: String, index: usize, state: arpg_game::DoorState },
+}
+
+impl ExpectedGameplayEvent {
+    pub(crate) fn kind(&self) -> arpg_game::GameplayEventKind {
+        use arpg_game::GameplayEventKind as Kind;
+        match self {
+            Self::TuningChanged { .. } => Kind::TuningChanged,
+            Self::AttackProfileChanged { .. } => Kind::AttackProfileChanged,
+            Self::Swung => Kind::Swung,
+            Self::ChannelStarted => Kind::ChannelStarted,
+            Self::ChannelStopped => Kind::ChannelStopped,
+            Self::HitboxOpened => Kind::HitboxOpened,
+            Self::HitboxClosed => Kind::HitboxClosed,
+            Self::Progress { .. } => Kind::Progress,
+            Self::Chest { .. } => Kind::Chest,
+            Self::Door { .. } => Kind::Door,
+        }
+    }
+
+    pub(crate) fn matches(&self, actual: arpg_game::GameplayEvent) -> bool {
+        use arpg_game::GameplayEvent as Event;
+        match (self, actual) {
+            (Self::TuningChanged { field, value }, Event::TuningChanged { field: f, value: v }) => *field == f && *value == v,
             (Self::AttackProfileChanged { profile }, Event::AttackProfileChanged { profile: actual }) => *profile == actual,
             (Self::Swung, Event::Swung) | (Self::ChannelStarted, Event::ChannelStarted)
             | (Self::ChannelStopped, Event::ChannelStopped) | (Self::HitboxOpened, Event::HitboxOpened)
             | (Self::HitboxClosed, Event::HitboxClosed) => true,
+            (Self::Progress { scene, index, state }, Event::Progress { scene: s, index: i, state: t }) => arpg_sim::SceneId::parse(scene) == Some(s) && *index == i && *state == t,
+            (Self::Chest { scene, index, state }, Event::Chest { scene: s, index: i, state: t }) => arpg_sim::SceneId::parse(scene) == Some(s) && *index == i && *state == t,
+            (Self::Door { scene, index, state }, Event::Door { scene: s, index: i, state: t }) => arpg_sim::SceneId::parse(scene) == Some(s) && *index == i && *state == t,
             _ => false,
         }
     }
@@ -138,12 +164,12 @@ mod tests {
     use std::path::Path;
 
     fn scenario(sequence: &str, kinds: &str) -> Scenario {
-        ron::from_str(&format!("#![enable(implicit_some)] (attacks: [0], budget: (ticks: 14), expect: (events: (kinds: [{kinds}], sequence: [{sequence}])) )")).unwrap()
+        ron::from_str(&format!("#![enable(implicit_some)] (attacks: [0], budget: (ticks: 14), expect: (events: (kinds: [Damaged], sequence: []), gameplay_events: (kinds: [{kinds}], sequence: [{sequence}])) )")).unwrap()
     }
 
     #[test]
     fn exact_scope_rejects_missing_extra_early_and_wrong_payload_events_even_when_blessing() {
-        let valid = scenario("(0, Swung), (6, HitboxOpened), (12, HitboxClosed)", "Swung, HitboxOpened, HitboxClosed, Hit");
+        let valid = scenario("(0, Swung), (6, HitboxOpened), (12, HitboxClosed)", "Swung, HitboxOpened, HitboxClosed");
         assert!(run::validate(&valid).is_empty());
         let observed = run::run(&valid);
         assert!(run::check_trace(&valid, &observed, Path::new("unused"), false).is_none());
@@ -151,20 +177,25 @@ mod tests {
             "(0, Swung), (5, HitboxOpened), (12, HitboxClosed)",
             "(0, Swung), (6, HitboxOpened)",
             "(0, Swung), (6, HitboxOpened), (12, HitboxClosed), (13, HitboxClosed)",
-            "(0, Swung), (6, HitboxOpened), (12, Hit(id: (1, 1), remaining: 2))",
+            "(0, AttackProfileChanged(profile: Slam)), (6, HitboxOpened), (12, HitboxClosed)",
         ] {
-            let wrong = scenario(sequence, "Swung, HitboxOpened, HitboxClosed, Hit");
+            let wrong = scenario(sequence, "Swung, HitboxOpened, HitboxClosed, AttackProfileChanged");
             assert!(run::check_trace(&wrong, &observed, Path::new("unused"), true).is_some());
         }
+        let mut wrong_damage = scenario("(0, Swung), (6, HitboxOpened), (12, HitboxClosed)", "Swung, HitboxOpened, HitboxClosed");
+        wrong_damage.expect.events.as_mut().unwrap().sequence.push((6, ExpectedEvent::Damaged { actor: (0, 1), target: (1, 1), remaining: 1 }));
+        assert!(run::check_trace(&wrong_damage, &observed, Path::new("unused"), true).is_some());
     }
 
     #[test]
-    fn oversized_expectations_are_rejected_before_capture() {
+    fn oversized_expectations_are_rejected_before_either_stream_is_captured() {
         let mut oversized = scenario("", "Swung");
-        oversized.expect.events.as_mut().unwrap().sequence.resize_with(arpg_sim::MAX_TRACE_EVENTS, || (0, ExpectedEvent::Swung));
+        oversized.expect.gameplay_events.as_mut().unwrap().sequence.resize_with(arpg_sim::MAX_TRACE_EVENTS, || (0, ExpectedGameplayEvent::Swung));
+        assert!(!run::validate(&oversized).is_empty());
+        let mut oversized = scenario("", "Swung");
+        oversized.expect.events.as_mut().unwrap().sequence.resize_with(arpg_sim::MAX_TRACE_EVENTS, || (0, ExpectedEvent::Damaged { actor: (0, 1), target: (1, 1), remaining: 1 }));
         assert!(!run::validate(&oversized).is_empty());
     }
-
 
     #[test]
     fn count_payloads_are_checked_independently_of_event_category() {
@@ -176,10 +207,26 @@ mod tests {
 
     #[test]
     fn empty_scope_and_predictions_outside_scope_or_budget_fail_validation() {
-        for (sequence, kinds) in [("", ""), ("(0, Swung)", "Hit"), ("(14, Swung)", "Swung")] {
+        for (sequence, kinds) in [("", ""), ("(0, Swung)", "HitboxOpened"), ("(14, Swung)", "Swung")] {
             assert!(!run::validate(&scenario(sequence, kinds)).is_empty());
         }
-        assert!(ron::from_str::<ExpectedEvent>("Swung(count: 1)").is_err());
-        assert!(ron::from_str::<ExpectedEvent>("Hit(id: (1, 1), remaining: 2, count: 1)").is_err());
+        assert!(ron::from_str::<ExpectedGameplayEvent>("Swung(count: 1)").is_err());
+        assert!(ron::from_str::<ExpectedEvent>("Damaged(actor: (0, 1), target: (1, 1), remaining: 2, count: 1)").is_err());
+        assert!(ron::from_str::<PhysicalEvents>("(kinds: [Swung], sequence: [])").is_err());
+        assert!(ron::from_str::<GameplayEvents>("(kinds: [Damaged], sequence: [])").is_err());
+    }
+
+    #[test]
+    fn gameplay_payloads_and_capture_overflow_fail_closed() {
+        assert!(ExpectedGameplayEvent::AttackProfileChanged { profile: arpg_game::AttackProfile::Slam }
+            .matches(arpg_game::GameplayEvent::AttackProfileChanged { profile: arpg_game::AttackProfile::Slam }));
+        assert!(!ExpectedGameplayEvent::AttackProfileChanged { profile: arpg_game::AttackProfile::Slam }
+            .matches(arpg_game::GameplayEvent::AttackProfileChanged { profile: arpg_game::AttackProfile::Cleave }));
+        let mut absent = scenario("", "Swung");
+        absent.attacks.push(22);
+        absent.budget.ticks = 23;
+        let observed = run::run(&absent);
+        assert!(observed.game.captured_gameplay_events().is_none());
+        assert!(run::check_trace(&absent, &observed, Path::new("unused"), true).is_some());
     }
 }

@@ -134,7 +134,9 @@ time. A long one-dimensional chain tests momentum transmission, but does not
 establish cost for a packed two-dimensional crowd.
 **Fix:** the solver now uses a fixed-budget soft step with warm starting (Box2D v3);
 see the [historical audit](physics-scalability-audit.md) for measurements. A new
-regression triggers the [stop and handoff policy](performance.md#feature-work-stop-and-handoff).
+regression follows the [record and continue policy](performance.md#feature-work-record-and-continue):
+retain task/source evidence in [performance follow-ups](performance-follow-ups.md)
+and finish the assigned work.
 Profiling belongs to a user-triggered investigation; the
 [physics profiler](performance.md#detailed-physics-investigation) is the existing tool.
 

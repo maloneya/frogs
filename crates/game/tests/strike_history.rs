@@ -183,7 +183,7 @@ fn defeat_releases_an_active_history_before_another_actor_commits() {
             },
         )
         .unwrap();
-    game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
+    game.set_attack_profile(arpg_game::AttackProfile::Disintegrate);
     for attempt in 0..6 {
         let actor = game.place(Vec2::new(0.0, 1.4), definition.clone()).unwrap();
         game.clear_trace();

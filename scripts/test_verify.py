@@ -321,7 +321,28 @@ class Workspace(unittest.TestCase):
             self.assertNotIn("deferred", attempt())
             self.next_run()
             # A successful explicit retry removes the failure, without caching timings.
-            self.assertEqual(attempt(retry=True, code=0)["exit_code"], 0)
+            with patch.object(verify.perf, "accepted_pass", return_value=True):
+                self.assertEqual(attempt(retry=True, code=0)["exit_code"], 0)
+
+    def test_absolute_only_success_cannot_certify_or_advance_performance_cadence(self):
+        name = "performance-headless"
+        output = self.artifact / (name + ".json")
+        report = {"assessment": {"status": "pass", "scope": "absolute_only", "relative_status": "missing"}}
+        script = ("from pathlib import Path; "
+                  f"Path({str(output)!r}).write_text({json.dumps(report)!r})")
+        record = verify.run_check(name, [sys.executable, "-c", script],
+                                  verify.source_identity(self.root), self.machine,
+                                  self.artifact, self.cache, root=self.root)
+        self.assertEqual(record["exit_code"], 2)
+        self.assertIn("accepted ceiling", record["reason"])
+        # Historical zero-exit records must not suppress today's due checks either.
+        record["exit_code"] = 0
+        base = self.root / "target/checkpoints"
+        run = base / "run-old"
+        run.mkdir(parents=True)
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.root, text=True).strip()
+        (run / "verification.json").write_text(json.dumps({"revision": revision, "checks": [record]}))
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], list(verify.PERFORMANCE))
 
     def test_noisy_measurement_is_never_deferred(self):
         name = "performance-live"
@@ -372,9 +393,11 @@ class Workspace(unittest.TestCase):
              patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
              patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
              contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(verify.main(["full"]), 2)
+            self.assertEqual(verify.main(["full"]), 0)
             result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
             self.assertFalse(result["complete"])
+            self.assertEqual(result["status"], "performance_warning")
+            self.assertEqual(result["performance_issues"], ["performance-headless"])
             self.assertEqual(result["coverage"], list(verify.CORRECTNESS))
             self.assertEqual(result["omitted"], list(verify.PERFORMANCE))
             run.reset_mock()
@@ -521,22 +544,55 @@ class Workspace(unittest.TestCase):
             self.assertEqual(verify.main(["full", "--performance"]), 0)
             self.assertEqual([call.args[0] for call in run.call_args_list], list(verify.CHECKS))
 
-    def test_performance_failure_stops_remaining_checks_without_certifying_omissions(self):
-        def fake(name, *args, **kwargs):
-            return {"name": name, "cached": False, "exit_code": 2 if name == "performance-headless" else 0,
-                    "seconds": 0, "evidence": [{"path": "test.log"}]}
+    def test_performance_issues_continue_checks_without_certifying_failed_performance(self):
         checkpoint = {"revision": "test", "commits_since_pass": {}, "due": list(verify.PERFORMANCE)}
-        with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
-             patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
-             patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
-             patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
-             contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(verify.main(["full", "--performance"]), 2)
-        self.assertNotIn("performance-live", [call.args[0] for call in run.call_args_list])
-        result = json.loads(next((self.root / "target/verify").glob("run-*/verification.json")).read_text())
-        self.assertEqual(result["omitted"], list(verify.PERFORMANCE))
-        self.assertFalse(result["complete"])
-        self.assertIn("Flag the user", output.getvalue())
+        for issue in ({"exit_code": 1}, {"exit_code": 2},
+                      {"exit_code": 2, "reason": "check did not produce its required structured evidence"}):
+            with self.subTest(issue=issue):
+                def fake(name, *args, **kwargs):
+                    return {"name": name, "cached": False, "seconds": 0,
+                            "evidence": [{"path": "test.log"}],
+                            **(issue if name == "performance-headless" else {"exit_code": 0})}
+                with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+                     patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
+                     patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
+                     patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake) as run, \
+                     contextlib.redirect_stdout(io.StringIO()) as output:
+                    before = set((self.root / "target/verify").glob("run-*/verification.json"))
+                    self.assertEqual(verify.main(["full", "--performance"]), 0)
+                self.assertEqual([call.args[0] for call in run.call_args_list], list(verify.CHECKS))
+                after = set((self.root / "target/verify").glob("run-*/verification.json"))
+                result = json.loads((after - before).pop().read_text())
+                self.assertEqual(result["omitted"], ["performance-headless"])
+                self.assertEqual(result["performance_issues"], ["performance-headless"])
+                self.assertEqual(result["status"], "performance_warning")
+                self.assertEqual(result["checks"][-2]["exit_code"], issue["exit_code"])
+                self.assertEqual(result["failures"][0]["check"], "performance-headless")
+                self.assertFalse(result["complete"])
+                self.assertIn("docs/performance-follow-ups.md", output.getvalue())
+                self.assertIn("continue the assigned task", output.getvalue())
+
+    def test_performance_warning_cannot_mask_correctness_or_source_integrity_failures(self):
+        checkpoint = {"revision": "test", "commits_since_pass": {}, "due": list(verify.PERFORMANCE)}
+        for issue in ({"exit_code": 1}, {"exit_code": 2},
+                      {"exit_code": 2, "source_changes": ["source.rs"], "reason": "inputs changed during check"}):
+            with self.subTest(issue=issue):
+                def fake(name, *args, **kwargs):
+                    failing = "performance-headless" if issue.get("source_changes") else "tests"
+                    return {"name": name, "cached": False, "seconds": 0,
+                            "evidence": [{"path": "test.log"}],
+                            **(issue if name == failing else {"exit_code": 1 if name in verify.PERFORMANCE else 0})}
+                with patch.object(verify, "ROOT", self.root), patch.object(verify, "context", return_value={}), \
+                     patch.object(verify, "source_manifest", return_value={"source.rs": "same"}), \
+                     patch.object(verify, "performance_checkpoint", return_value=checkpoint), \
+                     patch.object(verify, "commands", return_value=[]), patch.object(verify, "run_check", side_effect=fake), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    before = set((self.root / "target/verify").glob("run-*/verification.json"))
+                    self.assertEqual(verify.main(["full", "--performance"]), issue["exit_code"])
+                after = set((self.root / "target/verify").glob("run-*/verification.json"))
+                result = json.loads((after - before).pop().read_text())
+                self.assertFalse(result["complete"])
+                self.assertEqual(result["status"], "failed" if issue["exit_code"] == 1 else "inconclusive")
 
     def test_automatic_runs_never_launch_live_and_keep_due_evidence_omitted(self):
         def fake(name, *args, **kwargs):
@@ -609,17 +665,21 @@ class Workspace(unittest.TestCase):
                         if call.args[0] in verify.PERFORMANCE:
                             self.assertTrue(call.kwargs["retry"])
 
-    def test_checkpoint_counts_relevant_commits_and_rejects_damaged_evidence(self):
+    @patch.object(verify.perf, "accepted_pass", return_value=True)
+    def test_checkpoint_counts_relevant_commits_and_rejects_damaged_evidence(self, accepted_pass):
         base = self.root / "target/verify"
         run = base / "run-checkpoint"
         run.mkdir(parents=True)
         log = run / "pass.log"
         log.write_text("passed")
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.root, text=True).strip()
-        record = {"revision": revision, "status": "complete_pass", "checks": [
-            {"name": name, "exit_code": 0, "evidence": [
-                {"path": str(log), "sha256": verify.digest(log.read_bytes())}]}
-            for name in verify.PERFORMANCE]}
+        record = {"revision": revision, "status": "complete_pass", "checks": []}
+        for name in verify.PERFORMANCE:
+            report = run / (name + ".json")
+            report.write_text("{}")
+            record["checks"].append({"name": name, "exit_code": 0, "evidence": [
+                {"path": str(log), "sha256": verify.digest(log.read_bytes())},
+                {"path": str(report), "sha256": verify.digest(report.read_bytes())}]})
         evidence = run / "verification.json"
         evidence.write_text(json.dumps(record))
         def commit(path, value):
@@ -654,6 +714,12 @@ class Workspace(unittest.TestCase):
         evidence.write_text(json.dumps(record))
         self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], list(verify.PERFORMANCE))
         del record["reason"]
+        record["status"] = "performance_warning"
+        record["checks"][0]["exit_code"] = 1
+        evidence.write_text(json.dumps(record))
+        # Recording the issue does not turn the failed mode into a passing checkpoint.
+        self.assertEqual(verify.performance_checkpoint(self.root, base)["due"], list(verify.PERFORMANCE))
+        record["checks"][0]["exit_code"] = 0
         record["status"] = "complete_pass"
         evidence.write_text(json.dumps(record))
         log.write_text("damaged")

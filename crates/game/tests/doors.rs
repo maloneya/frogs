@@ -1,7 +1,8 @@
 //! Mechanical failure is a constraint reaction, independent of source and health.
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{DoorPanel, ActorDefinition, DoorSpec, DoorState, Game, GameScene, Placed};
-use arpg_sim::{Accumulator, AttackProfile, Dt, Impulse, Mass, Template, TuningField};
+use arpg_sim::{Accumulator, Dt, Impulse, Mass, Template};
+use arpg_game::{AttackProfile, TuningField};
 use glam::{Vec2, Vec3};
 
 fn prop(mass: f32) -> ActorDefinition {
@@ -187,7 +188,7 @@ fn accumulating_crowd_transmits_load_breaks_the_latch_and_crosses_the_opening() 
     let mut breached = None;
     let mut max_load = 0.0_f32;
     let mut replay = Game::from_scene(&authored).unwrap();
-    game.capture_events(4, vec![arpg_sim::EventKind::LockBroken]).unwrap();
+    game.capture_events(4, vec![arpg_sim::EventKind::LockBroken], vec![]).unwrap();
     let mut stamp = None;
     for tick in 0..900 {
         let before = game.tick();

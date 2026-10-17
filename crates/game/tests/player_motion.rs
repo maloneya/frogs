@@ -1,7 +1,8 @@
 //! Physical player control uses the same bounded motor and mass as other bodies.
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{ActorDefinition, Game, GameScene, Placed, Scene};
-use arpg_sim::{Accumulator, Dt, Impulse, Mass, Template, TuningField};
+use arpg_sim::{Accumulator, Dt, Impulse, Mass, Template};
+use arpg_game::{TuningField};
 use glam::{Vec2, Vec3};
 
 fn step(game: &mut Game, direction: Vec3) {

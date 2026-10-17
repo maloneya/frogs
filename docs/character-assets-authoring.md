@@ -153,8 +153,8 @@ bounded [gait/phase buckets](crowd-collision.md#movement-and-pushing). Phase com
 from stable entity identity, not authored or stored randomness. Startup loads `assets/weapons/thornbound-staff/equipped/sword-glaive/player.glb`
 for the player and `assets/characters/wolf/wolf.glb` for the horde,
 using the role scales and tints. Asset paths
-are resolved from the build-time repository location, independently of the launch
-directory. Missing or invalid defaults fail startup explicitly. `character clear`
+are resolved under `assets/` in the launch directory. The development and release
+launchers select the repository or extracted package before starting the game. Missing or invalid defaults fail startup explicitly. `character clear`
 and `horde clear` restore their respective default assets; there is no character cube fallback.
 
 The renderer deforms each occupied shared horde pose once per frame, then

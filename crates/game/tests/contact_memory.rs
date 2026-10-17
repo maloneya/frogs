@@ -4,7 +4,8 @@ use arpg_game::{
     ActionDefinition, ActorDefinition, BehaviorNode, Destination, Game, GameScene, MoveAction,
     Placed,
 };
-use arpg_sim::{Accumulator, Dt, EntityId, Template, TuningField, Wall};
+use arpg_sim::{Accumulator, Dt, EntityId, Template, Wall};
+use arpg_game::{TuningField};
 use glam::Vec2;
 
 fn mover(destination: f32) -> ActorDefinition {

@@ -70,6 +70,17 @@ def set_frame_ms(trial, milliseconds):
         frame["frame_ms"] = milliseconds
 
 
+@contextlib.contextmanager
+def accepted_store(directory, results):
+    directory = Path(directory)
+    store = directory / "published"
+    identities = [perf.archive_result(result, store).name.removesuffix(".json.gz") for result in results]
+    policy = directory / "accepted-ceiling.json"
+    perf.save(policy, {"headless": [], "live": identities})
+    with patch.object(perf, "EVIDENCE", store), patch.object(perf, "ACCEPTED_REFERENCES", policy):
+        yield policy
+
+
 class EvidenceTests(unittest.TestCase):
     def test_surface_latency_is_mandatory_integer_gpu_context(self):
         for latency in (1, 2):
@@ -96,7 +107,7 @@ class EvidenceTests(unittest.TestCase):
             trial["perf"]["gpu"]["desired_maximum_frame_latency"] = 1
         self.assertNotEqual(perf.environment(candidate["workloads"]["sparse"][0]["perf"]),
                             perf.environment(baseline["workloads"]["sparse"][0]["perf"]))
-        verdict = perf.assess(candidate, baseline)
+        verdict = perf.assess(candidate, perf.references(baseline))
         self.assertEqual(verdict["absolute_status"], "pass")
         self.assertEqual(verdict["relative_status"], "inconclusive")
         self.assertTrue(all(row["relative"] == "incompatible" for row in verdict["metrics"]))
@@ -186,11 +197,11 @@ class EvidenceTests(unittest.TestCase):
 
     def test_stable_same_work_passes_and_slower_work_regresses(self):
         base = fixture()
-        self.assertEqual(perf.assess(base, base)["status"], "pass")
+        self.assertEqual(perf.assess(base, perf.references(base))["status"], "pass")
         slow = copy.deepcopy(base)
         for trial in slow["workloads"]["sparse"]:
             set_step_ms(trial, 12)
-        result = perf.assess(slow, base)
+        result = perf.assess(slow, perf.references(base))
         self.assertEqual(result["status"], "regression")
         self.assertEqual(result["metrics"][0]["absolute"], "pass")
         self.assertEqual(result["metrics"][0]["relative"], "regression")
@@ -200,7 +211,7 @@ class EvidenceTests(unittest.TestCase):
         for trial in result["workloads"]["sparse"]:
             trial["perf"]["current_corpses"] = 4
             trial["perf"]["horde"].update(instances=104, corpse_instances=4)
-        self.assertEqual(perf.assess(result)["status"], "pass")
+        self.assertEqual(perf.assess(result, perf.references(result))["status"], "pass")
         for change in (dict(corpse_instances=3), dict(instances=103),
                        dict(idle_instances=0), dict(run_instances=1)):
             bad = copy.deepcopy(result)
@@ -209,24 +220,26 @@ class EvidenceTests(unittest.TestCase):
 
     def test_absolute_budget_needs_no_baseline(self):
         result = fixture()
-        self.assertEqual(perf.assess(result)["metrics"][1]["status"], "observed")
+        self.assertEqual(perf.assess(result)["absolute_status"], "pass")
+        self.assertEqual(perf.assess(result)["status"], "inconclusive")
         for trial in result["workloads"]["sparse"]:
             trial["perf"]["frame_ms"]["p99"] = 30
             trial["perf"]["window_ms"] = 1800
             for frame in trial["perf"]["frames"].values():
                 frame["frame_ms"] = 30
-        self.assertEqual(perf.assess(result)["status"], "regression")
+        self.assertEqual(perf.assess(result)["absolute_status"], "regression")
+        self.assertTrue(perf.assess(result)["confirmed_regressions"])
 
     def test_a_best_sample_cannot_hide_unstable_repetitions(self):
         result = fixture()
         set_step_ms(result["workloads"]["sparse"][1], 20)
-        self.assertEqual(perf.assess(result, fixture())["status"], "inconclusive")
+        self.assertEqual(perf.assess(result, perf.references(fixture()))["status"], "inconclusive")
 
     def test_threshold_overlap_is_not_a_pass(self):
         result = fixture()
         for trial, duration in zip(result["workloads"]["sparse"], [10.9, 11.1, 11.2]):
             set_step_ms(trial, duration)
-        self.assertEqual(perf.assess(result, fixture())["status"], "inconclusive")
+        self.assertEqual(perf.assess(result, perf.references(fixture()))["status"], "inconclusive")
 
     def test_invalid_measurement_windows_cannot_pass(self):
         mutations = [
@@ -265,7 +278,7 @@ class EvidenceTests(unittest.TestCase):
             observation["window_ms"] = 1000
             observation["frame_ms"]["p99"] = 16.6667
             observation["mean_step_ms"] = 10.0001
-        self.assertEqual(perf.assess(result)["status"], "pass")
+        self.assertEqual(perf.assess(result, perf.references(result))["status"], "pass")
 
     def test_invalid_frame_containers_are_inconclusive(self):
         for frames in ([], None, "frames", {"10": {}}):
@@ -301,48 +314,6 @@ class EvidenceTests(unittest.TestCase):
                 live.assert_not_called()
                 self.assertEqual(log.read_text(), "preserve this log")
 
-    def test_retired_and_unrelated_evidence_is_filtered_before_reading_raw(self):
-        with tempfile.TemporaryDirectory() as directory:
-            store = Path(directory)
-            current = fixture()
-            manifest = {key: current[key] for key in
-                        ("schema_version", "source", "conditions", "suite", "workload_digest", "asset_digests")}
-            manifest.update(artifact="missing.json.gz", sha256="a" * 64)
-            retired = {**manifest, "schema_version": 5}
-            perf.save(store / "retired.json", retired)
-            unversioned = {k: v for k, v in retired.items() if k != "schema_version"}
-            perf.save(store / "unversioned.json", unversioned)
-            for key, value in (("build", "cargo build --release -p scenario --bin perf-headless"),
-                               ("cpu", "different machine")):
-                unrelated = copy.deepcopy(manifest)
-                unrelated["conditions"][key] = value
-                perf.save(store / (key + ".json"), unrelated)
-            exclusions = []
-            self.assertEqual(perf.discover(current, store, exclusions), (None, None))
-            self.assertEqual(len(exclusions), 2)
-
-    def test_bad_eligible_baseline_aborts_before_build_or_trials(self):
-        with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            current = fixture()
-            current["source"]["revision"] = perf.command(["git", "rev-parse", "HEAD"])
-            baseline = directory / "baseline.json"
-            perf.save(baseline, current)
-            store = directory / "store"
-            artifact = perf.archive(baseline, store)
-            artifact.write_bytes(b"corrupt archive")
-            output = directory / "result.json"
-            with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]), \
-                 patch.object(perf, "prepare", side_effect=lambda args, result: result.update(copy.deepcopy(current))), \
-                 patch.object(perf, "EVIDENCE", store), patch.object(perf, "LOCAL_EVIDENCE", directory / "empty"), \
-                 patch.object(perf, "run") as measure, \
-                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(perf.main(), 2)
-            measure.assert_not_called()
-            saved = perf.load(output)
-            self.assertEqual(saved["failure"]["kind"], "infrastructure")
-            self.assertEqual(saved["failure"]["stage"], "baseline_preflight")
-
     def test_late_failures_keep_raw_trials_and_absolute_assessment(self):
         for stage in ("assessment", "archive"):
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
@@ -362,7 +333,7 @@ class EvidenceTests(unittest.TestCase):
                     result["workloads"] = copy.deepcopy(current["workloads"])
                 with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]), \
                      patch.object(perf, "prepare", side_effect=prepare), \
-                     patch.object(perf, "discover", return_value=(None, None)), \
+                     patch.object(perf, "accepted_references", return_value=perf.references(current)), \
                      patch.object(perf, "run", side_effect=measure), \
                      patch.object(perf, "assess", side_effect=assess), \
                      patch.object(perf, "archive_result", side_effect=OSError("store unavailable")), \
@@ -374,24 +345,24 @@ class EvidenceTests(unittest.TestCase):
                 self.assertEqual(saved["assessment"]["status"], "inconclusive")
                 self.assertEqual(saved["failure"]["stage"], stage)
                 # The saved raw samples can still be compared without measuring again.
-                self.assertEqual(original_assess(saved, current)["status"], "pass")
+                self.assertEqual(original_assess(saved, perf.references(current))["status"], "pass")
 
     def test_repeated_and_baseline_population_and_hash_must_match(self):
         result = fixture()
         result["workloads"]["sparse"][1]["final_hash"] = "ffffffffffffffff"
         self.assertEqual(perf.assess(result)["status"], "inconclusive")
         result["workloads"]["sparse"] = [copy.deepcopy(result["workloads"]["sparse"][1]) for _ in range(3)]
-        self.assertEqual(perf.assess(result, fixture())["status"], "inconclusive")
+        self.assertEqual(perf.assess(result, perf.references(fixture()))["status"], "inconclusive")
 
     def test_settings_workload_and_policy_changes_require_new_baseline(self):
         for field in ("conditions", "workload_digest", "suite"):
             result = fixture()
             result[field] = {} if field != "workload_digest" else "changed"
-            self.assertEqual(perf.assess(result, fixture())["status"], "inconclusive")
+            self.assertEqual(perf.assess(result, perf.references(fixture()))["status"], "inconclusive")
         result = fixture()
         for trial in result["workloads"]["sparse"]:
             trial["perf"]["width"] = 1920
-        self.assertEqual(perf.assess(result, fixture())["status"], "inconclusive")
+        self.assertEqual(perf.assess(result, perf.references(fixture()))["status"], "inconclusive")
 
     def test_missing_trials_and_workloads_fail_closed(self):
         result = fixture()
@@ -410,7 +381,9 @@ class EvidenceTests(unittest.TestCase):
         for field in ("source", "conditions", "workload_digest", "binary_sha256"):
             result = fixture()
             del result[field]
-            self.assertEqual(perf.assess(result, result)["status"], "inconclusive")
+            verdict = perf.assess(result, perf.references(fixture()))
+            self.assertEqual(verdict["status"], "inconclusive")
+            self.assertEqual(verdict["relative_status"], "inconclusive")
 
     def test_owned_logs_do_not_masquerade_as_source_edits(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -437,8 +410,9 @@ class EvidenceTests(unittest.TestCase):
         other["name"] = "other"
         result["suite"]["workloads"].append(other)
         result["workloads"]["other"] = copy.deepcopy(result["workloads"]["sparse"])
+        baselines = perf.references(copy.deepcopy(result))
         set_step_ms(result["workloads"]["sparse"][1], 20)
-        verdict = perf.assess(result)
+        verdict = perf.assess(result, baselines)
         rows = {(r["workload"], r["metric"]): r for r in verdict["metrics"]}
         self.assertEqual(rows["sparse", "mean_step_ms"]["status"], "inconclusive")
         self.assertEqual(rows["sparse", "frame_ms.p99"]["absolute"], "pass")
@@ -465,21 +439,21 @@ class EvidenceTests(unittest.TestCase):
         candidate["asset_digests"][path] = "f" * 64
         for trial in candidate["workloads"]["sparse"]:
             trial["perf"]["horde"]["vertices"] = 900
-        self.assertEqual(perf.assess(candidate, baseline)["relative_status"], "inconclusive")
-        self.assertFalse(perf.eligible(candidate, baseline, automatic=False))
-        self.assertEqual(perf.assess(candidate, baseline, [path])["status"], "pass")
+        self.assertEqual(perf.assess(candidate, perf.references(baseline))["relative_status"], "inconclusive")
+        self.assertFalse(perf.compatible(candidate, baseline, candidate["suite"]["workloads"]))
+        self.assertEqual(perf.assess(candidate, perf.references(baseline), [path])["status"], "pass")
         with self.assertRaises(ValueError):
             perf.asset_differences(candidate, baseline, [path, perf.CHARACTER_ASSETS["character"]])
         for trial in candidate["workloads"]["sparse"]:
             trial["perf"]["width"] = 1920
-        self.assertEqual(perf.assess(candidate, baseline, [path])["relative_status"], "inconclusive")
+        self.assertEqual(perf.assess(candidate, perf.references(baseline), [path])["relative_status"], "inconclusive")
 
     def test_changed_assets_do_not_erase_absolute_failure(self):
         baseline, candidate = fixture(), fixture()
         candidate["asset_digests"][perf.CHARACTER_ASSETS["horde"]] = "f" * 64
         for trial in candidate["workloads"]["sparse"]:
             set_frame_ms(trial, 30)
-        verdict = perf.assess(candidate, baseline)
+        verdict = perf.assess(candidate, perf.references(baseline))
         self.assertEqual(verdict["relative_status"], "inconclusive")
         self.assertEqual(verdict["confirmed_regressions"][0]["absolute"], "regression")
 
@@ -508,7 +482,7 @@ class EvidenceTests(unittest.TestCase):
     def test_undeclared_asset_changes_preserve_raw_absolute_observations(self):
         baseline, candidate = fixture(), fixture()
         candidate["asset_digests"][perf.CHARACTER_ASSETS["character"]] = "f" * 64
-        verdict = perf.assess(candidate, baseline, [perf.CHARACTER_ASSETS["horde"]])
+        verdict = perf.assess(candidate, perf.references(baseline), [perf.CHARACTER_ASSETS["horde"]])
         self.assertEqual(verdict["absolute_status"], "pass")
         self.assertEqual(verdict["relative_status"], "inconclusive")
 
@@ -543,30 +517,30 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(len(result["workloads"]["sparse"]), 1)
         self.assertEqual(request.call_count, 4)
 
-    def test_live_collection_stops_before_next_workload_after_confirmed_regression(self):
+    def test_live_collection_retains_regression_and_measures_remaining_workloads(self):
         result = fixture()
         workload = copy.deepcopy(result["suite"]["workloads"][0])
-        workload["name"] = "never-started"
+        workload["name"] = "next-workload"
         result["suite"]["workloads"].append(workload)
         trials = result["workloads"]["sparse"]
         for trial in trials:
             set_frame_ms(trial, 30)
         result["workloads"] = {}
         with patch.object(perf, "live_ready"), \
-             patch.object(perf, "request", side_effect=["vsync true", "ok", "ready tick=0", *map(json.dumps, trials)]), \
+             patch.object(perf, "request", side_effect=["vsync true", "ok", "ready tick=0", *map(json.dumps, trials),
+                                                       "ready tick=0", *map(json.dumps, trials)]), \
              contextlib.redirect_stdout(io.StringIO()):
-            with self.assertRaisesRegex(perf.MeasurementStopped, "confirmed performance failure"):
-                perf.collect_live("socket", argparse.Namespace(vsync="on", gpu_timing=False), result, None)
-        self.assertNotIn("never-started", result["workloads"])
+            perf.collect_live("socket", argparse.Namespace(vsync="on", gpu_timing=False), result, None)
+        self.assertEqual(len(result["workloads"]["next-workload"]), len(trials))
         verdict = perf.assess(result)
-        self.assertEqual(verdict["status"], "inconclusive")
+        self.assertEqual(verdict["absolute_status"], "regression")
         self.assertTrue(verdict["confirmed_regressions"])
 
     def test_changed_gameplay_preserves_absolute_evidence(self):
         result = fixture()
         for trial in result["workloads"]["sparse"]:
             trial["final_hash"] = "f" * 16
-        verdict = perf.assess(result, fixture())
+        verdict = perf.assess(result, perf.references(fixture()))
         self.assertEqual(verdict["absolute_status"], "pass")
         self.assertEqual(verdict["relative_status"], "inconclusive")
         self.assertTrue(all(r["relative"] == "incompatible" for r in verdict["metrics"]))
@@ -577,20 +551,7 @@ class EvidenceTests(unittest.TestCase):
         workload["name"] = "other"
         base["suite"]["workloads"].append(workload)
         base["workloads"]["other"] = copy.deepcopy(base["workloads"]["sparse"])
-        self.assertEqual(perf.assess(fixture(), base)["status"], "pass")
-
-    def test_dirty_head_is_not_evidence_of_ancestor_source(self):
-        with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            result = fixture()
-            result["source"].update(revision=perf.command(["git", "rev-parse", "HEAD"]), dirty=True)
-            path = directory / "input.json"
-            perf.save(path, result)
-            perf.archive(path, directory / "store")
-            changed = copy.deepcopy(result)
-            changed["source"]["digest"] = "e" * 64
-            self.assertEqual(perf.discover(changed, directory / "store"), (None, None))
-            self.assertIsNotNone(perf.discover(result, directory / "store")[0])
+        self.assertEqual(perf.assess(fixture(), perf.references(base))["status"], "pass")
 
     def test_headless_requires_complete_raw_ticks_and_matching_build(self):
         result = fixture()
@@ -601,9 +562,161 @@ class EvidenceTests(unittest.TestCase):
                  "population_sum": 6000, "final_hash": "a" * 16,
                  "step_ns": {str(i): 1000000 for i in range(60)}}
         result["workloads"]["sparse"] = [copy.deepcopy(trial) for _ in range(3)]
-        self.assertEqual(perf.assess(result, result)["status"], "pass")
+        self.assertEqual(perf.assess(result, perf.references(result))["status"], "pass")
         del result["workloads"]["sparse"][0]["step_ns"]["0"]
         self.assertEqual(perf.assess(result)["status"], "inconclusive")
+
+    def test_accepted_ceiling_covers_real_suite_and_preserves_dirty_uncertainty(self):
+        names = {work["name"] for work in perf.load(perf.SUITE)["workloads"]}
+        for mode in ("live", "headless"):
+            baselines = perf.accepted_references(mode)
+            self.assertEqual(set(baselines), names)
+            self.assertTrue(all(ref.result["source"]["dirty"] for ref in baselines.values()))
+        # Reading immutable historical evidence is not a benchmark run.
+        baselines = perf.accepted_references("live")
+        for name in ("compressed", "night_fire"):
+            ref = baselines[name].result
+            verdict = perf.assess(ref, baselines)
+            self.assertEqual(verdict["relative_status"], "inconclusive")
+            self.assertTrue(any(row["relative"] == "inconclusive" for row in verdict["metrics"]))
+
+    def test_separate_workload_references_keep_their_own_sources_and_timings(self):
+        candidate = fixture()
+        other = copy.deepcopy(candidate["suite"]["workloads"][0])
+        other["name"] = "other"
+        candidate["suite"]["workloads"].append(other)
+        candidate["workloads"]["other"] = copy.deepcopy(candidate["workloads"]["sparse"])
+        sparse = perf.selected(copy.deepcopy(candidate), candidate["suite"]["workloads"][0])
+        sparse["source"].update(dirty=True, digest="1" * 64)
+        other_result = perf.selected(copy.deepcopy(candidate), other)
+        other_result["source"].update(dirty=True, digest="2" * 64)
+        other_result["binary_sha256"] = "3" * 64
+        with tempfile.TemporaryDirectory() as directory, accepted_store(directory, [sparse, other_result]):
+            baselines = perf.accepted_references("live")
+            self.assertEqual(perf.assess(candidate, baselines)["status"], "pass")
+            self.assertEqual(baselines["sparse"].provenance()["source"], sparse["source"])
+            self.assertEqual(baselines["other"].provenance()["binary_sha256"], "3" * 64)
+            self.assertNotEqual(baselines["sparse"].sha256, baselines["other"].sha256)
+            del baselines["other"]
+            verdict = perf.assess(candidate, baselines)
+            self.assertEqual(verdict["status"], "inconclusive")
+            self.assertEqual(verdict["absolute_status"], "pass")
+            self.assertIn("other: missing relative reference", verdict["reasons"])
+
+    def test_default_run_keeps_pinned_reference_despite_newer_local_measurements(self):
+        baseline = fixture()
+        for trial in baseline["workloads"]["sparse"]:
+            set_step_ms(trial, 1)
+        baseline["source"].update(dirty=True, digest="1" * 64)
+        candidate = copy.deepcopy(baseline)
+        candidate["source"]["digest"] = "2" * 64
+        for trial in candidate["workloads"]["sparse"]:
+            set_step_ms(trial, 2)
+        with tempfile.TemporaryDirectory() as directory, accepted_store(directory, [baseline]):
+            directory = Path(directory)
+            with patch.object(perf, "LOCAL_EVIDENCE", directory / "local"), \
+                 patch.object(perf, "prepare", side_effect=lambda args, result: result.update(copy.deepcopy(candidate))), \
+                 patch.object(perf, "run"), contextlib.redirect_stdout(io.StringIO()):
+                for index in range(2):
+                    output = directory / f"run-{index}.json"
+                    with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]):
+                        self.assertEqual(perf.main(), 1)
+                    saved = perf.load(output)
+                    self.assertEqual(saved["assessment"]["absolute_status"], "pass")
+                    self.assertEqual(saved["assessment"]["relative_status"], "regression")
+                    self.assertEqual(saved["baselines"]["sparse"]["source"], baseline["source"])
+                self.assertEqual(len(list((directory / "local").glob("*.json.gz"))), 2)
+
+    def test_missing_corrupt_and_redirected_pins_stop_before_measurement(self):
+        for defect in ("missing", "corrupt", "redirected"):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory, \
+                 accepted_store(directory, [fixture()]):
+                store = perf.EVIDENCE
+                artifact = next(store.glob("*.json.gz"))
+                if defect == "missing":
+                    artifact.unlink()
+                elif defect == "corrupt":
+                    artifact.write_bytes(b"not gzip")
+                else:
+                    manifest = artifact.with_suffix("")
+                    value = perf.load(manifest)
+                    value["sha256"] = "f" * 64
+                    value["artifact"] = "f" * 64 + ".json.gz"
+                    manifest.write_text(json.dumps(value))
+                output = Path(directory) / "candidate.json"
+                with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]), \
+                     patch.object(perf, "prepare"), patch.object(perf, "run") as measure, \
+                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(perf.main(), 2)
+                measure.assert_not_called()
+                self.assertEqual(perf.load(output)["failure"]["stage"], "baseline_preflight")
+
+    def test_rerun_cannot_erase_a_confirmed_stop_by_switching_references(self):
+        original, candidate = fixture(), fixture()
+        for trial in original["workloads"]["sparse"]:
+            set_step_ms(trial, 1)
+        for trial in candidate["workloads"]["sparse"]:
+            set_step_ms(trial, 2)
+        candidate["assessment"] = perf.assess(candidate, perf.references(original))
+        self.assertTrue(candidate["assessment"]["confirmed_regressions"])
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            previous, replacement, output = [directory / name for name in ("previous.json", "replacement.json", "result.json")]
+            perf.save(previous, candidate)
+            perf.save(replacement, candidate)
+            with patch.object(sys, "argv", ["perf", "run", "--rerun", str(previous), "--baseline", str(replacement), "--output", str(output)]), \
+                 patch.object(perf, "run") as measure, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(perf.main(), 2)
+            measure.assert_not_called()
+            self.assertIn("confirmed failure", perf.load(output)["failure"]["reason"])
+
+    def test_malformed_stored_assessments_fail_admission_without_crashing(self):
+        for malformed in (None, [], "pass", 0):
+            candidate = fixture()
+            candidate["assessment"] = malformed
+            self.assertFalse(perf.accepted_pass(candidate, "live"))
+            self.assertEqual(perf.confirmed_regressions(malformed), [])
+
+    def test_missing_workload_reference_stops_before_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "candidate.json"
+            with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]), \
+                 patch.object(perf, "accepted_references", return_value={}), \
+                 patch.object(perf, "prepare", side_effect=lambda args, result: result.update(fixture())), \
+                 patch.object(perf, "run") as measure, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(perf.main(), 2)
+            measure.assert_not_called()
+            self.assertIn("missing relative reference", perf.load(output)["failure"]["reason"])
+
+    def test_noisy_reference_cannot_pass_stable_candidate(self):
+        baseline, candidate = fixture(), fixture()
+        for trial, duration in zip(baseline["workloads"]["sparse"], (8, 10, 12)):
+            set_step_ms(trial, duration)
+        verdict = perf.assess(candidate, perf.references(baseline))
+        self.assertEqual(verdict["absolute_status"], "pass")
+        self.assertEqual(verdict["relative_status"], "inconclusive")
+        self.assertEqual(verdict["status"], "inconclusive")
+
+    def test_complete_accepted_pass_revalidates_raw_and_reference_provenance(self):
+        candidate = fixture()
+        with tempfile.TemporaryDirectory() as directory, accepted_store(directory, [fixture()]):
+            suite_path = Path(directory) / "suite.json"
+            perf.save(suite_path, candidate["suite"])
+            baselines = perf.accepted_references("live")
+            candidate["baselines"] = {name: ref.provenance() for name, ref in baselines.items()}
+            candidate["assessment"] = perf.assess(candidate, baselines)
+            with patch.object(perf, "SUITE", suite_path):
+                self.assertTrue(perf.accepted_pass(candidate, "live"))
+                candidate["baselines"]["sparse"]["sha256"] = "f" * 64
+                self.assertFalse(perf.accepted_pass(candidate, "live"))
+                candidate["baselines"] = {name: ref.provenance() for name, ref in baselines.items()}
+                for trial in candidate["workloads"]["sparse"]:
+                    set_step_ms(trial, 12)
+                self.assertFalse(perf.accepted_pass(candidate, "live"))
+                candidate["assessment"]["scope"] = "absolute_only"
+                self.assertFalse(perf.accepted_pass(candidate, "live"))
 
     def test_archive_is_immutable_integrity_checked_and_reuses_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -616,48 +729,13 @@ class EvidenceTests(unittest.TestCase):
             artifact = perf.archive(path, store)
             with self.assertRaises(FileExistsError):
                 perf.archive(path, store)
-            discovered, manifest = perf.discover(result, store)
-            self.assertEqual(discovered, result)
-            self.assertTrue(manifest)
-            different = copy.deepcopy(result)
-            different["conditions"]["cpu"] = "another machine"
-            self.assertEqual(perf.discover(different, store), (None, None))
+            restored = perf.read_archive(artifact.with_suffix(""))
+            self.assertEqual(restored["sparse"].result, result)
             artifact.write_bytes(b"corrupt")
             with self.assertRaises(OSError):
-                perf.discover(result, store)
+                perf.read_archive(artifact.with_suffix(""))
 
-    def test_discovery_prefers_nearest_ancestor_then_newest_measurement(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            def git(*args):
-                return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
-            git("init", "-q")
-            revisions = []
-            for index in range(3):
-                (root / "source").write_text(str(index))
-                git("add", "source")
-                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", str(index))
-                revisions.append(git("rev-parse", "HEAD"))
-            store = root / "evidence"
-            with patch.object(perf, "ROOT", root):
-                for index, (revision, date) in enumerate([
-                    (revisions[0], "2026-09-30"),
-                    (revisions[1], "2026-09-20"),
-                    (revisions[1], "2026-09-21"),
-                ]):
-                    result = fixture()
-                    result["source"]["revision"] = revision
-                    result["created_utc"] = date
-                    path = root / f"result-{index}.json"
-                    perf.save(path, result)
-                    perf.archive(path, store)
-                current = fixture()
-                current["source"]["revision"] = revisions[2]
-                selected, _ = perf.discover(current, store)
-                self.assertEqual(selected["source"]["revision"], revisions[1])
-                self.assertEqual(selected["created_utc"], "2026-09-21")
-
-    def test_archive_preserves_measured_source_identity_and_discovery(self):
+    def test_archive_preserves_measured_source_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             def git(*args):
@@ -678,34 +756,12 @@ class EvidenceTests(unittest.TestCase):
                 perf.save(path, result)
                 perf.archive(path)
                 self.assertEqual(perf.source_identity(), before)
-                self.assertEqual(perf.discover(result)[0], result)
+                self.assertEqual(perf.read_archive(next(evidence.glob("*.json")))["sparse"].result, result)
                 perf.archive(path, local)
                 self.assertEqual(perf.source_identity(), before)
-                self.assertEqual(perf.discover(result)[0], result)
+                self.assertEqual(perf.read_archive(next(evidence.glob("*.json")))["sparse"].result, result)
                 (root / "code.rs").write_text("different source")
                 self.assertNotEqual(perf.source_identity(), before)
-
-    def test_run_automatically_saves_and_reuses_local_evidence(self):
-        with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            source = fixture()
-            source["source"]["revision"] = perf.command(["git", "rev-parse", "HEAD"])
-            with patch.object(perf, "EVIDENCE", directory / "published"), \
-                 patch.object(perf, "LOCAL_EVIDENCE", directory / "local"), \
-                 patch.object(perf, "prepare", side_effect=lambda args, result: result.update(copy.deepcopy(source))), \
-                 patch.object(perf, "run"), \
-                 contextlib.redirect_stdout(io.StringIO()):
-                outputs = []
-                for index in range(2):
-                    output = directory / f"run-{index}.json"
-                    with patch.object(sys, "argv", ["perf", "run", "--output", str(output)]):
-                        self.assertEqual(perf.main(), 0)
-                    outputs.append(perf.load(output))
-                self.assertEqual(outputs[0]["assessment"]["relative_status"], "missing")
-                self.assertEqual(outputs[1]["assessment"]["relative_status"], "pass")
-                self.assertTrue(outputs[1]["baseline"])
-                self.assertEqual(len(list((directory / "local").glob("*.json.gz"))), 2)
-                self.assertFalse((directory / "published").exists())
 
     def test_baseline_files_are_never_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:

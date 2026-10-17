@@ -136,7 +136,7 @@ impl App {
                 }
                 Command::State => self.report_state(),
                 Command::PerfTrial(spec) => {
-                    if self.game.tuning() != arpg_sim::Tuning::default() {
+                    if self.game.tuning() != arpg_game::Tuning::default() {
                         "error: performance trials require default tuning".into()
                     } else if self.renderer.is_none() {
                         "error: no renderer yet".into()
@@ -381,7 +381,7 @@ impl App {
         out.push_str(&events);
         out.push_str(&format!(
             "# {} event(s)",
-            self.game.trace().since(tick).count() + self.game.encounter_trace().since(tick).count()
+            self.game.trace().since(tick).count() + self.game.gameplay_trace().since(tick).count()
         ));
         out
     }

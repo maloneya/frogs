@@ -53,7 +53,7 @@ belongs to app/camera. Start with zero enemies unless the crowd is the subject;
 otherwise contact can change a movement prediction. Place bodies deliberately
 through setup actions or a scene; a fresh Game starts empty.
 
-Read [tuning](../../../crates/sim/src/tuning.rs), [turning](../../../crates/sim/src/pass/face.rs)
+Read [tuning](../../../crates/game/src/tuning.rs), [turning](../../../crates/game/src/player.rs)
 and [bounds](../../../crates/sim/src/lib.rs) before predicting. Distance above
 includes motor acceleration and drag before reaching target speed; see the numeric
 derivation in `scenarios/walk_east.ron`. Keep tolerances below the one-tick error
@@ -68,18 +68,21 @@ is supplied.
 
 Use intermediate checkpoints on both sides of a transition. See
 [attack timing](../../../scenarios/the_hitbox_opens_and_shuts_on_schedule.ron).
-Whole-run transition assertions belong in final `expect.events`, never a checkpoint.
+Whole-run transition assertions belong in final `expect.events` (physics) and
+`expect.gameplay_events` (abilities and encounters), never a checkpoint.
 Use explicit kinds and an exact sequence, including kinds expected to be absent:
 
 ```ron
-events: (
-    kinds: [Swung, HitboxOpened, HitboxClosed, Hit],
+events: (kinds: [Damaged], sequence: []),
+gameplay_events: (
+    kinds: [Swung, HitboxOpened, HitboxClosed],
     sequence: [(0, Swung), (6, HitboxOpened), (12, HitboxClosed)],
 ),
 ```
 
 This predicts exactly one attack window and no hits; extra, missing, early or
-late events fail. Events outside the selected kinds are irrelevant. Payloads
+late events fail. Each stream preserves its own emission order; assertions do
+not invent chronology between streams. Events outside the selected kinds are irrelevant. Payloads
 are typed and checked, including diagnostic identities `(slot, generation)`;
 these read-only pairs cannot be turned into engine handles.
 
@@ -127,7 +130,7 @@ cannot affect assertions. A selected kind with no sequence entries asserts absen
 
 The remaining `expect.trace` goldens check diagnostic serialization and gameplay
 streams. They use independent bounded capture of every stream and reject overflow;
-they do not read the live history ring. Do not combine `events` and `trace`.
+they do not read the live history ring. Do not combine either selected-event stream with `trace`.
 Set `expect.trace` to a filename relative to the scenario. Setup events are excluded.
 To regenerate a deliberately changed serialization expectation:
 

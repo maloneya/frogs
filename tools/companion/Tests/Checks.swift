@@ -8,7 +8,7 @@ private func reply(value: Double = 9, session: UInt32 = 1, ok: Bool = true) thro
     {"ok":\(ok),"error":\(ok ? "null" : "\"Out of range\""),"state":{
     "session":\(session),"fields":[{"key":"future_field","group":"Future type","label":"Speed","unit":"m/s","default":9,"min":0,"max":60,"step":0.1,"value":\(value),"saved":9}],
     "unsaved":\(value != 9),"path":"tuning.ron","message":"Ready","error":false,"busy":false,
-    "scenes":{"files":[{"path":"scenes/a.ron","label":"a.ron"}],"error":null,"current":"Test","run":1,"tick":42},
+    "scenes":{"current":"Test","run":1,"tick":42},
     "debug":{"collision":false,"vsync":true,"view_height":30,"fps":60,"frame_ms":16.67,"enemies":3,"instances":4,"performance":{},
     "capture":{"pending":false,"path":null,"error":null}}}}
     """.data(using: .utf8)!
@@ -147,12 +147,29 @@ func localTransportFailsClearlyWithoutAGame() async {
 
 
 @MainActor
-func liveToolingChecks(_ model: Model) async throws {
-    let original = model.state!
-    guard let file = original.scenes.files.first(where: { $0.label == "single_enemy.ron" }) else {
-        fatalError("Live check requires the repository scene catalog")
+func sceneFilesAreDiscoveredOfflineAndRefreshedLocally() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("arpg-catalog-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory.appendingPathComponent("directory.ron"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for filename in ["b.ron", "a scene.ron", "ignored.txt"] {
+        try "Broken files stay selectable".write(to: directory.appendingPathComponent(filename), atomically: true, encoding: .utf8)
     }
-    await model.send(Request(op: .startScene, path: file.path))
+    let model = Model(path: "unused", sceneDirectory: directory)
+    precondition(!model.connected && model.sceneFileError == nil)
+    precondition(model.sceneFiles.map(\.label) == ["a scene.ron", "b.ron"])
+    try FileManager.default.removeItem(at: directory.appendingPathComponent("b.ron"))
+    model.refreshSceneFiles()
+    precondition(model.sceneFiles.map(\.label) == ["a scene.ron"])
+    try FileManager.default.removeItem(at: directory)
+    model.refreshSceneFiles()
+    precondition(model.sceneFiles.isEmpty && model.sceneFileError != nil)
+}
+
+
+@MainActor
+func liveToolingChecks(_ model: Model, scene: URL) async throws {
+    let original = model.state!
+    await model.send(Request(op: .startScene, path: scene.path))
     precondition(!model.failed && model.state!.scenes.run == original.scenes.run + 1)
     let started = model.state!.scenes
     await model.send(Request(op: .startScene, path: "/no-such-arpg-scene.ron"))
@@ -160,8 +177,6 @@ func liveToolingChecks(_ model: Model) async throws {
     precondition(model.state!.scenes.current == started.current)
     await model.action(.restart)
     precondition(!model.failed && model.state!.scenes.run == started.run + 1)
-    await model.action(.refreshScenes)
-    precondition(!model.failed && model.state!.scenes.files.contains { $0.path == file.path })
 
     let debug = model.state!.debug
     await model.send(Request(op: .collision, enabled: !debug.collision))
@@ -199,13 +214,14 @@ func liveToolingChecks(_ model: Model) async throws {
             precondition(!FileManager.default.fileExists(atPath: path))
         }
     }
-    print("Native companion: live scene start/refusal/restart, catalog, collision, vsync, zoom and screenshot success/failure passed")
+    print("Native companion: live scene start/refusal/restart, collision, vsync, zoom and screenshot success/failure passed")
 }
 
 
 @main
 struct Checks {
     @MainActor static func main() async throws {
+        try sceneFilesAreDiscoveredOfflineAndRefreshedLocally()
         try await draftsSurviveRefreshButNeverReconnect()
         try await invalidTextNeverLeavesTheCompanion()
         try await sceneDraftsSurviveDisconnectAndUndoAcrossSave()
@@ -225,9 +241,11 @@ struct Checks {
             precondition(model.connected)
             // Startup can intentionally have no scene. Restart must exercise
             // an admitted scene rather than accidentally passing a refusal.
-            guard let scene = model.state!.scenes.files.first(where: { $0.label == "single_enemy.ron" }) else {
-                fatalError("Live check requires the repository scene catalog")
-            }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("arpg-live-check-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let scene = directory.appendingPathComponent("live-check.ron")
+            try "(scene: (engine: (name: \"Live companion check\", bodies: [(pos: (20.0, 0.0))])))".write(to: scene, atomically: true, encoding: .utf8)
             let started = await model.send(Request(op: .startScene, path: scene.path))
             precondition(started && !model.failed)
             let runBeforeRestart = model.state!.scenes.run
@@ -251,7 +269,7 @@ struct Checks {
             await model.set(field, value: original)
             await model.action(.save)
             print("Native companion: live game edit, refusal, save, revert, defaults and restart passed")
-            try await liveToolingChecks(model)
+            try await liveToolingChecks(model, scene: scene)
             try await liveSceneEditorChecks(model)
         }
     }

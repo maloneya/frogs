@@ -5,7 +5,8 @@ use std::collections::VecDeque;
 use arpg_core::{LinearRgb, LinearRgba, Report};
 use arpg_game::Game;
 use arpg_gfx::{EffectVertex, MAX_EFFECT_VERTICES};
-use arpg_sim::{Alpha, AttackPhase, AttackProfile};
+use arpg_sim::{Alpha, AttackPhase};
+use arpg_game::{AttackProfile};
 use glam::{Vec3, Vec3Swizzles};
 
 // Eight ticks of history plus an interpolation endpoint, bounded independently
@@ -178,7 +179,7 @@ impl AttackEffects {
                 tick,
                 centre: Vec3::new(beam.end().x, 0.0, beam.end().y),
                 origin: Vec3::new(beam.start().x, 0.0, beam.start().y),
-                radius: arpg_sim::Beam::RADIUS,
+                radius: beam.radius(),
                 kind: SampleKind::Beam,
                 end_normal: beam.end_normal().map(|n| Vec3::new(n.x, 0.0, n.y)),
             });
@@ -591,7 +592,7 @@ mod tests {
             game.set_attack_profile(profile);
             let mut effects = AttackEffects::default();
             let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
-            let Some(resolved) = profile.resolve(arpg_sim::Tuning::default()) else { continue };
+            let Some(resolved) = profile.resolve(arpg_game::Tuning::default()) else { continue };
             let close = resolved.startup() + resolved.active();
             for elapsed in 0..close + SLAM_LIFE as u32 + 2 {
                 game.step(dt, Intent::new(MoveDir::new(Vec3::X), arpg_core::AimDir::new(Vec3::X).unwrap(), elapsed == 0));
@@ -823,7 +824,7 @@ mod beam_tests {
             assert_eq!(effects.samples.len(), 1, "beam keeps only its current endpoint");
             assert_eq!(effects.vertices().len(), 504);
             let end = effects.samples.back().unwrap().centre;
-            assert!(end.abs_diff_eq(aim.as_vec3() * arpg_sim::Beam::LENGTH, 0.00001));
+            assert!(end.abs_diff_eq(aim.as_vec3() * arpg_game::Disintegrate::LENGTH, 0.00001));
         }
         game.step(dt, Intent::new(MoveDir::NONE, AimDir::FORWARD, false));
         effects.observe(&game, || None);

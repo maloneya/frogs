@@ -30,7 +30,10 @@ Pass `-- /tmp/arpg-world` to build into a separate directory.
 
 The script and source PNG are the editable sources. It applies transforms and exports selected
 geometry through Blender's GLB exporter. The validated static-mesh importer
-loads both assets. Runtime paths resolve from the build-time repository location. Missing or invalid required assets fail startup explicitly.
+loads both assets. Runtime lookup follows the
+[shared asset contract](../../docs/character-assets-authoring.md): launch from the
+directory containing `assets/`. Missing or invalid required assets fail startup
+explicitly.
 
 `state.world_assets` exposes imported paths, geometry/texture counts and live
 prop placements. `state.render.static_mesh_instances` and `static_mesh_draws`

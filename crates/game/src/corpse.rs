@@ -1,10 +1,8 @@
-//! Bounded visual remains, admitted from completed combat outcomes only.
+//! Visual remains admitted from completed combat outcomes, each with its own timeout.
 use arpg_core::Report;
 use arpg_sim::{ActorView, Alpha, Defeat, DefeatedBodyRetirement, EntityId, Fnv, SceneId};
 use glam::Vec2;
 
-/// Maximum simultaneous remains. Full admission skips subsequent deaths.
-pub const MAX_CORPSES: usize = 128;
 /// Ten seconds measured in fixed simulation ticks.
 pub const CORPSE_LIFETIME_TICKS: u32 = 10 * arpg_sim::TICK_HZ;
 
@@ -28,10 +26,8 @@ impl Corpse {
     pub fn remaining_ticks(self) -> u32 { self.remaining }
 }
 
+#[derive(Default)]
 pub(crate) struct Corpses { rows: Vec<Corpse> }
-impl Default for Corpses {
-    fn default() -> Self { Self { rows: Vec::with_capacity(MAX_CORPSES) } }
-}
 impl Corpses {
     pub(crate) fn as_slice(&self) -> &[Corpse] { &self.rows }
     pub(crate) fn remove(&mut self, id: EntityId) { self.rows.retain(|row| row.body != id); }
@@ -73,8 +69,8 @@ pub(crate) fn follow(corpses: &mut Corpses, view: ActorView<'_>) {
     }
 }
 
-/// Expiration and admission share the lethal-tick clock. Overflow retires the
-/// unrepresented body immediately; neither pressure nor a held beam can evade the cap.
+/// Every defeat gets its full lifetime, independent of other remains. Expiration
+/// also retires bodies kept moving by continued forces.
 pub(crate) fn advance<'a>(
     corpses: &mut Corpses,
     defeats: impl Iterator<Item = &'a Defeat>,
@@ -86,10 +82,6 @@ pub(crate) fn advance<'a>(
         row.remaining > 0
     });
     for defeat in defeats {
-        if corpses.rows.len() == MAX_CORPSES {
-            retirement.retire(defeat.body);
-            continue;
-        }
         corpses.rows.push(Corpse {
             body: defeat.body, scene: defeat.scene, position: defeat.position,
             previous: retirement.previous_position(defeat.body).unwrap_or(defeat.position),

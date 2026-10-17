@@ -53,6 +53,12 @@ name="arpg-$tag-macos-$arch"
 # --- Everything that can refuse, refuses before the build. ---------------------
 
 head="$(git rev-parse HEAD)"
+build_source="$(git rev-parse --short HEAD)"
+if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+    [ "$dry" -eq 1 ] || die "source has uncommitted or untracked files; commit or remove them before publishing"
+    build_source="$build_source (uncommitted working-tree content)"
+    printf 'release: dry run includes uncommitted working-tree content based on %s\n' "$head" >&2
+fi
 
 if [ "$dry" -eq 0 ]; then
     command -v gh >/dev/null 2>&1 || die "gh is not installed: brew install gh"
@@ -69,11 +75,6 @@ if [ "$dry" -eq 0 ]; then
     if ! git branch -r --contains "$head" 2>/dev/null | grep -q .; then
         die "HEAD ($(git rev-parse --short HEAD)) is not on any remote branch — git push first"
     fi
-fi
-
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    printf 'release: warning — uncommitted changes are NOT in this build (it builds %s)\n' \
-        "$(git rev-parse --short HEAD)" >&2
 fi
 
 # --- The gate. ----------------------------------------------------------------
@@ -95,6 +96,16 @@ payload="$staging/$name"
 mkdir -p "$payload"
 
 cp target/release/arpg "$payload/arpg"
+
+# Match the game's single launch-directory asset root. Keep authoring sources and
+# fixture/reference assets out of the release; GLBs include their own textures.
+asset_directories=(assets/world assets/characters/wolf assets/weapons/thornbound-staff/equipped/sword-glaive assets/audio)
+while IFS= read -r -d '' asset; do
+    mkdir -p "$payload/$(dirname "$asset")"
+    cp "$asset" "$payload/$asset"
+done < <(find "${asset_directories[@]}" -type f \( -name '*.glb' -o -name '*.wav' \) -print0)
+mkdir -p "$payload/assets/audio"
+cp -R assets/audio/licenses "$payload/assets/audio/licenses"
 
 # Both the game and companion use paths relative to the extracted folder.
 cp -R scenes "$payload/scenes"
@@ -159,7 +170,7 @@ ARPG Companion
     Debug           collision outlines, vsync, zoom, readouts and screenshots
     Editing and saving work with the game closed; drafts are not autosaved.
 
-Requires an Apple Silicon Mac with Metal. Built from $(git rev-parse --short HEAD).
+Requires an Apple Silicon Mac with Metal. Built from $build_source.
 READER
 
 mkdir -p dist
@@ -181,6 +192,11 @@ Unsigned build — if macOS refuses to open it, run \`xattr -dr com.apple.quaran
 in the unpacked folder. Apple Silicon / Metal only. See README.txt inside for controls.
 NOTES
 )"
+
+# The gate and builds run in the checkout. Refuse edits or a new commit made
+# during that work instead of publishing bytes under stale source provenance.
+[ "$(git rev-parse HEAD)" = "$head" ] || die "HEAD changed during release preparation; archive preserved at $archive"
+[ -z "$(git status --porcelain --untracked-files=all)" ] || die "source changed during release preparation; archive preserved at $archive"
 
 gh release create "$tag" "$archive" \
     --title "arpg $tag" \

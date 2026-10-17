@@ -134,7 +134,7 @@ fn initial_overlap_recovery_cannot_rotate_a_panel_through_a_thin_wall() {
             "overlap recovery crossed the thin wall on tick {tick}: {}", panel.angle());
         // Overlap correction moves at no more than the push speed; drag then
         // stops what one relaxation sweep leaves behind.
-        let push = game.tuning().get(arpg_sim::TuningField::ContactPushSpeed);
+        let push = game.tuning().get(arpg_game::TuningField::ContactPushSpeed);
         assert!(panel.rate().abs() * 2.0 < push, "overlap correction spun the panel");
         assert!(game.motion(body).unwrap().velocity().length() < push);
         assert_eq!(panel.reaction_impulse(), 0.0, "position repair loaded the released latch");

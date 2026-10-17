@@ -2,7 +2,7 @@
 //! runtime instances never retain authored engine indices for body/source access.
 use crate::door::Doors;
 use crate::chest::Chests;
-use crate::{DoorState, GameScene, SceneError};
+use crate::{GameScene, SceneError};
 use arpg_core::Report;
 use arpg_sim::{
     Defeat, EntityId, Fnv, GameplayAccess, InteractionState, SceneId, SourceId, TraceSink,
@@ -98,59 +98,7 @@ pub struct EncounterState {
     pub remaining_ticks: u32,
 }
 
-/// Diagnostic transitions; no gameplay logic reads these events.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EncounterEvent {
-    /// Phase or progress changed.
-    Progress {
-        /// Owning scene.
-        scene: SceneId,
-        /// Authored encounter index.
-        index: usize,
-        /// State after the transition.
-        state: EncounterState,
-    },
-    /// Chest changed state.
-    Chest {
-        /// Owning scene.
-        scene: SceneId,
-        /// Authored chest index.
-        index: usize,
-        /// New chest state.
-        state: crate::ChestState,
-    },
-    /// An encounter changed a door's latch. Physical breaches are engine
-    /// transitions, traced as `arpg_sim::Event::LockBroken`.
-    Door {
-        /// Owning scene.
-        scene: SceneId,
-        /// Authored door index.
-        index: usize,
-        /// New door state.
-        state: DoorState,
-    },
-}
-impl std::fmt::Display for EncounterEvent {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Progress {
-                scene,
-                index,
-                state,
-            } => write!(
-                out,
-                "encounter scene={scene} index={index} phase={:?} defeated={} remaining={}",
-                state.phase, state.defeated, state.remaining_ticks
-            ),
-            Self::Chest { scene, index, state } => write!(out, "chest scene={scene} index={index} state={state:?}"),
-            Self::Door {
-                scene,
-                index,
-                state,
-            } => write!(out, "door scene={scene} index={index} state={state:?}"),
-        }
-    }
-}
+use crate::GameplayEvent;
 
 struct Encounter {
     owner: SceneId,
@@ -389,7 +337,7 @@ fn effects(
     doors: &Doors,
     chests: &mut Chests,
     access: &mut GameplayAccess<'_>,
-    trace: &mut TraceSink<'_, EncounterEvent>,
+    trace: &mut TraceSink<'_, GameplayEvent>,
 ) {
     for action in actions {
         match *action {
@@ -411,7 +359,7 @@ pub(crate) fn begin(
     doors: &Doors,
     chests: &mut Chests,
     access: &mut GameplayAccess<'_>,
-    trace: &mut TraceSink<'_, EncounterEvent>,
+    trace: &mut TraceSink<'_, GameplayEvent>,
 ) {
     for group in encounters.rows.chunk_by_mut(|a, b| a.owner == b.owner) {
         for (index, row) in group.iter_mut().enumerate() {
@@ -448,7 +396,7 @@ pub(crate) fn begin(
             } else {
                 continue;
             }
-            trace.emit(EncounterEvent::Progress {
+            trace.emit(GameplayEvent::Progress {
                 scene: row.owner,
                 index,
                 state: row.state,
@@ -465,7 +413,7 @@ pub(crate) fn finish(
     chests: &mut Chests,
     defeats: &[Defeat],
     access: &mut GameplayAccess<'_>,
-    trace: &mut TraceSink<'_, EncounterEvent>,
+    trace: &mut TraceSink<'_, GameplayEvent>,
 ) {
     for group in encounters.rows.chunk_by_mut(|a, b| a.owner == b.owner) {
         for (index, row) in group.iter_mut().enumerate() {
@@ -502,7 +450,7 @@ pub(crate) fn finish(
                 effects(row.owner, actions, doors, chests, access, trace);
             }
             if row.state.defeated != previous || row.state.phase != EncounterPhase::Running {
-                trace.emit(EncounterEvent::Progress {
+                trace.emit(GameplayEvent::Progress {
                     scene: row.owner,
                     index,
                     state: row.state,

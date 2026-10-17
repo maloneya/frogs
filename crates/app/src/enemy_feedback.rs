@@ -182,7 +182,7 @@ mod tests {
     fn beam_pulses_refresh_contact_and_defeat_retires_it() {
         let mut game = Game::empty();
         let id = game.place(Vec2::new(0.0, 4.0), arpg_game::ActorDefinition::passive_hostile()).unwrap();
-        game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
+        game.set_attack_profile(arpg_game::AttackProfile::Disintegrate);
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         let mut feedback = EnemyFeedback::default();
         // Beam pulses on ticks 0, 12 and 24; death retires feedback before final physics.
@@ -278,7 +278,7 @@ mod tests {
     fn another_hit_reveals_an_expired_bar_and_defeat_removes_it() {
         let mut game = Game::empty();
         let id = game.place(Vec2::new(0.0, 95.7), arpg_game::ActorDefinition::passive_hostile()).unwrap();
-        game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
+        game.set_attack_profile(arpg_game::AttackProfile::Disintegrate);
         let dt = Accumulator::default().pending(Dt::SECS).next().unwrap();
         let mut bars = EnemyFeedback::default();
         let mut buffer = QuadBuffer::default();

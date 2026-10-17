@@ -8,13 +8,18 @@
  expect: (struck: 1, bodies: [
  (nth: 0, health: 1, pos: (x: 0.0, z: 5.15, tol: 0.00001), velocity: (x: 0.0, z: 32.4, tol: 0.00001)),
  (nth: 1, health: 3, pos: (x: 0.0, z: 5.65, tol: 0.00001), velocity: (x: 0.0, z: 32.4, tol: 0.00001))], events: (
-        kinds: [AttackProfileChanged, Swung, HitboxOpened, Hit, Impulsed, HitboxClosed],
-        sequence: [
-            (0, AttackProfileChanged(profile: Slam)),
-            (0, Swung),
-            (9, HitboxOpened),
-            (13, Hit(id: (1, 1), remaining: 1)),
-            (13, Impulsed(id: (1, 1), value: (0.0000,72.0000), source: Some((0, 1)), tolerance: 0.00005)),
-            (14, HitboxClosed),
-        ],
-    )))
+            kinds: [Damaged, Impulsed],
+            sequence: [
+                (13, Damaged(actor: (0, 1), target: (1, 1), remaining: 1)),
+                (13, Impulsed(id: (1, 1), value: (0.0000,72.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            ],
+        ),
+        gameplay_events: (
+            kinds: [AttackProfileChanged, Swung, HitboxOpened, HitboxClosed],
+            sequence: [
+                (0, AttackProfileChanged(profile: Slam)),
+                (0, Swung),
+                (9, HitboxOpened),
+                (14, HitboxClosed),
+            ],
+        )))

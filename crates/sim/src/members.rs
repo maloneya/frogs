@@ -23,11 +23,6 @@ pub(crate) struct Members {
 }
 
 impl Members {
-    /// Reserved scratch membership used by bounded per-tick target selection.
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Self { sparse: vec![VACANT; capacity], dense: Vec::with_capacity(capacity) }
-    }
-
     /// How many entities have this behaviour.
     pub(crate) fn len(&self) -> usize {
         self.dense.len()
@@ -36,11 +31,6 @@ impl Members {
     /// The members, in storage order. What a pass iterates.
     pub(crate) fn ids(&self) -> &[EntityId] {
         &self.dense
-    }
-
-    /// Clears derived membership without releasing reserved capacity.
-    pub(crate) fn clear(&mut self) {
-        for id in self.dense.drain(..) { self.sparse[id.slot()] = VACANT; }
     }
 
     /// Adds membership and returns the payload row to append.

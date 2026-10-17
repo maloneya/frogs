@@ -3,12 +3,11 @@
 use glam::Vec3;
 use crate::LinearRgb;
 
-/// Capacity of the instance buffer. Allocated once, up front.
+/// Capacity of fixed instance buffers and the initial character allocation.
 ///
-/// Capacity and count are separate concerns: we size the buffer for the worst
-/// case at startup and then only ever write the first N entries. Growing a GPU
-/// buffer means allocating a new one and waiting for in-flight frames to stop
-/// referencing the old one — not something to do mid-frame while tuning a dial.
+/// Fixed buffers reserve their worst case at startup and upload only live entries.
+/// Character placements also include timed remains
+/// from recycled body slots, so their renderer-owned buffer grows when needed.
 pub const MAX_INSTANCES: usize = 200_000;
 
 /// Per-placement GPU data, three vec4s. Yaw uses pos.w, white blend scale.w,

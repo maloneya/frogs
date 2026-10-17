@@ -14,5 +14,10 @@
     ],
     budget: (ticks: 30),
     expect: (bodies: [(nth: 1, health: 1, pos: (x: -2.8, z: 1.4, tol: 0.00001))],
-        events: (kinds: [TuningChanged], sequence: [(1, TuningChanged(field: CleaveImpulse, value: 12.0))])),
+        gameplay_events: (
+            kinds: [TuningChanged],
+            sequence: [
+                (1, TuningChanged(field: CleaveImpulse, value: 12.0)),
+            ],
+        )),
 )

@@ -105,8 +105,10 @@ python3 scripts/perf.py run --mode live --output target/perf/new-run.json
 ```
 
 Exit 2 is inconclusive, never a pass. Preserve gates and baseline evidence.
-During feature work, follow the [performance stop rule](../../../docs/performance.md#feature-work-stop-and-handoff)
-on a failure or concern; do not automatically optimize or retry measurements.
+During feature work, follow the [record and continue policy](../../../docs/performance.md#feature-work-record-and-continue):
+note a failure or concern with its task/source identity and evidence in
+[performance follow-ups](../../../docs/performance-follow-ups.md), then continue
+the assigned task. Do not automatically investigate, optimize or retry measurements.
 For camera/animation changes use core's elapsed-time half-life helpers and
 compare frame rates; fixed per-frame fractions change behaviour with FPS.
 

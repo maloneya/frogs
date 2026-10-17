@@ -1,7 +1,7 @@
 //! Native tooling commands and compact observations at the between-tick boundary.
-use super::{App, scene_catalog};
+use super::App;
 use crate::companion::{Command, Control, ZoomDirection};
-use arpg_sim::TuningField;
+use arpg_game::TuningField;
 use serde_json::json;
 
 impl App {
@@ -14,11 +14,6 @@ impl App {
         if self.trial.is_some() { return Err("Companion controls are unavailable during a performance trial.".into()); }
         let message = match control {
             Control::Tuning(edit) => self.edit_tuning(edit),
-            Control::RefreshScenes => {
-                self.scene_catalog = Some(scene_catalog(std::path::Path::new("scenes")));
-                self.scene_catalog.as_ref().expect("just refreshed").as_ref().map_err(Clone::clone)?;
-                Ok("Scene list refreshed.".into())
-            }
             Control::StartScene(path) => {
                 self.start_scene_file(&path)?;
                 Ok(format!("Started {}", path.display()))
@@ -56,9 +51,6 @@ impl App {
     }
 
     pub(super) fn companion_reply(&mut self, command: Command) -> String {
-        if self.scene_catalog.is_none() {
-            self.scene_catalog = Some(scene_catalog(std::path::Path::new("scenes")));
-        }
         let result = command.control().and_then(|control| control.map(|control| self.apply_control(control)).transpose());
         match &result {
             Ok(Some(message)) => self.companion_result(&Ok(message.clone())),
@@ -66,10 +58,6 @@ impl App {
             Ok(None) => {}
         }
         let error = result.err();
-        let catalog = self.scene_catalog.as_ref().expect("initialized catalog");
-        let files: Vec<_> = catalog.as_ref().map(|paths| paths.iter().map(|path| {
-            json!({"path":path, "label":path.file_name().unwrap_or_default().to_string_lossy()})
-        }).collect()).unwrap_or_default();
         let tuning = self.game.tuning();
         let fields: Vec<_> = TuningField::ALL.into_iter().map(|field| {
             let a = field.attribute();
@@ -84,8 +72,7 @@ impl App {
             "session":std::process::id(), "fields":fields, "unsaved":tuning != self.tuning_saved,
             "path":self.tuning_path, "message":self.companion_message, "error":self.companion_error,
             "busy":self.trial.is_some(),
-            "scenes":{"directory":std::path::absolute("scenes").ok(),"files":files, "error":catalog.as_ref().err(),
-                "current":self.game.selected_scene_name(), "run":self.run_id, "tick":self.game.tick()},
+            "scenes":{"current":self.game.selected_scene_name(), "run":self.run_id, "tick":self.game.tick()},
             "debug":{"collision":self.collision_debug.enabled(),
                 "vsync":self.renderer.as_ref().map(arpg_gfx::Renderer::vsync),
                 "view_height":self.camera.as_ref().map(arpg_gfx::OrthoCamera::view_height),

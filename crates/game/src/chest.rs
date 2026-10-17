@@ -1,6 +1,6 @@
 //! Scene-owned chests. Unlocking grants interaction; opening keeps the physical
 //! prop and exposes a persistent open state to presentation.
-use crate::encounter::EncounterEvent;
+use crate::GameplayEvent;
 use arpg_core::Report;
 use arpg_sim::{EntityId, Fnv, GameplayAccess, InteractionState, SceneId, TraceSink};
 use serde::{Deserialize, Serialize};
@@ -101,7 +101,7 @@ impl Chests {
         owner: SceneId,
         nth: usize,
         access: &mut GameplayAccess<'_>,
-        trace: &mut TraceSink<'_, EncounterEvent>,
+        trace: &mut TraceSink<'_, GameplayEvent>,
     ) {
         let Some(row) = self
             .rows
@@ -113,7 +113,7 @@ impl Chests {
         };
         if row.state == ChestState::Locked && access.enable_interaction(row.body) {
             row.state = ChestState::Unlocked;
-            trace.emit(EncounterEvent::Chest {
+            trace.emit(GameplayEvent::Chest {
                 scene: owner,
                 index: nth,
                 state: row.state,
@@ -147,7 +147,7 @@ impl Chests {
 pub(crate) fn advance(
     chests: &mut Chests,
     access: &GameplayAccess<'_>,
-    trace: &mut TraceSink<'_, EncounterEvent>,
+    trace: &mut TraceSink<'_, GameplayEvent>,
 ) {
     for group in chests.rows.chunk_by_mut(|a, b| a.owner == b.owner) {
         for (nth, row) in group.iter_mut().enumerate() {
@@ -163,7 +163,7 @@ pub(crate) fn advance(
                 ChestState::Locked | ChestState::Unlocked | ChestState::Open => continue,
             };
             row.state = next;
-            trace.emit(EncounterEvent::Chest {
+            trace.emit(GameplayEvent::Chest {
                 scene: row.owner,
                 index: nth,
                 state: next,

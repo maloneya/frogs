@@ -118,7 +118,7 @@ def failure(row, cwd, checked_root=None):
                 category = "timing-noise"
             reasons = assessment.get("reasons", [])
             ordered = regressions + [m for m in metrics if m not in regressions]
-            details = ["STOP: confirmed performance failure; incomplete coverage remains uncertified."] if category == "performance-regression" else []
+            details = ["Performance observation: confirmed performance failure; incomplete coverage remains uncertified."] if category == "performance-regression" else []
             if data.get("measurement_stop"):
                 details.append(data["measurement_stop"])
             details += [f"{m.get('workload')}/{m.get('metric')}: {m.get('status')}; absolute={m.get('absolute')}; relative={m.get('relative')}; trials_ms={m.get('current_ms')}; budget_ms={m.get('budget_ms')}" for m in ordered[:3]]
@@ -128,7 +128,10 @@ def failure(row, cwd, checked_root=None):
             diagnostic = clipped("\n".join(map(str, details)) or "Benchmark assessment: " + str(assessment.get("status", "unknown")))
         if not evidence or not evidence[0].endswith(".build.log"):
             line = None
-        action = "Stop feature work and flag the user; preserve the budget and evidence. Investigation starts only at the user's request."
+    if name.startswith("performance-") and category != "source-change":
+        action = ("Record the task, changed source and evidence in docs/performance-follow-ups.md; "
+                  "continue the assigned task and mention the note at completion. Preserve the budget and baseline; "
+                  "investigate or fix only within the user's explicit scope.")
         if name == "performance-live":
             action += " A user-requested retry needs a reserved foreground session."
     if checked_root is not None:

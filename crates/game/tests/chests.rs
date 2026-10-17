@@ -3,7 +3,8 @@ use arpg_game::{Placed, SourceSpec, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir, Report};
 use arpg_game::{ChestSpec, ChestState, DefeatObjective, DoorSpec, EncounterAction as Action,
     EncounterObjective, EncounterPhase, EncounterSpec, EncounterStart, Game, GameScene};
-use arpg_sim::{Accumulator, AttackProfile, Condition, Dt, };
+use arpg_sim::{Accumulator, Condition, Dt};
+use arpg_game::{AttackProfile};
 use glam::Vec2;
 
 fn scene() -> GameScene {

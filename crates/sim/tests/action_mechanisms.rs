@@ -1,5 +1,4 @@
 //! Physical action boundaries independent of gameplay roles and selection policy.
-use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_sim::{
     Accumulator, Alpha, Condition, Dt, Event, MotorCommand, Source, SourceSpec, Template, World,
 };
@@ -8,9 +7,6 @@ use std::num::NonZeroU8;
 
 fn dt() -> Dt {
     Accumulator::default().pending(Dt::SECS).next().unwrap()
-}
-fn idle() -> Intent {
-    Intent::new(MoveDir::NONE, AimDir::FORWARD, false)
 }
 fn hp(amount: u8) -> NonZeroU8 {
     NonZeroU8::new(amount).unwrap()
@@ -47,7 +43,7 @@ fn neutral_health_and_character_capabilities_are_independent() {
     );
     assert!(!world.actor_view().movable(breakable));
     let player = world.player_id();
-    let mut resolved = world.begin_step(dt(), idle(), 0).advance(&[], &[], &mut ());
+    let mut resolved = world.begin_step(dt(), 0).advance(&[], &mut ());
     assert_eq!(resolved.damage(player, breakable, hp(2)), Some(5));
     resolved.finish();
     assert_eq!(world.max_health(breakable), Some(7));
@@ -70,7 +66,7 @@ fn source_and_queued_births_receive_motors_on_their_first_tick() {
         })
         .unwrap(),
     );
-    let prepared = world.begin_step(dt(), idle(), 0);
+    let prepared = world.begin_step(dt(), 0);
     let outcomes = prepared.spawn_outcomes();
     assert_eq!(outcomes.len(), 2);
     assert_eq!(outcomes[0].ticket, ticket);
@@ -78,7 +74,7 @@ fn source_and_queued_births_receive_motors_on_their_first_tick() {
     let queued = outcomes[0].entity.unwrap();
     let emitted = outcomes[1].entity.unwrap();
     let commands = [queued, emitted].map(|id| MotorCommand::new(id, Vec2::X, 30.0).unwrap());
-    prepared.advance(&commands, &[], &mut ()).finish();
+    prepared.advance(&commands, &mut ()).finish();
     for id in [queued, emitted] {
         assert_eq!(world.motion(id).unwrap().velocity(), Vec2::X * 0.5);
     }
@@ -89,10 +85,7 @@ fn source_and_queued_births_receive_motors_on_their_first_tick() {
     );
     // Gameplay's explicit population prevents the next emission even though
     // the neutral source products have no damageable membership.
-    world
-        .begin_step(dt(), idle(), 1)
-        .advance(&[], &[], &mut ())
-        .finish();
+    world.begin_step(dt(), 1).advance(&[], &mut ()).finish();
     assert_eq!(world.body_count(), 2);
 }
 
@@ -103,7 +96,7 @@ fn explicit_effects_reject_dead_and_recycled_identities_and_preserve_player_body
         .place(Vec2::new(10.0, 0.0), Template::BODY.with_health(hp(1)))
         .unwrap();
     let player = world.player_id();
-    let mut resolved = world.begin_step(dt(), idle(), 0).advance(&[], &[], &mut ());
+    let mut resolved = world.begin_step(dt(), 0).advance(&[], &mut ());
     assert_eq!(resolved.damage(player, actor, hp(1)), Some(0));
     assert!(!resolved.view().alive(actor));
     assert_eq!(
@@ -122,7 +115,7 @@ fn explicit_effects_reject_dead_and_recycled_identities_and_preserve_player_body
         .place(Vec2::new(10.0, 0.0), Template::BODY.with_health(hp(1)))
         .unwrap();
     assert_ne!(actor, replacement);
-    let mut resolved = world.begin_step(dt(), idle(), 0).advance(&[], &[], &mut ());
+    let mut resolved = world.begin_step(dt(), 0).advance(&[], &mut ());
     assert_eq!(resolved.damage(actor, player, hp(1)), None);
     assert_eq!(resolved.damage(player, actor, hp(1)), None);
     assert_eq!(resolved.damage(replacement, player, hp(5)), Some(0));
@@ -151,7 +144,7 @@ fn generic_interaction_validates_actor_endpoint_and_distance() {
     let far = world
         .place(Vec2::new(13.0, 0.0), Template::BLOCK.interactive())
         .unwrap();
-    let mut resolved = world.begin_step(dt(), idle(), 0).advance(&[], &[], &mut ());
+    let mut resolved = world.begin_step(dt(), 0).advance(&[], &mut ());
     assert!(!resolved.view().can_interact(actor, far));
     assert!(!resolved.interact(actor, far));
     assert!(resolved.view().can_interact(actor, endpoint));
@@ -181,40 +174,15 @@ fn motors_reject_invalid_values_and_do_not_drive_stale_or_fixed_bodies() {
     }
     let commands = [fixed, retired].map(|id| MotorCommand::new(id, Vec2::X, 30.0).unwrap());
     world
-        .begin_step(dt(), idle(), 0)
-        .advance(&commands, &[], &mut ())
+        .begin_step(dt(), 0)
+        .advance(&commands, &mut ())
         .finish();
     assert_eq!(world.motion(fixed).unwrap().velocity(), Vec2::ZERO);
     assert_eq!(world.motion(replacement).unwrap().velocity(), Vec2::ZERO);
 }
 
 #[test]
-fn controlled_attacks_damage_only_the_explicit_target_set() {
-    let mut world = World::empty();
-    world.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
-    let eligible = world
-        .place(Vec2::new(0.0, 2.0), Template::BLOCK.with_health(hp(3)))
-        .unwrap();
-    let excluded = world
-        .place(Vec2::new(0.0, 3.0), Template::BLOCK.with_health(hp(3)))
-        .unwrap();
-    world
-        .begin_step(dt(), idle().with_attack_held(true), 1)
-        .advance(&[], &[eligible], &mut ())
-        .finish();
-    assert_eq!(world.health(eligible), Some(2));
-    assert_eq!(world.health(excluded), Some(3));
-    let player = world.player_id();
-    assert!(world.trace().iter().any(|(_, event)| event
-        == Event::Damaged {
-            actor: player,
-            target: eligible,
-            remaining: 2
-        }));
-}
-
-#[test]
-fn controlled_and_autonomous_interaction_share_cover_admission() {
+fn nearest_and_explicit_interactions_share_cover_admission() {
     let mut world = World::empty();
     let actor = world.place(Vec2::new(10.0, 0.0), Template::BODY).unwrap();
     let near_player = world.place(Vec2::X, Template::BLOCK.interactive()).unwrap();
@@ -229,9 +197,9 @@ fn controlled_and_autonomous_interaction_share_cover_admission() {
             ..Default::default()
         })
         .unwrap();
-    let mut resolved = world
-        .begin_step(dt(), idle().with_interact(true), 0)
-        .advance(&[], &[], &mut ());
+    let player = world.player_id();
+    let mut resolved = world.begin_step(dt(), 0).advance(&[], &mut ());
+    resolved.interact_nearest(player);
     assert_eq!(
         resolved.view().interaction(near_player),
         Some(arpg_sim::InteractionState::Ready)
@@ -240,9 +208,9 @@ fn controlled_and_autonomous_interaction_share_cover_admission() {
     assert!(!resolved.interact(actor, near_actor));
     resolved.finish();
     assert!(world.evict_scene(scene));
-    let mut resolved = world
-        .begin_step(dt(), idle().with_interact(true), 0)
-        .advance(&[], &[], &mut ());
+    let player = world.player_id();
+    let mut resolved = world.begin_step(dt(), 0).advance(&[], &mut ());
+    resolved.interact_nearest(player);
     assert_eq!(
         resolved.view().interaction(near_player),
         Some(arpg_sim::InteractionState::Activated)
@@ -259,22 +227,13 @@ fn protected_player_can_keep_playing_at_zero_health() {
         .unwrap();
     let endpoint = world.place(Vec2::X, Template::BLOCK.interactive()).unwrap();
     let player = world.player_id();
-    let mut resolved = world.begin_step(dt(), idle(), 0).advance(&[], &[], &mut ());
+    let mut resolved = world.begin_step(dt(), 0).advance(&[], &mut ());
     assert_eq!(resolved.damage(actor, player, hp(5)), Some(0));
     assert!(!resolved.view().alive(player));
     assert!(resolved.view().can_act(player));
     assert_eq!(resolved.damage(player, actor, hp(1)), Some(2));
     assert!(resolved.interact(player, endpoint));
     resolved.finish();
-    world.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
-    let target = world
-        .place(Vec2::new(0.0, 2.0), Template::BLOCK.with_health(hp(3)))
-        .unwrap();
-    world
-        .begin_step(dt(), idle().with_attack_held(true), 1)
-        .advance(&[], &[target], &mut ())
-        .finish();
-    assert_eq!(world.health(target), Some(2));
 }
 
 #[test]
@@ -337,10 +296,7 @@ fn numeric_position_admission_is_shared_and_preserves_accepted_work() {
     assert!(arpg_sim::stopping_speed(positive.distance(negative), 30.0, dt(), 300.0).is_finite());
     world.place(positive, Template::BODY).unwrap();
     world.place(negative, Template::BODY).unwrap();
-    world
-        .begin_step(dt(), idle(), 0)
-        .advance(&[], &[], &mut ())
-        .finish();
+    world.begin_step(dt(), 0).advance(&[], &mut ()).finish();
     assert_eq!(world.spawn_outcomes()[0].ticket, ticket);
     let admitted = world.spawn_outcomes()[0].entity.unwrap();
     assert!(world.actor_view().position(admitted).unwrap().x <= arpg_sim::ARENA_HALF);

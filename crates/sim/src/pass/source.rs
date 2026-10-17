@@ -430,7 +430,6 @@ pub(crate) fn trigger(
 mod tests {
     use super::*;
     use crate::{Accumulator, Dt, World};
-    use arpg_core::Intent;
 
     #[test]
     fn disabling_does_not_cancel_an_accepted_source_emission() {
@@ -445,7 +444,7 @@ mod tests {
         assert_eq!(world.queue.len(), 1);
         assert!(world.set_source_enabled(id, false));
         for dt in Accumulator::default().pending(Dt::SECS) {
-            world.step(dt, Intent::new(arpg_core::MoveDir::NONE, arpg_core::AimDir::FORWARD, false));
+            world.begin_step(dt, 0).advance(&[], &mut ()).finish();
         }
         assert_eq!(world.damageable_count(), 1);
         assert_eq!(world.source_state(id), Some(SourceState {

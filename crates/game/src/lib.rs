@@ -28,7 +28,7 @@ pub use scene::{GameScene, RestartError, SceneError};
 mod door;
 mod encounter;
 pub use door::{DoorPanel, DoorPose, DoorSpec, DoorState};
-pub use encounter::{DefeatObjective, EncounterAction, EncounterEvent, EncounterObjective, EncounterPhase, EncounterSpec, EncounterStart, EncounterState, MAX_ENCOUNTERS};
+pub use encounter::{DefeatObjective, EncounterAction, EncounterObjective, EncounterPhase, EncounterSpec, EncounterStart, EncounterState, MAX_ENCOUNTERS};
 
 mod chest;
 pub use chest::{ChestSpec, ChestState, MAX_CHESTS};
@@ -38,4 +38,16 @@ mod tree;
 pub use tree::{TreeKind, TreePose, TreeSpec, TreeState, MAX_TREES};
 
 mod corpse;
-pub use corpse::{Corpse, MAX_CORPSES, CORPSE_LIFETIME_TICKS};
+pub use corpse::{Corpse, CORPSE_LIFETIME_TICKS};
+
+mod attack;
+pub use attack::{AttackProfile, AttackStatus};
+mod player;
+pub use player::Disintegrate;
+mod presentation;
+pub use presentation::PlayerPresentation;
+mod tuning;
+pub use tuning::{Tuning, TuningField, TuningAttribute};
+
+mod trace;
+pub use trace::{GameplayEvent, GameplayEventKind};

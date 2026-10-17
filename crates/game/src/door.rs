@@ -1,6 +1,6 @@
 //! Doors: a scene body on a locked hinge. The hinge and lock are physics;
 //! what a door is, and which lock state means what, belongs here.
-use crate::encounter::EncounterEvent;
+use crate::GameplayEvent;
 use arpg_core::Report;
 use arpg_sim::{
     Alpha, EntityId, Fnv, GameplayAccess, HingeConfig, JointConfig, JointSpec, LockState,
@@ -141,10 +141,10 @@ impl Doors {
     pub(crate) fn available(&self, owner: SceneId, nth: usize, access: &GameplayAccess<'_>) -> bool {
         self.row(owner, nth).is_some_and(|row| access.joint(row.body).is_some())
     }
-    pub(crate) fn unlock(&self, owner: SceneId, nth: usize, access: &mut GameplayAccess<'_>, trace: &mut TraceSink<'_, EncounterEvent>) {
+    pub(crate) fn unlock(&self, owner: SceneId, nth: usize, access: &mut GameplayAccess<'_>, trace: &mut TraceSink<'_, GameplayEvent>) {
         let Some(row) = self.row(owner, nth) else { return };
         if access.release_lock(row.body) {
-            trace.emit(EncounterEvent::Door { scene: owner, index: nth, state: DoorState::Released });
+            trace.emit(GameplayEvent::Door { scene: owner, index: nth, state: DoorState::Released });
         }
     }
     pub(crate) fn hash(&self, out: &mut Fnv) {

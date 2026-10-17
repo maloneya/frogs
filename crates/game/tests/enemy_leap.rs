@@ -145,7 +145,7 @@ fn defeat_during_flight_cancels_landing_and_restart_restores_fresh_state() {
     let description = scene(&[(0.0, 4.0)]);
     let mut game = Game::from_scene(&description).unwrap();
     let initial_hash = game.hash();
-    game.set_attack_profile(arpg_sim::AttackProfile::Disintegrate);
+    game.set_attack_profile(arpg_game::AttackProfile::Disintegrate);
     for tick in 0..100 {
         step(&mut game, Vec3::ZERO, tick >= 42);
         if tick >= 66 {
@@ -237,4 +237,67 @@ fn leap_cooldown_prevents_an_immediate_second_jump_at_a_new_midrange_target() {
         }
     }
     assert!(eligible_distance_observed);
+}
+
+#[test]
+fn committed_landing_survives_target_removal_defeat_eviction_and_slot_reuse() {
+    use arpg_game::{ActionDefinition, ActionOutcome, BehaviorNode, LeapAction, TargetSelection};
+    use arpg_sim::{Event, Template};
+    enum Loss { Despawn, Reuse, Evict, Defeat }
+    for loss in [Loss::Despawn, Loss::Reuse, Loss::Evict, Loss::Defeat] {
+        let mut game = Game::empty();
+        let leaper = game.place(Vec2::new(4.0, 4.0), ActorDefinition {
+            actions: vec![ActionDefinition::Leap(LeapAction { target: TargetSelection::NearestHostile, ..Default::default() })],
+            behavior: BehaviorNode::Action(0),
+            ..ActorDefinition::civilian()
+        }).unwrap();
+        let owner = game.load_scene(&GameScene {
+            engine: Scene { bodies: vec![Placed { pos: (0.0, 4.0), what: ActorDefinition::passive_hostile() }], ..Default::default() },
+            ..Default::default()
+        }).unwrap();
+        let target = game.scene_bodies(owner).unwrap()[0];
+        step(&mut game, Vec3::ZERO, false);
+        let committed = game.action_status(leaper).unwrap();
+        assert_eq!(committed.kind, ActionKind::Leap);
+        assert_eq!(committed.target, Some(target));
+        assert_eq!(committed.centre, Vec2::new(0.0, 4.0));
+        let replacement = match loss {
+            Loss::Despawn => { assert!(game.despawn_body(target)); None },
+            Loss::Reuse => {
+                assert!(game.despawn_body(target));
+                let replacement = game.place(Vec2::new(0.0, 4.0), ActorDefinition {
+                    physical: Template::BODY.with_health(core::num::NonZeroU8::new(7).unwrap()),
+                    ..ActorDefinition::prop()
+                }).unwrap();
+                assert_eq!(replacement.diagnostic_identity().0, target.diagnostic_identity().0);
+                assert_ne!(replacement, target);
+                Some(replacement)
+            },
+            Loss::Evict => { assert!(game.evict_scene(owner)); None },
+            Loss::Defeat => {
+                game.set_attack_profile(arpg_game::AttackProfile::Disintegrate);
+                for _ in 1..=25 { step(&mut game, Vec3::ZERO, true); }
+                assert_eq!(game.health(target), Some(0), "three channel pulses defeated the committed target");
+                None
+            },
+        };
+        while game.tick() <= 78 {
+            step(&mut game, Vec3::ZERO, false);
+            let state = game.action_status(leaper).unwrap();
+            assert_eq!(state.kind, ActionKind::Leap);
+            assert_eq!(state.target, Some(target));
+            assert_eq!(state.centre, committed.centre);
+            assert_eq!(state.outcome, ActionOutcome::Running);
+            if game.tick() == 78 { assert_eq!(state.phase, AttackPhase::Active); }
+        }
+        assert_eq!(game.action_status(leaper).unwrap().phase, AttackPhase::Recovery);
+        assert!(!game.trace().since(78).any(|(_, event)| matches!(event,
+            Event::Damaged { actor, .. } if actor == leaper)), "a missing or defeated target cannot take landing damage");
+        if let Some(replacement) = replacement {
+            assert_eq!(game.health(replacement), Some(7), "a recycled slot cannot inherit targeted damage");
+            assert!(game.trace().since(78).any(|(_, event)| matches!(event,
+                Event::Impulsed { id, source: Some(source), .. } if id == replacement && source == leaper)), "the committed landing still physically impacts its actual contacts");
+        }
+        assert_eq!(game.player_health(), PLAYER_MAX_HEALTH);
+    }
 }

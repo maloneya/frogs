@@ -1419,13 +1419,9 @@ mod tests {
         MotorCommand, Placed, Scene, Template, ToppleConfig,
         World,
     };
-    use arpg_core::{AimDir, Intent, MoveDir};
 
     fn tick() -> Dt {
         Accumulator::default().pending(Dt::SECS).next().unwrap()
-    }
-    fn idle() -> Intent {
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false)
     }
     /// A 2 m hinge bound to the scene's first body, held by `strength`.
     fn hinge(thickness: f32, strength: f32) -> Vec<JointSpec> {
@@ -1491,7 +1487,7 @@ mod tests {
             )
         };
         let (momentum, energy) = totals(&world);
-        world.step(tick(), idle());
+        world.begin_step(tick(), 0).advance(&[], &mut ()).finish();
         let (after, after_energy) = totals(&world);
         // Passive drag scales every undriven body by the same factor after contacts.
         assert!(
@@ -1530,8 +1526,8 @@ mod tests {
             .collect();
         for _ in 0..ticks {
             world
-                .begin_step(tick(), idle(), 0)
-                .advance(&commands, &[], &mut ())
+                .begin_step(tick(), 0)
+                .advance(&commands, &mut ())
                 .finish();
         }
         world.joint(ids[1]).unwrap().reaction_impulse()
@@ -1572,7 +1568,7 @@ mod tests {
                 Vec2::new(11.0, 10.0),
                 Impulse::try_from((0.0, -impulse)).unwrap()
             ));
-            world.step(tick(), idle());
+            world.begin_step(tick(), 0).advance(&[], &mut ()).finish();
             let state = world.joint(hinged).unwrap();
             assert_eq!(state.lock() == LockState::Broken, breaks);
             if breaks {
@@ -1607,7 +1603,7 @@ mod tests {
             Impulse::try_from((0.0, -150.0)).unwrap()
         ));
         for _ in 0..3 {
-            world.step(tick(), idle());
+            world.begin_step(tick(), 0).advance(&[], &mut ()).finish();
             let state = world.joint(hinged).unwrap();
             assert_eq!(state.lock(), LockState::Broken);
             assert!(
@@ -1651,8 +1647,8 @@ mod tests {
             .collect();
         for _ in 0..240 {
             world
-                .begin_step(tick(), idle(), 0)
-                .advance(&commands, &[], &mut ())
+                .begin_step(tick(), 0)
+                .advance(&commands, &mut ())
                 .finish();
             if world.joint(pole).unwrap().lock() != LockState::Held {
                 break;
@@ -1707,10 +1703,10 @@ mod tests {
         }
         let command = MotorCommand::new(hinged, Vec2::new(0.0, 3.0), 30.0).unwrap();
         for _ in 0..30 {
-            let prepared = driven.begin_step(tick(), idle(), 0);
+            let prepared = driven.begin_step(tick(), 0);
             assert!(!prepared.view().movable(hinged));
-            prepared.advance(&[command], &[], &mut ()).finish();
-            still.begin_step(tick(), idle(), 0).advance(&[], &[], &mut ()).finish();
+            prepared.advance(&[command], &mut ()).finish();
+            still.begin_step(tick(), 0).advance(&[], &mut ()).finish();
             assert_eq!(driven.hash(), still.hash());
         }
         assert_eq!(driven.joint(hinged).unwrap().angle(), 0.0);

@@ -90,10 +90,11 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
             failures.push(Failure::new("inputs", "zero or a finite normalizable movement direction".into(), format!("{:?}", span.dir)));
         }
     }
-    if let Some(events) = &scenario.expect.events
-        && (scenario.expect.trace.is_some() || events.kinds.is_empty() || events.sequence.len() >= arpg_sim::MAX_TRACE_EVENTS || events.sequence.iter().any(|(tick, event)|
-            *tick >= scenario.budget.ticks || !events.kinds.contains(&event.kind()))) {
-        failures.push(Failure::new("events", "events without a golden, a nonempty scope, and reachable predictions fitting MAX_TRACE_EVENTS".into(), format!("{events:?}")));
+    if let Some(events) = &scenario.expect.events {
+        validate_events("events", events, scenario, crate::events::ExpectedEvent::kind, &mut failures);
+    }
+    if let Some(events) = &scenario.expect.gameplay_events {
+        validate_events("gameplay_events", events, scenario, crate::events::ExpectedGameplayEvent::kind, &mut failures);
     }
     for aim in &scenario.aims {
         if aim.at >= scenario.budget.ticks || AimDir::new(Vec3::new(aim.dir.0, 0.0, aim.dir.1)).is_err() {
@@ -179,15 +180,6 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
     for hold in &scenario.channels {
         validate_span("channels", hold.at, hold.ticks, scenario.budget.ticks, &mut failures);
     }
-    for command in &scenario.attack_recovery {
-        if command.at >= scenario.budget.ticks {
-            failures.push(Failure::new(
-                "attack_recovery",
-                format!("a tick below budget {}", scenario.budget.ticks),
-                format!("tick {} will not run", command.at),
-            ));
-        }
-    }
     for command in &scenario.attack_profiles {
         if command.at >= scenario.budget.ticks {
             failures.push(Failure::new(
@@ -206,15 +198,26 @@ pub(crate) fn validate(scenario: &Scenario) -> Vec<Failure> {
                 format!("tick {} will not run", checkpoint.at),
             ));
         }
-        if checkpoint.expect.trace.is_some() || checkpoint.expect.events.is_some() {
+        if checkpoint.expect.trace.is_some() || checkpoint.expect.events.is_some() || checkpoint.expect.gameplay_events.is_some() {
             failures.push(Failure::new(
                 &label,
-                "state assertions; transition evidence belongs in final expect.events or expect.trace".into(),
+                "state assertions; transition evidence belongs in final expect.events, expect.gameplay_events or expect.trace".into(),
                 "a checkpoint contains transition evidence".into(),
             ));
         }
     }
     failures
+}
+
+fn validate_events<K: PartialEq + std::fmt::Debug, E: std::fmt::Debug>(
+    name: &str, events: &crate::events::Events<K, E>, scenario: &Scenario,
+    kind: impl Fn(&E) -> K, failures: &mut Vec<Failure>,
+) {
+    if scenario.expect.trace.is_some() || events.kinds.is_empty()
+        || events.sequence.len() >= arpg_sim::MAX_TRACE_EVENTS
+        || events.sequence.iter().any(|(tick, event)| *tick >= scenario.budget.ticks || !events.kinds.contains(&kind(event))) {
+        failures.push(Failure::new(name, "events without a golden, a nonempty scope, and reachable predictions fitting MAX_TRACE_EVENTS".into(), format!("{events:?}")));
+    }
 }
 
 fn validate_span(name: &str, at: u64, ticks: u64, budget: u64, failures: &mut Vec<Failure>) {
@@ -286,10 +289,15 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
     if scenario.expect.trace.is_some() {
         game.capture_trace(65_536).expect("fixed golden capacity is supported");
     }
-    if let Some(events) = &scenario.expect.events {
-        // One extra event proves an unexpected duplicate. Any larger excess
-        // fails closed as overflow, without allocating according to crowd size.
-        game.capture_events(events.sequence.len().saturating_add(1), events.kinds.clone()).expect("validated event count");
+    if scenario.expect.events.is_some() || scenario.expect.gameplay_events.is_some() {
+        // One extra event proves an unexpected duplicate. Each stream retains
+        // exact scope independently, without inventing cross-stream chronology.
+        let physical = scenario.expect.events.as_ref();
+        let gameplay = scenario.expect.gameplay_events.as_ref();
+        let capacity = physical.map_or(0, |events| events.sequence.len())
+            .max(gameplay.map_or(0, |events| events.sequence.len())).saturating_add(1);
+        game.capture_events(capacity, physical.map_or_else(Vec::new, |events| events.kinds.clone()),
+            gameplay.map_or_else(Vec::new, |events| events.kinds.clone())).expect("validated event count");
     }
 
     timing.setup = run_started.elapsed();
@@ -349,9 +357,6 @@ pub(crate) fn run(scenario: &Scenario) -> Run {
             }
             for command in scenario.tuning.iter().filter(|command| command.at == tick) {
                 game.set_tuning(command.values);
-            }
-            for command in scenario.attack_recovery.iter().filter(|command| command.at == tick) {
-                game.set_attack_recovery(command.recovery);
             }
             for command in scenario.attack_profiles.iter().filter(|command| command.at == tick) {
                 game.set_attack_profile(command.profile);
@@ -553,8 +558,6 @@ fn check_state(
         player_health,
         attack_phase,
         swing_tick,
-        recovery_ticks,
-        swing_recovery_ticks,
         attack_profile,
         swing_profile,
         player_pos,
@@ -578,19 +581,13 @@ fn check_state(
         bodies,
         trace: _,
         events: _,
+        gameplay_events: _,
     } = expect;
 
     check_eq("player_health", player_health, game.player_health(), &mut failures);
     let attack = game.attack_status();
     check_eq("attack_phase", attack_phase, attack.phase, &mut failures);
     check_eq("swing_tick", swing_tick, attack.elapsed, &mut failures);
-    check_eq("recovery_ticks", recovery_ticks, attack.recovery.map_or(0, arpg_sim::RecoveryTicks::get), &mut failures);
-    check_eq(
-        "swing_recovery_ticks",
-        swing_recovery_ticks,
-        attack.swing_recovery.map_or(0, arpg_sim::RecoveryTicks::get),
-        &mut failures,
-    );
     check_eq("attack_profile", attack_profile, attack.profile, &mut failures);
     if let Some(want) = swing_profile
         && attack.swing_profile != Some(*want)
@@ -891,18 +888,13 @@ pub(crate) fn check_trace(
     beside: &Path,
     bless: bool,
 ) -> Option<Failure> {
-    if let Some(events) = &scenario.expect.events {
-        let Some(actual) = run.game.captured_events() else {
-            return Some(Failure::new("events", "complete selected evidence".into(), "event capture overflowed".into()));
-        };
-        if actual.len() != events.sequence.len() {
-            return Some(Failure::new("events", format!("{} selected events", events.sequence.len()), format!("{} selected events", actual.len())));
-        }
-        for (index, ((tick, expected), (actual_tick, event))) in events.sequence.iter().zip(actual).enumerate() {
-            if tick != actual_tick || !expected.matches(*event) {
-                return Some(Failure::new("events", format!("event {index}: {tick} {expected:?}"), format!("{actual_tick} {event:?}")));
-            }
-        }
+    if let Some(events) = &scenario.expect.events
+        && let Some(failure) = check_events("events", &events.sequence, run.game.captured_events(), |expected, actual| expected.matches(*actual)) {
+        return Some(failure);
+    }
+    if let Some(events) = &scenario.expect.gameplay_events
+        && let Some(failure) = check_events("gameplay_events", &events.sequence, run.game.captured_gameplay_events(), |expected, actual| expected.matches(*actual)) {
+        return Some(failure);
     }
     let name = scenario.expect.trace.as_ref()?;
     let path = beside.parent().unwrap_or(Path::new(".")).join(name);
@@ -963,6 +955,24 @@ pub(crate) fn check_trace(
             }
         }
     }
+}
+
+fn check_events<E: std::fmt::Debug, A: std::fmt::Debug>(
+    name: &str, sequence: &[(u64, E)], actual: Option<&[(u64, A)]>,
+    matches: impl Fn(&E, &A) -> bool,
+) -> Option<Failure> {
+    let Some(actual) = actual else {
+        return Some(Failure::new(name, "complete selected evidence".into(), "event capture overflowed".into()));
+    };
+    if actual.len() != sequence.len() {
+        return Some(Failure::new(name, format!("{} selected events", sequence.len()), format!("{} selected events", actual.len())));
+    }
+    for (index, ((tick, expected), (actual_tick, event))) in sequence.iter().zip(actual).enumerate() {
+        if tick != actual_tick || !matches(expected, event) {
+            return Some(Failure::new(name, format!("event {index}: {tick} {expected:?}"), format!("{actual_tick} {event:?}")));
+        }
+    }
+    None
 }
 
 fn check_velocity(

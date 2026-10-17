@@ -7,7 +7,8 @@ mod tests;
 
 use arpg_core::{Intent, Report};
 use arpg_game::{Game, PLAYER_MAX_HEALTH};
-use arpg_sim::{Alpha, AttackPhase, AttackProfile, TICK_HZ};
+use arpg_sim::{Alpha, AttackPhase, TICK_HZ};
+use arpg_game::{AttackProfile};
 use glam::Vec3Swizzles;
 
 use playback::Playback;

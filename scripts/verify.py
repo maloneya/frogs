@@ -6,6 +6,8 @@ benchmarks. Live benchmarks require --live, --performance or --only performance-
 due live coverage stays uncertified until explicitly measured. Only successful
 correctness checks are cached. Performance samples are always freshly measured,
 with baseline reuse owned by perf.py. No source edits or commands are inferred.
+Performance issues are reported without blocking correctness or task completion;
+their raw failures never certify coverage or advance a passing checkpoint.
 """
 import argparse
 import hashlib
@@ -18,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 
 sys.dont_write_bytecode = True
 import perf
@@ -203,6 +206,14 @@ def run_check(name, command, source, machine, artifact, cache, fresh=False, root
     if code == 0 and name.startswith(("scenarios-", "performance-")) and not extra.is_file():
         record["exit_code"] = 2
         record["reason"] = "check did not produce its required structured evidence"
+    if performance and record["exit_code"] == 0:
+        try:
+            accepted = perf.accepted_pass(perf.load(extra), name.removeprefix("performance-"))
+        except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError, IndexError):
+            accepted = False
+        if not accepted:
+            record["exit_code"] = 2
+            record["reason"] = "performance evidence does not certify the complete accepted ceiling"
     if extra.exists() and performance and code == 2:
         try:
             failure = json.loads(extra.read_text()).get("failure", {})
@@ -264,10 +275,13 @@ def performance_checkpoint(root, base):
                 name = row["name"]
                 if name not in PERFORMANCE or row["exit_code"] != 0 or not row["evidence"]:
                     continue
-                if all(digest(Path(item["path"]).read_bytes()) == item["sha256"]
-                       for item in row["evidence"]):
+                report = next((Path(item["path"]) for item in row["evidence"]
+                               if Path(item["path"]).name == name + ".json"), None)
+                if (report is not None and
+                        all(digest(Path(item["path"]).read_bytes()) == item["sha256"] for item in row["evidence"]) and
+                        perf.accepted_pass(perf.load(report), name.removeprefix("performance-"))):
                     distances[name] = min(distance, distances.get(name, distance))
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, EOFError, zlib.error, ValueError, KeyError, TypeError, IndexError):
             continue
     due = [name for name in PERFORMANCE
            if name not in distances or distances[name] >= PERFORMANCE_INTERVAL]
@@ -341,14 +355,14 @@ def main(argv=None):
                 summary = verify_summary.failure(row, retry_root, checked_root=ROOT)
                 result["failures"].append(summary)
                 verify_summary.display(summary)
-            if row.get("reason"):
-                break
-            if name in PERFORMANCE and row["exit_code"] != 0:
-                print("Performance collection stopped; remaining checks are omitted. Flag the user before further investigation.", flush=True)
+            if row.get("reason") and (name not in PERFORMANCE or row.get("source_changes")):
                 break
         result["coverage"] = [row["name"] for row in result["checks"] if row["exit_code"] == 0]
         result["omitted"] = [name for name in required if name not in result["coverage"]]
-        codes = [row["exit_code"] for row in result["checks"]]
+        result["performance_issues"] = [row["name"] for row in result["checks"]
+                                        if row["name"] in PERFORMANCE and row["exit_code"] != 0]
+        codes = [row["exit_code"] for row in result["checks"]
+                 if row["name"] not in PERFORMANCE or row.get("source_changes")]
         code = 1 if any(c not in (0, 2) for c in codes) else 2 if 2 in codes else 0
         after = source_manifest(ROOT)
         if manifest_identity(after) != source:
@@ -358,7 +372,9 @@ def main(argv=None):
             result["coverage"] = []
             result["omitted"] = required.copy()
         result["complete"] = code == 0 and not result["omitted"]
-        result["status"] = "complete_pass" if result["complete"] else "partial_pass" if code == 0 else "failed" if code == 1 else "inconclusive"
+        result["status"] = ("failed" if code == 1 else "inconclusive" if code == 2 else
+                            "performance_warning" if result["performance_issues"] else
+                            "complete_pass" if result["complete"] else "partial_pass")
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
         result.update(status="inconclusive", complete=False, reason=str(error))
         code = 2

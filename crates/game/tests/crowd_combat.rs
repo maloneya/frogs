@@ -2,7 +2,8 @@
 use arpg_game::{Scene, BodyGrid, ActorDefinition};
 use arpg_core::{AimDir, Intent, MoveDir};
 use arpg_game::Game;
-use arpg_sim::{Accumulator, AttackProfile, Dt, Impulse, Wall};
+use arpg_sim::{Accumulator, Dt, Impulse, Wall};
+use arpg_game::{AttackProfile};
 use glam::{Vec2, Vec3};
 
 #[test]

@@ -10,15 +10,20 @@
         hitbox: false,
         enemy_count: 0,
         events: (
-        kinds: [Swung, HitboxOpened, HitboxClosed, Hit],
-        sequence: [
-            (0, Swung),
-            (6, HitboxOpened),
-            (12, HitboxClosed),
-            (22, Swung),
-            (28, HitboxOpened),
-            (34, HitboxClosed),
-        ],
-    ),
+            kinds: [Damaged],
+            sequence: [
+            ],
+        ),
+        gameplay_events: (
+            kinds: [Swung, HitboxOpened, HitboxClosed],
+            sequence: [
+                (0, Swung),
+                (6, HitboxOpened),
+                (12, HitboxClosed),
+                (22, Swung),
+                (28, HitboxOpened),
+                (34, HitboxClosed),
+            ],
+        ),
     ),
 )

@@ -106,7 +106,9 @@ class FailureSummaries(unittest.TestCase):
         metric.update(stability='stable', status='regression')
         result = self.performance({'assessment': assessment})
         self.assertEqual(result['category'], 'performance-regression')
-        self.assertIn('preserve the budget', result['next_step'])
+        self.assertIn('Preserve the budget', result['next_step'])
+        self.assertIn('docs/performance-follow-ups.md', result['next_step'])
+        self.assertIn('continue the assigned task', result['next_step'])
 
     def test_mixed_coverage_prioritizes_confirmed_failure_over_noise_and_reasons(self):
         noise = dict(workload='sparse', metric='mean_step_ms', status='inconclusive', stability='inconclusive')
@@ -115,9 +117,9 @@ class FailureSummaries(unittest.TestCase):
         result = self.performance({'assessment': dict(status='inconclusive', metrics=[noise, breach],
             reasons=['baseline missing', 'other workload unfocused'])})
         self.assertEqual(result['category'], 'performance-regression')
-        self.assertTrue(result['diagnostic'].startswith('STOP: confirmed performance failure'))
+        self.assertTrue(result['diagnostic'].startswith('Performance observation: confirmed performance failure'))
         self.assertLess(result['diagnostic'].index('combat/frame_ms.p99'), result['diagnostic'].index('sparse/mean_step_ms'))
-        self.assertIn("user's request", result['next_step'])
+        self.assertIn("user's explicit scope", result['next_step'])
         self.assertNotIn('Resolve the measurement uncertainty', result['next_step'])
 
     def test_late_archive_failure_does_not_hide_measured_regression(self):

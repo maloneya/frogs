@@ -1,5 +1,5 @@
 //! Local companion transport. This thread decodes messages, never touches Game.
-use arpg_sim::TuningField;
+use arpg_game::TuningField;
 use serde::Deserialize;
 use std::{io::{BufRead, BufReader, Read, Write}, os::unix::{fs::MetadataExt, net::UnixStream},
     path::PathBuf, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{Receiver, Sender, SyncSender, channel, sync_channel}}, time::{Duration, Instant}};
@@ -15,7 +15,6 @@ pub(crate) enum ZoomDirection { In, Out }
 
 pub(crate) enum Control {
     Tuning(Edit),
-    RefreshScenes,
     StartScene(PathBuf),
     Collision(bool),
     Vsync(bool),
@@ -29,7 +28,6 @@ pub(crate) enum Command {
     State {},
     Set { session: u32, key: String, value: f32 },
     Save { session: u32 }, Revert { session: u32 }, Defaults { session: u32 }, Restart { session: u32 },
-    RefreshScenes { session: u32 },
     StartScene { session: u32, path: PathBuf },
     Collision { session: u32, enabled: bool },
     Vsync { session: u32, enabled: bool },
@@ -46,7 +44,6 @@ impl Command {
             Self::Revert { session } => (session, Control::Tuning(Edit::Revert)),
             Self::Defaults { session } => (session, Control::Tuning(Edit::Defaults)),
             Self::Restart { session } => (session, Control::Tuning(Edit::Restart)),
-            Self::RefreshScenes { session } => (session, Control::RefreshScenes),
             Self::StartScene { session, path } => (session, Control::StartScene(path)),
             Self::Collision { session, enabled } => (session, Control::Collision(enabled)),
             Self::Vsync { session, enabled } => (session, Control::Vsync(enabled)),
@@ -141,7 +138,7 @@ mod tests {
 
     #[test]
     fn strict_wire_commands_reject_unknown_duplicate_and_nonfinite_data() {
-        for bad in [r#"{"op":"state","extra":1}"#, r#"{"op":"quit"}"#,
+        for bad in [r#"{"op":"state","extra":1}"#, r#"{"op":"quit"}"#, r#"{"op":"refresh_scenes","session":1}"#,
             r#"{"op":"set","key":"player_speed"}"#, r#"{"op":"state","op":"save"}"#,
             r#"{"op":"set","key":"player_speed","value":NaN}"#] {
             assert!(serde_json::from_str::<Command>(bad).is_err(), "{bad}");

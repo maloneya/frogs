@@ -8,13 +8,12 @@
     attacks: [0, 22],
     checkpoints: [
         (at: 1, expect: (attack_phase: Startup, swing_tick: 1,
-            attack_profile: Slam, swing_profile: Cleave,
-            recovery_ticks: 16, swing_recovery_ticks: 10)),
+            attack_profile: Slam, swing_profile: Cleave)),
         (at: 6, expect: (attack_phase: Active, struck: 0)),
         (at: 11, expect: (attack_phase: Active, struck: 0)),
         (at: 12, expect: (attack_phase: Recovery, hitbox: false)),
         (at: 22, expect: (attack_phase: Startup, swing_tick: 0,
-            attack_profile: Slam, swing_profile: Slam, swing_recovery_ticks: 16)),
+            attack_profile: Slam, swing_profile: Slam)),
         (at: 30, expect: (attack_phase: Startup)),
         (at: 31, expect: (attack_phase: Active, struck: 0)),
         (at: 35, expect: (attack_phase: Active, struck: 1, bodies: [
@@ -25,17 +24,22 @@
     expect: (attack_phase: Recovery, swing_tick: 14, struck: 1,
         attack_profile: Slam, swing_profile: Slam,
         events: (
-        kinds: [Swung, AttackProfileChanged, HitboxOpened, HitboxClosed, Hit, Impulsed],
-        sequence: [
-            (0, Swung),
-            (1, AttackProfileChanged(profile: Slam)),
-            (6, HitboxOpened),
-            (12, HitboxClosed),
-            (22, Swung),
-            (31, HitboxOpened),
-            (35, Hit(id: (1, 1), remaining: 1)),
-            (35, Impulsed(id: (1, 1), value: (0.0000,72.0000), source: Some((0, 1)), tolerance: 0.00005)),
-            (36, HitboxClosed),
-        ],
-    )),
+            kinds: [Damaged, Impulsed],
+            sequence: [
+                (35, Damaged(actor: (0, 1), target: (1, 1), remaining: 1)),
+                (35, Impulsed(id: (1, 1), value: (0.0000,72.0000), source: Some((0, 1)), tolerance: 0.00005)),
+            ],
+        ),
+        gameplay_events: (
+            kinds: [Swung, AttackProfileChanged, HitboxOpened, HitboxClosed],
+            sequence: [
+                (0, Swung),
+                (1, AttackProfileChanged(profile: Slam)),
+                (6, HitboxOpened),
+                (12, HitboxClosed),
+                (22, Swung),
+                (31, HitboxOpened),
+                (36, HitboxClosed),
+            ],
+        )),
 )

@@ -2,16 +2,34 @@
 //!
 //! Hits submit impulses; displacement begins at the next motion pass.
 
-use super::health::DamageSink;
-use super::motion::{Impulse, ImpulseSink};
-use glam::Vec2;
-
-use crate::swing::{Disc, Hitbox, Swing};
-use crate::trace::{Event, TraceSink};
-use crate::{
-    ActionControls, ActionExecution, ActionSchedule, AttackPhase, AttackProfile, AttackStatus,
-    ENEMY_RADIUS, EntityId, Interruption, RecoveryTicks, ResolvedAttack,
+use crate::{AttackProfile, AttackStatus, GameplayEvent as Event, Tuning, TuningField};
+use arpg_core::Intent;
+use arpg_sim::{
+    ActionControls, ActionExecution, ActionSchedule, AttackDisc, AttackPhase, Beam, Dt, EntityId,
+    Fnv, Hitbox, Impulse, Interruption, MotorCommand, ResolvedAttack, ResolvedStep, TraceSink,
 };
+use glam::{Vec2, Vec3Swizzles};
+
+/// Authored Disintegrate policy. The simulation only receives a capsule and effects.
+pub struct Disintegrate;
+impl Disintegrate {
+    /// Reach from the actor's centre, in metres.
+    pub const LENGTH: f32 = 12.0;
+    /// Half width, in metres.
+    pub const RADIUS: f32 = 1.2;
+    /// Momentum along the beam per touching tick, in kg m/s.
+    pub const KNOCKBACK: f32 = 0.15;
+    /// One damage point immediately, then once every twelve ticks.
+    pub const HIT_EVERY: u32 = 12;
+}
+fn beam(origin: Vec2, facing: f32) -> Beam {
+    Beam::new(
+        origin,
+        origin + Vec2::new(facing.sin(), facing.cos()) * Disintegrate::LENGTH,
+        Disintegrate::RADIUS,
+    )
+    .expect("finite player pose and authored beam")
+}
 
 /// Maximum stored discs: one per tick of the longest accepted active window.
 const HITBOX_SAMPLES: usize = ResolvedAttack::MAX_ACTIVE_TICKS as usize;
@@ -67,6 +85,9 @@ pub(crate) struct Attack {
     struck: Vec<EntityId>,
     /// Damage positions from this completed tick, including defeated targets.
     beam_hits: Vec<Vec2>,
+    /// Reused query results bridge immutable physical observation and explicit effects.
+    /// Cleared before and after resolution; never authoritative state.
+    contacts: Vec<(EntityId, Vec2, Vec2)>,
 }
 
 struct Channel {
@@ -87,7 +108,7 @@ impl Channel {
     }
     fn advance(&mut self) {
         self.execution.advance();
-        self.cadence = (self.cadence + 1) % crate::Beam::HIT_EVERY;
+        self.cadence = (self.cadence + 1) % Disintegrate::HIT_EVERY;
     }
 }
 
@@ -97,11 +118,12 @@ impl Default for Attack {
             swing: None,
             channel: None,
             profile: AttackProfile::default(),
-            resolved: AttackProfile::default().resolve(crate::Tuning::default()),
+            resolved: AttackProfile::default().resolve(Tuning::default()),
             // Match physical admission, as defeat storage does. Neither the
             // first tick nor a wide hit against an existing crowd may allocate.
-            struck: Vec::with_capacity(crate::MAX_BODIES),
-            beam_hits: Vec::with_capacity(crate::MAX_BODIES),
+            struck: Vec::with_capacity(arpg_sim::MAX_BODIES),
+            beam_hits: Vec::with_capacity(arpg_sim::MAX_BODIES),
+            contacts: Vec::with_capacity(arpg_sim::MAX_BODIES),
         }
     }
 }
@@ -112,10 +134,8 @@ impl Attack {
         held && self.profile == AttackProfile::Disintegrate && !self.holds_facing()
     }
 
-    pub(crate) fn beam(&self, origin: Vec2, facing: f32) -> Option<crate::Beam> {
-        self.channel
-            .as_ref()
-            .map(|_| crate::Beam::new(origin, facing))
+    pub(crate) fn beam(&self, origin: Vec2, facing: f32) -> Option<Beam> {
+        self.channel.as_ref().map(|_| beam(origin, facing))
     }
 
     pub(crate) fn beam_hits(&self) -> &[Vec2] {
@@ -130,12 +150,6 @@ impl Attack {
             .is_some_and(|swing| swing.execution.holds_next_tick(ActionControls::Facing))
     }
 
-    /// Whether a swing is in progress.
-    #[cfg(test)]
-    pub(crate) fn is_swinging(&self) -> bool {
-        self.swing.is_some()
-    }
-
     /// A fresh observation, never a second maintained copy of attack state.
     pub(crate) fn status(&self) -> AttackStatus {
         let Self {
@@ -145,6 +159,7 @@ impl Attack {
             channel,
             struck,
             beam_hits: _,
+            contacts: _,
         } = self;
         let phase = match swing.as_ref().map(InFlight::phase) {
             None if channel.is_some() => AttackPhase::Active,
@@ -166,8 +181,6 @@ impl Attack {
             swing_profile: swing.as_ref().map(|s| s.profile),
             resolved: *resolved,
             swing_resolved: swing.as_ref().map(|s| s.resolved),
-            recovery: resolved.map(ResolvedAttack::recovery),
-            swing_recovery: swing.as_ref().map(|s| s.resolved.recovery()),
             struck: struck.len(),
         }
     }
@@ -177,7 +190,7 @@ impl Attack {
         &self,
         origin: Vec2,
         facing: f32,
-    ) -> impl Iterator<Item = crate::AttackDisc> + '_ {
+    ) -> impl Iterator<Item = AttackDisc> + '_ {
         let (discs, first) = match self.swing.as_ref() {
             Some(swing) => match swing.phase() {
                 Phase::Startup => (swing.hitbox.discs(), 0),
@@ -188,11 +201,15 @@ impl Attack {
         };
         discs.iter().enumerate().map(move |(offset, disc)| {
             let (centre, radius) = disc.place(origin, facing);
-            crate::AttackDisc::new(crate::on_ground(centre, 0.0), radius, first + offset)
+            AttackDisc::new(
+                glam::Vec3::new(centre.x, 0.0, centre.y),
+                radius,
+                first + offset,
+            )
         })
     }
 
-    pub(crate) fn set_profile(&mut self, profile: AttackProfile, tuning: crate::Tuning) -> bool {
+    pub(crate) fn set_profile(&mut self, profile: AttackProfile, tuning: Tuning) -> bool {
         let resolved = profile.resolve(tuning);
         let changed = self.profile != profile || self.resolved != resolved;
         self.profile = profile;
@@ -200,20 +217,8 @@ impl Attack {
         changed
     }
 
-    pub(crate) fn retune(&mut self, tuning: crate::Tuning) {
-        // Preserve the independently edited recovery and the in-flight snapshot.
-        if let (Some(current), Some(updated)) = (self.resolved, self.profile.resolve(tuning)) {
-            self.resolved = Some(updated.with_recovery(current.recovery()));
-        }
-    }
-
-    pub(crate) fn set_recovery(&mut self, recovery: RecoveryTicks) -> bool {
-        let Some(resolved) = self.resolved else {
-            return false;
-        };
-        let changed = resolved.recovery() != recovery;
-        self.resolved = Some(resolved.with_recovery(recovery));
-        changed
+    pub(crate) fn retune(&mut self, tuning: Tuning) {
+        self.resolved = self.profile.resolve(tuning);
     }
 
     /// Whether the hitbox exists right now.
@@ -231,7 +236,7 @@ impl Attack {
     }
 
     /// Feeds the swing into the world hash. Exhaustive, as every hash here is.
-    pub(crate) fn hash(&self, h: &mut crate::hash::Fnv) {
+    pub(crate) fn hash(&self, h: &mut Fnv) {
         let Self {
             swing,
             profile,
@@ -239,10 +244,11 @@ impl Attack {
             channel,
             struck,
             beam_hits,
+            contacts: _,
         } = self;
         h.usize(*profile as usize);
         if let Some(resolved) = resolved {
-            resolved.hash(h);
+            resolved.hash_into(h);
         }
         h.usize(usize::from(channel.is_some()));
         if let Some(Channel { execution, cadence }) = channel {
@@ -262,8 +268,8 @@ impl Attack {
         {
             execution.hash_into(h);
             h.usize(*profile as usize);
-            resolved.hash(h);
-            hitbox.hash(h);
+            resolved.hash_into(h);
+            hitbox.hash_into(h);
         }
 
         h.usize(beam_hits.len());
@@ -291,31 +297,20 @@ enum Phase {
     Recovery,
 }
 
-/// Ground-plane pose shared by the hit query and the impulse's direction.
-#[derive(Clone, Copy)]
-pub(crate) struct Pose {
-    pub(crate) actor: EntityId,
-    pub(crate) pos: Vec2,
-    pub(crate) facing: f32,
-}
-
-/// Advances the committed swing and tests its current active disc against final
-/// body positions after facing. Presses during a swing are dropped.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "positions and ids are one immutable body view, while impulse and damage sinks deliberately give the attack two independent effects without exposing either store"
-)]
+/// Resolve authored player effects after physics, before autonomous effects and retirement.
 pub(crate) fn attack(
     state: &mut Attack,
-    pose: Pose,
-    input: arpg_core::Intent,
-    bodies: &[EntityId],
-    pos: &[Vec2],
-    mut impulses: ImpulseSink<'_>,
-    mut damage: DamageSink<'_>,
-    walls: &crate::wall::Walls,
-    mut trace: TraceSink<'_>,
+    facing: f32,
+    input: Intent,
+    eligible: impl Fn(EntityId) -> bool,
+    resolved_step: &mut ResolvedStep<'_>,
+    mut trace: TraceSink<'_, Event>,
 ) {
+    let actor = resolved_step.view().player_id();
+    let origin = resolved_step
+        .view()
+        .position(actor)
+        .expect("persistent player body");
     state.beam_hits.clear();
     let channel_requested = state.channels(input.attack_held());
     // Advance before accepting input so post-step observations describe the tick
@@ -345,19 +340,34 @@ pub(crate) fn attack(
             0
         };
         state.struck.clear();
-        let beam = impulses.clip_beam(crate::Beam::new(pose.pos, pose.facing), walls);
-        super::beam::strike(
-            pose.actor,
-            beam,
-            cadence == 0,
-            bodies,
-            pos,
-            walls,
-            &mut damage,
-            &mut impulses,
-            &mut state.beam_hits,
-            &mut trace,
-        );
+        let beam = resolved_step.view().clip_beam(beam(origin, facing));
+        let push = (beam.end() - beam.start()).normalize_or_zero() * Disintegrate::KNOCKBACK;
+        let impulse = Impulse::try_from((push.x, push.y)).expect("finite authored beam impulse");
+        state.contacts.clear();
+        for (target, point) in resolved_step.view().beam_contacts(beam) {
+            if target != actor {
+                state.contacts.push((
+                    target,
+                    point,
+                    resolved_step
+                        .view()
+                        .position(target)
+                        .expect("contact is live"),
+                ));
+            }
+        }
+        for &(target, point, position) in &state.contacts {
+            resolved_step.impact(actor, target, point, impulse);
+            if cadence == 0
+                && eligible(target)
+                && resolved_step
+                    .damage(actor, target, core::num::NonZeroU8::MIN)
+                    .is_some()
+            {
+                state.beam_hits.push(position);
+            }
+        }
+        state.contacts.clear();
         return;
     }
     if state.swing.is_none()
@@ -365,11 +375,6 @@ pub(crate) fn attack(
         && let Some(resolved) = state.resolved
     {
         let profile = state.profile;
-        let path = Swing::new(
-            resolved.start(),
-            resolved.end(),
-            (resolved.start_radius(), resolved.end_radius()),
-        );
         state.swing = Some(InFlight {
             execution: ActionExecution::new(
                 ActionSchedule::timed(
@@ -383,7 +388,9 @@ pub(crate) fn attack(
             ),
             profile,
             resolved,
-            hitbox: path.generate(resolved.active() as usize),
+            hitbox: resolved
+                .hitbox()
+                .expect("validated active window fits committed storage"),
         });
         state.struck.clear();
         trace.emit(Event::Swung);
@@ -406,20 +413,39 @@ pub(crate) fn attack(
     }
 
     if let Some(disc) = live {
-        strike(
-            &mut state.struck,
-            disc,
-            pose,
-            swing.profile == AttackProfile::Slam,
-            resolved.knockback(),
-            resolved.damage(),
-            bodies,
-            pos,
-            &mut impulses,
-            &mut damage,
-            walls,
-            &mut trace,
-        );
+        let (centre, radius) = disc.place(origin, facing);
+        state.contacts.clear();
+        for (target, point) in resolved_step.view().disc_contacts(origin, centre, radius) {
+            if target != actor && !state.struck.contains(&target) {
+                state.contacts.push((
+                    target,
+                    point,
+                    resolved_step
+                        .view()
+                        .position(target)
+                        .expect("contact is live"),
+                ));
+            }
+        }
+        for &(target, point, position) in &state.contacts {
+            state.struck.push(target);
+            if eligible(target) {
+                resolved_step.damage(actor, target, resolved.damage());
+            }
+            let direction = if swing.profile == AttackProfile::Slam {
+                (position - origin).normalize_or(Vec2::X)
+            } else {
+                Vec2::new(facing.sin(), facing.cos())
+            } * resolved.knockback();
+            resolved_step.impact(
+                actor,
+                target,
+                point,
+                Impulse::try_from((direction.x, direction.y))
+                    .expect("finite authored melee impulse"),
+            );
+        }
+        state.contacts.clear();
     }
 
     // Symmetric with the open above: `opened` on the first tick the hitbox
@@ -432,76 +458,102 @@ pub(crate) fn attack(
     }
 }
 
-/// Tests only the current active disc, not the union of past hitbox positions.
-/// `struck` records targets already hit during this swing.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "`bodies` and `pos` are one parallel pair and knockback direction, strength and damage are the only tuning values this may see; bundling them would hand `strike` more authority than taking positions immutably is meant to allow"
-)]
-fn strike(
-    struck: &mut Vec<EntityId>,
-    disc: Disc,
-    pose: Pose,
-    radial: bool,
-    knockback: f32,
-    hit_damage: core::num::NonZeroU8,
-    bodies: &[EntityId],
-    pos: &[Vec2],
-    impulses: &mut ImpulseSink<'_>,
-    damage: &mut DamageSink<'_>,
-    walls: &crate::wall::Walls,
-    trace: &mut TraceSink<'_>,
-) {
-    // Place the committed disc using the current authoritative facing.
-    let (centre, radius) = disc.place(pose.pos, pose.facing);
-
-    for (row, body) in pos.iter().enumerate() {
-        let id = bodies[row];
-        let Some(point) = impulses.disc_contact(id, *body, ENEMY_RADIUS, centre, radius) else {
-            continue;
-        };
-        if id == pose.actor || struck.contains(&id) {
-            continue;
+/// Player-owned ability execution and facing. Physics receives only a motor command.
+#[derive(Default)]
+pub(crate) struct Player {
+    pub(crate) attack: Attack,
+    facing: f32,
+    prev_facing: f32,
+}
+impl Player {
+    pub(crate) fn prepare(
+        &mut self,
+        actor: EntityId,
+        input: Intent,
+        dt: Dt,
+        tuning: Tuning,
+    ) -> Option<MotorCommand> {
+        self.prev_facing = self.facing;
+        let channel = self.attack.channels(input.attack_held());
+        if !self.attack.holds_facing() {
+            let aim = input.aim().as_vec3();
+            let target = aim.x.atan2(aim.z);
+            if input.attack() || channel {
+                self.facing = target;
+            } else {
+                let arc = arpg_sim::angle::shortest_arc(self.facing, target);
+                let step = (14.0 * dt.secs()).min(arc.abs());
+                self.facing = arpg_sim::angle::wrap(self.facing + step * arc.signum());
+            }
         }
-        if impulses.obstructs(walls, pose.pos, point, Some(id)) {
-            continue;
-        }
-        struck.push(id);
-        if let Some(remaining) = damage.hit(id, hit_damage) {
-            trace.emit(Event::Hit { id, remaining });
-            trace.emit(Event::Damaged {
-                actor: pose.actor,
-                target: id,
-                remaining,
-            });
-        }
-        // Normalization preserves equal strength at every angle and distance.
-        // Coincident centres use a fixed axis, independent of player facing.
-        let direction = if radial {
-            (*body - pose.pos).try_normalize().unwrap_or(Vec2::X)
-        } else {
-            Vec2::new(pose.facing.sin(), pose.facing.cos())
-        } * knockback;
-        impulses.push_at(
-            id,
-            point,
-            Impulse::try_from((direction.x, direction.y)).expect("finite facing and tuning"),
-            trace,
-        );
+        (!channel).then(|| {
+            MotorCommand::new(
+                actor,
+                input.move_dir().as_vec3().xz() * tuning.get(TuningField::PlayerSpeed),
+                tuning.get(TuningField::PlayerAcceleration),
+            )
+            .expect("validated player motor tuning")
+        })
+    }
+    pub(crate) fn facing(&self) -> f32 {
+        self.facing
+    }
+    pub(crate) fn drawn_facing(&self, alpha: arpg_sim::Alpha) -> f32 {
+        let arc = arpg_sim::angle::shortest_arc(self.prev_facing, self.facing);
+        arpg_sim::angle::wrap(self.prev_facing + arc * alpha.get())
+    }
+    pub(crate) fn hash(&self, hash: &mut Fnv) {
+        let Self {
+            attack,
+            facing,
+            prev_facing,
+        } = self;
+        attack.hash(hash);
+        hash.f32(*facing);
+        hash.f32(*prev_facing);
+    }
+    pub(crate) fn report(&self, view: arpg_sim::ActorView<'_>, out: &mut arpg_core::Report) {
+        let Self {
+            attack,
+            facing,
+            prev_facing,
+        } = self;
+        attack.status().report(out);
+        out.num("facing", *facing);
+        out.num("prev_facing", *prev_facing);
+        out.object("beam", |out| {
+            if let Some(beam) = attack.beam(
+                view.position(view.player_id())
+                    .expect("persistent player body"),
+                *facing,
+            ) {
+                let beam = view.clip_beam(beam);
+                let on_ground = |point: Vec2| glam::Vec3::new(point.x, 0.0, point.y);
+                out.vec3("start", on_ground(beam.start()));
+                out.vec3("end", on_ground(beam.end()));
+                out.num("radius", beam.radius());
+                out.num("knockback_per_tick", Disintegrate::KNOCKBACK);
+                out.int("hits", attack.beam_hits().len() as u64);
+                out.object("hit_positions", |out| {
+                    for (index, point) in attack.beam_hits().iter().enumerate() {
+                        out.vec3(&index.to_string(), on_ground(*point));
+                    }
+                });
+                out.int("hit_every_ticks", u64::from(Disintegrate::HIT_EVERY));
+            }
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trace::Trace;
-
     #[test]
     fn channel_presence_and_damage_clock_reach_hash_and_report() {
         let mut state = Attack::default();
         state.set_profile(AttackProfile::Disintegrate, crate::Tuning::default());
         let hash = |state: &Attack| {
-            let mut hash = crate::hash::Fnv::default();
+            let mut hash = Fnv::default();
             state.hash(&mut hash);
             hash.finish()
         };
@@ -526,162 +578,10 @@ mod tests {
         assert!(execution.holds(ActionControls::Movement));
         assert!(!execution.holds(ActionControls::Facing));
         assert!(status.resolved.is_none());
-        assert!(status.recovery.is_none());
         let mut report = arpg_core::Report::default();
         status.report(&mut report);
         let report = report.finish();
         assert!(report.contains("\"channel_tick\":1"));
         assert!(report.contains("\"action_execution\":{\"elapsed\":1"));
-    }
-
-    /// The default resolved attack, which is what these tests pin: they check the state
-    /// machine's shape against whatever it is configured with, not against a
-    /// second copy of the numbers.
-    fn resolved() -> ResolvedAttack {
-        ResolvedAttack::default()
-    }
-
-    fn is_active(elapsed: u32, resolved: ResolvedAttack) -> bool {
-        (resolved.startup()..resolved.startup() + resolved.active()).contains(&elapsed)
-    }
-
-    fn duration() -> u32 {
-        let t = resolved();
-        t.startup() + t.active() + t.recovery().get()
-    }
-
-    /// Drives a swing with no bodies to hit, so what is left is the state
-    /// machine on its own. The scenarios cover it end to end; these localise a
-    /// failure to the phases rather than to the geometry or the schedule.
-    fn swing_for(ticks: u32, press_on: &[u32]) -> Vec<(u32, bool, bool)> {
-        let mut state = Attack::default();
-        let mut trace = Trace::default();
-        let mut seen = Vec::new();
-        let mut health = super::super::health::Health::default();
-        let mut physics = super::super::motion::Physics::default();
-        let player = crate::slots::Slots::default().insert();
-
-        for tick in 0..ticks {
-            attack(
-                &mut state,
-                Pose {
-                    actor: player,
-                    pos: Vec2::ZERO,
-                    facing: 0.0,
-                },
-                arpg_core::Intent::new(
-                    arpg_core::MoveDir::NONE,
-                    arpg_core::AimDir::FORWARD,
-                    press_on.contains(&tick),
-                ),
-                &[],
-                &[],
-                physics.sink(player),
-                health.sink(),
-                &crate::wall::Walls::default(),
-                trace.sink(u64::from(tick)),
-            );
-            seen.push((tick, state.is_swinging(), state.hitbox_is_live()));
-        }
-
-        seen
-    }
-
-    /// The window's edges, stated as the resolved attack does. Half-open: live on
-    /// `startup`, dead on `startup + active`.
-    #[test]
-    fn the_hitbox_is_live_for_exactly_the_active_ticks() {
-        let t = resolved();
-        let (startup, active) = (t.startup(), t.active());
-
-        assert!(!is_active(startup - 1, t), "live during startup");
-        assert!(is_active(startup, t), "not live on the first active tick");
-        assert!(
-            is_active(startup + active - 1, t),
-            "not live on the last active tick"
-        );
-        assert!(
-            !is_active(startup + active, t),
-            "still live after the window"
-        );
-
-        let live: Vec<u32> = (0..duration()).filter(|&tick| is_active(tick, t)).collect();
-        assert_eq!(
-            live.len() as u32,
-            active,
-            "the window is not `active` ticks wide"
-        );
-    }
-
-    /// A swing occupies exactly its configured duration and then the player is idle
-    /// again — and `elapsed` names the tick that just ran, so this reads the
-    /// way the harness reads it.
-    #[test]
-    fn a_swing_lasts_exactly_its_length() {
-        let seen = swing_for(duration() + 2, &[0]);
-
-        for (tick, swinging, _) in &seen[..duration() as usize] {
-            assert!(swinging, "idle on tick {tick}, inside the swing");
-        }
-        assert!(
-            !seen[duration() as usize].1,
-            "still swinging after its configured duration"
-        );
-    }
-
-    /// **Hitbox liveness is derived from one number, so it cannot disagree with
-    /// the phase.** Checked against the resolved attack rather than a second
-    /// copy of the schedule.
-    #[test]
-    fn the_hitbox_is_live_only_inside_the_swing() {
-        for (tick, swinging, hitbox) in swing_for(duration() + 2, &[0]) {
-            let expected = tick < duration() && is_active(tick, resolved());
-            assert_eq!(hitbox, expected, "hitbox wrong on tick {tick}");
-            if hitbox {
-                assert!(
-                    swinging,
-                    "a live hitbox with no swing behind it, tick {tick}"
-                );
-            }
-        }
-    }
-
-    /// Default hitbox samples must overlap; runtime edits validate this at admission.
-    #[test]
-    fn consecutive_discs_of_the_swing_leave_no_gap() {
-        let t = resolved();
-        let path = Swing::new(t.start(), t.end(), (t.start_radius(), t.end_radius()));
-        let hitbox = path.generate::<HITBOX_SAMPLES>(t.active() as usize);
-        let placed: Vec<(Vec2, f32)> = hitbox
-            .discs()
-            .iter()
-            .map(|d| d.place(Vec2::ZERO, 0.0))
-            .collect();
-
-        for (i, pair) in placed.windows(2).enumerate() {
-            let ((from, from_radius), (to, to_radius)) = (pair[0], pair[1]);
-
-            // A body's centre between the two discs is caught by one of them
-            // only while their reaches meet, and a body reaches out by its own
-            // radius on each side.
-            let covered = from_radius + to_radius + 2.0 * ENEMY_RADIUS;
-            let gap = from.distance(to);
-
-            assert!(
-                gap <= covered,
-                "discs {i} and {} are {gap} apart but cover {covered}: a body between them \
-                 is passed straight through",
-                i + 1
-            );
-        }
-    }
-
-    /// An idle player with the button down is not attacking. The edge is the
-    /// caller's to supply, and this is what says the pass believes it.
-    #[test]
-    fn no_press_means_no_swing() {
-        for (tick, swinging, hitbox) in swing_for(duration(), &[]) {
-            assert!(!swinging && !hitbox, "swung with no press, tick {tick}");
-        }
     }
 }

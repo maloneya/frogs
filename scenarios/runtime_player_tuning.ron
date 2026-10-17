@@ -15,8 +15,11 @@
     ],
     budget: (ticks: 18),
     expect: (player_pos: (x: 0.63794535, z: 0.0, tol: 0.00001),
-        events: (kinds: [TuningChanged], sequence: [
-            (6, TuningChanged(field: PlayerSpeed, value: 3.0)),
-            (12, TuningChanged(field: PlayerSpeed, value: 0.0)),
-        ])),
+        gameplay_events: (
+            kinds: [TuningChanged],
+            sequence: [
+                (6, TuningChanged(field: PlayerSpeed, value: 3.0)),
+                (12, TuningChanged(field: PlayerSpeed, value: 0.0)),
+            ],
+        )),
 )

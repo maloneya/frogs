@@ -4,7 +4,7 @@
 //! two seams, and the schedule — rather than being mostly test code.
 
 use super::*;
-use arpg_core::{AimDir, Intent, MoveDir};
+use arpg_core::MoveDir;
 
 /// Counts only this thread's allocations to isolate parallel tests.
 /// Const initialization avoids allocator recursion on first access.
@@ -80,12 +80,29 @@ fn grid_positions(n: usize) -> impl Iterator<Item = Vec2> {
 /// Ordinary construction for tests needing a crowd of a particular size.
 fn world_with_enemies(count: usize) -> World {
     let mut world = World::empty();
+    assert!(world.set_mass(world.player_id(), Mass::try_from(20.0).unwrap()));
     for position in grid_positions(count) {
         world
             .place(position, crate::TEST_CHARACTER)
             .expect("test crowd fits");
     }
     world
+}
+
+/// Test-owned physical drive, independent of gameplay selection and ability state.
+fn step(world: &mut World, dt: Dt, direction: MoveDir) {
+    let direction = direction.as_vec3();
+    let command = MotorCommand::new(
+        world.player_id(),
+        Vec2::new(direction.x, direction.z) * 9.0,
+        60.0,
+    )
+    .unwrap();
+    let population = world.damageable_count();
+    world
+        .begin_step(dt, population)
+        .advance(&[command], &mut ())
+        .finish();
 }
 
 /// Steps a fresh world `ticks` times and returns the hash after each one.
@@ -99,14 +116,10 @@ fn hash_sequence(enemies: usize, ticks: usize, dir_at: impl Fn(u64) -> MoveDir) 
     let mut acc = Accumulator::default();
     let mut seq = Vec::with_capacity(ticks);
 
-    let mut aim = AimDir::FORWARD;
     while seq.len() < ticks {
         for dt in acc.pending(Dt::SECS) {
             let dir = dir_at(world.tick());
-            if let Ok(direction) = AimDir::new(dir.as_vec3()) {
-                aim = direction;
-            }
-            world.step(dt, Intent::new(dir, aim, false));
+            step(&mut world, dt, dir);
             seq.push(world.hash());
         }
     }
@@ -126,10 +139,7 @@ fn in_open_ground() -> World {
     // The lone body spawns on top of the player. Two seconds of powered
     // movement puts the player well past it.
     for _ in 0..120 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-        );
+        step(&mut world, tick_dt(), MoveDir::new(Vec3::X));
     }
     world
 }
@@ -148,10 +158,7 @@ fn frame_rate_cannot_change_the_simulation() {
 
         for _ in 0..(120 / ticks_per_frame) {
             for dt in acc.pending(Dt::SECS * ticks_per_frame as f32) {
-                world.step(
-                    dt,
-                    Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-                );
+                step(&mut world, dt, MoveDir::new(Vec3::X));
                 seq.push(world.hash());
             }
         }
@@ -234,15 +241,9 @@ fn drawn_enemies(world: &World, alpha: Alpha) -> Vec<Vec3> {
 fn shoving_through_the_crowd(enemies: usize) -> World {
     let mut world = world_with_enemies(enemies);
 
-    // Only a few ticks: at `PLAYER_SPEED` the player clears a small horde
-    // in well under a second, and then contacts drop to zero and this
-    // measures open ground again. 20 ticks is 3.0 units, which walks
-    // straight out of a 64-body crowd (5.6 units across).
+    // A short drive keeps the player inside the crowd while contacts move bodies.
     for _ in 0..5 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-        );
+        step(&mut world, tick_dt(), MoveDir::new(Vec3::X));
     }
     assert!(
         world.contacts() > 0,
@@ -263,10 +264,7 @@ fn the_blend_endpoints_are_the_two_ticks_themselves() {
     let mut world = in_open_ground();
 
     let before = world.player_pos();
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-    );
+    step(&mut world, tick_dt(), MoveDir::new(Vec3::X));
     let after = world.player_pos();
     assert_ne!(before, after, "the tick under test did not move anything");
 
@@ -283,36 +281,6 @@ fn the_blend_endpoints_are_the_two_ticks_themselves() {
 }
 
 /// Asset animation receives one immutable snapshot of simulation-owned facts.
-#[test]
-fn player_presentation_carries_identity_transform_movement_and_attack() {
-    let mut world = World::empty();
-    let id = world.player_id();
-    assert!(
-        !world.despawn_body(id),
-        "the player cannot be removed as an enemy"
-    );
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), true),
-    );
-
-    let player = world.player_presentation(Alpha::ONE);
-    assert_eq!(player.id(), id);
-    assert_eq!(player.ground_position().y, 0.0);
-    // The motor's velocity change ramps in over four substeps, so the first
-    // tick covers (4 + 1) / (2 * 4) of a * dt².
-    let travel =
-        Tuning::default().get(TuningField::PlayerAcceleration) * Dt::SECS * Dt::SECS * 5.0 / 8.0;
-    assert!((player.ground_position().x - travel).abs() < 1.0e-6);
-    assert!((player.displacement() - Vec2::X * travel).length() < 1.0e-6);
-    assert_eq!(player.facing(), world.player_facing());
-    assert_eq!(player.attack().phase, AttackPhase::Startup);
-    assert_eq!(
-        world.player_id(),
-        id,
-        "presentation changed stable identity"
-    );
-}
 
 #[test]
 fn horde_presentation_is_stable_derived_and_excludes_props() {
@@ -321,10 +289,7 @@ fn horde_presentation_is_stable_derived_and_excludes_props() {
         .place(Vec2::new(2.0, 0.0), crate::TEST_CHARACTER)
         .unwrap();
     let prop = world.place(Vec2::new(-2.0, 0.0), Template::BLOCK).unwrap();
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-    );
+    step(&mut world, tick_dt(), MoveDir::NONE);
 
     let presentations: Vec<_> = world.character_presentations(Alpha::ONE).collect();
     assert_eq!(presentations.len(), 1);
@@ -347,10 +312,7 @@ fn the_blend_crosses_the_gap_once_and_in_order() {
     let mut world = in_open_ground();
 
     let before = world.player_pos();
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-    );
+    step(&mut world, tick_dt(), MoveDir::new(Vec3::X));
     let after = world.player_pos();
     let span = (after - before).length();
 
@@ -399,10 +361,7 @@ fn the_horde_is_interpolated_too() {
     let mut world = shoving_through_the_crowd(256);
 
     let before: Vec<Vec2> = world.bodies.pos[1..].to_vec();
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-    );
+    step(&mut world, tick_dt(), MoveDir::new(Vec3::X));
     let after: Vec<Vec2> = world.bodies.pos[1..].to_vec();
 
     let moved: Vec<usize> = (0..after.len())
@@ -454,10 +413,7 @@ fn an_empty_horde_is_a_legal_world() {
     assert_eq!(world.damageable_count(), 0);
 
     for _ in 0..30 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-        );
+        step(&mut world, tick_dt(), MoveDir::new(Vec3::X));
     }
     assert_eq!(world.contacts(), 0, "an empty arena reported a contact");
 
@@ -499,10 +455,7 @@ fn a_new_horde_is_drawn_standing_still() {
 fn drawing_never_touches_sim_state() {
     let mut world = world_with_enemies(64);
     for _ in 0..10 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-        );
+        step(&mut world, tick_dt(), MoveDir::new(Vec3::X));
     }
 
     let untouched = world.hash();
@@ -517,32 +470,6 @@ fn drawing_never_touches_sim_state() {
             "presentation at {i}/8 of a tick changed the world"
         );
     }
-}
-
-/// **The seam again, one layer up.** `facing` is wrapped to `-PI..=PI`, so
-/// a body turning through south steps from `+3.13` to `-3.13` — a real turn
-/// of 0.02 radians whose naive lerp spins it 6.26 the other way for exactly
-/// one frame. That reads as a flicker, and flickers get blamed on the
-/// renderer rather than on the maths.
-#[test]
-fn the_drawn_facing_crosses_the_pi_seam_the_short_way() {
-    use core::f32::consts::PI;
-
-    let from = PI - 0.01;
-    let to = -PI + 0.01;
-
-    let mid = blend_angle(from, to, half());
-    assert!(
-        mid.abs() > PI - 0.02,
-        "the drawn facing took the long way round the seam: {mid} should be near ±PI"
-    );
-
-    // And the endpoints still land exactly where they should.
-    assert!((blend_angle(from, to, Alpha::ZERO) - from).abs() < 1e-6);
-    assert!((blend_angle(from, to, Alpha::ONE) - to).abs() < 1e-6);
-
-    // Wrapped, so repeated blending cannot drift out of range.
-    assert!(mid.abs() <= PI, "the drawn facing left -PI..=PI");
 }
 
 /// Half a tick in, minted the only way an `Alpha` can be.
@@ -563,10 +490,7 @@ fn a_body_that_did_not_move_is_drawn_where_it_is() {
     // relaxes at the contact spring's rate until corrections fall below f32
     // resolution, then nothing moves at all.
     for _ in 0..180 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-        );
+        step(&mut world, tick_dt(), MoveDir::NONE);
     }
     assert_eq!(
         world.contacts(),
@@ -601,14 +525,7 @@ fn the_previous_tick_is_the_previous_tick() {
         let expected = world.bodies.pos[0];
         let enemies_before = world.bodies.pos[1..].to_vec();
 
-        world.step(
-            tick_dt(),
-            Intent::new(
-                east,
-                AimDir::new(east.as_vec3()).expect("nonzero test movement"),
-                false,
-            ),
-        );
+        step(&mut world, tick_dt(), east);
 
         assert_eq!(
             world.bodies.prev_pos[0], expected,
@@ -629,12 +546,11 @@ fn every_field_of_the_world_reaches_the_hash() {
     /// A field of `World` and the smallest change that touches it.
     type Poke = (&'static str, fn(&mut World));
 
-    let fields: [Poke; 10] = [
-        ("attack.recovery", |w| {
-            w.set_attack_recovery(RecoveryTicks::try_from(1).unwrap());
+    let fields: [Poke; 9] = [
+        ("contact material", |w| {
+            w.set_contact_material(ContactMaterial::new(20.0, 10.0, 3.0).unwrap());
         }),
         ("player.pos", |w| w.bodies.pos[0].x += 0.001),
-        ("player.facing", |w| w.player.facing += 0.001),
         ("tick", |w| w.tick += 1),
         ("contacts", |w| w.contacts += 1),
         ("enemies.pos", |w| w.bodies.pos[1].x += 0.001),
@@ -644,7 +560,6 @@ fn every_field_of_the_world_reaches_the_hash() {
         ("enemies.health", |w| {
             w.bodies
                 .health
-                .sink()
                 .hit(w.bodies.slots.ids()[1], core::num::NonZeroU8::MIN);
         }),
         // A pending request is a body that exists in one of two otherwise
@@ -677,34 +592,6 @@ fn every_field_of_the_world_reaches_the_hash() {
     }
 }
 
-#[test]
-fn every_configured_and_committed_attack_profile_reaches_the_hash() {
-    for profile in AttackProfile::ALL.into_iter().skip(1) {
-        let mut configured = world_with_enemies(1024);
-        configured.set_attack_profile(profile);
-        assert_ne!(
-            configured.hash(),
-            world_with_enemies(1024).hash(),
-            "configured {profile} omitted from replay state"
-        );
-
-        let mut changed = World::empty();
-        let mut normal = World::empty();
-        changed.set_attack_profile(profile);
-        let press = Intent::new(MoveDir::NONE, AimDir::FORWARD, true);
-        changed.step(tick_dt(), press);
-        normal.step(tick_dt(), press);
-        // Configured profiles agree again; only the in-flight copy differs.
-        // Trace is deliberately excluded from the hash.
-        changed.set_attack_profile(AttackProfile::default());
-        assert_ne!(
-            changed.hash(),
-            normal.hash(),
-            "committed {profile} omitted from replay state"
-        );
-    }
-}
-
 /// The horde is what the player's own state cannot stand in for: walking
 /// through the crowd displaces bodies, and a replay that agrees on the
 /// player while the horde drifts is the divergence that matters most once
@@ -717,10 +604,7 @@ fn the_horde_is_part_of_what_a_replay_compares() {
     // hash from here is the horde's.
     let settled = {
         for _ in 0..30 {
-            world.step(
-                tick_dt(),
-                Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-            );
+            step(&mut world, tick_dt(), MoveDir::NONE);
         }
         world.hash()
     };
@@ -733,54 +617,6 @@ fn the_horde_is_part_of_what_a_replay_compares() {
     );
 }
 
-/// Warm up before counting so initial storage preparation is excluded.
-#[test]
-fn a_steady_state_frame_allocates_nothing() {
-    let east = MoveDir::new(Vec3::X);
-    let dt = tick_dt();
-
-    for profile in AttackProfile::ALL {
-        let mut world = world_with_enemies(512);
-        world.set_attack_profile(profile);
-        let attack = profile.resolve(crate::Tuning::default());
-        let duration = attack.map_or(60, |attack| {
-            attack.startup() + attack.active() + attack.recovery().get()
-        });
-
-        world.step(
-            dt,
-            Intent::new(
-                east,
-                AimDir::new(east.as_vec3()).expect("nonzero test movement"),
-                false,
-            ),
-        );
-        observe_presentation(&world, Alpha::ONE);
-
-        let allocations = alloc_counter::allocations(|| {
-            for tick in 0..3 * duration {
-                // Include three consecutive swings: walking alone cannot catch
-                // a hit list that grows when the attack reaches a crowded rank.
-                world.step(
-                    dt,
-                    Intent::new(
-                        east,
-                        AimDir::new(east.as_vec3()).expect("nonzero test movement"),
-                        tick % duration == 0,
-                    )
-                    .with_attack_held(profile == AttackProfile::Disintegrate),
-                );
-                observe_presentation(&world, Alpha::ONE);
-            }
-        });
-
-        assert_eq!(
-            allocations, 0,
-            "{profile}: three swings allocated {allocations} times"
-        );
-    }
-}
-
 /// Walking into the wall must stop, not leave the ground plane — and must
 /// stay finite, since a NaN position would silently vanish the character.
 #[test]
@@ -791,61 +627,13 @@ fn the_player_cannot_walk_off_the_arena() {
         // the far wall from anywhere in a 96-unit half-arena, so this
         // reaches the clamp rather than merely walking toward it.
         for _ in 0..1200 {
-            world.step(
-                tick_dt(),
-                Intent::new(MoveDir::new(dir), AimDir::new(dir).unwrap(), false),
-            );
+            step(&mut world, tick_dt(), MoveDir::new(dir));
         }
         let pos = world.player_pos();
         assert!(pos.is_finite());
         assert!(
             pos.x.abs() <= ARENA_HALF && pos.z.abs() <= ARENA_HALF,
             "escaped: {pos}"
-        );
-    }
-}
-
-#[test]
-fn turning_never_overshoots_its_target() {
-    let mut world = world_with_enemies(1024);
-    let target = std::f32::consts::FRAC_PI_2;
-
-    for _ in 0..200 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-        );
-        assert!(world.player.facing >= 0.0);
-        assert!(
-            world.player.facing <= target,
-            "overshot to {}",
-            world.player.facing
-        );
-    }
-}
-
-/// Facing must stay canonical however long the session runs, rather than
-/// accumulating toward the range where f32 loses angular precision.
-#[test]
-fn facing_stays_wrapped_while_spinning() {
-    let mut world = world_with_enemies(1024);
-    let circle = [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z];
-
-    for lap in 0..50 {
-        for _ in 0..30 {
-            world.step(
-                tick_dt(),
-                Intent::new(
-                    MoveDir::new(circle[lap % 4]),
-                    AimDir::new(circle[lap % 4]).unwrap(),
-                    false,
-                ),
-            );
-        }
-        assert!(
-            world.player.facing.abs() <= std::f32::consts::PI + 1e-6,
-            "drifted to {}",
-            world.player.facing
         );
     }
 }
@@ -945,10 +733,7 @@ fn no_enemy_is_left_overlapping_the_player() {
 
     // Walk into the middle of the horde and keep going.
     for _ in 0..240 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-        );
+        step(&mut world, tick_dt(), MoveDir::new(Vec3::X));
     }
 
     let contact = PLAYER_RADIUS + ENEMY_RADIUS;
@@ -973,10 +758,7 @@ fn walking_through_the_horde_displaces_it() {
 
     let mut ever_touched = 0;
     for _ in 0..240 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::new(Vec3::X), AimDir::new(Vec3::X).unwrap(), false),
-        );
+        step(&mut world, tick_dt(), MoveDir::new(Vec3::X));
         ever_touched += world.contacts();
     }
 
@@ -1000,25 +782,16 @@ fn walking_through_the_horde_displaces_it() {
 #[test]
 fn the_contact_count_tracks_whether_anything_is_touching() {
     let mut clear = in_open_ground();
-    clear.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-    );
+    step(&mut clear, tick_dt(), MoveDir::NONE);
     assert_eq!(clear.contacts(), 0, "nothing is near the player out here");
 
     // Structural overlap is repaired without an impact. Subsequent physical
     // pushing must report the player's compressed contacts.
     let mut crowded = world_with_enemies(1024);
-    crowded.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-    );
+    step(&mut crowded, tick_dt(), MoveDir::NONE);
     let mut touched = false;
     for _ in 0..30 {
-        crowded.step(
-            tick_dt(),
-            Intent::new(MoveDir::new(Vec3::X), AimDir::FORWARD, false),
-        );
+        step(&mut crowded, tick_dt(), MoveDir::new(Vec3::X));
         touched |= crowded.contacts() > 0;
     }
     assert!(touched, "physical pushing reported no contact");
@@ -1032,10 +805,7 @@ fn nothing_is_pushed_out_of_the_arena() {
 
     for dir in [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z] {
         for _ in 0..600 {
-            world.step(
-                tick_dt(),
-                Intent::new(MoveDir::new(dir), AimDir::new(dir).unwrap(), false),
-            );
+            step(&mut world, tick_dt(), MoveDir::new(dir));
         }
         for &enemy in &world.bodies.pos[1..] {
             assert!(enemy.is_finite(), "poisoned position {enemy}");
@@ -1067,10 +837,7 @@ fn a_request_becomes_a_body_on_the_next_tick_and_not_before() {
         "the request was granted without a tick running"
     );
 
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-    );
+    step(&mut world, tick_dt(), MoveDir::NONE);
     assert_eq!(world.damageable_count(), 1);
 }
 
@@ -1098,10 +865,7 @@ fn a_full_queue_refuses_out_loud() {
         "the queue accepted past capacity"
     );
 
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-    );
+    step(&mut world, tick_dt(), MoveDir::NONE);
 
     assert_eq!(
         world.damageable_count(),
@@ -1161,10 +925,7 @@ fn a_held_back_source_fires_the_instant_its_condition_opens() {
     // Long enough that a source counting down regardless would have come round
     // twice over.
     for _ in 0..120 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-        );
+        step(&mut world, tick_dt(), MoveDir::NONE);
     }
     assert_eq!(
         world.damageable_count(),
@@ -1176,10 +937,7 @@ fn a_held_back_source_fires_the_instant_its_condition_opens() {
     // this half lives here: it isolates the opening of the condition from the
     // ticks spent walking to it.
     world.bodies.pos[0] = far;
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-    );
+    step(&mut world, tick_dt(), MoveDir::NONE);
 
     assert_eq!(
         world.damageable_count(),
@@ -1207,10 +965,7 @@ fn a_population_condition_fills_to_its_number_and_stops() {
     );
 
     for _ in 0..60 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-        );
+        step(&mut world, tick_dt(), MoveDir::NONE);
     }
     assert_eq!(
         world.damageable_count(),
@@ -1222,10 +977,7 @@ fn a_population_condition_fills_to_its_number_and_stops() {
     // cannot do.
     let victim = world.bodies.slots.ids()[1];
     assert!(world.despawn_body(victim));
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-    );
+    step(&mut world, tick_dt(), MoveDir::NONE);
     assert_eq!(
         world.damageable_count(),
         3,
@@ -1254,10 +1006,7 @@ fn a_removed_source_stops_and_its_name_stays_dead() {
         .unwrap(),
     );
     for _ in 0..5 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-        );
+        step(&mut world, tick_dt(), MoveDir::NONE);
     }
     let made = world.damageable_count();
     assert_eq!(made, 5, "every=1 should fire on every tick");
@@ -1267,10 +1016,7 @@ fn a_removed_source_stops_and_its_name_stays_dead() {
     assert_eq!(world.source_count(), 0);
 
     for _ in 0..20 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-        );
+        step(&mut world, tick_dt(), MoveDir::NONE);
     }
     assert_eq!(
         world.damageable_count(),
@@ -1321,10 +1067,7 @@ fn a_ring_does_not_stack_what_it_makes() {
     // to separate anything — so this measures the placement, not the response
     // to a bad placement.
     for _ in 0..4 {
-        world.step(
-            tick_dt(),
-            Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-        );
+        step(&mut world, tick_dt(), MoveDir::NONE);
     }
 
     let places = world.bodies.pos[1..].to_vec();
@@ -1353,7 +1096,7 @@ fn despawning_preserves_a_swapped_survivors_payloads() {
     assert!(world.apply_impulse(a, impulse));
     assert!(world.apply_impulse(b, impulse));
     assert_eq!(
-        world.bodies.health.sink().hit(b, core::num::NonZeroU8::MIN),
+        world.bodies.health.hit(b, core::num::NonZeroU8::MIN),
         Some(2)
     );
     assert!(world.despawn_body(a));
@@ -1366,10 +1109,7 @@ fn despawning_preserves_a_swapped_survivors_payloads() {
     assert_eq!(world.motion(b).unwrap().velocity(), Vec2::new(6.0, 0.0));
     assert_eq!(world.health(b), Some(2));
     assert_eq!(world.health(c), Some(3));
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-    );
+    step(&mut world, tick_dt(), MoveDir::NONE);
     assert!((world.body_pos(b).unwrap().x - 20.1).abs() < 1e-5);
     assert_eq!(world.body_pos(c).unwrap().x, 30.0);
 }
@@ -1412,10 +1152,13 @@ fn scene_eviction_revokes_prop_activation() {
     let owner = world.load_scene(&scene).unwrap();
     let id = world.bodies.slots.ids()[1];
     assert!(!world.actor_view().movable(id));
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true),
-    );
+    let player = world.player_id();
+    let population = world.damageable_count();
+    let mut resolved = world
+        .begin_step(tick_dt(), population)
+        .advance(&[], &mut ());
+    resolved.interact_nearest(player);
+    resolved.finish();
 
     assert_eq!(
         world.interaction_state(id),
@@ -1477,10 +1220,13 @@ fn an_interaction_tie_survives_dense_row_swaps() {
         .place(-Vec2::Y, Template::BLOCK.interactive())
         .unwrap();
     world.despawn_body(removed);
-    world.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true),
-    );
+    let player = world.player_id();
+    let population = world.damageable_count();
+    let mut resolved = world
+        .begin_step(tick_dt(), population)
+        .advance(&[], &mut ());
+    resolved.interact_nearest(player);
+    resolved.finish();
     assert_eq!(
         world.interaction_state(first),
         Some(InteractionState::Activated)
@@ -1498,14 +1244,11 @@ fn activation_state_reaches_the_world_hash() {
         world
     };
     let (mut ready, mut activated) = (make(), make());
-    ready.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-    );
-    activated.step(
-        tick_dt(),
-        Intent::new(MoveDir::NONE, AimDir::FORWARD, false).with_interact(true),
-    );
+    step(&mut ready, tick_dt(), MoveDir::NONE);
+    let player = activated.player_id();
+    let mut resolved = activated.begin_step(tick_dt(), 0).advance(&[], &mut ());
+    resolved.interact_nearest(player);
+    resolved.finish();
     assert_ne!(ready.hash(), activated.hash());
 }
 
@@ -1607,18 +1350,11 @@ fn crowd_contacts_replay_through_combat_and_structural_changes() {
                 let direction = [Vec3::X, Vec3::Z, -Vec3::X, -Vec3::Z][tick / 30 % 4];
                 let population = world.damageable_count();
                 let targets = world.bodies.health.ids()[1..].to_vec();
-                let prepared = world.begin_step(
-                    tick_dt(),
-                    Intent::new(
-                        MoveDir::new(direction),
-                        AimDir::new(direction).unwrap(),
-                        tick % 23 == 0,
-                    ),
-                    population,
-                );
+                let player_id = world.player_id();
+                let prepared = world.begin_step(tick_dt(), population);
                 let view = prepared.view();
                 let player = view.position(view.player_id()).unwrap();
-                let motors: Vec<_> = targets
+                let mut motors: Vec<_> = targets
                     .iter()
                     .copied()
                     .filter(|id| id.slot() % 2 == 0)
@@ -1628,7 +1364,16 @@ fn crowd_contacts_replay_through_combat_and_structural_changes() {
                         crate::MotorCommand::new(id, toward, 30.0).unwrap()
                     })
                     .collect();
-                prepared.advance(&motors, &targets, &mut ()).finish();
+                motors.push(
+                    MotorCommand::new(player_id, Vec2::new(direction.x, direction.z) * 9.0, 60.0)
+                        .unwrap(),
+                );
+                let mut resolved = prepared.advance(&motors, &mut ());
+                if tick % 23 == 0 {
+                    let target = targets[0];
+                    resolved.damage(player_id, target, core::num::NonZeroU8::MIN);
+                }
+                resolved.finish();
             }
             assert_eq!(
                 grid.hash(),
@@ -1652,10 +1397,7 @@ fn rebuilding_the_grid_uses_reserved_storage_even_after_population_changes() {
     let mut world = world_with_enemies(1024);
     let allocations = alloc_counter::allocations(|| {
         for _ in 0..3 {
-            world.step(
-                tick_dt(),
-                Intent::new(MoveDir::NONE, AimDir::FORWARD, false),
-            );
+            step(&mut world, tick_dt(), MoveDir::NONE);
         }
     });
     assert_eq!(
@@ -1670,10 +1412,7 @@ fn rebuilding_the_grid_uses_reserved_storage_even_after_population_changes() {
             .is_some()
     );
     assert_eq!(
-        alloc_counter::allocations(|| world.step(
-            tick_dt(),
-            Intent::new(MoveDir::NONE, AimDir::FORWARD, false)
-        )),
+        alloc_counter::allocations(|| step(&mut world, tick_dt(), MoveDir::NONE)),
         0
     );
 }

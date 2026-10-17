@@ -150,9 +150,9 @@ fn parse(line: &str) -> Result<Command, String> {
                 Some("defaults") => Command::TuningEdit(Edit::Defaults),
                 Some("restart") => Command::TuningEdit(Edit::Restart),
                 Some("set") => {
-                    let field = it.next().and_then(arpg_sim::TuningField::named).ok_or("unknown tuning field")?;
+                    let field = it.next().and_then(arpg_game::TuningField::named).ok_or("unknown tuning field")?;
                     let value = it.next().ok_or(usage)?.parse::<f32>().map_err(|_| usage)?;
-                    arpg_sim::Tuning::default().with(field, value)?;
+                    arpg_game::Tuning::default().with(field, value)?;
                     Command::TuningEdit(Edit::Set(field, value))
                 }
                 _ => return Err(usage.into()),
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn tuning_commands_resolve_every_shared_catalog_field() {
-        for field in arpg_sim::TuningField::ALL {
+        for field in arpg_game::TuningField::ALL {
             let attribute = field.attribute();
             let command = parse(&format!("tuning set {} {}", attribute.key, attribute.default)).unwrap();
             let Command::TuningEdit(crate::companion::Edit::Set(parsed, value)) = command else {

@@ -35,7 +35,9 @@ The native executable accepts `--scenes <directory>`; without it, the catalog
 uses `scenes/` relative to its working directory. File browsing is local to the
 companion and works offline.
 Packaged builds provide `play.command` for the game and `tools.command` for both
-(Python 3 required).
+(Python 3 required). Both launchers select the extracted directory; direct game
+launches must use the directory containing `assets/` and `scenes/` as their working
+directory. Runtime assets never fall back to the build checkout.
 
 ## Tabs
 
@@ -66,8 +68,8 @@ Each connection carries one newline-terminated JSON request/reply. Start with
 
 The game vocabulary is [Control](../crates/app/src/companion.rs). Authoring
 documents never travel through this socket. Replies contain
-`ok`, `error` and a small `state` snapshot with accepted/saved tuning, catalog,
-status and presentation readouts. They never serialize runtime bodies. Messages
+`ok`, `error` and a small `state` snapshot with accepted/saved tuning,
+current scene/run/tick and presentation readouts. They never serialize runtime bodies. Messages
 are bounded to 8 MiB; stale sessions and malformed input are refused.
 
 A socket thread handles I/O; the main loop validates/applies commands between
