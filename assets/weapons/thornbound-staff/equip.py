@@ -138,6 +138,51 @@ def staff_slam(rig,body):
         assert error<.001, ('staff Slam changed its ready seam',frame,error)
 
 
+def staff_idle(rig,body,staff):
+    """Keep the long shaft upright in the palm, including melee ready seams."""
+    hands=grasp.calibrate(body)
+    upright=Vector((0,0,1))
+    inverse=rig.data.bones['Weapon'].matrix_local.inverted()
+    points=[inverse@vertex.co for vertex in staff.data.vertices]
+    for name in ['Idle','AttackCleave','AttackSlam']:
+        action=bpy.data.actions[name]
+        rig.animation_data.action=action
+        rig.animation_data.action_slot=action.slots[0]
+        frames=sorted({point.co.x for layer in action.layers for strip in layer.strips
+                       for curve in strip.channelbag(action.slots[0]).fcurves for point in curve.keyframe_points})
+        samples=[]
+        for frame in frames:
+            bpy.context.scene.frame_set(int(frame),subframe=frame-int(frame))
+            weapon=rig.pose.bones['Weapon']
+            axis=(weapon.tail-weapon.head).normalized()
+            rotation=weapon.matrix.to_quaternion().copy()
+            weight=1 if name=='Idle' else max(0,1-(frame-1)/6,(frame-25)/6)
+            if weight==0: continue
+            weight=weight*weight*(3-2*weight)
+            # The metre-long butt needs a slightly higher grasp than the sword.
+            origin=weapon.head+Vector((-.14*weight,-.12*weight,.10*weight))
+            goal=rotation.slerp(axis.rotation_difference(upright)@rotation,weight)
+            origin.z=max(origin.z,.04-min((goal@point).z for point in points))
+            samples.append((frame,origin.copy(),goal,
+                            {b.name:(b.location.copy(),b.rotation_quaternion.copy()) for b in rig.pose.bones}))
+        previous={}
+        for frame,origin,rotation,pose in samples:
+            for joint,(location,quaternion) in pose.items():
+                rig.pose.bones[joint].location=location
+                rig.pose.bones[joint].rotation_quaternion=quaternion
+            bpy.context.view_layer.update()
+            poles=tuple(rig.pose.bones[side+'Forearm'].head.copy() for side in ['Right','Left'])
+            grasp.place(rig,hands,player.chain,origin,rotation,0,poles=poles)
+            for joint in rig.pose.bones:
+                joint.rotation_quaternion.normalize()
+                if joint.name in previous and joint.rotation_quaternion.dot(previous[joint.name])<0:
+                    joint.rotation_quaternion.negate()
+                previous[joint.name]=joint.rotation_quaternion.copy()
+                joint.keyframe_insert(data_path='rotation_quaternion',frame=frame)
+                joint.keyframe_insert(data_path='location',frame=frame)
+        set_linear_keys(action)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output',type=Path)
@@ -154,6 +199,7 @@ def main():
     landmarks=json.loads(source.with_name('build.json').read_text())['landmarks_blender_metres']
     staff=equip(rig,source,landmarks)
     staff_slam(rig,body)
+    staff_idle(rig,body,staff)
     # Failed admission remains inspectable without producing a runtime GLB.
     assert bpy.ops.wm.save_as_mainfile(filepath=str(out/'candidate.blend')) == {'FINISHED'}
     grasp.validate_motion(rig,body,support_window=None)

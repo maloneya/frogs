@@ -62,6 +62,8 @@ fn retained_staffs_keep_equipped_grips_and_casting_tips() {
         let tip = matrix(&pose, "BeamOrigin").transform_point3(Vec3::ZERO);
         let staff = asset.parts().iter().find(|part| part.node_name() == "ThornboundStaff").unwrap();
         assert!(asset.vertices()[staff.vertices()].iter().any(|vertex| vertex.position().distance(tip) < 0.001));
+        asset.sample(idle, 0.0, &mut pose);
+        let ready = matrix(&pose, "Weapon");
         for name in ["Idle", "Run", "RunBackward", "RunLeft", "RunRight", "AttackCleave", "AttackSlam", "Disintegrate"] {
             let clip = asset.clip_named(name).unwrap();
             for fraction in [0.0, 0.4, 0.5, 0.6, 1.0] {
@@ -69,6 +71,13 @@ fn retained_staffs_keep_equipped_grips_and_casting_tips() {
                 let weapon = matrix(&pose, "Weapon");
                 let grip = weapon.transform_point3(Vec3::ZERO);
                 assert!(grip.distance(matrix(&pose, "RightGrip").transform_point3(Vec3::ZERO)) < 0.001, "{name}");
+                if name == "Idle" {
+                    assert!(weapon.transform_vector3(Vec3::Y).normalize().y > 0.999,
+                        "both retained staffs must rest vertically");
+                }
+                if matches!(name, "AttackCleave" | "AttackSlam") && (fraction == 0.0 || fraction == 1.0) {
+                    assert!(weapon.abs_diff_eq(ready, 0.001), "{name} must meet the upright idle guard");
+                }
                 if name == "AttackSlam" && (0.4..=0.6).contains(&fraction) {
                     let free_hand = matrix(&pose, "LeftGrip").transform_point3(Vec3::ZERO) - grip;
                     let axis = weapon.transform_vector3(Vec3::Y).normalize();

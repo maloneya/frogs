@@ -22,7 +22,9 @@ The [shared asset contract](../../../docs/character-assets-authoring.md) owns li
 `generate.py` authors the weapon; `equip.py` fits it to the retained
 [basic player foundation](../../characters/basic-player/README.md). The equipped
 export keeps its body, cloak, rig and eight role clips. Cleave/casting retain
-the source motion; Slam raises the primary right hand above the hood, drives the
+the source action; idle holds the shaft vertically beside the body with a low,
+closed right-hand grasp. Cleave and Slam enter and recover to that upright guard,
+with floor clearance derived from the actual weapon geometry. Slam raises the primary right hand above the hood, drives the
 butt down in front of the body and settles into grounded knee/torso compression.
 The left arm opens to the side for balance and stays clear of the shaft. The first active sample
 plants the butt; the remaining active samples hold it while the force wave

@@ -407,6 +407,8 @@ fn idle_through_game_moves_the_relaxed_body_without_sliding_support_or_changing_
         for hand in &transforms[2..4] {
             assert!(hand.transform_point3(Vec3::ZERO).y < 1.18, "idle arms stayed raised");
         }
+        assert!(transforms[6].transform_vector3(Vec3::Y).normalize().y > 0.999,
+            "idle staff must stay vertical through the relaxed loop");
         samples.push(transforms);
         assert_eq!(game.hash(), hash);
     }

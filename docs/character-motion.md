@@ -103,7 +103,8 @@ and the [preview commands](../assets/characters/basic-player/README.md#review-mo
 The relaxed idle adapts the retained Quaternius `Sword_Idle` into a 3.2-second
 loop on the same rig. Both arms rest lower with soft elbows; relative torso,
 pelvis and wrist motion supplies a small weight shift while the feet stay planted.
-Melee recovery meets its opening pose. The long blade rests slightly above
-horizontal to preserve the Cleave wrist release; locomotion carries it higher
-for stride clearance. This is a visual checkpoint awaiting user judgement of feel,
+Melee recovery meets its opening pose. The sword foundation rests slightly above
+horizontal; the equipped staff compiler turns its grasp upright beside the body
+and adapts melee ready seams while preserving the active stroke. Locomotion
+retains its elevated forward carry for stride clearance. This is a visual checkpoint awaiting user judgement of feel,
 with compilation, grip/support and in-game presentation checked separately.

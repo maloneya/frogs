@@ -58,9 +58,9 @@ travel retimes the run. `Bite` and `Leap`
 use frames 1/13/19/31 for ready/load/contact-end/recovered poses. App maps those
 segments to each action's committed phase lengths, including authored tuning.
 Default preview cadence is 36/9/39 ticks for bite and 42/36/54 for leap.
-`Hit` supplies the existing three recoil stages. `Death` supplies the authored
-collapse and final curled pose. Runtime starts that clip at death while shared
-physics carries the body, then holds its final pose until expiration.
+`Hit` supplies the existing three recoil stages. `Death` supplies the authored collapse and final curled pose. Runtime starts
+that clip at death while shared physics carries the body, then holds its final
+pose until expiration.
 
 Use the maintained character reviewer with the bundled Python/Pillow runtime:
 
